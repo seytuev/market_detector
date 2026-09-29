@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LTF — текущий сетап · HTF Zones</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-row">
+      <button id="ltf-burger" class="btn ltf-burger" title="Список активов">☰</button>
+      <h1>HTF <span>Zones</span></h1>
+      <nav class="main-nav app-tabs" aria-label="Разделы">
+        <a href="/#overview" id="lnk-htf" class="app-tab">Обзор</a>
+        <a href="/#review" class="app-tab">Проверка</a>
+        <a class="app-tab active" aria-current="page" href="/ltf.html">LTF</a>
+        <a href="/#events" class="app-tab">События</a>
+      </nav>
+      <div class="topbar-controls">
+        <a class="app-tab settings-link" href="/#settings">Настройки</a>
+        <button id="btn-ltf-settings" class="btn">LTF</button>
+        <span id="ws-indicator" class="ws-dot offline" title="Нет соединения"></span><span id="connection-label" class="connection-label">Нет данных</span>
+      </div>
+    </div>
+    <!-- §4.1: инструмент, биржа, рынок, H1, цена и котировка, закрытая H1,
+         раздельные индикаторы данных, режим и масштаб -->
+    <div class="context-row"><div class="context-controls">
+        <select id="ltf-instrument" title="Актив"></select>
+        <span id="ltf-venue" class="badge" title="Биржа"></span>
+        <span id="ltf-market" class="badge" title="Рынок"></span>
+        <span class="tf-badge" title="Таймфрейм структуры">H1</span>
+        <span id="ltf-last-price" class="last-price" title="Текущая цена">—</span>
+        <span id="ltf-quote-at" class="quote-at" title="Время последней котировки"></span>
+        <span id="ltf-last-candle" class="last-candle" title="Последняя закрытая H1-свеча">—</span>
+        <span id="ltf-ind-data" class="data-ind" title="Поступление данных">—</span>
+        <span id="ltf-ind-processed" class="data-ind" title="Обработка последней закрытой свечи движком">—</span>
+        <span class="sep"></span>
+        <span class="ltf-mode-group" role="group" aria-label="Режим">
+          <button id="ltf-mode-now" class="ltf-tab active" title="Текущее состояние">Сейчас</button>
+          <button id="ltf-mode-history" class="ltf-tab" title="История сценария и зон">История</button>
+        </span>
+        <span class="ltf-scale-group" role="group" aria-label="Масштаб">
+          <button class="ltf-tab active" data-days="3">3д</button>
+          <button class="ltf-tab" data-days="7">7д</button>
+          <button class="ltf-tab" data-days="14">14д</button>
+        </span>
+        <button id="ltf-to-price" class="btn small" title="Вернуться к текущей цене">К текущей цене</button>
+    </div></div>
+  </header>
+
+  <main class="ltf-layout">
+    <!-- §4.2: слева «Активы» — одна строка на instrument -->
+    <aside id="ltf-obs-panel" class="ltf-obs-panel">
+      <div class="obs-panel-head">
+        <h2>Активы</h2>
+        <button id="ltf-filter-toggle" class="btn small" aria-expanded="false">Фильтры <span id="ltf-filter-count"></span></button>
+        <div class="ltf-filters hidden" id="ltf-filters">
+          <input id="flt-symbol" type="search" placeholder="Актив (тикер)" title="Поиск по тикеру">
+          <select id="flt-venue" title="Биржа"><option value="">Биржа: все</option></select>
+          <select id="flt-stage" title="Этап"><option value="">Этап: все</option></select>
+          <select id="flt-direction" title="Направление">
+            <option value="">Направление: все</option>
+            <option value="bull">Рост</option><option value="bear">Снижение</option>
+            <option value="mixed">Разные контексты</option>
+          </select>
+        </div>
+      </div>
+      <div id="ltf-obs-list" class="ltf-obs-list"></div>
+    </aside>
+
+    <!-- §4.3: в центре H1-график -->
+    <section class="chart-block">
+      <div class="chart-toolbar">
+        <span class="section-label">График · H1</span>
+        <span class="layer-toggles" id="ltf-layer-toggles">
+          <label title="Подтверждённые pivots, все события структуры сценария"><input type="checkbox" data-layer="structure"> Подробная структура</label>
+          <label title="Внутренние экстремумы (internal high/low)"><input type="checkbox" data-layer="liquidity"> Внутренняя ликвидность</label>
+          <label title="Зоны, исключённые из подходящих, с причинами"><input type="checkbox" data-layer="excluded"> Исключённые зоны</label>
+          <label title="Предыдущие версии диапазона сценария"><input type="checkbox" data-layer="history"> История сценариев</label>
+          <label id="ltf-prov-toggle" class="hidden" title="Предлагаемый режим §16.2 (не подтверждён владельцем): временный конец текущего движения до подтверждения опор тремя правыми свечами. Только отображение — на подтверждённые зоны, сигналы и уведомления не влияет"><input type="checkbox" data-layer="provisional"> Предварительный диапазон</label>
+        </span>
+      </div>
+      <div id="chart-container">
+        <div id="chart"></div>
+        <div id="ltf-overlay"></div>
+      </div>
+      <div id="ltf-chart-empty" class="ltf-empty hidden"></div>
+    </section>
+
+    <!-- §4.4: справа карточка текущего контекста/сценария -->
+    <section class="side-block ltf-inspector" id="ltf-inspector">
+      <div class="panel" id="ltf-card-panel" role="dialog" aria-labelledby="ltf-card-title">
+        <button class="drawer-close" id="ltf-card-close" title="Закрыть">×</button>
+        <h2 id="ltf-card-title">Текущий сетап</h2>
+        <div id="ltf-card"></div>
+      </div>
+    </section>
+
+    <!-- §4.5: нижняя панель — подходящие зоны / события / история -->
+    <section class="ltf-bottom"><div class="bottom-head"><div class="bottom-tabs" role="tablist" aria-label="Данные LTF"><button class="bottom-tab active" data-panel="eligible" role="tab">Подходящие зоны <span id="ltf-eligible-count"></span></button><button class="bottom-tab" data-panel="events" role="tab">События <span id="ltf-journal-count"></span></button><button class="bottom-tab" data-panel="history" role="tab">История <span id="ltf-history-count"></span></button></div><button id="ltf-bottom-collapse" class="btn small" aria-expanded="true">Свернуть</button></div><div class="bottom-content">
+      <div class="panel" id="ltf-entries-panel" data-content="eligible">
+        <div id="ltf-entries"></div>
+      </div>
+      <div class="panel hidden" id="ltf-journal-panel" data-content="events">
+        <ul id="ltf-journal" class="events"></ul>
+      </div>
+      <div class="panel hidden" id="ltf-history-panel" data-content="history">
+        <div class="history-filters">
+          <select id="flt-hist-view" title="Срез истории">
+            <option value="excluded">Исключённые (текущая версия)</option>
+            <option value="history">Все версии</option>
+          </select>
+          <select id="flt-hist-reason" title="Причина исключения"><option value="">Причина: все</option></select>
+        </div>
+        <div id="ltf-history"></div>
+      </div>
+    </div></section>
+  </main>
+
+  <div id="ltf-close-modal" class="modal hidden"><div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="ltf-close-title"><h3 id="ltf-close-title">Завершить сценарий?</h3><p>Сценарий завершится вручную. HTF-зона останется доступной.</p><p id="ltf-close-error" class="form-error" role="alert"></p><div class="modal-actions"><button id="ltf-close-confirm" class="btn danger">Завершить</button><button id="ltf-close-cancel" class="btn">Отмена</button></div></div></div>
+
+  <!-- Модалка: настройки LTF (§14) -->
+  <div id="ltf-settings-modal" class="modal hidden">
+    <div class="modal-card wide">
+      <h3>Настройки LTF</h3>
+      <div id="ltf-settings-form" class="settings-form"></div>
+      <div class="modal-actions">
+        <button type="button" id="ltf-settings-save" class="btn primary">Сохранить</button>
+        <button type="button" id="ltf-settings-cancel" class="btn">Закрыть</button>
+      </div>
+      <div id="ltf-settings-status" class="settings-status"></div>
+    </div>
+  </div>
+
+  <script src="/common.js"></script>
+  <script src="/ltf.js"></script>
+</body>
+</html>

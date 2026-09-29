@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HTF Zones</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="/style.css">
+  <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body class="app-body">
+  <header class="app-nav" aria-label="Основная навигация">
+    <a class="brand" href="#overview">HTF Zones</a>
+    <nav class="app-tabs">
+      <a href="#overview" data-view="overview" class="app-tab active">Обзор</a>
+      <a href="#review" data-view="review" class="app-tab">Проверка</a>
+      <a href="/ltf.html" id="lnk-ltf" class="app-tab">LTF</a>
+      <a href="#events" data-view="events" class="app-tab">События</a>
+    </nav>
+    <div class="app-nav-right">
+      <a href="#settings" data-view="settings" class="app-tab settings-link">Настройки</a>
+    </div>
+  </header>
+
+  <section id="view-overview" class="view active">
+    <div class="workbar">
+      <select id="instrument-select" title="Инструмент"></select>
+      <span id="instrument-meta" class="work-meta">—</span>
+      <span id="last-price" class="last-price">—</span>
+      <span id="price-change" class="price-change"></span>
+      <div class="tf-switch" role="group" aria-label="Таймфрейм графика">
+        <select id="tf-select" title="Таймфрейм свечей">
+          <option value="D1" selected>D1</option>
+          <option value="W1">W1</option>
+        </select>
+      </div>
+      <details class="layer-menu">
+        <summary class="btn">Слои <span id="layer-count" class="layer-active"></span></summary>
+        <div class="layer-options">
+          <label><input type="checkbox" id="layer-tf-d1" checked> Зоны D1</label>
+          <label><input type="checkbox" id="layer-tf-w1" checked> Зоны W1</label>
+          <label><input type="checkbox" id="tf-all"> Все ТФ на графике</label>
+          <label><input type="checkbox" id="show-candidates"> Кандидаты</label>
+          <label><input type="checkbox" id="layer-history"> История</label>
+          <label><input type="checkbox" id="layer-mids" checked> Середины</label>
+          <label><input type="checkbox" id="layer-labels" checked> Подписи</label>
+        </div>
+      </details>
+      <button id="btn-new-zone" class="btn primary">+ Зона</button>
+      <div class="workbar-status">
+        <span id="ws-indicator" class="ws-dot offline" title="Нет соединения"></span>
+        <span id="connection-label" class="connection-label">Нет данных</span>
+      </div>
+    </div>
+
+    <div class="overview-layout">
+      <section class="chart-block">
+        <div id="chart-container">
+          <div id="chart"></div>
+          <div id="zone-overlay"></div>
+        </div>
+        <div id="draw-hint" class="draw-hint hidden">Первый клик задаёт начало зоны и первую цену, второй — вторую цену. <button id="draw-cancel" class="btn small" type="button">Отмена</button></div>
+      </section>
+
+      <aside class="zone-rail" id="zone-rail">
+        <div class="rail-head">
+          <h2>Зоны</h2>
+          <button id="btn-table-mode" class="btn small" type="button">Таблица</button>
+        </div>
+        <div class="rail-tabs" role="tablist">
+          <button type="button" class="rail-tab active" data-bucket="live">Актуальные</button>
+          <button type="button" class="rail-tab" data-bucket="candidate">Кандидаты <span id="candidates-count"></span></button>
+          <button type="button" class="rail-tab" data-bucket="archive">Архив</button>
+        </div>
+        <div class="list-filters">
+          <select id="zone-type-filter"><option value="">Все типы</option><option value="fvg">FVG</option><option value="ob">OB</option><option value="prb">PRB</option><option value="breaker">Breaker</option><option value="ssl">SSL</option><option value="bsl">BSL</option><option value="manual">Ручная</option></select>
+          <select id="zone-tf-filter"><option value="">D1 + W1</option><option value="D1">D1</option><option value="W1">W1</option></select>
+          <select id="zone-rel-filter"><option value="">Положение</option><option value="inside">Цена внутри</option><option value="above">Выше цены</option><option value="below">Ниже цены</option></select>
+          <button type="button" id="btn-resort" class="btn small">Обновить порядок</button>
+        </div>
+        <select id="zone-status-filter" class="hidden">
+          <option value="">актуальные</option>
+          <option value="candidate">кандидаты</option>
+          <option value="active">активные</option>
+          <option value="worked">отработанные</option>
+          <option value="rejected">отклонённые</option>
+          <option value="all">все</option>
+        </select>
+        <div id="zone-list" class="zone-cards"></div>
+        <div id="zone-table-wrap" class="table-wrap hidden">
+          <table id="zones-table">
+            <thead><tr><th>Тип</th><th>ТФ</th><th>Диапазон</th><th>Середина</th><th>Статус</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <aside id="zone-detail" class="inspector hidden">
+          <button class="back-link" id="detail-close" type="button">← К зонам</button>
+          <div id="detail-content"></div>
+        </aside>
+      </aside>
+    </div>
+
+    <footer class="event-strip">
+      <div class="strip-head"><span>События</span><a href="#events" data-view="events">Все события →</a></div>
+      <ul id="events-list" class="events strip-events"></ul>
+    </footer>
+  </section>
+
+  <section id="view-review" class="view">
+    <div class="review-layout">
+      <aside class="review-queue">
+        <div class="rail-head"><h2>Очередь кандидатов</h2><span id="review-progress" class="muted">0 из 0</span></div>
+        <div id="candidates-list" class="candidates"></div>
+      </aside>
+      <section class="chart-block review-chart-hint">
+        <p class="muted">Клик по кандидату слева открывает зону в инспекторе вкладки «Обзор»; график Обзора сохраняет выбранный инструмент.</p>
+      </section>
+      <aside class="review-inspector muted" id="review-inspector-placeholder">
+        <h2>Проверка зоны</h2>
+        <p>Очередь использует те же решения ревью, что и карточка зоны: подтвердить геометрию, исправить границы или отклонить.</p>
+      </aside>
+    </div>
+  </section>
+
+  <section id="view-events" class="view">
+    <div class="page-pad">
+      <h2>События</h2>
+      <p class="muted">Рыночные события HTF и состояние доставки. Исторически восстановленные помечаются отдельно.</p>
+      <ul id="events-full" class="events events-full"></ul>
+    </div>
+  </section>
+
+  <section id="view-settings" class="view">
+    <div class="settings-layout">
+      <aside class="settings-nav" id="settings-nav"></aside>
+      <div class="settings-main">
+        <h2>Настройки</h2>
+        <div id="settings-form" class="settings-form"></div>
+        <div class="settings-sticky">
+          <span id="settings-status" class="settings-status"></span>
+          <button type="button" id="settings-cancel" class="btn">Отменить</button>
+          <button type="button" id="settings-save" class="btn primary">Сохранить</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <nav class="mobile-nav" aria-label="Мобильная навигация">
+    <a href="#overview" data-view="overview">Обзор</a>
+    <a href="#review" data-view="review">Проверка</a>
+    <a href="/ltf.html" id="lnk-ltf-mobile">LTF</a>
+    <a href="#events" data-view="events">Ещё</a>
+  </nav>
+
+  <div id="header-stats" class="hidden"></div>
+  <span id="zones-count" class="hidden"></span>
+  <span id="events-count" class="hidden"></span>
+  <span id="chart-tf-label" class="hidden">D1</span>
+
+  <div id="zone-create-choice" class="modal hidden"><div class="modal-card choice-card" role="dialog" aria-modal="true" aria-labelledby="choice-title"><h3 id="choice-title">Добавить зону</h3><p>Выберите способ задания границ.</p><button id="choice-draw" class="btn primary" type="button">Нарисовать на графике</button><button id="choice-form" class="btn" type="button">Ввести границы</button><button id="choice-cancel" class="btn subtle" type="button">Отмена</button></div></div>
+  <div id="bounds-modal" class="modal hidden"><div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="bounds-title"><h3 id="bounds-title">Исправить границы</h3><label>Нижняя граница <input id="bounds-lower" type="number" step="any"></label><label>Верхняя граница <input id="bounds-upper" type="number" step="any"></label><label id="bounds-anchor-wrap">Свеча-якорь, время открытия в мс (необязательно) <input id="bounds-anchor" type="number" step="1"></label><p id="bounds-error" class="form-error" role="alert"></p><div class="modal-actions"><button id="bounds-save" class="btn primary" type="button">Сохранить</button><button id="bounds-cancel" class="btn" type="button">Отмена</button></div></div></div>
+
+  <div id="manual-modal" class="modal hidden">
+    <div class="modal-card">
+      <h3>Новая ручная зона</h3>
+      <label>Режим
+        <select id="mz-mode"><option value="range">Диапазон</option><option value="level">Уровень</option></select>
+      </label>
+      <label>Нижняя граница L <input id="mz-lower" type="number" step="any"></label>
+      <label>Верхняя граница U <input id="mz-upper" type="number" step="any"></label>
+      <label>или уровень <input id="mz-level" type="number" step="any" placeholder="L = U"></label>
+      <label>Направление
+        <select id="mz-direction"><option value="bull">Бычий</option><option value="bear">Медвежий</option></select>
+      </label>
+      <label>Таймфрейм
+        <select id="mz-timeframe"><option>D1</option><option>W1</option></select>
+      </label>
+      <label>Типовое правило
+        <select id="mz-ztype"><option value="ob">OB</option><option value="fvg">FVG</option><option value="">без правила</option></select>
+      </label>
+      <label>Начало на графике <input id="mz-anchor" type="datetime-local" step="60"></label>
+      <label>Название <input id="mz-name" type="text"></label>
+      <label>Комментарий <textarea id="mz-comment" rows="2"></textarea></label>
+      <p id="manual-status" class="form-error" role="alert"></p>
+      <div class="modal-actions">
+        <button id="mz-save" class="btn primary" type="button">Создать зону</button>
+        <button id="mz-cancel" class="btn" type="button">Отмена</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="settings-modal" class="hidden"></div>
+  <button id="btn-settings" class="hidden" type="button"></button>
+
+  <script src="/common.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
