@@ -6,7 +6,7 @@ COPY app ./app
 RUN pip install --no-cache-dir .
 
 ENV HTF_DB_PATH=/data/htf_zones.db
-VOLUME /data
+RUN mkdir -p /data
 
 EXPOSE 8000
 CMD ["python", "-m", "app.main"]
