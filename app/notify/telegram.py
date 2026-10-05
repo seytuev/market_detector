@@ -11,6 +11,7 @@ from typing import Optional
 
 from ..config import Settings
 from ..db import Database
+from ..bot.access import make_owner_guard
 from ..models import (
     AlertState,
     Event,
@@ -148,7 +149,11 @@ class TelegramSender:
         self.site_base_url = site_base_url
 
     def build_keyboard(self, payload: MessagePayload):
-        """Inline-кнопки §9. Действия привязаны к зоне первого события пакета."""
+        """Inline-кнопки §9 + единый набор ТЗ бота п.10: «График» (рендер
+        в чате), «Подробнее» (карточка зоны), «Открыть приложение» (URL),
+        «Заглушить» (= «Отключить», htf:mute), «🔄 Обновить» (новым
+        сообщением); под касанием — «Показать LTF».
+        Действия привязаны к зоне первого события пакета."""
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
         if not payload.views:
@@ -159,7 +164,20 @@ class TelegramSender:
         kind = view.event.kind.value
 
         chart_url = f"{self.site_base_url}/?zone={zone_id}"
-        buttons = [[InlineKeyboardButton("Открыть график", url=chart_url)]]
+        buttons = [
+            [
+                InlineKeyboardButton("📊 График", callback_data=f"nav:chartz:{zone_id}"),
+                InlineKeyboardButton("Подробнее", callback_data=f"nav:zone:{zone_id}"),
+            ],
+            [InlineKeyboardButton("Открыть приложение", url=chart_url)],
+        ]
+        if kind == "touch" and view.zone is not None:
+            buttons.append([
+                InlineKeyboardButton(
+                    "Показать LTF",
+                    callback_data=f"nav:ltf:{view.zone.instrument_id}",
+                )
+            ])
         tv = tradingview_url(view.instrument)
         if tv:
             buttons.append([InlineKeyboardButton("TradingView", url=tv)])
@@ -180,6 +198,15 @@ class TelegramSender:
                 callback_data=f"htf:note:{zone_id}:{cycle_id}:{kind}",
             ),
         ])
+        if view.zone is not None:
+            # «Обновить» — текущее состояние НОВЫМ сообщением, исторический
+            # текст сигнала не переписывается (ТЗ п.10)
+            buttons.append([
+                InlineKeyboardButton(
+                    "🔄 Обновить",
+                    callback_data=f"nav:refresh:{view.zone.instrument_id}",
+                )
+            ])
         return InlineKeyboardMarkup(buttons)
 
     async def send(self, payload: MessagePayload) -> None:
@@ -206,14 +233,22 @@ class TelegramSender:
         """Сервисное сообщение без кнопок и снимка (§11)."""
         await self._bot.send_message(chat_id=self.chat_id, text=text)
 
+    async def send_ltf(self, text: str, reply_markup=None) -> None:
+        """LTF-сигнал с inline-кнопками навигации (ТЗ бота п.10)."""
+        await self._bot.send_message(
+            chat_id=self.chat_id, text=text, reply_markup=reply_markup,
+        )
+
 
 class LogSender:
     """Заглушка без токена: рендерит текст в лог и считается успешной
-    доставкой. Для dev-режима и тестов (self.sent — журнал отправок)."""
+    доставкой. Для dev-режима и тестов (self.sent — журнал отправок,
+    self.sent_ltf — LTF-сообщения с разметкой кнопок)."""
 
     def __init__(self, logger: Optional[logging.Logger] = None):
         self._log = logger or log
         self.sent: list[MessagePayload] = []
+        self.sent_ltf: list[tuple[str, object]] = []
 
     async def send(self, payload: MessagePayload) -> None:
         text = render_text(payload)
@@ -222,6 +257,10 @@ class LogSender:
 
     async def send_text(self, text: str) -> None:
         self._log.warning("SERVICE (log-delivery): %s", text)
+
+    async def send_ltf(self, text: str, reply_markup=None) -> None:
+        self.sent_ltf.append((text, reply_markup))
+        self._log.info("LTF NOTIFY (log-delivery):\n%s", text)
 
 
 # ---------- приложение бота и обработчики кнопок ----------
@@ -236,6 +275,25 @@ def _parse_callback(data: str) -> Optional[tuple[str, int, int, str]]:
         return parts[1], int(parts[2]), int(parts[3]), parts[4]
     except ValueError:
         return None
+
+
+def ensure_mute(db: Database, zone_id: int, cycle_id: int, kind: str, until: int) -> None:
+    """Mute всей зоны/цикла. Строки alert_state под некоторые виды событий
+    могут ещё не существовать — создаём опорную строку, не сбрасывая
+    last_delivered_at уже существующей. Общая логика для htf:-кнопок
+    уведомлений и карточек бота (app/bot)."""
+    prev = db.get_alert_state(zone_id, cycle_id, kind)
+    db.set_alert_state(
+        AlertState(
+            zone_id=zone_id,
+            cycle_id=cycle_id,
+            event_kind=kind,
+            last_delivered_at=prev.last_delivered_at if prev else 0,
+            muted_until=until,
+            acknowledged=prev.acknowledged if prev else False,
+        )
+    )
+    db.set_mute(zone_id, cycle_id, until)
 
 
 def build_application(settings: Settings, db: Database):
@@ -253,29 +311,13 @@ def build_application(settings: Settings, db: Database):
         filters,
     )
 
+    from ..bot.handlers import register_bot_handlers
+
     app = Application.builder().token(settings.telegram_token).build()
-    owner_chat = settings.telegram_chat_id
 
-    def _is_owner(update) -> bool:
-        chat = update.effective_chat
-        return bool(owner_chat) and chat is not None and str(chat.id) == str(owner_chat)
-
-    def _ensure_mute(zone_id: int, cycle_id: int, kind: str, until: int) -> None:
-        """Mute всей зоны/цикла. Строки alert_state под некоторые виды событий
-        могут ещё не существовать — создаём опорную строку, не сбрасывая
-        last_delivered_at уже существующей."""
-        prev = db.get_alert_state(zone_id, cycle_id, kind)
-        db.set_alert_state(
-            AlertState(
-                zone_id=zone_id,
-                cycle_id=cycle_id,
-                event_kind=kind,
-                last_delivered_at=prev.last_delivered_at if prev else 0,
-                muted_until=until,
-                acknowledged=prev.acknowledged if prev else False,
-            )
-        )
-        db.set_mute(zone_id, cycle_id, until)
+    # Единая проверка владельца — app/bot/access.py (используется и новыми
+    # хендлерами команд, и старыми кнопками/заметками)
+    _is_owner = make_owner_guard(settings)
 
     async def on_callback(update, context) -> None:
         if not _is_owner(update):
@@ -297,10 +339,10 @@ def build_application(settings: Settings, db: Database):
             await query.answer("Отмечено: изучаю.")
         elif action == "snooze":
             until = now_ms() + SNOOZE_HOURS * 3_600_000
-            _ensure_mute(zone_id, cycle_id, kind, until)
+            ensure_mute(db, zone_id, cycle_id, kind, until)
             await query.answer(f"Отложено на {SNOOZE_HOURS} ч.")
         elif action == "mute":
-            _ensure_mute(zone_id, cycle_id, kind, MUTE_FOREVER_MS)
+            ensure_mute(db, zone_id, cycle_id, kind, MUTE_FOREVER_MS)
             await query.answer("Уведомления по зоне отключены.")
         elif action == "note":
             context.user_data["pending_note_zone"] = zone_id
@@ -313,6 +355,9 @@ def build_application(settings: Settings, db: Database):
             return
         zone_id = context.user_data.pop("pending_note_zone", None)
         if zone_id is None:
+            # нет pending-заметки — текст может быть кнопкой reply-меню
+            if handle_menu_text is not None:
+                await handle_menu_text(update, context)
             return
         db.add_review(
             Review(
@@ -325,6 +370,11 @@ def build_application(settings: Settings, db: Database):
         )
         await update.message.reply_text("Заметка сохранена.")
 
+    # Старые хендлеры регистрируются первыми (индексы handlers[0][0..1]
+    # используются существующими тестами); конфликтов с новыми нет:
+    # MessageHandler исключает команды (~filters.COMMAND), а паттерны
+    # callback ^htf: и ^nav: не пересекаются
     app.add_handler(CallbackQueryHandler(on_callback, pattern=r"^htf:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
+    handle_menu_text = register_bot_handlers(app, settings, db)
     return app

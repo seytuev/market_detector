@@ -19,16 +19,24 @@ T0 = 1_780_000_000_000
 
 
 class RecSender:
-    """Отправитель-заглушка: журнал текстов + имитация сбоя транспорта."""
+    """Отправитель-заглушка: журнал текстов (+ разметки кнопок send_ltf)
+    и имитация сбоя транспорта."""
 
     def __init__(self):
         self.texts: list[str] = []
+        self.markups: list = []
         self.fail = False
 
     async def send_text(self, text: str) -> None:
         if self.fail:
             raise RuntimeError("telegram недоступен (тест)")
         self.texts.append(text)
+
+    async def send_ltf(self, text: str, reply_markup=None) -> None:
+        if self.fail:
+            raise RuntimeError("telegram недоступен (тест)")
+        self.texts.append(text)
+        self.markups.append(reply_markup)
 
     async def send(self, payload) -> None:  # Protocol Sender
         raise NotImplementedError

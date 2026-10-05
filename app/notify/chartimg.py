@@ -21,6 +21,35 @@ from ..models import Candle, Zone, now_ms
 from ..texts_ru import DIRECTION_RU, STATUS_RU, TYPE_RU
 
 
+def candles_to_df(candles: list[Candle]) -> "pd.DataFrame":
+    """OHLC-DataFrame для mplfinance (индекс — UTC open_time)."""
+    return pd.DataFrame(
+        {
+            "Open": [c.open for c in candles],
+            "High": [c.high for c in candles],
+            "Low": [c.low for c in candles],
+            "Close": [c.close for c in candles],
+        },
+        index=pd.DatetimeIndex(
+            [
+                datetime.fromtimestamp(c.open_time / 1000, tz=timezone.utc)
+                for c in candles
+            ],
+            tz="UTC",
+        ),
+    )
+
+
+def make_dark_style():
+    """Тёмная тема графиков (общая для снимков зон и LTF-графиков бота)."""
+    return mpf.make_mpf_style(
+        base_mpf_style="nightclouds",
+        gridstyle=":",
+        facecolor="#12161c",
+        figcolor="#12161c",
+    )
+
+
 def render_zone_chart(
     candles: list[Candle],
     zone: Zone,
@@ -39,29 +68,10 @@ def render_zone_chart(
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    df = pd.DataFrame(
-        {
-            "Open": [c.open for c in candles],
-            "High": [c.high for c in candles],
-            "Low": [c.low for c in candles],
-            "Close": [c.close for c in candles],
-        },
-        index=pd.DatetimeIndex(
-            [
-                datetime.fromtimestamp(c.open_time / 1000, tz=timezone.utc)
-                for c in candles
-            ],
-            tz="UTC",
-        ),
-    )
+    df = candles_to_df(candles)
 
     # Тёмная тема
-    style = mpf.make_mpf_style(
-        base_mpf_style="nightclouds",
-        gridstyle=":",
-        facecolor="#12161c",
-        figcolor="#12161c",
-    )
+    style = make_dark_style()
 
     fig, axes = mpf.plot(
         df,

@@ -428,3 +428,38 @@ CREATE TABLE IF NOT EXISTS ltf_review_assessment (
     corrected_upper REAL
 );
 CREATE INDEX IF NOT EXISTS ix_ltf_review_assessment_zone ON ltf_review_assessment (entry_zone_id);
+
+-- Telegram-бот (ТЗ п.8): список наблюдения владельца бота.
+-- chat_id — ключ владельца (модель «один владелец», но схема multi-user-ready);
+-- alerts_enabled=0 — торговые уведомления по инструменту не доставляются.
+CREATE TABLE IF NOT EXISTS bot_watchlist (
+    chat_id TEXT NOT NULL,
+    instrument_id INTEGER NOT NULL REFERENCES instrument(id),
+    alerts_enabled INTEGER NOT NULL DEFAULT 1,
+    added_at INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (chat_id, instrument_id)
+);
+
+-- Telegram-бот (ТЗ п.9): настройки групп/видов уведомлений.
+-- scope: global (scope_ref='') | instrument (scope_ref=instrument_id) |
+-- context (scope_ref=zone_id); grp: htf | ltf | entry | scenario | service.
+-- Дефолт — включено: строка появляется при первом изменении переключателя.
+CREATE TABLE IF NOT EXISTS bot_alert_pref (
+    chat_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    scope_ref TEXT NOT NULL DEFAULT '',
+    grp TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (chat_id, scope, scope_ref, grp, kind)
+);
+
+-- Telegram-бот (ТЗ п.9): мьютинг доставки (только доставка — расчёт,
+-- история и актуальность зон продолжаются). scope: all | instrument | zone.
+CREATE TABLE IF NOT EXISTS bot_mute (
+    chat_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    scope_ref TEXT NOT NULL DEFAULT '',
+    until INTEGER NOT NULL,
+    PRIMARY KEY (chat_id, scope, scope_ref)
+);

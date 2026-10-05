@@ -26,6 +26,7 @@ from .models import (
     ZoneRelation,
     ZoneStatus,
     ZoneType,
+    now_ms,
 )
 from .models_ltf import (
     LtfEntryZone,
@@ -845,6 +846,30 @@ class Database:
             for r in self.conn.execute(q, args).fetchall()
         ]
 
+    def list_events_for_instrument(
+        self, instrument_id: int, since_ms: Optional[int] = None, limit: int = 100
+    ) -> list[Event]:
+        """HTF-события инструмента (join через зону), свежие первыми —
+        история для бота (ТЗ п.11)."""
+        q = """SELECT event.* FROM event
+               JOIN zone ON event.zone_id = zone.id
+               WHERE zone.instrument_id=?"""
+        args: list[Any] = [instrument_id]
+        if since_ms is not None:
+            q += " AND event.occurred_at>=?"
+            args.append(since_ms)
+        q += " ORDER BY event.occurred_at DESC LIMIT ?"
+        args.append(limit)
+        return [
+            Event(
+                id=r["id"], zone_id=r["zone_id"], cycle_id=r["cycle_id"],
+                kind=EventKind(r["kind"]), occurred_at=r["occurred_at"],
+                detected_at=r["detected_at"], price=r["price"], depth=r["depth"],
+                delayed=bool(r["delayed"]), evidence=json.loads(r["evidence"] or "{}"),
+            )
+            for r in self.conn.execute(q, args).fetchall()
+        ]
+
     def has_event(
         self, zone_id: int, cycle_id: int, kind: EventKind, occurred_at: int
     ) -> bool:
@@ -941,6 +966,139 @@ class Database:
             (muted_until, zone_id, cycle_id, user),
         )
         self.conn.commit()
+
+    # ---------- Telegram-бот: watchlist (ТЗ п.8) ----------
+
+    def list_watchlist(self, chat_id: str) -> list[dict[str, Any]]:
+        """Строки списка наблюдения владельца бота (порядок — по добавлению)."""
+        return [
+            {
+                "instrument_id": r["instrument_id"],
+                "alerts_enabled": bool(r["alerts_enabled"]),
+                "added_at": r["added_at"],
+            }
+            for r in self.conn.execute(
+                "SELECT * FROM bot_watchlist WHERE chat_id=? ORDER BY added_at, instrument_id",
+                (chat_id,),
+            ).fetchall()
+        ]
+
+    def watchlist_add(self, chat_id: str, instrument_id: int) -> None:
+        self.conn.execute(
+            """INSERT OR IGNORE INTO bot_watchlist
+               (chat_id, instrument_id, alerts_enabled, added_at)
+               VALUES (?,?,1,?)""",
+            (chat_id, instrument_id, now_ms()),
+        )
+        self.conn.commit()
+
+    def watchlist_remove(self, chat_id: str, instrument_id: int) -> None:
+        self.conn.execute(
+            "DELETE FROM bot_watchlist WHERE chat_id=? AND instrument_id=?",
+            (chat_id, instrument_id),
+        )
+        self.conn.commit()
+
+    def watchlist_set_alerts(
+        self, chat_id: str, instrument_id: int, enabled: bool
+    ) -> None:
+        self.conn.execute(
+            "UPDATE bot_watchlist SET alerts_enabled=? "
+            "WHERE chat_id=? AND instrument_id=?",
+            (int(enabled), chat_id, instrument_id),
+        )
+        self.conn.commit()
+
+    def watchlist_alerts_disabled(self, chat_id: str, instrument_id: int) -> bool:
+        """True только если инструмент в списке с выключенными уведомлениями;
+        отсутствие строки — не блокировка (fallback на enabled-инструменты)."""
+        r = self.conn.execute(
+            "SELECT alerts_enabled FROM bot_watchlist "
+            "WHERE chat_id=? AND instrument_id=?",
+            (chat_id, instrument_id),
+        ).fetchone()
+        return r is not None and not r["alerts_enabled"]
+
+    def seed_watchlist(self, chat_id: str) -> int:
+        """Первичное наполнение из включённых инструментов (при /start);
+        непустой список не трогаем. Возвращает число добавленных."""
+        if self.list_watchlist(chat_id):
+            return 0
+        added = 0
+        for ins in self.get_instruments(enabled_only=True):
+            self.watchlist_add(chat_id, ins.id)
+            added += 1
+        return added
+
+    # ---------- Telegram-бот: настройки уведомлений (ТЗ п.9) ----------
+
+    def get_alert_prefs(self, chat_id: str) -> list[dict[str, Any]]:
+        return [
+            {
+                "scope": r["scope"], "scope_ref": r["scope_ref"],
+                "grp": r["grp"], "kind": r["kind"],
+                "enabled": bool(r["enabled"]),
+            }
+            for r in self.conn.execute(
+                "SELECT * FROM bot_alert_pref WHERE chat_id=?", (chat_id,)
+            ).fetchall()
+        ]
+
+    def set_alert_pref(
+        self, chat_id: str, scope: str, scope_ref: str,
+        grp: str, kind: str, enabled: bool,
+    ) -> None:
+        self.conn.execute(
+            """INSERT INTO bot_alert_pref
+               (chat_id, scope, scope_ref, grp, kind, enabled)
+               VALUES (?,?,?,?,?,?)
+               ON CONFLICT (chat_id, scope, scope_ref, grp, kind)
+               DO UPDATE SET enabled=excluded.enabled""",
+            (chat_id, scope, scope_ref, grp, kind, int(enabled)),
+        )
+        self.conn.commit()
+
+    def alert_pref_enabled(
+        self, chat_id: str, scope: str, scope_ref: str, grp: str, kind: str
+    ) -> bool:
+        """Дефолт — включено: строка появляется при первом переключении."""
+        r = self.conn.execute(
+            """SELECT enabled FROM bot_alert_pref
+               WHERE chat_id=? AND scope=? AND scope_ref=? AND grp=? AND kind=?""",
+            (chat_id, scope, scope_ref, grp, kind),
+        ).fetchone()
+        return bool(r["enabled"]) if r else True
+
+    # ---------- Telegram-бот: мьютинг доставки (ТЗ п.9) ----------
+
+    def set_mute_scope(
+        self, chat_id: str, scope: str, scope_ref: str, until: int
+    ) -> None:
+        self.conn.execute(
+            """INSERT INTO bot_mute (chat_id, scope, scope_ref, until)
+               VALUES (?,?,?,?)
+               ON CONFLICT (chat_id, scope, scope_ref)
+               DO UPDATE SET until=excluded.until""",
+            (chat_id, scope, scope_ref, until),
+        )
+        self.conn.commit()
+
+    def clear_mute_scope(self, chat_id: str, scope: str, scope_ref: str) -> None:
+        self.conn.execute(
+            "DELETE FROM bot_mute WHERE chat_id=? AND scope=? AND scope_ref=?",
+            (chat_id, scope, scope_ref),
+        )
+        self.conn.commit()
+
+    def get_mutes(self, chat_id: str, now: int) -> list[dict[str, Any]]:
+        """Активные (не истёкшие) мьюты владельца."""
+        return [
+            {"scope": r["scope"], "scope_ref": r["scope_ref"], "until": r["until"]}
+            for r in self.conn.execute(
+                "SELECT * FROM bot_mute WHERE chat_id=? AND until>?",
+                (chat_id, now),
+            ).fetchall()
+        ]
 
     # ---------- reviews / notes ----------
 
@@ -1800,6 +1958,22 @@ class Database:
             return [self._to_ltf_event(r) for r in self.conn.execute(q, args).fetchall()]
         return self._ltf_cached(
             ("ltf_ev", observation_id, scenario_id, limit), load)
+
+    def list_ltf_events_for_instrument(
+        self, instrument_id: int, since_ms: Optional[int] = None, limit: int = 100
+    ) -> list[LtfEvent]:
+        """LTF-события инструмента (join через наблюдение), свежие первыми —
+        история для бота (ТЗ п.11). Без кэша: выборка редкая (команда бота)."""
+        q = """SELECT ltf_event.* FROM ltf_event
+               JOIN ltf_observation o ON ltf_event.observation_id = o.id
+               WHERE o.instrument_id=?"""
+        args: list[Any] = [instrument_id]
+        if since_ms is not None:
+            q += " AND ltf_event.occurred_at>=?"
+            args.append(since_ms)
+        q += " ORDER BY ltf_event.occurred_at DESC, ltf_event.id DESC LIMIT ?"
+        args.append(limit)
+        return [self._to_ltf_event(r) for r in self.conn.execute(q, args).fetchall()]
 
     def mark_ltf_event_delivered(self, event_id: int) -> None:
         self.conn.execute(

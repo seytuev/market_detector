@@ -51,6 +51,12 @@ async def run_bot_polling(settings, db) -> None:
     if application is None:
         log.info("TELEGRAM_TOKEN не задан — бот отключён, доставка в лог")
         return
+    base_url = settings.effective_base_url()
+    if "127.0.0.1" in base_url or "localhost" in base_url:
+        log.warning(
+            "Ссылки из Telegram ведут на %s (localhost) — с других устройств "
+            "не откроются; задайте HTF_PUBLIC_BASE_URL", base_url,
+        )
     async with application:
         await application.start()
         await application.updater.start_polling()
@@ -86,13 +92,14 @@ async def async_main() -> None:
     # §11 п.7: снимки зон для Telegram складываем рядом с БД
     charts_dir = str(Path(settings.db_path).parent / "charts")
     dispatcher = EventDispatcher(
-        db, settings.detector, sender, charts_dir=charts_dir
+        db, settings.detector, sender, charts_dir=charts_dir,
+        chat_id=settings.telegram_chat_id or None,
     )
 
     ltf_engine = LtfEngine(db, settings.detector)   # LTF Confirmations (этапы B–E)
     app = create_app(db, settings, ltf_engine=ltf_engine)
     # доставка LTF-уведомлений тем же транспортом, что у HTF (§11)
-    ltf_dispatcher = LtfDispatcher(db, settings.detector, sender)
+    ltf_dispatcher = LtfDispatcher(db, settings.detector, sender, settings=settings)
     worker = Worker(
         db, settings, settings.detector, adapters, dispatcher,
         broadcast=app.state.ws_hub.broadcast,

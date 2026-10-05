@@ -23,7 +23,13 @@ from ..models import (
     ZoneStatus,
     now_ms,
 )
-from .suppress import mark_delivered, should_notify
+from .suppress import (
+    BOT_GRP_HTF,
+    BOT_GRP_SERVICE,
+    bot_delivery_blocked,
+    mark_delivered,
+    should_notify,
+)
 
 log = logging.getLogger(__name__)
 
@@ -58,13 +64,19 @@ class Sender(Protocol):
         """Сервисное сообщение владельцу (§11): без кнопок и снимка."""
         ...
 
+    async def send_ltf(self, text: str, reply_markup=None) -> None:
+        """LTF-сигнал с inline-кнопками навигации (ТЗ бота п.10);
+        reply_markup=None — часть длинного сообщения без кнопок."""
+        ...
+
 
 class EventDispatcher:
     """Фильтрация, объединение и идемпотентная доставка событий."""
 
     def __init__(self, db: Database, cfg: DetectorConfig, sender: Sender,
                  destination: str = "telegram", user: str = "owner",
-                 charts_dir: Optional[str] = None):
+                 charts_dir: Optional[str] = None,
+                 chat_id: Optional[str] = None):
         self.db = db
         self.cfg = cfg
         self.sender = sender
@@ -72,6 +84,9 @@ class EventDispatcher:
         self.user = user
         # Каталог для снимков зон (§11 п.7); None — снимки не генерируются
         self.charts_dir = charts_dir
+        # Владелец бота для настроек доставки (ТЗ п.9: мьют/группы/watchlist);
+        # None — фильтры бота не применяются (старое поведение)
+        self.chat_id = chat_id
 
     # ---------- внутреннее ----------
 
@@ -92,6 +107,18 @@ class EventDispatcher:
         ):
             return False
         return should_notify(self.db, view.event, self.cfg, self.user)
+
+    def _bot_blocked(self, view: EventView) -> bool:
+        """Настройки бота владельца (ТЗ п.9): мьют/группы/watchlist.
+        Подавленное событие помечается доставленным без отправки — после
+        unmute накопившееся не уходит."""
+        zone = view.zone
+        return bot_delivery_blocked(
+            self.db, self.chat_id,
+            grp=BOT_GRP_HTF, kind=view.event.kind.value,
+            instrument_id=zone.instrument_id if zone is not None else None,
+            zone_id=view.event.zone_id,
+        )
 
     def _record_pending(self, event: Event) -> Optional[int]:
         """Пишет delivery pending по UNIQUE idempotency_key.
@@ -158,6 +185,7 @@ class EventDispatcher:
         """
         views: list[EventView] = []
         delivery_ids: list[int] = []
+        blocked: list[tuple[EventView, int]] = []
         for event in events:
             view = self._load_view(event)
             if not self._passes_filters(view):
@@ -165,11 +193,25 @@ class EventDispatcher:
             delivery_id = self._record_pending(event)
             if delivery_id is None:
                 continue  # идемпотентность: такая доставка уже есть
+            if self._bot_blocked(view):
+                blocked.append((view, delivery_id))
+                continue
             views.append(view)
             delivery_ids.append(delivery_id)
 
+        delivered_at = now_ms()
+        if blocked:
+            # мьют/выключение останавливает ТОЛЬКО доставку: событие
+            # помечается доставленным, чтобы после unmute старые события
+            # не ушли (ТЗ п.9 «не рассылать накопившиеся»)
+            for view, delivery_id in blocked:
+                self.db.update_delivery(delivery_id, "sent", delivered_at=delivered_at)
+                mark_delivered(self.db, view.event, delivered_at, self.user)
+
         if not views:
-            return []
+            return self._deliveries_by_ids(
+                delivery_ids + [d for _, d in blocked]
+            )
 
         payload = MessagePayload(
             events=[v.event for v in views],
@@ -184,13 +226,16 @@ class EventDispatcher:
             error = f"{type(exc).__name__}: {exc}"
             for delivery_id in delivery_ids:
                 self.db.update_delivery(delivery_id, "failed", error=error)
-            return self._deliveries_by_ids(delivery_ids)
+            return self._deliveries_by_ids(
+                delivery_ids + [d for _, d in blocked]
+            )
 
-        delivered_at = now_ms()
         for view, delivery_id in zip(views, delivery_ids):
             self.db.update_delivery(delivery_id, "sent", delivered_at=delivered_at)
             mark_delivered(self.db, view.event, delivered_at, self.user)
-        return self._deliveries_by_ids(delivery_ids)
+        return self._deliveries_by_ids(
+            delivery_ids + [d for _, d in blocked]
+        )
 
     async def notify_service(self, text: str) -> None:
         """Сервисное уведомление владельцу (§11): не рыночное событие,
@@ -208,6 +253,15 @@ class EventDispatcher:
                 idempotency_key=f"service:{self.user}:{now_ms()}:{text}",
             )
         )
+        # ТЗ п.9: выключенная группа «Сервис» глушит сервисные сообщения
+        # (мьют /mute all на них НЕ действует — только торговые события);
+        # подавленное помечается доставленным — после включения не уйдёт
+        if bot_delivery_blocked(
+            self.db, self.chat_id, grp=BOT_GRP_SERVICE, kind="service"
+        ):
+            if delivery_id is not None:
+                self.db.update_delivery(delivery_id, "sent", delivered_at=now_ms())
+            return
         try:
             await self.sender.send_text(text)
         except Exception as exc:  # noqa: BLE001 — журналируем сбой, не роняем воркер

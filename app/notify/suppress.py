@@ -12,9 +12,81 @@
 """
 from __future__ import annotations
 
+from typing import Optional
+
 from ..config import DetectorConfig
 from ..db import Database
-from ..models import SUPPRESSED_KINDS, AlertState, Event, now_ms
+from ..models import SUPPRESSED_KINDS, AlertState, Event, EventKind, now_ms
+
+# ТЗ бота п.9: группы настроек уведомлений (/alerts). Вид события → группа:
+# HTF-события — «htf»; LTF — касание Entry Zone в «entry», отмена сценария
+# в «scenario», остальные в «ltf»; сервисные — «service».
+BOT_GRP_HTF = "htf"
+BOT_GRP_LTF = "ltf"
+BOT_GRP_ENTRY = "entry"
+BOT_GRP_SCENARIO = "scenario"
+BOT_GRP_SERVICE = "service"
+
+BOT_ALERT_GROUPS: dict[str, list[str]] = {
+    BOT_GRP_HTF: [k.value for k in EventKind],
+    BOT_GRP_LTF: ["bos", "sms", "entries_ready", "range_ready",
+                  "sweep_confirmed", "sweep_failed"],
+    BOT_GRP_ENTRY: ["touch"],
+    BOT_GRP_SCENARIO: ["cancellation"],
+    BOT_GRP_SERVICE: ["service"],
+}
+
+
+def bot_group_for_ltf_kind(kind: str) -> str:
+    if kind == "touch":
+        return BOT_GRP_ENTRY
+    if kind == "cancellation":
+        return BOT_GRP_SCENARIO
+    return BOT_GRP_LTF
+
+
+def bot_delivery_blocked(
+    db: Database,
+    chat_id: Optional[str],
+    *,
+    grp: str,
+    kind: str,
+    instrument_id: Optional[int] = None,
+    zone_id: Optional[int] = None,
+    now: Optional[int] = None,
+) -> bool:
+    """True — доставку подавить настройками бота (ТЗ п.9): bot_mute
+    (all/instrument/zone), bot_alert_pref (global → instrument → context),
+    alerts_enabled=0 в watchlist. Пустые таблицы или chat_id=None — старое
+    поведение (ничего не блокируется). Подавленное событие всё равно
+    помечается доставленным — после unmute накопившееся не уходит."""
+    if not chat_id:
+        return False
+    now = now if now is not None else now_ms()
+    if grp != BOT_GRP_SERVICE:
+        # мьютинг (all/instrument/zone) и watchlist глушат только торговые
+        # события — сервисные сообщения продолжают приходить (ТЗ п.9)
+        for m in db.get_mutes(chat_id, now):
+            scope, ref = m["scope"], m["scope_ref"]
+            if scope == "all":
+                return True
+            if (scope == "instrument" and instrument_id is not None
+                    and ref == str(instrument_id)):
+                return True
+            if scope == "zone" and zone_id is not None and ref == str(zone_id):
+                return True
+        if (instrument_id is not None
+                and db.watchlist_alerts_disabled(chat_id, instrument_id)):
+            return True
+    if not db.alert_pref_enabled(chat_id, "global", "", grp, kind):
+        return True
+    if (instrument_id is not None and not db.alert_pref_enabled(
+            chat_id, "instrument", str(instrument_id), grp, kind)):
+        return True
+    if (zone_id is not None and not db.alert_pref_enabled(
+            chat_id, "context", str(zone_id), grp, kind)):
+        return True
+    return False
 
 
 def _zone_muted(db: Database, zone_id: int, cycle_id: int, user: str, now: int) -> bool:
