@@ -943,9 +943,43 @@ async function loadCandidates() {
   renderReviewQueue();
 }
 
-// Очередь с учётом фильтра ТФ и решений этой сессии: решения вроде
-// no_context / now_irrelevant не меняют статус зоны, поэтому проверенные
-// убираем из очереди локально (doneMap), иначе крутились бы по кругу.
+// Выгрузка разметки проверки: /api/export/labels закрыт Bearer-токеном,
+// поэтому качаем fetch'ем в blob, а не ссылкой. Ошибку показываем текстом
+// на самой кнопке (отдельного статус-элемента в шапке очереди нет).
+async function downloadLabels() {
+  const btn = $('btn-download-labels');
+  const label = btn.textContent;
+  const fail = (msg) => {
+    btn.textContent = msg;
+    setTimeout(() => { btn.textContent = label; }, 3000);
+  };
+  const doFetch = () => fetch('/api/export/labels', {
+    headers: { 'Authorization': 'Bearer ' + HTF.getToken() },
+  });
+  let resp = await doFetch();
+  if (resp.status === 401) {
+    localStorage.removeItem('htf_token');
+    await HTF.ensureToken('Токен не подошёл. Проверьте значение и попробуйте снова.');
+    resp = await doFetch();
+  }
+  if (!resp.ok) {
+    let detail = 'Ошибка выгрузки';
+    try { detail = (await resp.json()).detail || detail; } catch (e) { /* не JSON */ }
+    fail(detail);
+    return;
+  }
+  const blob = await resp.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'labels.jsonl';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// Очередь с учётом фильтра ТФ и решений этой сессии. Сервер уже не отдаёт
+// проверенных кандидатов (у них есть запись в review); doneMap лишь прячет
+// только что проверенные до прихода свежего списка после loadCandidates().
 function visibleCandidates() {
   return reviewState.all.filter((c) =>
     !reviewState.doneMap.has(c.id) &&
@@ -1849,6 +1883,7 @@ async function main() {
       renderReviewQueue();
     };
   }
+  if ($('btn-download-labels')) $('btn-download-labels').onclick = downloadLabels;
   $('draw-cancel').onclick = exitDrawMode;
   $('btn-settings').onclick = () => showView('settings');
   $('settings-save').onclick = saveSettings;

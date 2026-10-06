@@ -6,6 +6,7 @@ import pytest
 
 from app.config import DetectorConfig
 from app.db import Database
+from app.engine.ltf import LtfEngine
 from app.models import Direction, Zone, ZoneStatus, ZoneType
 from app.models_ltf import LtfEvent, LtfObservation, LtfScenario
 from app.notify.ltf_queue import LtfDispatcher
@@ -13,6 +14,12 @@ from app.notify.ltf_templates import (
     TELEGRAM_TEXT_LIMIT,
     LtfContext,
     render_ltf_messages,
+)
+from tests.test_ltf_breaks import _series
+from tests.test_ltf_engine import (
+    SERIES_H_CLOSES,
+    SERIES_H_HL,
+    _setup as _engine_setup,
 )
 
 T0 = 1_780_000_000_000
@@ -374,3 +381,58 @@ async def test_dispatcher_touch_not_resent_after_range_recalc(db: Database, inst
     t = sender.texts[0]
     assert "цена пришла к Entry Zone — FVG LTF H1" in t
     assert "Ожидаем закрытия" not in t  # OB/FVG — без строки ожидания (§11.3)
+
+
+# --- F01/A01: live-события внутри grace-окна доставляются --------------------
+
+
+async def _deliver_bos_with_lag(db: Database, instrument_id: int,
+                                sender: RecSender, lag_ms: int) -> list:
+    """Серия H до первичного BOS (idx14); свеча слома обнаружена с лагом
+    lag_ms после закрытия; новые события движка уходят в диспетчер."""
+    engine = LtfEngine(db, DetectorConfig())
+    candles = _series(SERIES_H_HL, SERIES_H_CLOSES, instrument_id)
+    zid = _engine_setup(db, instrument_id)
+    engine.on_htf_zone_touched(instrument_id, db.get_zone(zid), occurred_at=T0)
+    for c in candles[:14]:
+        db.insert_candles([c])
+        engine.process_h1_close(instrument_id, now_ms=c.close_time)
+    c = candles[14]
+    db.insert_candles([c])
+    result = engine.process_h1_close(instrument_id,
+                                     now_ms=c.close_time + lag_ms)
+    disp = _dispatcher(db, sender)
+    await disp(result.events)
+    return result.events
+
+
+@pytest.mark.parametrize("lag_ms", [1_000, 60_000])
+async def test_a01_fresh_bos_within_grace_delivered_once(
+        db: Database, instrument_id: int, lag_ms: int):
+    """A01: свежий BOS, обнаруженный внутри grace-окна (1 с / 60 с),
+    доставляется ровно один раз. До фикса любой лаг опроса делал событие
+    delayed, и диспетчер с pending_ltf_events навсегда его подавляли."""
+    sender = RecSender()
+    events = await _deliver_bos_with_lag(db, instrument_id, sender, lag_ms)
+    assert len(sender.texts) == 1
+    assert "Bearish BOS" in sender.texts[0]
+    bos = [e for e in events if e.kind == "bos"][0]
+    assert db.get_ltf_event(bos.id).delivered is True
+    # повторные вызовы и ретрай не шлют второй раз (§11.5)
+    disp = _dispatcher(db, sender)
+    await disp(events)
+    await disp.retry_pending()
+    assert len(sender.texts) == 1
+
+
+async def test_a01_catchup_bos_not_delivered(db: Database, instrument_id: int):
+    """A01: лаг дольше grace-окна — catchup: диспетчер и ретрай подавляют
+    (семантика delayed сохранена, gates не менялись)."""
+    sender = RecSender()
+    events = await _deliver_bos_with_lag(db, instrument_id, sender, 901_000)
+    disp = _dispatcher(db, sender)
+    await disp(events)
+    await disp.retry_pending()
+    assert sender.texts == []
+    bos = [e for e in events if e.kind == "bos"][0]
+    assert db.get_ltf_event(bos.id).delivered is False

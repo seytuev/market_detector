@@ -610,7 +610,13 @@ class LtfEvent:
     scenario_id: Optional[int] = None
     payload: dict[str, Any] = field(default_factory=dict)
     delivered: bool = False
-    delayed: bool = False              # восстановленное событие с исходным временем (§13)
+    # F01/A01: legacy-флаг доставки — производный (processing_mode != 'live');
+    # gates доставки (LtfDispatcher, pending_ltf_events) работают на нём без
+    # изменений. processing_mode: live | catchup | replay | unknown (строки
+    # до миграции). detection_lag_ms — лаг обнаружения от закрытия свечи
+    delayed: bool = False
+    processing_mode: str = "unknown"
+    detection_lag_ms: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -624,4 +630,6 @@ class LtfEvent:
             "dedupe_key": self.dedupe_key,
             "delivered": self.delivered,
             "delayed": self.delayed,
+            "processing_mode": self.processing_mode,
+            "detection_lag_ms": self.detection_lag_ms,
         }

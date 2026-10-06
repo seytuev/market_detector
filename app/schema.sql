@@ -400,6 +400,10 @@ CREATE TABLE IF NOT EXISTS ltf_event (
     dedupe_key TEXT NOT NULL,
     delivered INTEGER NOT NULL DEFAULT 0,
     delayed INTEGER NOT NULL DEFAULT 0,
+    -- F01/A01: происхождение события (live|catchup|replay|unknown) и лаг
+    -- обнаружения относительно закрытия свечи; delayed = processing_mode != 'live'
+    processing_mode TEXT NOT NULL DEFAULT 'unknown',
+    detection_lag_ms INTEGER NOT NULL DEFAULT 0,
     UNIQUE (dedupe_key)
 );
 CREATE INDEX IF NOT EXISTS ix_ltf_event_obs ON ltf_event (observation_id, occurred_at);

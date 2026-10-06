@@ -72,6 +72,14 @@ _INVALIDATING_REASONS = ("breaker_broken", "prb_broken", "jumped_through", "swep
 _STALE_ARCHIVABLE_STATES = ("waiting_structure", "active", "paused_data")
 
 
+def _processing_mode(lag_ms: int, grace_ms: int) -> str:
+    """F01/A01: происхождение события по лагу обнаружения. В пределах
+    grace-окна живого опроса — 'live' (доставляется); дольше — 'catchup'
+    (догоняющий бэклог, подавлен как replay). 'replay' задаёт вызывающий
+    код явно (исторический прогон), здесь не вычисляется."""
+    return "live" if lag_ms <= grace_ms else "catchup"
+
+
 @dataclass
 class LtfTickResult:
     """Итог обработки (одной или нескольких свечей)."""
@@ -137,6 +145,7 @@ class LtfEngine:
         """Обрабатывает все ещё не обработанные закрытые H1-свечи инструмента
         (инкрементально, через meta-курсор — перезапуск ничего не дублирует)."""
         now = now_ms if now_ms is not None else _real_now_ms()
+        grace_ms = self.cfg.ltf_live_grace_seconds * 1000
         closed = self.db.get_candles(instrument_id, "H1")
         result = LtfTickResult()
         if not closed:
@@ -148,11 +157,17 @@ class LtfEngine:
             for idx, c in enumerate(closed):
                 if c.close_time <= last_done:
                     continue
-                # backlog (свеча закрылась раньше «сейчас») — события с меткой
-                # задержки: массовые исторические касания не уходят как текущие (§13)
+                # F01/A01: лаг обнаружения относительно закрытия свечи. В
+                # пределах grace-окна события — live (доставляются: любой лаг
+                # опроса, даже миллисекунды, не подавляет свежий сигнал);
+                # дольше — catchup: массовый догоняющий бэклог не уходит как
+                # текущий (§13)
+                lag = max(0, now - c.close_time)
                 self._process_candle(
                     instrument_id, closed, idx,
-                    detected_at=now, delayed=c.close_time < now, result=result,
+                    detected_at=now,
+                    processing_mode=_processing_mode(lag, grace_ms),
+                    detection_lag_ms=lag, result=result,
                 )
                 self.db.set_meta(key, str(c.close_time))
         finally:
@@ -162,7 +177,8 @@ class LtfEngine:
     def replay_observation(self, observation_id: int) -> LtfTickResult:
         """§13: детерминированный прогон по сохранённым свечам тем же кодом.
 
-        detected_at = закрытие свечи, события delayed=True. Повторный replay
+        detected_at = закрытие свечи, события processing_mode='replay'
+        (delayed=True — в доставку не идут). Повторный replay
         не дублирует pivots/события/зоны/диапазоны (UNIQUE-ключи + дедуп)
         и не воскрешает tested-зоны (состояние читается из БД).
         """
@@ -170,13 +186,15 @@ class LtfEngine:
         obs = self.db.get_ltf_observation(observation_id)
         if obs is None:
             return result
+        now = _real_now_ms()
         closed = self.db.get_candles(obs.instrument_id, "H1")
         self._batch = StructureBatch() if self.scan_cursors else None
         try:
             for idx, c in enumerate(closed):
                 self._process_candle(
                     obs.instrument_id, closed, idx,
-                    detected_at=c.close_time, delayed=True, result=result,
+                    detected_at=c.close_time, processing_mode="replay",
+                    detection_lag_ms=max(0, now - c.close_time), result=result,
                     # роли в БД переписываем только на голове истории — иначе
                     # каждый replay прокручивает промежуточные роли против
                     # финальных и множит строки ltf_pivot_role_log (§13: replay
@@ -193,7 +211,8 @@ class LtfEngine:
 
     def _process_candle(
         self, instrument_id: int, closed: list, idx: int,
-        detected_at: int, delayed: bool, result: LtfTickResult,
+        detected_at: int, processing_mode: str, detection_lag_ms: int,
+        result: LtfTickResult,
         persist_roles: bool = True,
     ) -> None:
         candle = closed[idx]
@@ -203,7 +222,8 @@ class LtfEngine:
         result.last_candle_open_time = candle.open_time
 
         # (2) касания опубликованных зон и исходы liquidity-тестов (§13.2)
-        self._process_touches(instrument_id, candle, now, delayed, result)
+        self._process_touches(instrument_id, candle, now,
+                              processing_mode, detection_lag_ms, result)
 
         # (3) структура: pivots/роли идемпотентно в БД; события — далее
         sync = sync_structure(self.db, self.cfg, instrument_id, up_to, now,
@@ -220,17 +240,20 @@ class LtfEngine:
             sc = self.db.get_active_ltf_scenario(obs.id)
             if sc is None:
                 self._maybe_open_scenario(obs, avail, up_to, candle, now,
-                                          delayed, result)
+                                          processing_mode, detection_lag_ms,
+                                          result)
             else:
                 self._process_active_scenario(obs, sc, sync, avail, up_to,
-                                              candle, now, delayed, result)
+                                              candle, now, processing_mode,
+                                              detection_lag_ms, result)
 
     # ------------------------------------------------------------------ #
     # (2) Касания и liquidity-тесты (§9, §10)
     # ------------------------------------------------------------------ #
 
     def _process_touches(
-        self, instrument_id: int, candle, now: int, delayed: bool,
+        self, instrument_id: int, candle, now: int,
+        processing_mode: str, detection_lag_ms: int,
         result: LtfTickResult,
     ) -> None:
         for obs in self.db.list_ltf_observations(instrument_id=instrument_id):
@@ -278,7 +301,8 @@ class LtfEngine:
                 if cur is not None and candle.close_time < cur.available_at:
                     continue
                 self._on_entry_touched(obs, sc, entry, zone, candle, tests,
-                                       now, delayed, result)
+                                       now, processing_mode, detection_lag_ms,
+                                       result)
             # закрытие тестов, начатых внутри этой свечи (live-путь, §10/п.14)
             for t in self.db.list_ltf_liquidity_tests(state="awaiting_close",
                                                       scenario_id=sc.id):
@@ -290,12 +314,14 @@ class LtfEngine:
                 outcome = resolve_sweep(zone.type, t.level, candle)
                 if outcome is not None:
                     self._resolve_liquidity_test(obs, sc, t.id, zone, t.level,
-                                                 candle, outcome, now, delayed,
-                                                 result)
+                                                 candle, outcome, now,
+                                                 processing_mode,
+                                                 detection_lag_ms, result)
 
     def _on_entry_touched(
         self, obs, sc, entry: LtfScenarioEntry, zone: LtfEntryZone, candle,
-        tests: list[LtfLiquidityTest], now: int, delayed: bool,
+        tests: list[LtfLiquidityTest], now: int,
+        processing_mode: str, detection_lag_ms: int,
         result: LtfTickResult,
     ) -> None:
         # §9: касание потребляет текущий выбор зоны; отказ доставки не
@@ -343,7 +369,7 @@ class LtfEngine:
         # §11.5: ключ касания — entry_zone_id + сценарий, БЕЗ range_version
         self._emit(obs.id, sc.id, "touch", payload,
                    candle.close_time, now, f"touch:{zone.id}:{sc.id}",
-                   delayed, result)
+                   processing_mode, detection_lag_ms, result)
 
         if zone.type not in ("BSL", "SSL"):
             return  # OB/FVG: касание зафиксировано, зона в истории (§9)
@@ -359,7 +385,9 @@ class LtfEngine:
         outcome = resolve_sweep(zone.type, zone.lower, candle)
         if outcome is not None:  # свеча уже закрыта — исход известен сразу
             self._resolve_liquidity_test(obs, sc, tid, zone, zone.lower,
-                                         candle, outcome, now, delayed, result)
+                                         candle, outcome, now,
+                                         processing_mode, detection_lag_ms,
+                                         result)
 
     def _accumulate_test_depth(self, zone: LtfEntryZone, candle) -> None:
         """ТЗ §3/§4: глубина теста накапливается за всю историю (максимум);
@@ -378,7 +406,8 @@ class LtfEngine:
 
     def _resolve_liquidity_test(
         self, obs, sc, test_id: int, zone: LtfEntryZone, level: float, candle,
-        outcome: str, now: int, delayed: bool, result: LtfTickResult,
+        outcome: str, now: int, processing_mode: str, detection_lag_ms: int,
+        result: LtfTickResult,
     ) -> None:
         confirmed = outcome == "confirmed"
         self.db.update_ltf_liquidity_test(
@@ -409,7 +438,8 @@ class LtfEngine:
                        "outcome": outcome,
                        "candle_open_time": candle.open_time,
                    }, candle.close_time, now,
-                   f"sweep:{zone.id}:{candle.open_time}", delayed, result)
+                   f"sweep:{zone.id}:{candle.open_time}",
+                   processing_mode, detection_lag_ms, result)
 
     # ------------------------------------------------------------------ #
     # (3) Сценарии: открытие, события, отмена (§6)
@@ -417,7 +447,8 @@ class LtfEngine:
 
     def _maybe_open_scenario(
         self, obs, avail: list[PivotCandidate], up_to: list, candle,
-        now: int, delayed: bool, result: LtfTickResult,
+        now: int, processing_mode: str, detection_lag_ms: int,
+        result: LtfTickResult,
     ) -> None:
         """Первичный BOS/SMS в направлении HTF-родителя открывает сценарий
         (SMS самостоятелен, §6.3)."""
@@ -488,14 +519,17 @@ class LtfEngine:
                             up_to, now, result)
         # §18: контекст (снятие SSL/BSL + тест 50% D1 FVG) — до публикации
         # входов, чтобы допуск вне Premium применился уже в событии слома
-        self._update_scenario_context(obs, sc, avail, up_to, now, delayed,
+        self._update_scenario_context(obs, sc, avail, up_to, now,
+                                      processing_mode, detection_lag_ms,
                                       result)
         self._emit_structure_event(obs, sc, main, se_ids[main.level_key],
-                                   now, delayed, result)
+                                   now, processing_mode, detection_lag_ms,
+                                   result)
 
     def _process_active_scenario(
         self, obs, sc, sync, avail: list[PivotCandidate], up_to: list, candle,
-        now: int, delayed: bool, result: LtfTickResult,
+        now: int, processing_mode: str, detection_lag_ms: int,
+        result: LtfTickResult,
     ) -> None:
         cancel = sync.cancellations.get(sc.id)
         fresh = [
@@ -521,7 +555,7 @@ class LtfEngine:
                 "break_level": rev.break_level,
                 "break_candle_open_time": rev.break_candle_open_time,
             }, rev.occurred_at, now, f"cancellation:{sc.id}:{rev.level_key}",
-                delayed, result)
+                processing_mode, detection_lag_ms, result)
             result.cancellations.append(sc.id)
             return
 
@@ -533,14 +567,18 @@ class LtfEngine:
         # §6.5: продолжение в том же направлении — фиксируем событие, но новые
         # зоны последующих движений не добавляем (§8.1)
         for e, se_id in se_ids:
-            self._emit_structure_event(obs, sc, e, se_id, now, delayed, result)
+            self._emit_structure_event(obs, sc, e, se_id, now,
+                                       processing_mode, detection_lag_ms,
+                                       result)
         # §18: обновление контекста — до entries_ready, чтобы допуск FVG
         # вне Premium увидел свежие факты этого закрытия
-        self._update_scenario_context(obs, sc, avail, up_to, now, delayed,
+        self._update_scenario_context(obs, sc, avail, up_to, now,
+                                      processing_mode, detection_lag_ms,
                                       result)
         # §11.5: дополнение — только при ещё не сообщённых свежих зонах,
         # не при каждом изменении M
-        self._maybe_entries_ready(obs, sc, candle.close_time, now, delayed,
+        self._maybe_entries_ready(obs, sc, candle.close_time, now,
+                                  processing_mode, detection_lag_ms,
                                   result,
                                   range_created=created_range is not None,
                                   suppress=bool(se_ids))
@@ -551,7 +589,8 @@ class LtfEngine:
 
     def _update_scenario_context(
         self, obs, sc, avail: list[PivotCandidate], up_to: list,
-        now: int, delayed: bool, result: LtfTickResult,
+        now: int, processing_mode: str, detection_lag_ms: int,
+        result: LtfTickResult,
     ) -> None:
         """§18: новые факты контекста (снятие контр-уровня, тест 50% D1 FVG)
         — события context_update с дедупом по уровню/зоне; отдельно не
@@ -572,7 +611,8 @@ class LtfEngine:
             self._emit(obs.id, sc.id, "context_update", {
                 "fact": "counter_sweep", "scenario_id": sc.id, **s,
             }, s["swept_at"], now,
-                f"context:{sc.id}:sweep:{s['pivot_ref']}", delayed, result)
+                f"context:{sc.id}:sweep:{s['pivot_ref']}",
+                processing_mode, detection_lag_ms, result)
         f = ctx["htf_fvg50"]
         if f is not None and f.get("confirmed", False):
             # L02: неподтверждённый геометрический fallback не эмитится —
@@ -580,7 +620,8 @@ class LtfEngine:
             self._emit(obs.id, sc.id, "context_update", {
                 "fact": "htf_fvg50", "scenario_id": sc.id, **f,
             }, f.get("tested_at") or now, now,
-                f"context:{sc.id}:fvg50:{f['zone_id']}", delayed, result)
+                f"context:{sc.id}:fvg50:{f['zone_id']}",
+                processing_mode, detection_lag_ms, result)
 
     def _scenario_context(self, scenario_id: int) -> dict[str, Any]:
         """§18: агрегированный контекст сценария из событий context_update."""
@@ -944,12 +985,17 @@ class LtfEngine:
     def _emit(
         self, observation_id: int, scenario_id: Optional[int], kind: str,
         payload: dict[str, Any], occurred_at: int, detected_at: int,
-        dedupe_key: str, delayed: bool, result: LtfTickResult,
+        dedupe_key: str, processing_mode: str, detection_lag_ms: int,
+        result: LtfTickResult,
     ) -> LtfEvent:
+        # F01/A01: legacy delayed — производный от происхождения: всё, что не
+        # live (catchup/replay/unknown), gates доставки подавляют без изменений
         ev, created = self.db.insert_ltf_event(LtfEvent(
             id=None, observation_id=observation_id, scenario_id=scenario_id,
             kind=kind, payload=payload, occurred_at=occurred_at,
-            detected_at=detected_at, dedupe_key=dedupe_key, delayed=delayed,
+            detected_at=detected_at, dedupe_key=dedupe_key,
+            delayed=processing_mode != "live",
+            processing_mode=processing_mode, detection_lag_ms=detection_lag_ms,
         ))
         if created:
             result.events.append(ev)
@@ -1030,7 +1076,7 @@ class LtfEngine:
 
     def _emit_structure_event(
         self, obs, sc, e: StructureEventDraft, se_id: int, now: int,
-        delayed: bool, result: LtfTickResult,
+        processing_mode: str, detection_lag_ms: int, result: LtfTickResult,
     ) -> None:
         """Событие bos/sms (§11.1/§11.2). При готовых диапазоне и зонах —
         одно объединённое сообщение (приёмка п.18)."""
@@ -1054,10 +1100,12 @@ class LtfEngine:
         }
         # §11.5: scenario_id + structure_event_id
         self._emit(obs.id, sc.id, e.kind.lower(), payload, e.occurred_at, now,
-                   f"{e.kind.lower()}:{sc.id}:{se_id}", delayed, result)
+                   f"{e.kind.lower()}:{sc.id}:{se_id}",
+                   processing_mode, detection_lag_ms, result)
 
     def _maybe_entries_ready(
-        self, obs, sc, occurred_at: int, now: int, delayed: bool,
+        self, obs, sc, occurred_at: int, now: int,
+        processing_mode: str, detection_lag_ms: int,
         result: LtfTickResult, range_created: bool, suppress: bool,
     ) -> None:
         """§11.2: дополнение при появлении ещё не сообщённых подходящих зон
@@ -1083,12 +1131,13 @@ class LtfEngine:
                     for en, z, out in fresh
                 ],
             }, occurred_at, now, f"entries_ready:{sc.id}:{','.join(map(str, ids))}",
-                delayed, result)
+                processing_mode, detection_lag_ms, result)
         elif range_created and rng.version == 1:
             self._emit(obs.id, sc.id, "range_ready", {
                 "scenario_id": sc.id, "range": self._range_payload(rng),
                 "note": "подходящих свежих Entry Zones пока нет",
-            }, occurred_at, now, f"range_ready:{sc.id}:{rng.version}", delayed, result)
+            }, occurred_at, now, f"range_ready:{sc.id}:{rng.version}",
+                processing_mode, detection_lag_ms, result)
 
     # ------------------------------------------------------------------ #
     # Жизненный цикл родителя и ручное завершение (§4, §11.4)
@@ -1123,7 +1172,7 @@ class LtfEngine:
             self._emit(obs.id, sc.id, "cancellation", {
                 "scenario_id": sc.id, "reason": "HTF_INVALIDATED",
             }, now, now, f"cancellation:{sc.id}:htf_invalidated",
-                False, LtfTickResult())
+                "live", 0, LtfTickResult())
         self.db.update_ltf_observation(obs.id, state="closed_by_parent",
                                        updated_at=now)
         return True
@@ -1144,7 +1193,7 @@ class LtfEngine:
                                        updated_at=now)
         self._emit(sc.observation_id, sc.id, "cancellation", {
             "scenario_id": sc.id, "reason": "manual",
-        }, now, now, f"cancellation:{sc.id}:manual", False, LtfTickResult())
+        }, now, now, f"cancellation:{sc.id}:manual", "live", 0, LtfTickResult())
 
     # ------------------------------------------------------------------ #
     # Автоархивация неактивных наблюдений и resync pivots
@@ -1183,7 +1232,7 @@ class LtfEngine:
                 self._emit(obs.id, sc.id, "cancellation", {
                     "scenario_id": sc.id, "reason": "stale",
                 }, now, now, f"cancellation:{sc.id}:stale",
-                    False, LtfTickResult())
+                    "live", 0, LtfTickResult())
             self.db.update_ltf_observation(obs.id, state="closed_stale",
                                            updated_at=now)
             archived.append(obs.id)

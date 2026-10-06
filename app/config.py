@@ -100,6 +100,11 @@ class DetectorConfig:
     # типы доставки LTF (этап D); выключение не меняет рыночный анализ
     ltf_notify_kinds: str = "bos_sms,entries_ready,touch,sweep_outcome,cancellation"
     ltf_poll_seconds: int = 300              # свой цикл опроса H1
+    # F01/A01: grace-окно живой обработки H1-закрытия. Событие, обнаруженное
+    # в пределах окна после закрытия свечи, — live (доставляется: любой лаг
+    # опроса, даже миллисекунды, не должен подавлять свежий сигнал); дольше —
+    # catchup (догоняющий бэклог, доставка подавлена как у replay)
+    ltf_live_grace_seconds: int = 900
     ltf_history_days: int = 30               # §4: H1-история до касания HTF
     ltf_observation_stale_days: int = 14     # автоархивация наблюдения без
                                              # активности дольше N дней (0 — выкл.)
@@ -193,6 +198,7 @@ _NUMERIC_RANGES: dict[str, tuple[float, float]] = {
     "ltf_structure_left": (3, 5),
     "ltf_structure_right": (3, 5),
     "ltf_poll_seconds": (30, 86400),
+    "ltf_live_grace_seconds": (0, 86400),
     "ltf_history_days": (1, 365),
     "ltf_observation_stale_days": (0, 365),
     "stale_quote_seconds": (0, 86400),

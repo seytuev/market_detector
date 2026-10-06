@@ -2,6 +2,11 @@
 replay (приёмка п.12, 15, 17–20)."""
 from __future__ import annotations
 
+import sqlite3
+from pathlib import Path
+
+import pytest
+
 from app.db import Database
 from app.engine.ltf import LtfEngine
 from app.models import Direction, Zone, ZoneStatus, ZoneType
@@ -715,3 +720,128 @@ def test_disabled_entry_type_reclassify(db: Database, cfg, instrument_id: int):
     fe2 = [e for e in db.list_ltf_scenario_entries(sc.id)
            if e.entry_zone_id == fvg.id][0]
     assert (fe2.reason, fe2.state) == ("ok", "fresh")
+
+
+# --- F01/A01: происхождение событий (processing_mode/detection_lag_ms) ------
+
+
+def _feed_until_bos(db: Database, engine: LtfEngine, instrument_id: int,
+                    candles, lag_ms: int):
+    """Серия H до первичного BOS (idx14); свеча слома обрабатывается
+    с заданным лагом обнаружения после её закрытия."""
+    zid = _setup(db, instrument_id)
+    obs = engine.on_htf_zone_touched(instrument_id, db.get_zone(zid), T0)
+    _feed(db, engine, instrument_id, candles, 13)
+    c = candles[14]
+    db.insert_candles([c])
+    result = engine.process_h1_close(instrument_id,
+                                     now_ms=c.close_time + lag_ms)
+    return obs, result
+
+
+@pytest.mark.parametrize("lag_ms", [1_000, 60_000])
+def test_a01_bos_within_grace_stays_live(db: Database, cfg, instrument_id: int,
+                                         lag_ms: int):
+    """A01: BOS, обнаруженный с лагом внутри grace-окна (1 с / 60 с при
+    дефолтных 900 с), — live: delayed=False. До фикса любой лаг опроса
+    (c.close_time < now) делал событие delayed и оно навсегда подавлялось."""
+    engine = LtfEngine(db, cfg)
+    candles = _series(SERIES_H_HL, SERIES_H_CLOSES, instrument_id)
+    obs, result = _feed_until_bos(db, engine, instrument_id, candles, lag_ms)
+    bos = [e for e in result.events if e.kind == "bos"]
+    assert len(bos) == 1
+    assert bos[0].processing_mode == "live"
+    assert bos[0].detection_lag_ms == lag_ms
+    assert bos[0].delayed is False
+    # событие доступно ретраю доставки (pending фильтрует только delayed)
+    assert [e.id for e in db.pending_ltf_events()] == [bos[0].id]
+    # повторный прогон тех же свечей (рестарт) — дублей нет (§11.5)
+    again = engine.process_h1_close(instrument_id,
+                                    now_ms=candles[14].close_time + lag_ms)
+    assert again.events == []
+    assert len(db.list_ltf_events(observation_id=obs.id, limit=1000)) == 1
+
+
+def test_a01_catchup_backlog_suppressed_then_live(db: Database, cfg,
+                                                  instrument_id: int):
+    """A01: лаг дольше grace-окна — catchup (delayed=True, не доставляется,
+    в pending не попадает); следующая живая свеча снова даёт live-события."""
+    engine = LtfEngine(db, cfg)
+    candles = _series(SERIES_H_HL, SERIES_H_CLOSES, instrument_id)
+    obs, result = _feed_until_bos(db, engine, instrument_id, candles,
+                                  lag_ms=901_000)  # > 900 с grace
+    bos = [e for e in result.events if e.kind == "bos"]
+    assert len(bos) == 1
+    assert bos[0].processing_mode == "catchup"
+    assert bos[0].detection_lag_ms == 901_000
+    assert bos[0].delayed is True
+    assert db.pending_ltf_events() == []
+
+    # последующие живые закрытия (lag=0) — события снова live: откат idx18
+    # трогает FVG причинного движения (см. test_full_flow)
+    for c in candles[15:19]:
+        db.insert_candles([c])
+        engine.process_h1_close(instrument_id, now_ms=c.close_time)
+    touch = [e for e in _events(db, obs.id) if e.kind == "touch"]
+    assert len(touch) == 1
+    assert touch[0].processing_mode == "live"
+    assert touch[0].delayed is False
+    assert [e.id for e in db.pending_ltf_events()] == [touch[0].id]
+
+
+def test_a01_replay_marks_replay_and_stays_suppressed(db: Database, cfg,
+                                                      instrument_id: int):
+    """A01: replay_observation — processing_mode='replay' (delayed=True):
+    события пишутся в журнал, но в доставку и pending не попадают."""
+    engine = LtfEngine(db, cfg)
+    candles = _series(SERIES_H_HL, SERIES_H_CLOSES, instrument_id)
+    zid = _setup(db, instrument_id)
+    obs = engine.on_htf_zone_touched(instrument_id, db.get_zone(zid), T0)
+    db.insert_candles(candles)
+    engine.replay_observation(obs.id)
+    evs = _events(db, obs.id)
+    assert [e.kind for e in evs] == [
+        "bos", "touch", "entries_ready", "touch", "sweep_failed", "cancellation",
+    ]
+    assert all(e.processing_mode == "replay" for e in evs)
+    assert all(e.delayed for e in evs)
+    assert all(e.detection_lag_ms >= 0 for e in evs)
+    assert db.pending_ltf_events() == []
+
+
+def test_a01_ltf_event_migration_adds_origin_columns(tmp_path):
+    """F01: миграция существующей БД добавляет processing_mode/
+    detection_lag_ms; строки до миграции читаются с 'unknown'/0."""
+    schema = Path("app/schema.sql").read_text(encoding="utf-8")
+    # схема «до миграции»: без новых колонок ltf_event
+    old_schema = "\n".join(
+        ln for ln in schema.replace("\r\n", "\n").split("\n")
+        if "processing_mode" not in ln and "detection_lag_ms" not in ln
+        and "F01/A01" not in ln
+    )
+    path = tmp_path / "old.db"
+    raw = sqlite3.connect(path)
+    raw.executescript(old_schema)
+    # строка, записанная старым кодом (только старые колонки)
+    raw.execute(
+        """INSERT INTO ltf_event
+           (observation_id, scenario_id, kind, payload, occurred_at,
+            detected_at, dedupe_key, delivered, delayed)
+           VALUES (1, NULL, 'bos', '{}', 1000, 1000, 'bos:legacy:1', 0, 1)"""
+    )
+    raw.commit()
+    raw.close()
+
+    mdb = Database(str(path))
+    try:
+        cols = {
+            r["name"]
+            for r in mdb.conn.execute("PRAGMA table_info(ltf_event)").fetchall()
+        }
+        assert {"processing_mode", "detection_lag_ms"} <= cols
+        ev = mdb.list_ltf_events(limit=10)[0]
+        assert ev.processing_mode == "unknown"
+        assert ev.detection_lag_ms == 0
+        assert ev.delayed is True           # старое значение сохранено
+    finally:
+        mdb.close()

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -870,9 +871,11 @@ def create_app(
 
     @app.get("/api/candidates", dependencies=[Depends(require_auth)])
     def list_candidates(instrument_id: Optional[int] = None) -> list[dict[str, Any]]:
-        """Зоны-кандидаты (§10) с объяснением обнаружения из evidence."""
+        """Очередь ручной проверки (§10): кандидаты без ревью, с объяснением
+        обнаружения из evidence. Проверенные зоны (решение зафиксировано
+        в review) из очереди уходят, даже если статус остался candidate."""
         out = []
-        for z in db.get_zones(instrument_id=instrument_id, statuses=[ZoneStatus.CANDIDATE]):
+        for z in db.get_unreviewed_candidates(instrument_id=instrument_id):
             ins = db.get_instrument(z.instrument_id)
             out.append({
                 **zone_to_dict(z),
@@ -1009,6 +1012,17 @@ def create_app(
             "ltf_review_decisions": LTF_REVIEW_DECISION_RU,
             "ltf_review_reasons": LTF_REVIEW_REASON_RU,
         }
+
+    @app.get("/api/export/labels", dependencies=[Depends(require_auth)])
+    def download_labels() -> FileResponse:
+        """Скачивание разметки проверки (labels.jsonl, §13/§15) одним файлом —
+        та же append-only запись, что пишет export_label() при каждом ревью."""
+        path = Path(settings.db_path).parent / "labels.jsonl"
+        if not path.exists():
+            raise HTTPException(status_code=404,
+                                detail="Проверенных решений пока нет")
+        return FileResponse(path, media_type="application/x-ndjson",
+                            filename="labels.jsonl")
 
     # ------------------------- health (§11: для деплоя, открыт) -------------------------
 

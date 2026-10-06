@@ -230,6 +230,20 @@ def test_candidates_list(seeded, client):
     assert cands[0]["instrument"]["symbol"] == "BTCUSDT"
 
 
+def test_reviewed_candidate_leaves_queue(seeded, client, db):
+    """Решения вроде now_irrelevant статуса не меняют (§15.1.1), но проверенный
+    кандидат не должен возвращаться в очередь /api/candidates и в счётчик
+    «Требует проверки»."""
+    zid = seeded["z_cand"]
+    resp = client.post(f"/api/zones/{zid}/review", headers=AUTH, json={
+        "decision": "now_irrelevant",
+    })
+    assert resp.status_code == 200
+    assert resp.json()["zone"]["status"] == "candidate"  # статус не тронут
+    assert client.get("/api/candidates", headers=AUTH).json() == []
+    assert db.count_candidate_zones() == {}
+
+
 def test_zone_dict_display_fields(seeded, client, db):
     """§15.1.3/§15.1.7: zone_to_dict несёт display_from/display_until/
     end_reason и breaker-флаги; без display_from — fallback на formed_at."""

@@ -459,3 +459,33 @@ def test_migrate_existing_db_adds_tables(tmp_path):
             "SELECT name FROM sqlite_master WHERE type='table'").fetchall()
     }
     db2.close()
+
+
+# ---------------------------------------------------------------------------
+# Выгрузка разметки: GET /api/export/labels
+# ---------------------------------------------------------------------------
+
+def test_export_labels_requires_auth(client):
+    assert client.get("/api/export/labels").status_code in (401, 403)
+
+
+def test_export_labels_404_when_empty(client):
+    resp = client.get("/api/export/labels", headers=AUTH)
+    assert resp.status_code == 404
+
+
+def test_export_labels_downloads_jsonl(zones, client, settings):
+    zid = zones["live_cand"]
+    client.post(f"/api/zones/{zid}/review", headers=AUTH,
+                json={"decision": "correct", "text": "проверено"})
+    resp = client.get("/api/export/labels", headers=AUTH)
+    assert resp.status_code == 200
+    assert "labels.jsonl" in resp.headers["content-disposition"]
+    rows = [json.loads(line) for line in resp.text.splitlines() if line.strip()]
+    assert len(rows) == 1
+    assert rows[0]["zone"]["id"] == zid
+    assert rows[0]["review_decision"] == "correct"
+    # отдаётся ровно тот же append-only файл, что пишет export_label (R13)
+    assert resp.content == (
+        Path(settings.db_path).parent / "labels.jsonl"
+    ).read_bytes()

@@ -301,6 +301,22 @@ class Database:
                     self.conn.execute(
                         f"ALTER TABLE ltf_pivot ADD COLUMN {col} {ddl}"
                     )
+            # F01/A01: происхождение LTF-событий (live/catchup/replay) и лаг
+            # обнаружения; старые строки получают 'unknown'/0
+            ltf_ev_cols = {
+                r["name"]
+                for r in self.conn.execute(
+                    "PRAGMA table_info(ltf_event)"
+                ).fetchall()
+            }
+            for col, ddl in (
+                ("processing_mode", "TEXT NOT NULL DEFAULT 'unknown'"),
+                ("detection_lag_ms", "INTEGER NOT NULL DEFAULT 0"),
+            ):
+                if col not in ltf_ev_cols:
+                    self.conn.execute(
+                        f"ALTER TABLE ltf_event ADD COLUMN {col} {ddl}"
+                    )
             self.conn.commit()
 
     def get_meta(self, key: str) -> Optional[str]:
@@ -653,6 +669,24 @@ class Database:
             if version == self._zone_cache_version:
                 self._zone_cache[key] = (version, result)
         return list(result)
+
+    def get_unreviewed_candidates(
+        self, instrument_id: Optional[int] = None
+    ) -> list[Zone]:
+        """Очередь ручной проверки (§10): кандидаты без единого ревью.
+
+        Решения вроде now_irrelevant / no_context статуса зоны не меняют
+        (§15.1.1), поэтому «проверенность» определяется по наличию записи
+        в review — иначе проверенные зоны возвращались бы в очередь.
+        Без кэша: review-записи версию кэша зон не инвалидируют."""
+        q = ("SELECT * FROM zone WHERE status='candidate' "
+             "AND NOT EXISTS (SELECT 1 FROM review r WHERE r.zone_id = zone.id)")
+        args: list[Any] = []
+        if instrument_id is not None:
+            q += " AND instrument_id=?"
+            args.append(instrument_id)
+        q += " ORDER BY formed_at"
+        return [self._zone_from_row(r) for r in self.conn.execute(q, args).fetchall()]
 
     def _zone_from_row(self, r: sqlite3.Row) -> Zone:
         fp = hash(tuple(r))
@@ -1842,14 +1876,16 @@ class Database:
         }
 
     def count_candidate_zones(self) -> dict[int, int]:
-        """instrument_id → число зон-кандидатов (status='candidate') — один
-        агрегатный запрос для приоритета внимания списка активов (L06,
-        без N+1)."""
+        """instrument_id → число зон на ручной проверке (кандидаты без ревью) —
+        один агрегатный запрос для приоритета внимания списка активов (L06,
+        без N+1). Фильтр совпадает с очередью /api/candidates."""
         return {
             int(r["instrument_id"]): int(r["n"])
             for r in self.conn.execute(
                 "SELECT instrument_id, COUNT(*) AS n FROM zone "
-                "WHERE status='candidate' GROUP BY instrument_id"
+                "WHERE status='candidate' "
+                "AND NOT EXISTS (SELECT 1 FROM review r WHERE r.zone_id = zone.id) "
+                "GROUP BY instrument_id"
             ).fetchall()
         }
 
@@ -2080,11 +2116,13 @@ class Database:
         cur = self.conn.execute(
             """INSERT OR IGNORE INTO ltf_event
                (observation_id, scenario_id, kind, payload, occurred_at,
-                detected_at, dedupe_key, delivered, delayed)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
+                detected_at, dedupe_key, delivered, delayed,
+                processing_mode, detection_lag_ms)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (e.observation_id, e.scenario_id, e.kind,
              json.dumps(e.payload, ensure_ascii=False), e.occurred_at,
-             e.detected_at, e.dedupe_key, int(e.delivered), int(e.delayed)),
+             e.detected_at, e.dedupe_key, int(e.delivered), int(e.delayed),
+             e.processing_mode, e.detection_lag_ms),
         )
         self.conn.commit()
         self._bump_ltf_cache()
@@ -2175,6 +2213,8 @@ class Database:
             occurred_at=r["occurred_at"], detected_at=r["detected_at"],
             dedupe_key=r["dedupe_key"], delivered=bool(r["delivered"]),
             delayed=bool(r["delayed"]),
+            processing_mode=r["processing_mode"],
+            detection_lag_ms=r["detection_lag_ms"],
         )
 
     # ---------- LTF: reviews / assessments (разметка Entry Zones) ----------
