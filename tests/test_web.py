@@ -279,17 +279,28 @@ def test_grouped_does_not_modify_zones(seeded, client, db):
     assert resp.status_code == 200
     groups = resp.json()["groups"]
     sizes = sorted(len(g["zones"]) for g in groups)
-    assert sizes == [1, 2]  # пара A+B пересекается, C отдельно
+    # §10: сливаются только ОДНОТИПНЫЕ зоны — разнотипные A(FVG)+B(OB)
+    # пересекаются, но не группируются
+    assert sizes == [1, 1, 1]
 
+    # однотипная пересекающаяся пара сливается; исходные зоны не пересчитаны
+    base = seeded["base"]
+    z_d = db.insert_zone(Zone(
+        id=None, instrument_id=seeded["ins1"], type=ZoneType.FVG,
+        direction=Direction.BULL, timeframe="D1", lower=108.0, upper=120.0,
+        formed_at=base + 4, confirmed_at=base + 4, status=ZoneStatus.ACTIVE,
+        source="auto", created_at=base + 4, evidence={"reason": "test"},
+    ))
+    resp = client.get(f"/api/zones/grouped?instrument_id={seeded['ins1']}", headers=AUTH)
+    groups = resp.json()["groups"]
     big = next(g for g in groups if len(g["zones"]) == 2)
-    assert set(big["zone_ids"]) == {seeded["z_a"], seeded["z_b"]}
-    assert big["lower"] == 100.0 and big["upper"] == 115.0
+    assert set(big["zone_ids"]) == {seeded["z_a"], z_d}
+    assert big["lower"] == 100.0 and big["upper"] == 120.0
 
-    # исходные зоны не пересчитаны
     a = db.get_zone(seeded["z_a"])
-    b = db.get_zone(seeded["z_b"])
+    d = db.get_zone(z_d)
     assert (a.lower, a.upper) == (100.0, 110.0)
-    assert (b.lower, b.upper) == (105.0, 115.0)
+    assert (d.lower, d.upper) == (108.0, 120.0)
 
 
 # ---------------------------------------------------------------------------

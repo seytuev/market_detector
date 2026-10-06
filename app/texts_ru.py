@@ -100,7 +100,7 @@ LTF_EVENT_KIND_RU = {
     "entries_ready": "новые Entry Zones",
     "touch": "касание Entry Zone",
     "sweep_confirmed": "снятие уровня подтверждено",
-    "sweep_failed": "снятие уровня не подтверждено",
+    "sweep_failed": "исход снятия уровня",
     "cancellation": "отмена сценария",
     "context_update": "контекст сценария: снятие SSL/BSL + тест 50% D1 FVG (§18)",
     "note": "заметка",

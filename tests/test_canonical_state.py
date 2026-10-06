@@ -47,7 +47,10 @@ def _zone(**kw) -> Zone:
       "type": ZoneType.MANUAL}, True),                     # ручная зона владельца
     ({"market_validity": "invalid"}, False),               # пробит (close_beyond)
     ({"display_until": 3000}, False),                      # завершён
-    ({"status": ZoneStatus.CANDIDATE}, False),             # кандидат
+    # ТЗ 07.10.2026 §3: candidate — признак очереди ревью, не рынка;
+    # подтверждённый кандидат актуален и рисуется сразу
+    ({"status": ZoneStatus.CANDIDATE}, True),
+    ({"status": ZoneStatus.CANDIDATE, "confirmed_at": None}, False),
     ({"status": ZoneStatus.REJECTED}, False),
     ({"status": ZoneStatus.WEAKENED}, True),               # ослабленная FVG жива
 ])

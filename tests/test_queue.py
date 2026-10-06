@@ -283,10 +283,10 @@ async def test_notification_marks_visually_merged_zone():
     db, z = _make_db()
     t0 = now_ms()
     btc_zone = db.get_zone(z["btc_zone"])
-    # вторая актуальная ACTIVE-зона того же инструмента, пересекающаяся
-    # с исходной OB W1 65000–66000
+    # вторая актуальная ACTIVE-зона того же инструмента и ТОГО ЖЕ типа,
+    # пересекающаяся с исходной OB W1 65000–66000 (разнотипные не сливаются)
     db.insert_zone(
-        Zone(None, btc_zone.instrument_id, ZoneType.FVG, Direction.BULL, "D1",
+        Zone(None, btc_zone.instrument_id, ZoneType.OB, Direction.BULL, "D1",
              lower=65500.0, upper=66500.0, formed_at=t0 - 8_000,
              confirmed_at=t0 - 7_000, status=ZoneStatus.ACTIVE, created_at=t0)
     )
@@ -298,7 +298,7 @@ async def test_notification_marks_visually_merged_zone():
     assert len(sender.sent) == 1
     text = render_text(sender.sent[0])
     assert "Визуально объединена с" in text
-    assert "FVG D1" in text and "65,500" in text  # тип/ТФ и граница участника
+    assert "Orderblock D1" in text and "65,500" in text  # тип/ТФ и граница участника
 
 
 async def test_notification_without_group_has_no_merge_mark():

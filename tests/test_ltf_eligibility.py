@@ -17,6 +17,7 @@ from app.engine.ltf.eligibility import (
     REASON_ORIGIN_UNRESOLVED,
     REASON_OUTSIDE_PD,
     REASON_RANGE_PENDING,
+    REASON_LEVEL_BROKEN,
     REASON_SWEPT_LEVEL,
     REASON_TESTED_TOO_DEEP,
     REASON_TYPE_DISABLED,
@@ -73,7 +74,7 @@ def _test(entry_zone_id: int, state: str) -> LtfLiquidityTest:
 def test_reason_codes_stable():
     assert ELIGIBILITY_REASONS == (
         "ok", "outside_pd", "tested_too_deep", "type_disabled", "invalid",
-        "swept_level", "origin_unresolved", "range_pending",
+        "swept_level", "level_broken", "origin_unresolved", "range_pending",
     )
 
 
@@ -148,8 +149,8 @@ def test_type_disabled():
 
 
 def test_swept_level_not_eligible():
-    """п.17: подтверждённый sweep закрывает пригодность уровня; failed —
-    не закрывает."""
+    """п.17: подтверждённый sweep закрывает пригодность уровня; §9 (Этап 5):
+    failed (строгое закрытие за уровнем) — тоже терминально, level_broken."""
     cfg = DetectorConfig()
     zone = _zone("BSL", lower=105.0, upper=105.0)
     ev = evaluate_entry(zone, Direction.BEAR, cfg, _rng(),
@@ -157,7 +158,7 @@ def test_swept_level_not_eligible():
     assert (ev.reason, ev.state) == (REASON_SWEPT_LEVEL, "tested")
     ev2 = evaluate_entry(zone, Direction.BEAR, cfg, _rng(),
                          liquidity_tests=[_test(1, "failed")])
-    assert ev2.reason == REASON_OK
+    assert (ev2.reason, ev2.state) == (REASON_LEVEL_BROKEN, "tested")
     # тест чужой зоны не влияет
     ev3 = evaluate_entry(zone, Direction.BEAR, cfg, _rng(),
                          liquidity_tests=[_test(999, "confirmed")])

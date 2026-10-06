@@ -40,6 +40,7 @@ REASON_TESTED_TOO_DEEP = "tested_too_deep"  # тест >= entry_reuse_max_depth 
 REASON_TYPE_DISABLED = "type_disabled"  # тип отключён настройкой ltf_entry_types
 REASON_INVALID = "invalid"              # зона рыночно невалидна
 REASON_SWEPT_LEVEL = "swept_level"      # BSL/SSL с подтверждённым снятием
+REASON_LEVEL_BROKEN = "level_broken"    # уровень пройден закрытием без возврата (§9)
 REASON_ORIGIN_UNRESOLVED = "origin_unresolved"  # принадлежность движению не доказана
 REASON_RANGE_PENDING = "range_pending"  # диапазон ещё не подтверждён — кандидат
 
@@ -50,6 +51,7 @@ ELIGIBILITY_REASONS = (
     REASON_TYPE_DISABLED,
     REASON_INVALID,
     REASON_SWEPT_LEVEL,
+    REASON_LEVEL_BROKEN,
     REASON_ORIGIN_UNRESOLVED,
     REASON_RANGE_PENDING,
 )
@@ -97,6 +99,15 @@ def evaluate_entry(
         for t in liquidity_tests or ()
     ):
         return EligibilityResult(REASON_SWEPT_LEVEL, "tested", eligible, overlap)
+    # 3b) §9 (Этап 5): уровень, пройденный закрытием H1 без возврата
+    # (исход failed — строгое закрытие за уровнем), — терминальное состояние:
+    # не «свежая нетронутая ликвидность», возврат за уровень позже исход
+    # пробойной свечи не меняет и от новой версии диапазона не воскресает
+    if zone.type in ("BSL", "SSL") and any(
+        t.entry_zone_id == zone.id and t.state == "failed"
+        for t in liquidity_tests or ()
+    ):
+        return EligibilityResult(REASON_LEVEL_BROKEN, "tested", eligible, overlap)
     # 4) принадлежность движению сценария: movement_id обязан разрешаться;
     # movement_id=0 (уровень якоря диапазона) — вне этой проверки
     if zone.movement_id and movements is not None:

@@ -221,7 +221,10 @@ def is_external(base: BaseRecord, fvg: FvgRecord) -> bool:
 
     Бычий OB: FVG полностью выше U базы; медвежий — полностью ниже L.
     FVG внутри диапазона консолидации не подтверждает OB.
+    ТЗ 07.10.2026 §5: условие bull L_fvg >= U_ob / bear U_fvg <= L_ob —
+    равенство касающихся краёв допустимо как неперекрытие (FVG имеет
+    положительную ширину по построению: строгие High1<Low3 / Low1>High3).
     """
     if base.direction == Direction.BULL:
-        return fvg.lower > base.upper
-    return fvg.upper < base.lower
+        return fvg.lower >= base.upper
+    return fvg.upper <= base.lower

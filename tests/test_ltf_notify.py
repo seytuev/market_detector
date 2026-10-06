@@ -238,7 +238,7 @@ def test_render_sweep_outcomes(db: Database, instrument_id: int):
     fail = _event(db, obs, sc, "sweep_failed", dict(base, outcome="failed"),
                   "sweep:3:b")
     t = render_ltf_messages(fail, _ctx(db, obs, sc))[0]
-    assert "снятие не подтвердилось" in t
+    assert "пройден без возврата" in t
     eq = _event(db, obs, sc, "sweep_failed", dict(base, outcome="equal_close"),
                 "sweep:3:c")
     t = render_ltf_messages(eq, _ctx(db, obs, sc))[0]

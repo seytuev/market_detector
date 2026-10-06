@@ -39,6 +39,7 @@ from .breaks import StructureEventDraft, detect_breaks
 from .context import context_complete, context_flags, scenario_context
 from .eligibility import (
     ADMISSION_CONTEXT,
+    REASON_LEVEL_BROKEN,
     REASON_OUTSIDE_PD,
     admitted_scenario_entries,
     entry_reason,
@@ -302,8 +303,17 @@ class LtfEngine:
                 # касания (§13: восстановление не меняет прошлое)
                 if zone.confirmed_at and zone.confirmed_at > candle.close_time:
                     continue
-                # §8.5: касание проверяется по полному диапазону зоны
+                # §8.5: касание проверяется по полному диапазону зоны;
+                # §9 (Этап 5): закрытие за уровнем БЕЗ касания (ценовой разрыв
+                # через уровень) — уровень пройден, терминальный исход
                 if not touch_bar(zone.lower, zone.upper, candle):
+                    if (zone.is_level
+                            and (cur is None
+                                 or candle.close_time >= cur.available_at)
+                            and self._level_close_beyond(zone, candle)):
+                        self._mark_level_broken(obs, sc, zone, candle, now,
+                                                processing_mode,
+                                                detection_lag_ms, result)
                     continue
                 # replay/backlog: версия диапазона подтверждена позже этой
                 # свечи — касания до выбора зоны на текущей версии не
@@ -314,6 +324,21 @@ class LtfEngine:
                 self._on_entry_touched(obs, sc, entry, zone, candle, tests,
                                        now, processing_mode, detection_lag_ms,
                                        result)
+            # §9 (Этап 5): уровни с незавершённой историей тестов (касались
+            # раньше, терминального исхода нет) — строгое закрытие за уровнем
+            # на этой свече финализирует исход: уровень пройден без возврата
+            watched = {
+                t.entry_zone_id for t in tests
+                if t.state not in ("confirmed", "failed")
+            }
+            for zid in watched:
+                zone = self.db.get_ltf_entry_zone(zid)
+                if zone is None or not zone.is_level:
+                    continue
+                if self._level_close_beyond(zone, candle):
+                    self._mark_level_broken(obs, sc, zone, candle, now,
+                                            processing_mode, detection_lag_ms,
+                                            result)
             # закрытие тестов, начатых внутри этой свечи (live-путь, §10/п.14)
             for t in self.db.list_ltf_liquidity_tests(state="awaiting_close",
                                                       scenario_id=sc.id):
@@ -426,9 +451,15 @@ class LtfEngine:
             sweep_at=candle.close_time if confirmed else None,
             resolved_at=candle.close_time,
         )
-        if confirmed:
-            # снятый уровень сразу теряет пригодность на текущей версии,
-            # не дожидаясь следующего пересчёта диапазона (приёмка п.17)
+        # §9 (Этап 5): confirmed — снятие с возвратом; failed — строгое
+        # закрытие за уровнем (уровень пройден без возврата). Оба исхода
+        # терминальны: уровень сразу теряет пригодность на текущей версии,
+        # не дожидаясь пересчёта диапазона, и не воскресает (п.17)
+        terminal_reason = {
+            "confirmed": "swept_level",
+            "failed": REASON_LEVEL_BROKEN,
+        }.get(outcome)
+        if terminal_reason is not None:
             cur = self.db.get_current_ltf_range(sc.id)
             ver = cur.version if cur is not None else 0
             for e in self.db.list_ltf_scenario_entries(sc.id):
@@ -437,7 +468,7 @@ class LtfEngine:
                 self.db.upsert_ltf_scenario_entry(LtfScenarioEntry(
                     id=None, scenario_id=sc.id, entry_zone_id=zone.id,
                     range_version=e.range_version, eligible=e.eligible,
-                    overlap=e.overlap, state="tested", reason="swept_level",
+                    overlap=e.overlap, state="tested", reason=terminal_reason,
                     added_at=e.added_at, updated_at=now,
                 ))
         result.sweeps.append(test_id)
@@ -451,6 +482,89 @@ class LtfEngine:
                    }, candle.close_time, now,
                    f"sweep:{zone.id}:{candle.open_time}",
                    processing_mode, detection_lag_ms, result)
+
+    # ------------------------------------------------------------------ #
+    # (2b) §9 (Этап 5): уровень, пройденный закрытием без возврата
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _level_close_beyond(zone: LtfEntryZone, candle) -> bool:
+        """Строгое закрытие за уровнем: BSL — Close > K, SSL — Close < K."""
+        if not candle.closed:
+            return False
+        if zone.type == "BSL":
+            return candle.close > zone.lower
+        return candle.close < zone.lower
+
+    def _level_passed_candle(
+        self, zone_type: str, level: float, formed_at: int, up_to: list
+    ):
+        """§9 (Этап 5): первая закрытая свеча ПОСЛЕ рождения экстремума,
+        закрепившаяся за уровнем без возврата (BSL: Close > K; SSL: Close < K).
+        Рождение экстремума и свечи до него — не ретест (приёмка п.11)."""
+        for c in up_to:
+            if not c.closed or c.open_time <= formed_at:
+                continue
+            if zone_type == "BSL" and c.close > level:
+                return c
+            if zone_type == "SSL" and c.close < level:
+                return c
+        return None
+
+    def _mark_level_broken(
+        self, obs, sc, zone: LtfEntryZone, candle, now: int,
+        processing_mode: str, detection_lag_ms: int,
+        result: LtfTickResult,
+    ) -> Optional[LtfLiquidityTest]:
+        """Терминальный исход «уровень пройден без возврата» (broken_without
+        _reclaim): строка теста state='failed', зона tested, привязки текущей
+        версии — reason level_broken, событие sweep_failed. Идемпотентно:
+        терминальный тест (confirmed/failed) по зоне уже есть — no-op."""
+        tests = self.db.list_ltf_liquidity_tests(scenario_id=sc.id)
+        if any(
+            t.entry_zone_id == zone.id and t.state in ("confirmed", "failed")
+            for t in tests
+        ):
+            return None
+        # зона должна быть подтверждена к моменту свечи (§13: replay не
+        # меняет прошлое) — более раннее «прохождение» ловится при создании
+        if zone.confirmed_at and zone.confirmed_at > candle.close_time:
+            return None
+        t = LtfLiquidityTest(
+            id=None, entry_zone_id=zone.id, scenario_id=sc.id,
+            level=zone.lower, touch_at=candle.close_time,
+            candle_open_time=candle.open_time, state="failed",
+            close_price=candle.close, resolved_at=candle.close_time,
+        )
+        t.id = self.db.insert_ltf_liquidity_test(t)
+        # пройденный уровень — не «свежая нетронутая ликвидность» (§9)
+        self.db.update_ltf_entry_zone(
+            zone.id,
+            first_test_at=zone.first_test_at or candle.close_time,
+            validity="tested",
+        )
+        zone.first_test_at = zone.first_test_at or candle.close_time
+        zone.validity = "tested"
+        cur = self.db.get_current_ltf_range(sc.id)
+        ver = cur.version if cur is not None else 0
+        for e in self.db.list_ltf_scenario_entries(sc.id):
+            if e.entry_zone_id != zone.id or e.range_version != ver:
+                continue
+            self.db.upsert_ltf_scenario_entry(LtfScenarioEntry(
+                id=None, scenario_id=sc.id, entry_zone_id=zone.id,
+                range_version=e.range_version, eligible=e.eligible,
+                overlap=e.overlap, state="tested", reason=REASON_LEVEL_BROKEN,
+                added_at=e.added_at, updated_at=now,
+            ))
+        result.sweeps.append(t.id)
+        self._emit(obs.id, sc.id, "sweep_failed", {
+            "liquidity_test_id": t.id, "entry_zone_id": zone.id,
+            "level": zone.lower, "close_price": candle.close,
+            "outcome": "failed",
+            "candle_open_time": candle.open_time,
+        }, candle.close_time, now, f"sweep:{zone.id}:{candle.open_time}",
+            processing_mode, detection_lag_ms, result)
+        return t
 
     # ------------------------------------------------------------------ #
     # (3) Сценарии: открытие, события, отмена (§6)
@@ -530,14 +644,20 @@ class LtfEngine:
         sc.origin_break_event_id = se_ids[main.level_key]
         # §11.2/п.18: диапазон и зоны готовы на закрытии слома — одно
         # объединённое событие, иначе range_pending и позже дополнение
-        self._update_range(sc, up_to, now, result, avail=avail)
+        self._update_range(sc, up_to, now, result, avail=avail, obs=obs,
+                           processing_mode=processing_mode,
+                           detection_lag_ms=detection_lag_ms)
         self._build_entries(obs, sc, main, se_ids[main.level_key], avail,
-                            up_to, now, result)
+                            up_to, now, result,
+                            processing_mode=processing_mode,
+                            detection_lag_ms=detection_lag_ms)
         # §7 (Этап 4): второй проход — причинное движение появляется только
         # в _build_entries, поэтому диапазон origin_reversal от его якоря
         # строится здесь, на том же закрытии слома; при валидной
         # continuation-паре первый проход уже создал версию, а этот — no-op
-        self._update_range(sc, up_to, now, result, avail=avail)
+        self._update_range(sc, up_to, now, result, avail=avail, obs=obs,
+                           processing_mode=processing_mode,
+                           detection_lag_ms=detection_lag_ms)
         # §18: контекст (снятие SSL/BSL + тест 50% D1 FVG) — до публикации
         # входов, чтобы допуск вне Premium применился уже в событии слома
         self._update_scenario_context(obs, sc, avail, up_to, now,
@@ -597,7 +717,10 @@ class LtfEngine:
                   for e in fresh]
         # (4) диапазон: новая подтверждённая опора → версия; старые события
         # сохраняют прежнюю геометрию (§7)
-        created_range = self._update_range(sc, up_to, now, result, avail=avail)
+        created_range = self._update_range(sc, up_to, now, result, avail=avail,
+                                           obs=obs,
+                                           processing_mode=processing_mode,
+                                           detection_lag_ms=detection_lag_ms)
         # §6.5: продолжение в том же направлении — фиксируем событие, но новые
         # зоны последующих движений не добавляем (§8.1)
         for e, se_id in se_ids:
@@ -799,6 +922,7 @@ class LtfEngine:
     def _update_range(
         self, sc, up_to: list, now: int, result: LtfTickResult,
         avail: Optional[list[PivotCandidate]] = None,
+        obs=None, processing_mode: str = "unknown", detection_lag_ms: int = 0,
     ) -> Optional[LtfRange]:
         # ТЗ §8/п.04: отменённый/закрытый сценарий не получает новых рабочих
         # версий диапазона и пересчёта привязок (исторический replay
@@ -907,10 +1031,29 @@ class LtfEngine:
         zone_ids = self._scenario_zone_ids(sc.id)
         if anchor_zone_id is not None:
             zone_ids.add(anchor_zone_id)
+        if obs is None:
+            obs = self.db.get_ltf_observation(sc.observation_id)
         for zid in zone_ids:
             zone = self.db.get_ltf_entry_zone(zid)
             if zone is None:
                 continue
+            # §9 (Этап 5): уровень, пройденный закрытием до этой версии (в т.ч.
+            # за окно подтверждения опор и пока был вне выбора), рождается /
+            # перепривязывается уже пройденным — «свежим» он не становится
+            if zone.is_level and not any(
+                t.entry_zone_id == zid and t.state in ("confirmed", "failed")
+                for t in tests
+            ):
+                breach = self._level_passed_candle(
+                    zone.type, zone.lower, zone.formed_at, up_to
+                )
+                if breach is not None:
+                    t = self._mark_level_broken(
+                        obs, sc, zone, breach, now,
+                        processing_mode, detection_lag_ms, result,
+                    )
+                    if t is not None:
+                        tests.append(t)
             ev = evaluate_entry(
                 zone, sc.direction, self.cfg, draft,
                 movements=movements, liquidity_tests=tests,
@@ -995,6 +1138,7 @@ class LtfEngine:
         self, obs, sc, main: StructureEventDraft, se_id: int,
         avail: list[PivotCandidate], up_to: list, now: int,
         result: LtfTickResult,
+        processing_mode: str = "unknown", detection_lag_ms: int = 0,
     ) -> None:
         # ТЗ §8/п.04: отменённый/закрытый сценарий не получает новых
         # движений и Entry Zones
@@ -1042,6 +1186,21 @@ class LtfEngine:
                 ))
                 existing[(ez.type, ez.lower, ez.upper)] = ez.id
             result.entry_zones_processed.append(ez.id)
+            # §9 (Этап 5): уровень, пройденный закрытием после рождения
+            # экстремума (в т.ч. за окно из 3 правых свечей подтверждения),
+            # рождается пройденным — «свежей нетронутой ликвидностью» не
+            # становится никогда
+            if ez.is_level:
+                breach = self._level_passed_candle(
+                    ez.type, ez.lower, ez.formed_at, up_to
+                )
+                if breach is not None:
+                    t = self._mark_level_broken(
+                        obs, sc, ez, breach, now,
+                        processing_mode, detection_lag_ms, result,
+                    )
+                    if t is not None:
+                        tests.append(t)
             # ТЗ §10: пригодность — конъюнкция evaluate_entry (тип, sweep,
             # движение, глубина тестов, половина диапазона); протестированная
             # зона с глубиной СТРОГО < 90% допускается к повторному выбору

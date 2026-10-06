@@ -15,7 +15,7 @@ def _zone(zid: int, lower: float, upper: float,
 
 
 def test_overlapping_zones_grouped_and_members_listed():
-    zones = [_zone(1, 100, 200), _zone(2, 150, 250, ZoneType.FVG),
+    zones = [_zone(1, 100, 200), _zone(2, 150, 250, ZoneType.OB),
              _zone(3, 500, 600)]
     members = group_members_by_zone(zones)
     assert set(members) == {1, 2}
@@ -34,3 +34,20 @@ def test_chain_merge_through_transitive_overlap():
 def test_single_zones_have_no_group():
     zones = [_zone(1, 100, 200), _zone(2, 300, 400)]
     assert group_members_by_zone(zones) == {}
+
+
+def test_different_types_never_merge():
+    # OB пересекается с FVG — не сливаются; второй OB, касающийся только
+    # через FVG, тоже не попадает в группу (цепочка рвётся на типе)
+    zones = [_zone(1, 100, 200, ZoneType.OB),
+             _zone(2, 150, 220, ZoneType.FVG),
+             _zone(3, 210, 300, ZoneType.OB)]
+    assert group_members_by_zone(zones) == {}
+
+
+def test_same_type_chain_still_merges():
+    # однотипная цепочка сливается транзитивно, даже если крайние зоны
+    # напрямую не пересекаются
+    zones = [_zone(1, 100, 200), _zone(2, 190, 260), _zone(3, 250, 400)]
+    members = group_members_by_zone(zones)
+    assert set(members) == {1, 2, 3}

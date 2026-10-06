@@ -57,7 +57,7 @@ const state = {
 let LTF_KIND_RU = {
   bos: 'слом BOS', sms: 'слом SMS', range_ready: 'диапазон готов',
   entries_ready: 'новые Entry Zones', touch: 'касание Entry Zone',
-  sweep_confirmed: 'снятие подтверждено', sweep_failed: 'снятие не подтверждено',
+  sweep_confirmed: 'снятие подтверждено', sweep_failed: 'исход снятия уровня',
   cancellation: 'отмена сценария', note: 'заметка',
 };
 let LTF_OBS_STATE_RU = {
@@ -101,6 +101,7 @@ const REASON_RU = {
   type_disabled: 'тип отключён настройкой',
   invalid: 'зона невалидна',
   swept_level: 'уровень снят',
+  level_broken: 'уровень пройден без возврата',
   origin_unresolved: 'принадлежность движению не доказана',
   range_pending: 'диапазон ещё не подтверждён',
 };
@@ -110,9 +111,9 @@ const ENTRY_STATE_RU = {
 };
 const LIQUIDITY_STATE_RU = {
   awaiting_close: 'снятие ожидает закрытия H1',
-  confirmed: 'снятие подтверждено',
-  failed: 'снятие не подтверждено',
-  equal_close: 'закрытие ровно на уровне',
+  confirmed: 'снятие с возвратом',
+  failed: 'уровень пройден без возврата',
+  equal_close: 'закрытие ровно на уровне — исход неопределён',
 };
 let LTF_REVIEW_DECISION_RU = {
   correct: 'размечено верно', now_irrelevant: 'сейчас неактуально',
@@ -1149,7 +1150,8 @@ function renderJournal() {
     if (e.kind === 'range_ready') return p.range ? `[${fmtPrice(p.range.lower)}; ${fmtPrice(p.range.upper)}]` : '';
     if (e.kind === 'touch') return `${esc(p.type || '')} ${fmtPrice(p.lower)}${p.upper !== p.lower ? '–' + fmtPrice(p.upper) : ''}`;
     if (e.kind === 'sweep_confirmed' || e.kind === 'sweep_failed') {
-      return `уровень ${fmtPrice(p.level)}, закрытие ${fmtPrice(p.close_price)}`;
+      const outcome = p.outcome ? ` · ${esc(LIQUIDITY_STATE_RU[p.outcome] || p.outcome)}` : '';
+      return `уровень ${fmtPrice(p.level)}, закрытие ${fmtPrice(p.close_price)}${outcome}`;
     }
     if (e.kind === 'cancellation') return esc(LTF_CANCEL_RU[p.reason] || p.reason || '');
     return '';

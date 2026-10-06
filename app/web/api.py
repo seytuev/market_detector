@@ -186,6 +186,14 @@ def zone_to_dict(z: Zone) -> dict[str, Any]:
         # ТЗ 07.10.2026 §3/§11: единый canonical state — актуальные зоны
         # рисуются сразу, статус candidate означает только очередь ревью
         "relevant": z.is_currently_relevant(),
+        # ТЗ 07.10.2026 §7 (T10): предпочтение владельца для рабочего входа
+        "entry_preference": (
+            "preferred" if z.evidence.get("preferred_for_entry")
+            else "superseded" if z.evidence.get("superseded_for_entry_by")
+            else None
+        ),
+        "supersedes_for_entry": z.evidence.get("supersedes_for_entry"),
+        "superseded_for_entry_by": z.evidence.get("superseded_for_entry_by"),
         "market_validity": z.market_validity,
         "evidence": z.evidence,
         "rule_version": z.rule_version,
@@ -432,6 +440,16 @@ class ReviewIn(BaseModel):
     reason_code: Optional[str] = None          # машинный код причины (R13)
     anchor_candle_open_time: Optional[int] = None  # свеча-якорь поправки (§15.2)
     evidence_source: str = "manual_ui"
+
+
+class PreferEntryIn(BaseModel):
+    """ТЗ 07.10.2026 §7 (T10): предпочтение владельца для рабочего входа.
+
+    supersedes_zone_id — какую связанную (например, более широкую
+    охватывающую) зону эта зона замещает для входа; None — снять пометку.
+    """
+    supersedes_zone_id: Optional[int] = None
+    comment: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -950,6 +968,24 @@ def create_app(
             review_id = _add_review(db, zone_id, body.decision, body.text)
         else:
             review_id = db.get_reviews(zone_id)[-1].id
+
+        # ТЗ 07.10.2026 §9/§11 (T13): ручное исключение из новых входов по
+        # комментарию («глубокий/множественный тест») — market_validity НЕ
+        # трогаем: рыночное завершение подтверждается только свечами,
+        # выдуманного close_beyond нет. Оценка владельца не сбрасывает
+        # историю тестов/пробоев (T17)
+        if reason_code in _MANUAL_ENTRY_EXCLUSION_REASONS:
+            cur = db.get_zone(zone_id)
+            updates: dict = {}
+            if cur.entry_eligible:
+                updates["entry_eligible"] = False
+            evidence = dict(cur.evidence)
+            evidence["manual_entry_exclusion"] = reason_code
+            evidence["manual_entry_exclusion_review_id"] = review_id
+            evidence["manual_entry_exclusion_comment"] = body.text or ""
+            _update_evidence(db, cur, evidence)
+            if updates:
+                db.update_zone(zone_id, **updates)
         # review_assessment — раздельная оценка (§12, §15.3); текст не дублируем
         assessment = ReviewAssessment(
             id=None, zone_id=zone_id, review_id=review_id,
@@ -974,6 +1010,55 @@ def create_app(
                     boundary_correction_to_dict(correction) if correction else None
                 ),
                 "reviews": [review_to_dict(r) for r in db.get_reviews(zone_id)]}
+
+    @app.post("/api/zones/{zone_id}/prefer-entry", dependencies=[Depends(require_auth)])
+    def prefer_entry(zone_id: int, body: PreferEntryIn) -> dict[str, Any]:
+        """ТЗ 07.10.2026 §7 (T10): предпочтительная рабочая зона для входа.
+
+        Ссылка preferred_entry_zone/supersedes_for_entry — не удаление
+        родителя: обе зоны сохраняют независимые lifecycle и историю тестов
+        (эталон ETH №342 предпочтительна, широкая №340 — связанная
+        историческая/контекстная). Глубины считаются от собственных W каждой
+        зоны (T11). Автоматического ранжирования «самая узкая/поздняя» нет.
+        """
+        zone = db.get_zone(zone_id)
+        if zone is None:
+            raise HTTPException(status_code=404, detail="Зона не найдена")
+        evidence = dict(zone.evidence)
+        old_superseded = evidence.get("supersedes_for_entry")
+        if body.supersedes_zone_id is None:
+            evidence.pop("preferred_for_entry", None)
+            evidence.pop("supersedes_for_entry", None)
+            evidence.pop("entry_preference_comment", None)
+        else:
+            other = db.get_zone(body.supersedes_zone_id)
+            if other is None:
+                raise HTTPException(status_code=404,
+                                    detail="Замещаемая зона не найдена")
+            if other.id == zone.id:
+                raise HTTPException(status_code=400,
+                                    detail="Зона не может замещать саму себя")
+            evidence["preferred_for_entry"] = True
+            evidence["supersedes_for_entry"] = other.id
+            if body.comment:
+                evidence["entry_preference_comment"] = body.comment
+            # обратная пометка на замещаемой зоне (родитель не удаляется)
+            other_ev = dict(other.evidence)
+            other_ev["superseded_for_entry_by"] = zone.id
+            _update_evidence(db, other, other_ev)
+        _update_evidence(db, zone, evidence)
+        # снятие обратной пометки с прежней замещаемой зоны
+        if body.supersedes_zone_id is None and old_superseded is not None:
+            prev = db.get_zone(old_superseded)
+            if prev is not None and \
+                    prev.evidence.get("superseded_for_entry_by") == zone.id:
+                prev_ev = dict(prev.evidence)
+                prev_ev.pop("superseded_for_entry_by", None)
+                _update_evidence(db, prev, prev_ev)
+        updated = db.get_zone(zone_id)
+        hub.broadcast({"type": "zone", "action": "updated",
+                       "zone": zone_to_dict(updated)})
+        return zone_to_dict(updated)
 
     @app.get("/api/candidates", dependencies=[Depends(require_auth)])
     def list_candidates(instrument_id: Optional[int] = None) -> list[dict[str, Any]]:
@@ -1325,6 +1410,17 @@ _LIFECYCLE_COMMENT_RULES: list[tuple[str, str, tuple[str, ...]]] = [
         "не отработан", "не отработана", "не отработано",
         "не является отработанным", "не является отработанной",
     )),
+    # ТЗ 07.10.2026 §9/§11 (T13): глубокий/множественный тест — ручное
+    # исключение из НОВЫХ входов с конкретной причиной, без выдуманного
+    # close_beyond; непробитый OB сохраняет market_validity.
+    # «множественный» проверяется раньше «глубокого» (№215: «Глубокий и
+    # множественный тест»)
+    ("repeated_test_manual_exclusion", "completed", (
+        "множественный тест", "множественные тесты",
+    )),
+    ("deep_test_entry_excluded", "completed", (
+        "протестирован", "глубокий тест", "90%", "90 %",
+    )),
     ("already_tested", "tested", (
         "уже тестирован", "уже тестировал", "тестировался", "тестировалась",
         "был протестирован", "была протестирована", "частичный тест",
@@ -1332,12 +1428,20 @@ _LIFECYCLE_COMMENT_RULES: list[tuple[str, str, tuple[str, ...]]] = [
     ("already_completed", "completed", (
         "уже снят", "уже снята", "перекрыт", "перекрыта",
         "был пробит", "была пробита", "не актуал", "неактуал",
+        "прошит", "прошита", "прошиты", "прошито",
         # ТЗ 06.10.2026 §11 (№551): «потерял актуальность в …» — lifecycle,
         # а не ошибка геометрии
         "потерял актуальность", "потеряла актуальность",
         "утратил актуальность", "утратила актуальность",
     )),
 ]
+
+# Причины already_completed, означающие ручное исключение из новых входов
+# (ТЗ 07.10.2026 §11: разбиение на close_beyond / deep_test_entry_excluded /
+# repeated_test_manual_exclusion / unresolved)
+_MANUAL_ENTRY_EXCLUSION_REASONS = {
+    "deep_test_entry_excluded", "repeated_test_manual_exclusion",
+}
 
 
 def _lifecycle_comment_hint(text: str) -> Optional[tuple[str, str]]:

@@ -11,7 +11,11 @@ from ..models import Zone
 
 def union_find_groups(zones: list[Zone]) -> list[list[Zone]]:
     """Union-find по пересечению диапазонов [lower, upper] (§10: визуальное
-    объединение). Касание границ считается пересечением."""
+    объединение). Касание границ считается пересечением.
+
+    Объединяются только ОДНОТИПНЫЕ зоны (одинаковый type): сливать, скажем,
+    OB с FVG в одну полосу нельзя — разнотипные зоны на графике обрезают
+    друг друга в месте пересечения (см. drawZones в app.js)."""
     parent = {z.id: z.id for z in zones}
 
     def find(x: int) -> int:
@@ -30,6 +34,8 @@ def union_find_groups(zones: list[Zone]) -> list[list[Zone]]:
         for b in ordered[i + 1:]:
             if b.lower > a.upper:
                 break  # отсортировано: дальше пересечений с a не будет
+            if a.type != b.type:
+                continue  # разнотипные зоны не сливаются
             union(a.id, b.id)
     groups: dict[int, list[Zone]] = {}
     for z in zones:

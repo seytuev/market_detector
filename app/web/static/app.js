@@ -288,8 +288,9 @@ function drawZones() {
     return div;
   };
 
-  // §10: пересекающиеся зоны не накладываются друг на друга — для визуальной
-  // группы рисуется ОДНА объединённая полоса (состав — в подписи и tooltip).
+  // §10: пересекающиеся ОДНОТИПНЫЕ зоны не накладываются друг на друга —
+  // для визуальной группы рисуется ОДНА объединённая полоса (состав — в
+  // бейдже и tooltip); разнотипные полосы обрезают друг друга (ниже).
   // Исходные зоны, границы, середины и правила уведомлений не меняются.
   const groupByZone = new Map();
   for (const g of state.groups) {
@@ -304,9 +305,12 @@ function drawZones() {
     const sel = state.zones.find((z) => z.id === state.selectedZoneId);
     pool = sel && tfMatch(sel) ? [sel] : [];
   } else {
+    // ТЗ 07.10.2026 §3: актуальные зоны (relevant — canonical state с
+    // сервера) рисуются СРАЗУ, без ожидания ручного ревью; статус candidate
+    // скрывает только неподтверждённые объекты очереди проверки
     pool = state.zones.filter((z) =>
       CHART_STATUSES.has(z.status) && tfMatch(z) &&
-      (state.showCandidates || z.status !== 'candidate'));
+      (z.relevant || z.status !== 'candidate' || state.showCandidates));
     if (pool.length > state.maxChartZones) {
       const price = state.lastPrice || 0;
       pool.sort((a, b) => distanceToZone(a, price) - distanceToZone(b, price));
@@ -334,6 +338,42 @@ function drawZones() {
     for (const z of members) mergedIds.add(z.id);
   }
 
+  // Разнотипные зоны не сливаются и не закрашивают друг друга: в месте
+  // пересечения более широкая полоса обрезается более узкой (узкие «режут»
+  // широкие). Каждая полоса рисуется оставшимися сегментами [lo, hi].
+  // Уровни (SSL/BSL) — тонкие линии, в обрезке не участвуют.
+  const subtractSegs = (segs, lo, hi) => {
+    const out = [];
+    for (const [a, b] of segs) {
+      if (hi <= a || lo >= b) { out.push([a, b]); continue; }
+      if (lo > a) out.push([a, Math.min(lo, b)]);
+      if (hi < b) out.push([Math.max(hi, a), b]);
+    }
+    return out;
+  };
+  const clipItems = []; // {key, lower, upper}
+  for (const z of pool) {
+    if (mergedIds.has(z.id) || z.is_level) continue;
+    clipItems.push({ key: z.id, lower: z.lower, upper: z.upper });
+  }
+  for (const [gid, members] of mergedGroups) {
+    clipItems.push({
+      key: 'g' + gid,
+      lower: Math.min(...members.map((z) => z.lower)),
+      upper: Math.max(...members.map((z) => z.upper)),
+    });
+  }
+  // приоритет — более узкая полоса: она остаётся целой и режет широкие
+  clipItems.sort((a, b) => (a.upper - a.lower) - (b.upper - b.lower));
+  const segsByKey = new Map();
+  const taken = []; // интервалы более приоритетных (узких) полос
+  for (const it of clipItems) {
+    let segs = [[it.lower, it.upper]];
+    for (const [lo, hi] of taken) segs = subtractSegs(segs, lo, hi);
+    segsByKey.set(it.key, segs);
+    taken.push([it.lower, it.upper]);
+  }
+
   for (const z of pool) {
     if (mergedIds.has(z.id)) continue; // входит в объединённую полосу ниже
     // §15.1.7: рисунок начинается от display_from (для FVG — средняя свеча
@@ -357,44 +397,55 @@ function drawZones() {
       const xc = ts.timeToCoordinate(Math.floor(z.display_until / 1000));
       if (xc !== null) x2 = Math.min(paneRight, xc);
     }
-    const div = makeBand(z.upper, z.lower,
-      `zone-rect z-${z.type} status-${z.status}` +
-      (completed ? ' status-completed' : '') +
-      (state.selectedZoneId === z.id ? ' selected' : ''));
-    if (!div) continue;
-    div.dataset.zoneId = z.id;
     if (x2 <= x1) continue; // завершилась левее видимой области
-    div.style.left = x1 + 'px';
-    div.style.width = Math.max(8, x2 - x1) + 'px';
-    div.onclick = () => openZoneDetail(z.id);
-
-    if (!z.is_level) {
-      const midY = state.candleSeries.priceToCoordinate(z.mid);
-      if (midY !== null && midY >= 0 && midY <= height) {
-        const mid = document.createElement('div');
-        mid.className = 'zone-mid';
-        mid.style.top = (midY - parseFloat(div.style.top)) + 'px';
-        div.appendChild(mid);
-      }
-    }
-
-    const label = document.createElement('span');
-    label.className = 'zone-label';
-    label.textContent =
+    const cls = `zone-rect z-${z.type} status-${z.status}` +
+      (completed ? ' status-completed' : '') +
+      (state.selectedZoneId === z.id ? ' selected' : '');
+    const labelText =
       `${z.type.toUpperCase()} ${z.timeframe} · ${STATUS_RU[z.status] || z.status}` +
       (z.name ? ` · ${z.name}` : '');
-    // подписи только у некандидатов — иначе подписи кандидатов превращают
-    // график в кашу; текст кандидата доступен в tooltip (div.title)
-    if (z.status !== 'candidate') div.appendChild(label);
-    div.title = label.textContent;
-    overlay.appendChild(div);
+    // уровни рисуются целиком; полосы — сегментами после обрезки соседями
+    const segs = z.is_level ? [[z.lower, z.upper]] : (segsByKey.get(z.id) || []);
+    let labelPlaced = false;
+    for (const [lo, hi] of segs) {
+      const div = makeBand(hi, lo, cls);
+      if (!div) continue;
+      div.dataset.zoneId = z.id;
+      div.style.left = x1 + 'px';
+      div.style.width = Math.max(8, x2 - x1) + 'px';
+      div.onclick = () => openZoneDetail(z.id);
+
+      if (!z.is_level && z.mid >= lo && z.mid <= hi) {
+        const midY = state.candleSeries.priceToCoordinate(z.mid);
+        if (midY !== null && midY >= 0 && midY <= height) {
+          const mid = document.createElement('div');
+          mid.className = 'zone-mid';
+          mid.style.top = (midY - parseFloat(div.style.top)) + 'px';
+          div.appendChild(mid);
+        }
+      }
+
+      // подписи только у некандидатов — иначе подписи кандидатов превращают
+      // график в кашу; текст кандидата доступен в tooltip (div.title);
+      // подпись — на первом отрисованном сегменте
+      if (!labelPlaced && z.status !== 'candidate') {
+        const label = document.createElement('span');
+        label.className = 'zone-label';
+        label.textContent = labelText;
+        div.appendChild(label);
+        labelPlaced = true;
+      }
+      div.title = labelText;
+      overlay.appendChild(div);
+    }
   }
 
-  // §10: объединённые полосы визуальных групп — вместо наложения зон друг
-  // на друга. Состав группы — в бейдже и tooltip; клик открывает первую
-  // зону группы (исходные зоны доступны и в таблице ниже).
+  // §10: объединённые полосы визуальных групп (только однотипные зоны) —
+  // вместо наложения зон друг на друга. Состав группы — в бейдже и tooltip;
+  // клик открывает первую зону группы (исходные зоны доступны и в таблице
+  // ниже). Границы — по видимым участникам; полоса тоже обрезается более
+  // узкими разнотипными соседями (сегменты из segsByKey).
   for (const [gid, members] of mergedGroups) {
-    const g = groupByZone.get(members[0].id);
     // начало полосы — самое раннее формирование участников
     let x1 = null;
     for (const z of members) {
@@ -404,20 +455,28 @@ function drawZones() {
       if (x1 === null || zx < x1) x1 = zx;
     }
     if (x1 === null || x1 > paneRight) continue;
-    const div = makeBand(g.upper, g.lower, 'zone-group');
-    if (!div) continue;
-    div.style.left = x1 + 'px';
-    div.style.width = Math.max(8, paneRight - x1) + 'px';
     const ordered = members.slice().sort((a, b) => a.id - b.id);
-    const badge = document.createElement('span');
-    badge.className = 'zone-group-badge';
-    badge.textContent = `⧉ ${ordered.map((z) => `${z.type.toUpperCase()} ${z.timeframe}`).join(' + ')}`;
-    div.appendChild(badge);
-    div.title = ordered.map((z) =>
+    const badgeText = `⧉ ${ordered.map((z) => `${z.type.toUpperCase()} ${z.timeframe}`).join(' + ')}`;
+    const title = ordered.map((z) =>
       `${z.type.toUpperCase()} ${z.timeframe} · ${fmtPrice(z.lower)}–${fmtPrice(z.upper)}` +
       ` · ${STATUS_RU[z.status] || z.status}`).join('\n');
-    div.onclick = () => openZoneDetail(g.id);
-    overlay.appendChild(div);
+    let badgePlaced = false;
+    for (const [lo, hi] of (segsByKey.get('g' + gid) || [])) {
+      const div = makeBand(hi, lo, 'zone-group');
+      if (!div) continue;
+      div.style.left = x1 + 'px';
+      div.style.width = Math.max(8, paneRight - x1) + 'px';
+      if (!badgePlaced) {
+        const badge = document.createElement('span');
+        badge.className = 'zone-group-badge';
+        badge.textContent = badgeText;
+        div.appendChild(badge);
+        badgePlaced = true;
+      }
+      div.title = title;
+      div.onclick = () => openZoneDetail(gid);
+      overlay.appendChild(div);
+    }
   }
 
   // ТЗ §5: внутренние уровни ликвидности выбранной зоны — тонкие линии
@@ -485,7 +544,9 @@ function filteredZones() {
   let zones = state.zones.filter(isHtf);
   const bucket = state.zoneBucket || 'live';
   if (bucket === 'live') {
-    zones = zones.filter((z) => !z.display_until && z.status !== 'candidate' && z.status !== 'rejected');
+    // ТЗ 07.10.2026 §11: «Актуальные» — canonical relevant (подтверждённые,
+    // непробитые, незавершённые), а не просто status=active
+    zones = zones.filter((z) => z.relevant);
   } else if (bucket === 'candidate') {
     zones = zones.filter((z) => z.status === 'candidate' && !z.display_until);
   } else if (bucket === 'archive') {
@@ -591,8 +652,10 @@ function renderHeaderStats() {
   const ssl = by((z) => z.type === 'ssl' && z.status === 'active');
   const bsl = by((z) => z.type === 'bsl' && z.status === 'active');
   const items = [
-    ['Активные', by((z) => z.status === 'active' && !z.display_until)],
-    ['Кандидаты', by((z) => z.status === 'candidate' && !z.display_until)],
+    // ТЗ 07.10.2026 §11/§13: счётчики тех же выборок, что и таблица/график
+    ['Актуальные', by((z) => z.relevant)],
+    ['Кандидаты (неподтверждённые)', by((z) =>
+      z.status === 'candidate' && !z.display_until && !z.relevant)],
     ['Цена внутри', inside],
     ['SSL/BSL активные', `${ssl}/${bsl}`],
     ['Завершённые', zones.length - live.length],

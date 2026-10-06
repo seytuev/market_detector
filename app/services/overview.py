@@ -498,7 +498,9 @@ def _entry_row(
         "admission_basis": fe.admission_basis,
         # §18: контекстный допуск FVG вне Premium — отображается, не блокирует
         "outside_premium": fe.admission_basis == ADMISSION_CONTEXT,
-        "max_test_depth": zone.max_test_depth,
+        # §9 (Этап 5): точечный уровень (W=0) глубины не имеет — null,
+        # UI показывает «—» вместо «0%»
+        "max_test_depth": None if zone.is_level else zone.max_test_depth,
         "first_test_at": zone.first_test_at,
         "liquidity_state": liquidity_state,
         "dist_abs": dist_abs,
