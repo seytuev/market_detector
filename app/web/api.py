@@ -32,6 +32,7 @@ from ..config import (
 )
 from ..db import Database
 from ..engine import Scanner
+from ..engine.scanner import review_replay_start_ms
 from ..models import (
     TIMEFRAME_MINUTES,
     BoundaryCorrection,
@@ -120,6 +121,18 @@ def instrument_to_dict(ins: Instrument) -> dict[str, Any]:
     }
 
 
+def _unconfirmed_reason(z: Zone) -> Optional[str]:
+    """Причина отсутствия автоматического подтверждения (ТЗ 06.10.2026 §13):
+    нарушена хронология / не найден внешний FVG / недостающие свечи."""
+    if z.confirmed_at is not None:
+        return None
+    if z.evidence.get("integrity") == "inconsistent":
+        return "timeline_violation"
+    if z.needs_replay:
+        return "data_incomplete"
+    return "no_external_fvg"
+
+
 def zone_to_dict(z: Zone) -> dict[str, Any]:
     """Зона для API: середина, возраст, evidence (объяснение обнаружения, §13).
 
@@ -162,6 +175,14 @@ def zone_to_dict(z: Zone) -> dict[str, Any]:
         "name": z.evidence.get("name", ""),
         "comment": z.evidence.get("comment", ""),
         "boundary_version": z.evidence.get("boundary_version", 1),
+        # ТЗ 06.10.2026 §4 (T09): основание подтверждения — FVG, только
+        # ручное одобрение владельца или отсутствует
+        "confirmation_state": (
+            "fvg_confirmed" if z.confirmed_at is not None
+            else "manual_only" if z.evidence.get("manual_confirmation_only")
+            else "unconfirmed"
+        ),
+        "market_validity": z.market_validity,
         "evidence": z.evidence,
         "rule_version": z.rule_version,
     }
@@ -315,6 +336,16 @@ def export_label(db: Database, zone: Zone, decision: str, text: str,
         "display_from": zone.display_from or zone.formed_at,
         "display_until": zone.display_until,
         "end_reason": zone.end_reason,
+        # ТЗ 06.10.2026 §3.6/§11: явная временная семантика снимка —
+        # разница в 1 мс между display_until (boundary) и assessed_as_of
+        # (close_time) — следствие конвенции, а не будущие данные; срез
+        # zone — текущее состояние БД на exported_at, а не на reviewed_at
+        "time_semantics": {
+            "event_time": "exclusive close boundary = open_time + tf = close_time + 1ms",
+            "assessed_as_of": "close_time последней закрытой свечи ТФ зоны",
+            "reviewed_at": "момент нажатия оценки пользователем",
+            "snapshot_scope": "current_db_state_at_export",
+        },
         # §15.2: исходные и исправленные границы (для fix_boundaries)
         "original_lower": correction.original_lower if correction else None,
         "original_upper": correction.original_upper if correction else None,
@@ -649,7 +680,9 @@ def create_app(
         Только для отображения: исходные зоны, их границы, середины и
         правила уведомлений НЕ пересчитываются и не меняются.
         """
-        zones = db.get_zones(instrument_id=instrument_id, statuses=[ZoneStatus.ACTIVE])
+        zones = [z for z in db.get_zones(instrument_id=instrument_id,
+                                         statuses=[ZoneStatus.ACTIVE])
+                 if z.is_currently_relevant()]  # ТЗ 06.10.2026 §13 (T21)
         groups = _union_find_groups(zones)
         return {
             "instrument_id": instrument_id,
@@ -830,9 +863,14 @@ def create_app(
         # R02/§15.1.2: актуальность — по воспроизведённой истории от подтверждения
         # до момента ревью, а не по «застывшему» статусу в БД. replay идемпотентен:
         # по свежему инструменту это дёшевый прогон, по отстающему — догоняет
-        # касания/глубины/пробои до assessed_as_of.
+        # касания/глубины/пробои до assessed_as_of. Окно — от появления зоны
+        # (для OB formed_at — первая свеча базы) с запасом в несколько свечей:
+        # состояние до окна уже накоплено live-трекингом, а replay аддитивен,
+        # поэтому полный прогон всей истории инструмента не нужен (на H1 это
+        # часы ожидания на клик ревью).
+        start_ms = review_replay_start_ms(zone)
         Scanner(db, settings.detector).replay_instrument(
-            zone.instrument_id, timeframes={zone.timeframe}
+            zone.instrument_id, start_ms=start_ms, timeframes={zone.timeframe}
         )
         zone = db.get_zone(zone_id)
         assert zone is not None  # replay не удаляет зоны
@@ -854,6 +892,14 @@ def create_app(
             else:
                 if zone.status == ZoneStatus.CANDIDATE:
                     db.update_zone(zone_id, status=ZoneStatus.ACTIVE)
+                    if zone.confirmed_at is None:
+                        # ТЗ 06.10.2026 §4 (T09): ручное одобрение геометрии
+                        # не создаёт external_fvg/confirmed_at без
+                        # доказательств — отмечаем, что подтверждение
+                        # только ручное; расхождение остаётся явным
+                        evidence = dict(zone.evidence)
+                        evidence["manual_confirmation_only"] = True
+                        _update_evidence(db, zone, evidence)
                 # ZONE_CONFIRMED_BY_USER — только при correct на живой зоне
                 db.insert_event(Event(
                     id=None, zone_id=zone_id, cycle_id=zone.cycle_id,
@@ -937,6 +983,9 @@ def create_app(
                 **zone_to_dict(z),
                 "instrument": instrument_to_dict(ins) if ins else None,
                 "explanation": z.evidence,  # объяснение обнаружения (§13)
+                # ТЗ 06.10.2026 §13: отсутствие подтверждения — явный статус
+                # с причиной, а не неконкретное «ожидание»
+                "unconfirmed_reason": _unconfirmed_reason(z),
             })
         return out
 
@@ -1168,6 +1217,10 @@ def create_app(
                 for zid in sorted(zone_ids)
                 for c in db.get_boundary_corrections(zid)
             ],
+            # ТЗ 06.10.2026 §11: нормализация отдельным слоем — latest-view
+            # по reviewed_at и сохранённые конфликты; сырые массивы выше
+            # неизменны (R13)
+            "normalized": _export_normalized_layer(db, reviews),
         }
         return Response(
             content=json.dumps(payload, ensure_ascii=False, indent=2),
@@ -1275,6 +1328,10 @@ _LIFECYCLE_COMMENT_RULES: list[tuple[str, str, tuple[str, ...]]] = [
     ("already_completed", "completed", (
         "уже снят", "уже снята", "перекрыт", "перекрыта",
         "был пробит", "была пробита", "не актуал", "неактуал",
+        # ТЗ 06.10.2026 §11 (№551): «потерял актуальность в …» — lifecycle,
+        # а не ошибка геометрии
+        "потерял актуальность", "потеряла актуальность",
+        "утратил актуальность", "утратила актуальность",
     )),
 ]
 
@@ -1308,6 +1365,9 @@ def _normalization_hint(
         return None
     code, verdict = hint
     return {
+        # ТЗ 06.10.2026 §11 (№551): вердикт/комментарий противоречат друг
+        # другу — строка не используется как образец ошибки геометрии
+        "semantic_conflict": True,
         "geometry_verdict": "unknown",
         "lifecycle_verdict": verdict,
         "reason_code": code,
@@ -1316,6 +1376,54 @@ def _normalization_hint(
             "(старый паттерн: отклонение + geometry_verdict=invalid)"
         ),
     }
+
+
+def _export_normalized_layer(db: Database, reviews: list[Review]) -> list[dict[str, Any]]:
+    """ТЗ 06.10.2026 §11 (T16): latest-view оценок и журнал конфликтов.
+
+    По каждой зоне — последняя оценка по reviewed_at (она действует), плюс:
+    - verdict_changed: прошлые оценки с иными вердиктами (№130: удаление
+      текста не доказывает отсутствие пробоя — конфликт сохраняется);
+    - semantic_conflict: комментарий о потере актуальности при вердикте
+      correct (не доказательство lifecycle-события, хранится для аудита).
+    """
+    by_zone: dict[int, list[Review]] = {}
+    for r in reviews:
+        by_zone.setdefault(r.zone_id, []).append(r)
+    out: list[dict[str, Any]] = []
+    for zid in sorted(by_zone):
+        assessments = db.get_assessments(zid)
+        if not assessments:
+            continue
+        latest = max(assessments, key=lambda a: (a.reviewed_at or 0, a.id or 0))
+        conflicts: list[dict[str, Any]] = []
+        for a in assessments:
+            if a.id == latest.id:
+                continue
+            if (a.review_decision, a.geometry_verdict, a.lifecycle_verdict) != (
+                latest.review_decision, latest.geometry_verdict,
+                latest.lifecycle_verdict,
+            ):
+                conflicts.append({
+                    "kind": "verdict_changed",
+                    "assessment": assessment_to_dict(a),
+                })
+        for r in by_zone[zid]:
+            if r.decision in ("correct", "confirmed") and \
+                    _lifecycle_comment_hint(r.text or ""):
+                conflicts.append({
+                    "kind": "semantic_conflict",
+                    "review": review_to_dict(r),
+                    "note": "комментарий о потере актуальности при вердикте "
+                            "correct — не доказательство пробоя, сохранён для аудита",
+                })
+        if conflicts or len(assessments) > 1:
+            out.append({
+                "zone_id": zid,
+                "latest_assessment": assessment_to_dict(latest),
+                "conflicts": conflicts,
+            })
+    return out
 
 
 def _zone_brief(db: Database, zone_id: Optional[int]) -> Optional[dict[str, Any]]:

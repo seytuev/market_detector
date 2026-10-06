@@ -118,6 +118,8 @@ def _htf_zones(db: Database, instrument_id: int, filt: str) -> list:
     zones = db.get_zones(
         instrument_id=instrument_id, statuses=_ACTIVE_ZONE_STATUSES
     )
+    # ТЗ 06.10.2026 §13 (T21): единый canonical state актуальности
+    zones = [z for z in zones if z.is_currently_relevant()]
     if filt in ("d1", "w1"):
         zones = [z for z in zones if z.timeframe == filt.upper()]
     return sorted(zones, key=lambda z: (z.timeframe, z.lower))

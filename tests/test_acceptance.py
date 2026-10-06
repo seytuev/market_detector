@@ -164,7 +164,10 @@ def test_n8_filled_and_ob_touch_are_independent_events(db, cfg, instrument_id):
     # возврат сверху: сначала 50% FVG (110.2 → глубина 0.6)
     ev = scanner.on_price(instrument_id, 110.2, t + 1)
     assert [e.kind for e in ev] == [EventKind.FVG_WEAKENED]
-    assert db.get_events(ob.id) == []  # OB ещё не коснутся
+    # OB ещё не коснутся (OB_CONFIRMED — структурное событие сетапа, §7 ТЗ
+    # 06.10.2026: эмитится и при подтверждении в момент создания)
+    assert [e for e in db.get_events(ob.id)
+            if e.kind != EventKind.OB_CONFIRMED] == []
 
     # цена проходит FVG насквозь и касается OB по его границе — одним тиком
     ev = scanner.on_price(instrument_id, 105.5, t + 2)
@@ -173,7 +176,7 @@ def test_n8_filled_and_ob_touch_are_independent_events(db, cfg, instrument_id):
         by_zone.setdefault(e.zone_id, []).append(e.kind)
     assert by_zone[fvg.id] == [EventKind.FVG_FILLED]
     assert by_zone[ob.id] == [EventKind.TOUCH]  # самостоятельная геометрия OB
-    ob_touch = db.get_events(ob.id)[0]
+    ob_touch = [e for e in db.get_events(ob.id) if e.kind == EventKind.TOUCH][0]
     assert ob_touch.price == 105.5 and ob_touch.occurred_at == t + 2
 
 

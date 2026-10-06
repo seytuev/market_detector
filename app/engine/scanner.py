@@ -24,6 +24,7 @@ from ..models import (
     ZoneRelation,
     ZoneStatus,
     ZoneType,
+    close_boundary_ms,
     now_ms,
 )
 from . import breaker as br
@@ -32,7 +33,7 @@ from . import liquidity as liq
 from . import orderblock as ob_mod
 from . import prb as prb_mod
 from .fvg import scan_fvgs
-from .lifecycle import is_delayed, is_ob_like, set_zone_end, track_zone
+from .lifecycle import base_end_ms, is_delayed, is_ob_like, set_zone_end, track_zone
 
 # Диапазонные зоны, отслеживаемые tick-логикой
 RANGE_TYPES = {ZoneType.FVG, ZoneType.OB, ZoneType.PRB, ZoneType.BREAKER, ZoneType.MANUAL}
@@ -40,6 +41,28 @@ RANGE_TYPES = {ZoneType.FVG, ZoneType.OB, ZoneType.PRB, ZoneType.BREAKER, ZoneTy
 # (confirmed_at задан) авто-кандидатам — режим «уведомлять только о
 # проверенных» (§10) включается отдельно на уровне доставки.
 TRACKED_STATUSES = [ZoneStatus.CANDIDATE, ZoneStatus.ACTIVE, ZoneStatus.WEAKENED]
+
+
+def review_replay_start_ms(zone: Zone, margin_candles: int = 10) -> Optional[int]:
+    """Нижняя граница окна replay при ревью зоны (R02/§15.1.2).
+
+    Состояние зоны пересчитывается по истории от её появления (для OB
+    formed_at — open_time ПЕРВОЙ свечи базы, поэтому вся база попадает в
+    окно) с запасом в несколько свечей её ТФ (тройка FVG, 3+3 пивотов).
+    Более ранняя история не нужна: визиты/уровни/события до окна уже
+    записаны live-трекингом, а replay аддитивен и идемпотентен (§13.12) —
+    он не теряет и не портит накопленное состояние. None — полный прогон
+    (нет временных меток у зоны).
+    """
+    starts = [
+        t for t in (zone.display_from, zone.formed_at, zone.confirmed_at,
+                    zone.anchor_time)
+        if t is not None
+    ]
+    tf_min = TIMEFRAME_MINUTES.get(zone.timeframe)
+    if not starts or tf_min is None:
+        return None
+    return max(0, min(starts) - margin_candles * tf_min * 60_000)
 
 
 class Scanner:
@@ -53,26 +76,32 @@ class Scanner:
     # закрытая свеча: структурные обновления
     # ------------------------------------------------------------------
 
-    def on_closed_candle(self, candle: Candle) -> list[Event]:
+    def on_closed_candle(
+        self, candle: Candle, candles: Optional[list[Candle]] = None
+    ) -> list[Event]:
         """Вставляет свечу и пересчитывает структуру её инструмента/ТФ.
 
         Идемпотентно: повторный вызов с той же свечой дублей не создаёт.
+        candles — необязательный in-memory список закрытых свечей ТФ по
+        текущую включительно (replay держит его нарастающим и не перечитывает
+        всю историю из БД на каждую свечу); None — читаем из БД (live).
         """
         self.db.insert_candles([candle])
         created: list[Event] = []
         iid, tf = candle.instrument_id, candle.timeframe
-        boundary = candle.open_time + TIMEFRAME_MINUTES[tf] * 60_000
+        boundary = close_boundary_ms(candle.open_time, tf)
         now = now_ms()
-        candles = self.db.get_candles(iid, tf)
+        if candles is None:
+            candles = self.db.get_candles(iid, tf)
 
         created += self._scan_fvg_and_blocks(iid, tf, candles, now)
-        created += self._check_block_transitions(iid, tf, candle, boundary, now)
+        created += self._check_block_transitions(iid, tf, candle, candles, boundary, now)
         if tf in ("D1", "W1"):
             self._scan_pivots(iid, tf, candles, now)
         created += self._check_level_crossings(iid, candle.low, candle.high, boundary, now)
         self._sync_inner_levels(iid, tf, candle, candles, boundary, now)
         if tf == "D1":
-            created += self._check_d1_close_inside(iid, candle, boundary, now)
+            created += self._check_d1_close_inside(iid, candle, boundary, now, candles)
         return created
 
     # ----- FVG → OB/PRB -----
@@ -140,16 +169,40 @@ class Scanner:
                 self.db.set_relation(ZoneRelation(zone_id=zid, parent_ob_id=parent.id))
             if not external:
                 continue
+            if zone.market_validity == "invalid":
+                # ТЗ 06.10.2026 §6: база уже уничтожена до подтверждения —
+                # поздний FVG не воскрешает старую конструкцию
+                continue
             fzid = fvg_zone_ids.get(f.formed_at)
             if fzid is not None:
                 self.db.set_relation(ZoneRelation(zone_id=zid, confirming_fvg_id=fzid))
-            if zone is not None and zone.confirmed_at is None:
+            if zone is None:
+                continue
+            already = zone.confirmed_at is not None
+            if already and zone.confirmed_at != f.confirmed_at:
+                # подтверждён более ранним FVG — первое основание не
+                # подменяется поздним (ТЗ 06.10.2026 §7)
+                continue
+            need_ev = (
+                zone.evidence.get("confirming_fvg_formed_at") != f.formed_at
+                or "actual_confirming_fvg" not in zone.evidence
+            )
+            if not already:
                 self.db.update_zone(zid, confirmed_at=f.confirmed_at)
+            # ТЗ 06.10.2026 §7 (T08): evidence фактического подтверждения и
+            # relation ссылаются на один и тот же FVG с одной тройкой —
+            # и при подтверждении в момент создания зоны, и при позднем
+            if need_ev:
                 ev_dict = dict(zone.evidence)
                 ev_dict.update({
                     "external_fvg": True,
                     "confirming_fvg_range": [f.lower, f.upper],
                     "confirming_fvg_formed_at": f.formed_at,
+                    "actual_confirming_fvg": {
+                        "formed_at": f.formed_at,
+                        "open_times": list(f.candle_open_times),
+                        "range": [f.lower, f.upper],
+                    },
                 })
                 # ТЗ §4: внешний FVG доказывает направленный выход из базы —
                 # самостоятельные возвраты после подтверждения являются тестами.
@@ -157,30 +210,34 @@ class Scanner:
                 ev_dict.setdefault("phase", "departed")
                 ev_dict.setdefault("departed_at", f.confirmed_at)
                 self._update_evidence(zone, ev_dict)
-                ev = Event(
-                    id=None, zone_id=zid, cycle_id=zone.cycle_id,
-                    kind=EventKind.OB_CONFIRMED, occurred_at=f.confirmed_at,
-                    detected_at=now, price=f.lower,
-                    delayed=is_delayed(self.cfg, f.confirmed_at, now),
-                    evidence={"confirming_fvg_zone_id": fzid,
-                              "confirming_fvg_range": [f.lower, f.upper]},
-                )
-                ev = self._emit(ev)
-                if ev is not None:
-                    created.append(ev)
+            ev = Event(
+                id=None, zone_id=zid, cycle_id=zone.cycle_id,
+                kind=EventKind.OB_CONFIRMED, occurred_at=f.confirmed_at,
+                detected_at=now, price=f.lower,
+                delayed=is_delayed(self.cfg, f.confirmed_at, now),
+                evidence={"confirming_fvg_zone_id": fzid,
+                          "confirming_fvg_range": [f.lower, f.upper]},
+            )
+            ev = self._emit(ev)
+            if ev is not None:
+                created.append(ev)
         return created
 
     # ----- Breaker / архивация блоков -----
 
     def _check_block_transitions(
-        self, iid: int, tf: str, candle: Candle, boundary: int, now: int
+        self, iid: int, tf: str, candle: Candle, candles: list[Candle],
+        boundary: int, now: int
     ) -> list[Event]:
         created: list[Event] = []
 
         # OB → Breaker (§6 + §15.6/§9.5–6): нужны ОБА условия — закрытие свечи
         # ТФ зоны за дальней границей И новый FVG пробойного движения.
         # Предыдущий отдельный тест >50% навсегда исключает преобразование.
-        candles = self.db.get_candles(iid, tf)
+        # ТЗ 06.10.2026 §6: пробой ищется ретросканированием от момента
+        # наблюдаемости зоны (confirmed_at; для кандидата — конец базы), а не
+        # только на текущей свече — display_until получает границу закрытия
+        # ПЕРВОЙ пробойной свечи (T03–T05), позднее не перезаписывается (T06).
         tf_ms = TIMEFRAME_MINUTES[tf] * 60_000
         for ob in self.db.get_zones(
             iid,
@@ -188,21 +245,64 @@ class Scanner:
             types=[ZoneType.OB],
             timeframes={tf},
         ):
-            if not self._visible(ob, tf, boundary):
-                continue
             pending_at = ob.breakout_close_at
-            if pending_at is None:
-                if not br.converts_to_breaker(ob, candle):
-                    continue
+            if ob.market_validity == "invalid" and pending_at is None:
+                continue  # первый пробой уже зафиксирован, решение принято
+            scan_from = ob.confirmed_at
+            if scan_from is None:
+                # кандидат до подтверждения: история раннего кандидата тоже
+                # проверяется — база, уничтоженная до FVG, не воскресает
+                # поздним подтверждением (ТЗ 06.10.2026 §6)
+                scan_from = base_end_ms(ob)
+            if scan_from is None or scan_from > boundary:
+                continue
+            if pending_at is not None:
+                first_b = None  # пробой уже зафиксирован ранее
+            else:
+                first_b = br.first_close_beyond(candles, ob, scan_from, boundary)
+            if first_b is not None:
+                breakout_boundary = close_boundary_ms(first_b.open_time, tf)
                 # ТЗ §3: закрытие свечи ТФ зоны СТРОГО за дальней границей —
                 # потеря рыночной актуальности OB независимо от дальнейшего
                 # образования Breaker; равенство Close границе — не пробой
                 # (строгие неравенства в breaker.far_boundary_broken)
                 self.db.update_zone(ob.id, market_validity="invalid",
                                     entry_eligible=False)
-                set_zone_end(self.db, ob, boundary, None, "close_beyond (ТЗ §3)")
+                set_zone_end(self.db, ob, breakout_boundary, None,
+                             "close_beyond (ТЗ §3)")
+                # журнал доказательств (ТЗ 06.10.2026 §14): свеча первого
+                # пробоя, OHLC, сравниваемая граница, версии правил
+                if ob.evidence.get("invalidated_at") is None:
+                    ev_d = dict(ob.evidence)
+                    ev_d["invalidated_at"] = breakout_boundary
+                    ev_d["first_invalidating_candle_open_time"] = first_b.open_time
+                    self._update_evidence(ob, ev_d)
+                    ob.evidence = ev_d
+                ev = Event(
+                    id=None, zone_id=ob.id, cycle_id=ob.cycle_id,
+                    kind=EventKind.OB_INVALIDATED, occurred_at=breakout_boundary,
+                    detected_at=now, price=first_b.close,
+                    delayed=is_delayed(self.cfg, breakout_boundary, now),
+                    evidence={
+                        "candle_open_time": first_b.open_time,
+                        "open": first_b.open, "high": first_b.high,
+                        "low": first_b.low, "close": first_b.close,
+                        "boundary_compared": (
+                            ob.lower if ob.direction == Direction.BULL else ob.upper
+                        ),
+                        "rule_version": ob.rule_version,
+                    },
+                )
+                ev = self._emit(ev)
+                if ev is not None:
+                    created.append(ev)
+                if ob.confirmed_at is None:
+                    # база уничтожена до подтверждения — поздний FVG не
+                    # воскрешает конструкцию, Breaker не строится (ТЗ §6)
+                    continue
                 if br.breaker_forbidden(
-                    ob, self.db.get_visits(ob.id, ob.cycle_id), candles, self.cfg
+                    ob, self.db.get_visits(ob.id, ob.cycle_id), candles, self.cfg,
+                    before_ms=first_b.open_time,
                 ):
                     if not ob.breaker_forbidden:
                         self.db.update_zone(ob.id, breaker_forbidden=True)
@@ -211,14 +311,22 @@ class Scanner:
                             "предыдущий отдельный тест >50% исключает Breaker (§15.6)"
                         )
                         self._update_evidence(ob, ev_d)
+                    # ТЗ 06.10.2026 §10 (T20): пробитый OB неактуален и при
+                    # запрещённой конверсии — не остаётся active/candidate
+                    set_zone_end(self.db, ob, breakout_boundary,
+                                 ZoneStatus.ARCHIVED, "close_beyond_no_breaker (§15.6)")
                     continue
-                fvg = br.find_breakout_fvg(candles, ob, candle.open_time, self.cfg)
+                fvg = br.find_breakout_fvg(candles, ob, first_b.open_time, self.cfg)
                 if fvg is not None:
-                    created += self._create_breaker(ob, boundary, now, candle.close, fvg)
+                    activate_at = max(breakout_boundary, fvg.confirmed_at)
+                    created += self._create_breaker(ob, activate_at, now,
+                                                    first_b.close, fvg)
                 else:
                     # §9.6: закрытие за границей есть, нового FVG пробоя пока
                     # нет — активного Breaker ещё нет, ждём его подтверждения
-                    self.db.update_zone(ob.id, breakout_close_at=boundary)
+                    self.db.update_zone(ob.id, breakout_close_at=breakout_boundary)
+                continue
+            if pending_at is None:
                 continue
             # ожидание нового FVG пробойного движения (может подтвердиться
             # позже пробойного закрытия — приёмка §15.6)
@@ -292,8 +400,10 @@ class Scanner:
         if bid is None:
             return []
         self.db.set_relation(ZoneRelation(zone_id=bid, predecessor_ob_id=ob.id))
+        # сегмент OB заканчивается конверсией (§15.1.4); дата первого пробоя
+        # сохранена в evidence.invalidated_at и событии OB_INVALIDATED
         set_zone_end(self.db, ob, activate_at, ZoneStatus.CONVERTED,
-                     "converted_to_breaker (§6/§15.6)")
+                     "converted_to_breaker (§6/§15.6)", force=True)
         ev = Event(
             id=None, zone_id=bid, cycle_id=bz.cycle_id,
             kind=EventKind.BREAKER_CREATED, occurred_at=activate_at,
@@ -418,21 +528,32 @@ class Scanner:
             and z.status not in (ZoneStatus.ARCHIVED, ZoneStatus.REJECTED)
             and TIMEFRAME_MINUTES[z.timeframe] >= TIMEFRAME_MINUTES[tf]
         ]
+        # индексы по свечам строятся один раз на свечу и разделяются всеми
+        # зонами (bisect-срезы окна визита / поиск pivot-свечи); чтения
+        # визитов и уровней внутри — через версионные кэши Database
+        times = [c.open_time for c in candles]
+        index = {t: i for i, t in enumerate(times)}
         for z in zones:
-            inner.sync_candidates(self.db, self.cfg, z, candles, now)
-            inner.confirm_levels(self.db, self.cfg, z, candles, tf_ms, boundary, now)
+            inner.sync_candidates(self.db, self.cfg, z, candles, now, times=times)
+            inner.confirm_levels(self.db, self.cfg, z, candles, tf_ms, boundary, now,
+                                 index=index)
         inner.check_taken_for_instrument(self.db, iid, candle.low, candle.high, boundary)
 
     # ----- D1 close inside (§9) -----
 
     def _check_d1_close_inside(
-        self, iid: int, candle: Candle, boundary: int, now: int
+        self, iid: int, candle: Candle, boundary: int, now: int,
+        candles: Optional[list[Candle]] = None,
     ) -> list[Event]:
         created: list[Event] = []
         # §8: ежедневные напоминания отменены — «закрепление внутри» эмитим
         # только при переходе: предыдущее D1-закрытие было вне зоны
-        prev = self.db.get_candles(iid, "D1", end_ms=candle.open_time - 1)
-        prev_close = prev[-1].close if prev else None
+        if candles is not None:
+            # replay: in-memory список по текущую свечу включительно
+            prev_close = candles[-2].close if len(candles) >= 2 else None
+        else:
+            prev = self.db.get_candles(iid, "D1", end_ms=candle.open_time - 1)
+            prev_close = prev[-1].close if prev else None
         for z in self.db.get_zones(iid, statuses=TRACKED_STATUSES):
             if z.type not in RANGE_TYPES or z.is_level:
                 continue
@@ -511,12 +632,16 @@ class Scanner:
                    and not z.breaker_forbidden]
         # ТЗ §4: кандидаты OB до подтверждения FVG отслеживаются молча —
         # самостоятельные тесты после выхода из базы пишутся в историю
-        # (визиты, max_test_depth), события и уведомления не порождаются
+        # (визиты, max_test_depth), события и уведомления не порождаются.
+        # ТЗ 06.10.2026 §3.1: нижняя граница — закрытие последней свечи базы;
+        # более ранние наблюдения не могут быть выходом именно этой базы
+        # (иначе replay писал departed_at раньше formed_at — зоны №550/549/…)
         silent = [z for z in zones
                   if z.type == ZoneType.OB and z.source != "manual"
                   and (z.confirmed_at is None or z.confirmed_at >= ts)
                   and z.breakout_close_at is None
-                  and z.market_validity == "active"]
+                  and z.market_validity == "active"
+                  and (be := base_end_ms(z)) is not None and be < ts]
         levels = [z for z in visible if z.is_level]
         if levels:
             created += self._cross_level_zones(levels, iid, lo, hi, ts, detected_at)
@@ -553,56 +678,79 @@ class Scanner:
         отставании), затем структурные обновления on_closed_candle.
         timeframes — необязательное ограничение ТФ (воркер применяет настройку
         scan_timeframes); None — все ТФ из БД.
+
+        Списки свечей читаются из БД один раз на ТФ; per-candle пересчёт
+        получает нарастающий in-memory срез (префикс до start_ms + обработанные
+        свечи) — то же содержимое, что давал бы db.get_candles на каждой свече,
+        без per-candle N+1. Записи прогона — одним batch (один commit на replay
+        вместо commit'а на каждую запись; живой путь вне replay не в батче).
         """
+        tf_candles: dict[str, list[Candle]] = {}
         all_candles: list[Candle] = []
         for tf in TIMEFRAME_MINUTES:
             if timeframes is not None and tf not in timeframes:
                 continue
-            all_candles += self.db.get_candles(instrument_id, tf, start_ms=start_ms)
+            full = self.db.get_candles(instrument_id, tf)
+            tf_candles[tf] = full
+            if start_ms is None:
+                all_candles += full
+            else:
+                all_candles += [c for c in full if c.open_time >= start_ms]
         all_candles.sort(key=lambda c: (c.close_time, TIMEFRAME_MINUTES[c.timeframe]))
 
         created: list[Event] = []
         now = now_ms()
         self._last_price.pop(instrument_id, None)
         last_ts: Optional[int] = None
-        for c in all_candles:
-            boundary = c.open_time + TIMEFRAME_MINUTES[c.timeframe] * 60_000
-            prev = self._last_price.get(instrument_id)
-            created += self._track_all(
-                instrument_id, c.low, c.high, boundary, False, prev, now,
-                entered_at=c.open_time, timeframes=timeframes,
-            )
-            created += self.on_closed_candle(c)
-            self._last_price[instrument_id] = c.close
-            last_ts = boundary
+        # нарастающий срез по ТФ: свечи до окна replay (уже в БД) + обработанные
+        seen: dict[str, list[Candle]] = {
+            tf: [c for c in full if start_ms is not None and c.open_time < start_ms]
+            for tf, full in tf_candles.items()
+        }
+        with self.db.batch_writes():
+            for c in all_candles:
+                boundary = close_boundary_ms(c.open_time, c.timeframe)
+                prev = self._last_price.get(instrument_id)
+                created += self._track_all(
+                    instrument_id, c.low, c.high, boundary, False, prev, now,
+                    entered_at=c.open_time, timeframes=timeframes,
+                )
+                seen[c.timeframe].append(c)
+                created += self.on_closed_candle(c, candles=seen[c.timeframe])
+                self._last_price[instrument_id] = c.close
+                last_ts = boundary
 
-        # §8: если после обработки истории цена уже в актуальной зоне — отметить
-        price = self._last_price.get(instrument_id)
-        if price is not None and last_ts is not None:
-            for z in self.db.get_zones(instrument_id, statuses=TRACKED_STATUSES):
-                if z.type not in RANGE_TYPES or z.is_level:
-                    continue
-                if timeframes is not None and z.timeframe not in timeframes:
-                    continue
-                if z.confirmed_at is None or z.confirmed_at > last_ts:
-                    continue
-                if z.market_validity != "active":
-                    continue
-                # ТЗ §4: OB до выхода цены из базы «касания» не имеет —
-                # цена внутри диапазона базы/импульса не является тестом
-                if is_ob_like(z) and z.evidence.get("phase") != "departed":
-                    continue
-                if z.lower <= price <= z.upper:
-                    ev = Event(
-                        id=None, zone_id=z.id, cycle_id=z.cycle_id,
-                        kind=EventKind.ALREADY_IN_ZONE, occurred_at=last_ts,
-                        detected_at=now, price=price,
-                        delayed=is_delayed(self.cfg, last_ts, now),
-                        evidence={"note": "цена уже в зоне после обработки истории (§8)"},
-                    )
-                    ev = self._emit(ev)
-                    if ev is not None:
-                        created.append(ev)
+            # §8: если после обработки истории цена уже в актуальной зоне — отметить
+            price = self._last_price.get(instrument_id)
+            if price is not None and last_ts is not None:
+                for z in self.db.get_zones(instrument_id, statuses=TRACKED_STATUSES):
+                    if z.type not in RANGE_TYPES or z.is_level:
+                        continue
+                    if timeframes is not None and z.timeframe not in timeframes:
+                        continue
+                    if z.confirmed_at is None or z.confirmed_at > last_ts:
+                        continue
+                    if z.market_validity != "active":
+                        continue
+                    # ТЗ §4: OB до выхода цены из базы «касания» не имеет —
+                    # цена внутри диапазона базы/импульса не является тестом
+                    if is_ob_like(z) and z.evidence.get("phase") != "departed":
+                        continue
+                    # ТЗ 06.10.2026 §3.1: испорченное состояние выхода не
+                    # порождает сигналов (T02: evidence_incomplete)
+                    if z.evidence.get("integrity") == "inconsistent":
+                        continue
+                    if z.lower <= price <= z.upper:
+                        ev = Event(
+                            id=None, zone_id=z.id, cycle_id=z.cycle_id,
+                            kind=EventKind.ALREADY_IN_ZONE, occurred_at=last_ts,
+                            detected_at=now, price=price,
+                            delayed=is_delayed(self.cfg, last_ts, now),
+                            evidence={"note": "цена уже в зоне после обработки истории (§8)"},
+                        )
+                        ev = self._emit(ev)
+                        if ev is not None:
+                            created.append(ev)
         return created
 
     # ------------------------------------------------------------------

@@ -122,7 +122,79 @@ class Database:
         # выборки неизменных зон не тратят время на _to_zone. Инвалидация по
         # отпечатку — любое изменение строки даёт новый fingerprint.
         self._zone_obj_cache: dict[int, tuple[int, Zone]] = {}
+        # Кэши горячих чтений HTF-движка (per-candle N+1 на replay, см. LTF
+        # прецедент выше): визиты/уровни/события перечитывались на каждой
+        # свече для каждой зоны. Инвалидация — версией, bump из методов записи
+        # (open/close/update_visit, insert/update_inner_level, insert_event).
+        # Списки возвращаются копией; объекты разделяются — не мутировать без
+        # последующего update_* (он инвалидирует кэш).
+        self._read_cache_lock = threading.RLock()
+        self._visit_versions: dict[int, int] = {}
+        self._visits_cache: dict[tuple, tuple[int, Any]] = {}
+        self._inner_versions: dict[int, int] = {}
+        self._inner_global_version = 0
+        self._inner_cache: dict[tuple, tuple[int, Any]] = {}
+        self._event_versions: dict[tuple[int, int], int] = {}
+        self._event_cache: dict[tuple, tuple[int, Any]] = {}
+        # batch-режим записи (replay): per-write commit'ы и инкременты
+        # state_seq откладываются до выхода из batch_writes — один commit
+        # на весь прогон вместо тысяч fsync. Живой путь (одна свеча) не в
+        # батче — семантика per-write commit сохраняется.
+        self._batch_lock = threading.RLock()
+        self._batch_depth = 0
+        self._state_seq_dirty = False
         self.migrate()
+
+    def _commit(self) -> None:
+        """commit с учётом batch-режима: внутри batch_writes отложен."""
+        if self._batch_depth == 0:
+            self.conn.commit()
+
+    @contextlib.contextmanager
+    def batch_writes(self):
+        """Массовая запись (replay инструмента): per-write commit'ы и
+        инкременты state_seq откладываются — один commit и не более одного
+        инкремента state_seq на весь батч. Инвалидация читающих кэшей при
+        этом остаётся немедленной (записи и чтения replay перемежаются).
+
+        Безопасность: соединение одно (_LockedConnection), транзакция sqlite
+        одна на батч; исключение откатывает батч целиком и сбрасывает
+        in-memory кэши (могли наполниться данными откаченных строк). Вложенные
+        батчи учитываются счётчиком — commit только на внешнем выходе.
+        """
+        with self._batch_lock:
+            self._batch_depth += 1
+        try:
+            yield
+        except BaseException:
+            with self._batch_lock:
+                self._batch_depth -= 1
+                if self._batch_depth == 0:
+                    self._state_seq_dirty = False
+                    self.conn._conn.rollback()
+                    self._drop_read_caches()
+            raise
+        with self._batch_lock:
+            self._batch_depth -= 1
+            if self._batch_depth == 0:
+                if self._state_seq_dirty:
+                    self._state_seq_dirty = False
+                    self._write_state_seq()
+                self.conn.commit()
+
+    def _drop_read_caches(self) -> None:
+        """Полный сброс in-memory кэшей чтения (после rollback батча)."""
+        with self._zone_cache_lock:
+            self._zone_cache_version += 1
+            self._zone_cache.clear()
+        self._zone_obj_cache.clear()
+        with self._ltf_cache_lock:
+            self._ltf_cache_version += 1
+            self._ltf_cache.clear()
+        with self._read_cache_lock:
+            self._visits_cache.clear()
+            self._inner_cache.clear()
+            self._event_cache.clear()
 
     def migrate(self) -> None:
         cur = self.conn.execute(
@@ -329,7 +401,7 @@ class Database:
             "ON CONFLICT (key) DO UPDATE SET value=excluded.value",
             (key, value),
         )
-        self.conn.commit()
+        self._commit()
 
     # ---------- meta: последние котировки (read model LTF, ТЗ §14) ----------
 
@@ -382,7 +454,7 @@ class Database:
             (ins.asset, ins.venue, ins.market_type, ins.symbol, ins.quote_asset,
              ins.precision, int(ins.enabled)),
         )
-        self.conn.commit()
+        self._commit()
         row = self.conn.execute(
             "SELECT id FROM instrument WHERE venue=? AND market_type=? AND symbol=?",
             (ins.venue, ins.market_type, ins.symbol),
@@ -413,14 +485,14 @@ class Database:
         self.conn.execute(
             "UPDATE instrument SET enabled=? WHERE id=?", (int(enabled), instrument_id)
         )
-        self.conn.commit()
+        self._commit()
 
     def set_instrument_ltf_analyze(self, instrument_id: int, analyze: bool) -> None:
         self.conn.execute(
             "UPDATE instrument SET ltf_analyze=? WHERE id=?",
             (int(analyze), instrument_id),
         )
-        self.conn.commit()
+        self._commit()
 
     # ---------- candles ----------
 
@@ -440,7 +512,7 @@ class Database:
                              closed=excluded.closed, source=excluded.source""",
             rows,
         )
-        self.conn.commit()
+        self._commit()
         self.bump_state_seq()
         return cur.rowcount
 
@@ -518,7 +590,7 @@ class Database:
              int(z.has_tests), int(z.entry_eligible), z.anchor_time, z.zone_type,
              z.test_extreme),
         )
-        self.conn.commit()
+        self._commit()
         # INSERT OR IGNORE: rowcount == 0 при дубликате; lastrowid sqlite3 при этом
         # может вернуть id прежней вставки — на него полагаться нельзя.
         if cur.rowcount == 1:
@@ -551,7 +623,7 @@ class Database:
         self.conn.execute(
             f"UPDATE zone SET {cols} WHERE id=?", (*fields.values(), zone_id)
         )
-        self.conn.commit()
+        self._commit()
         self.invalidate_zone_cache()
 
     def invalidate_zone_cache(self) -> None:
@@ -564,17 +636,24 @@ class Database:
 
     # ---------- версия состояния (D01) ----------
 
-    def bump_state_seq(self) -> None:
-        """Монотонный счётчик версии состояния (D01): инкремент при любой
-        записи предметного состояния (зоны, события, свечи, ltf_*). WS и
-        снимки отдают его как state_version; по возрастанию клиент видит
-        изменение, а после reconnect перечитывает полный снимок."""
+    def _write_state_seq(self) -> None:
         self.conn.execute(
             """INSERT INTO meta (key, value) VALUES ('state_seq', '1')
                ON CONFLICT (key) DO UPDATE SET
                value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)"""
         )
-        self.conn.commit()
+
+    def bump_state_seq(self) -> None:
+        """Монотонный счётчик версии состояния (D01): инкремент при любой
+        записи предметного состояния (зоны, события, свечи, ltf_*). WS и
+        снимки отдают его как state_version; по возрастанию клиент видит
+        изменение, а после reconnect перечитывает полный снимок. В batch-
+        режиме (replay) инкремент откладывается до конца батча."""
+        if self._batch_depth > 0:
+            self._state_seq_dirty = True
+            return
+        self._write_state_seq()
+        self._commit()
 
     def get_state_seq(self) -> int:
         r = self.conn.execute(
@@ -586,9 +665,15 @@ class Database:
     def read_tx(self):
         """Согласованное чтение снимка (D01): замок соединения удерживается
         на всю read-транзакцию, поэтому серия запросов видит одну версию
-        состояния без вклинивания записей между ними."""
+        состояния без вклинивания записей между ними. Во время batch_writes
+        BEGIN/ROLLBACK сломали бы отложенную транзакцию батча на этом же
+        соединении — читаем без обёртки (видно промежуточное состояние
+        replay, как и при per-write commit'ах)."""
         lock = self.conn._lock
         with lock:
+            if self._batch_depth > 0:
+                yield
+                return
             self.conn.execute("BEGIN DEFERRED")
             try:
                 yield
@@ -625,6 +710,50 @@ class Database:
             if version == self._ltf_cache_version:
                 self._ltf_cache[key] = (version, value)
         return list(value) if isinstance(value, list) else value
+
+    # ---------- кэши горячих HTF-чтений (replay: per-candle N+1) ----------
+
+    def _rc_cached(self, store: dict, key: tuple, version: int, loader) -> Any:
+        """Выборка через кэш с явной версией (визиты/уровни/события зоны).
+        Списки отдаются поверхностной копией; объекты разделяются — не
+        мутировать без последующего update_* (он инвалидирует кэш)."""
+        with self._read_cache_lock:
+            hit = store.get(key)
+            if hit is not None and hit[0] == version:
+                value = hit[1]
+                return list(value) if isinstance(value, list) else value
+        value = loader()
+        with self._read_cache_lock:
+            store[key] = (version, value)
+        return list(value) if isinstance(value, list) else value
+
+    def _visit_version(self, zone_id: int) -> int:
+        with self._read_cache_lock:
+            return self._visit_versions.get(zone_id, 0)
+
+    def _bump_visit_version(self, zone_id: int) -> None:
+        with self._read_cache_lock:
+            self._visit_versions[zone_id] = self._visit_versions.get(zone_id, 0) + 1
+
+    def _inner_version(self, parent_ob_id: int) -> int:
+        with self._read_cache_lock:
+            return self._inner_versions.get(parent_ob_id, 0)
+
+    def _bump_inner_version(self, parent_ob_id: int) -> None:
+        with self._read_cache_lock:
+            self._inner_versions[parent_ob_id] = (
+                self._inner_versions.get(parent_ob_id, 0) + 1
+            )
+            self._inner_global_version += 1
+
+    def _event_version(self, zone_id: int, cycle_id: int) -> int:
+        with self._read_cache_lock:
+            return self._event_versions.get((zone_id, cycle_id), 0)
+
+    def _bump_event_version(self, zone_id: int, cycle_id: int) -> None:
+        with self._read_cache_lock:
+            key = (zone_id, cycle_id)
+            self._event_versions[key] = self._event_versions.get(key, 0) + 1
 
     def get_zone(self, zone_id: int) -> Optional[Zone]:
         r = self.conn.execute("SELECT * FROM zone WHERE id=?", (zone_id,)).fetchone()
@@ -678,8 +807,12 @@ class Database:
         Решения вроде now_irrelevant / no_context статуса зоны не меняют
         (§15.1.1), поэтому «проверенность» определяется по наличию записи
         в review — иначе проверенные зоны возвращались бы в очередь.
-        Без кэша: review-записи версию кэша зон не инвалидируют."""
+        Без кэша: review-записи версию кэша зон не инвалидируют.
+        ТЗ 06.10.2026 §3.3 (T07): завершённые/инвалидированные объекты
+        (close_beyond и т.п.) очередь проверки и рабочие сигналы не
+        засоряют — они доступны в истории."""
         q = ("SELECT * FROM zone WHERE status='candidate' "
+             "AND market_validity='active' AND display_until IS NULL "
              "AND NOT EXISTS (SELECT 1 FROM review r WHERE r.zone_id = zone.id)")
         args: list[Any] = []
         if instrument_id is not None:
@@ -736,27 +869,42 @@ class Database:
              lv.pivot_time, lv.confirmed_at, lv.source_test_id, lv.status,
              lv.taken_at, json.dumps(lv.evidence, ensure_ascii=False), lv.created_at),
         )
-        self.conn.commit()
-        return int(cur.lastrowid) if cur.rowcount == 1 else None
+        if cur.rowcount == 1:
+            self._bump_inner_version(lv.parent_ob_id)
+            self._commit()
+            return int(cur.lastrowid)
+        self._commit()
+        return None
 
     def update_inner_level(self, level_id: int, **fields: Any) -> None:
         if "evidence" in fields and isinstance(fields["evidence"], dict):
             fields["evidence"] = json.dumps(fields["evidence"], ensure_ascii=False)
         cols = ", ".join(f"{k}=?" for k in fields)
+        parent = self.conn.execute(
+            "SELECT parent_ob_id FROM inner_level WHERE id=?", (level_id,)
+        ).fetchone()
         self.conn.execute(
             f"UPDATE inner_level SET {cols} WHERE id=?", (*fields.values(), level_id)
         )
-        self.conn.commit()
+        if parent is not None:
+            self._bump_inner_version(int(parent["parent_ob_id"]))
+        self._commit()
 
     def get_inner_level_by_key(
         self, parent_ob_id: int, timeframe: str, kind: str, price: float, pivot_time: int
     ) -> Optional["InnerLevel"]:
-        r = self.conn.execute(
-            """SELECT * FROM inner_level
-               WHERE parent_ob_id=? AND timeframe=? AND kind=? AND price=? AND pivot_time=?""",
-            (parent_ob_id, timeframe, kind, price, pivot_time),
-        ).fetchone()
-        return self._to_inner_level(r) if r else None
+        def load() -> Optional["InnerLevel"]:
+            r = self.conn.execute(
+                """SELECT * FROM inner_level
+                   WHERE parent_ob_id=? AND timeframe=? AND kind=? AND price=? AND pivot_time=?""",
+                (parent_ob_id, timeframe, kind, price, pivot_time),
+            ).fetchone()
+            return self._to_inner_level(r) if r else None
+        return self._rc_cached(
+            self._inner_cache,
+            ("inner_k", parent_ob_id, timeframe, kind, price, pivot_time),
+            self._inner_version(parent_ob_id), load,
+        )
 
     def list_inner_levels(
         self,
@@ -764,19 +912,31 @@ class Database:
         instrument_id: Optional[int] = None,
         statuses: Optional[tuple[str, ...]] = None,
     ) -> list["InnerLevel"]:
-        q = "SELECT * FROM inner_level WHERE 1=1"
-        args: list[Any] = []
+        def load() -> list["InnerLevel"]:
+            q = "SELECT * FROM inner_level WHERE 1=1"
+            args: list[Any] = []
+            if parent_ob_id is not None:
+                q += " AND parent_ob_id=?"
+                args.append(parent_ob_id)
+            if instrument_id is not None:
+                q += " AND instrument_id=?"
+                args.append(instrument_id)
+            if statuses:
+                q += f" AND status IN ({','.join('?' * len(statuses))})"
+                args += list(statuses)
+            q += " ORDER BY pivot_time, id"
+            return [self._to_inner_level(r) for r in self.conn.execute(q, args).fetchall()]
         if parent_ob_id is not None:
-            q += " AND parent_ob_id=?"
-            args.append(parent_ob_id)
-        if instrument_id is not None:
-            q += " AND instrument_id=?"
-            args.append(instrument_id)
-        if statuses:
-            q += f" AND status IN ({','.join('?' * len(statuses))})"
-            args += list(statuses)
-        q += " ORDER BY pivot_time, id"
-        return [self._to_inner_level(r) for r in self.conn.execute(q, args).fetchall()]
+            return self._rc_cached(
+                self._inner_cache, ("inner_p", parent_ob_id, statuses),
+                self._inner_version(parent_ob_id), load,
+            )
+        # выборки по инструменту — глобальная версия inner_level (записи редки)
+        with self._read_cache_lock:
+            version = self._inner_global_version
+        return self._rc_cached(
+            self._inner_cache, ("inner_i", instrument_id, statuses), version, load,
+        )
 
     @staticmethod
     def _to_inner_level(r: sqlite3.Row) -> "InnerLevel":
@@ -804,7 +964,7 @@ class Database:
             (rel.zone_id, rel.parent_ob_id, rel.confirming_fvg_id,
              rel.predecessor_ob_id, rel.visual_group_id),
         )
-        self.conn.commit()
+        self._commit()
 
     def get_relation(self, zone_id: int) -> Optional[ZoneRelation]:
         r = self.conn.execute(
@@ -833,6 +993,16 @@ class Database:
     # ---------- visits ----------
 
     def open_visit(self, v: Visit) -> int:
+        """Открытие захода. Идемпотентно (T22, ТЗ 06.10.2026 §14): повторный
+        replay обрабатывает те же свечи — визит с тем же ключом
+        (zone_id, cycle_id, entered_at) не дублируется, возвращается id
+        существующего."""
+        existing = self.conn.execute(
+            "SELECT id FROM visit WHERE zone_id=? AND cycle_id=? AND entered_at=?",
+            (v.zone_id, v.cycle_id, v.entered_at),
+        ).fetchone()
+        if existing is not None:
+            return int(existing["id"])
         cur = self.conn.execute(
             """INSERT INTO visit (zone_id, cycle_id, entered_at, exited_at, max_depth,
                                   observed, extreme, d_raw)
@@ -840,29 +1010,42 @@ class Database:
             (v.zone_id, v.cycle_id, v.entered_at, v.exited_at, v.max_depth,
              int(v.observed), v.extreme, v.d_raw),
         )
-        self.conn.commit()
+        self._bump_visit_version(v.zone_id)
+        self._commit()
         return int(cur.lastrowid)
 
     def close_visit(self, visit_id: int, exited_at: int, max_depth: float,
                     exit_kind: Optional[str] = None,
                     extreme: Optional[float] = None, d_raw: Optional[float] = None) -> None:
+        zone_id = self._visit_zone_id(visit_id)
         self.conn.execute(
             """UPDATE visit SET exited_at=?, max_depth=?, exit_kind=?,
                  extreme=COALESCE(?, extreme), d_raw=COALESCE(?, d_raw)
                WHERE id=?""",
             (exited_at, max_depth, exit_kind, extreme, d_raw, visit_id),
         )
-        self.conn.commit()
+        if zone_id is not None:
+            self._bump_visit_version(zone_id)
+        self._commit()
+
+    def _visit_zone_id(self, visit_id: int) -> Optional[int]:
+        r = self.conn.execute(
+            "SELECT zone_id FROM visit WHERE id=?", (visit_id,)
+        ).fetchone()
+        return int(r["zone_id"]) if r else None
 
     def update_visit_depth(self, visit_id: int, max_depth: float,
                            extreme: Optional[float] = None,
                            d_raw: Optional[float] = None) -> None:
+        zone_id = self._visit_zone_id(visit_id)
         self.conn.execute(
             "UPDATE visit SET max_depth=?, extreme=COALESCE(?, extreme), "
             "d_raw=COALESCE(?, d_raw) WHERE id=?",
             (max_depth, extreme, d_raw, visit_id),
         )
-        self.conn.commit()
+        if zone_id is not None:
+            self._bump_visit_version(zone_id)
+        self._commit()
 
     @staticmethod
     def _to_visit(r: sqlite3.Row) -> Visit:
@@ -877,13 +1060,18 @@ class Database:
         )
 
     def get_visits(self, zone_id: int, cycle_id: Optional[int] = None) -> list[Visit]:
-        q = "SELECT * FROM visit WHERE zone_id=?"
-        args: list[Any] = [zone_id]
-        if cycle_id is not None:
-            q += " AND cycle_id=?"
-            args.append(cycle_id)
-        q += " ORDER BY entered_at"
-        return [self._to_visit(r) for r in self.conn.execute(q, args).fetchall()]
+        def load() -> list[Visit]:
+            q = "SELECT * FROM visit WHERE zone_id=?"
+            args: list[Any] = [zone_id]
+            if cycle_id is not None:
+                q += " AND cycle_id=?"
+                args.append(cycle_id)
+            q += " ORDER BY entered_at"
+            return [self._to_visit(r) for r in self.conn.execute(q, args).fetchall()]
+        return self._rc_cached(
+            self._visits_cache, ("visits", zone_id, cycle_id),
+            self._visit_version(zone_id), load,
+        )
 
     def get_zone_max_depth(self, zone_id: int, cycle_id: int) -> Optional[float]:
         """Максимальная глубина теста за жизненный цикл (§15.7: контракт для
@@ -895,14 +1083,17 @@ class Database:
         return r["d"] if r and r["d"] is not None else None
 
     def open_visit_for(self, zone_id: int, cycle_id: int) -> Optional[Visit]:
-        r = self.conn.execute(
-            """SELECT * FROM visit WHERE zone_id=? AND cycle_id=? AND exited_at IS NULL
-               ORDER BY entered_at DESC LIMIT 1""",
-            (zone_id, cycle_id),
-        ).fetchone()
-        if not r:
-            return None
-        return self._to_visit(r)
+        def load() -> Optional[Visit]:
+            r = self.conn.execute(
+                """SELECT * FROM visit WHERE zone_id=? AND cycle_id=? AND exited_at IS NULL
+                   ORDER BY entered_at DESC LIMIT 1""",
+                (zone_id, cycle_id),
+            ).fetchone()
+            return self._to_visit(r) if r else None
+        return self._rc_cached(
+            self._visits_cache, ("open_visit", zone_id, cycle_id),
+            self._visit_version(zone_id), load,
+        )
 
     # ---------- events ----------
 
@@ -915,9 +1106,10 @@ class Database:
             (e.zone_id, e.cycle_id, e.kind.value, e.occurred_at, e.detected_at, e.price,
              e.depth, int(e.delayed), json.dumps(e.evidence, ensure_ascii=False)),
         )
-        self.conn.commit()
+        self._commit()
         # rowcount надёжен в отличие от lastrowid после проигнорированной вставки
         if cur.rowcount == 1:
+            self._bump_event_version(e.zone_id, e.cycle_id)
             self.bump_state_seq()
             return int(cur.lastrowid)
         return None
@@ -976,12 +1168,17 @@ class Database:
         self, zone_id: int, cycle_id: int, kind: EventKind, occurred_at: int
     ) -> bool:
         """Точечная проверка дедуп-ключа (UNIQUE zone/cycle/kind/occurred_at)."""
-        row = self.conn.execute(
-            """SELECT 1 FROM event
-               WHERE zone_id=? AND cycle_id=? AND kind=? AND occurred_at=?""",
-            (zone_id, cycle_id, kind.value, occurred_at),
-        ).fetchone()
-        return row is not None
+        def load() -> bool:
+            row = self.conn.execute(
+                """SELECT 1 FROM event
+                   WHERE zone_id=? AND cycle_id=? AND kind=? AND occurred_at=?""",
+                (zone_id, cycle_id, kind.value, occurred_at),
+            ).fetchone()
+            return row is not None
+        return self._rc_cached(
+            self._event_cache, ("has_event", zone_id, cycle_id, kind, occurred_at),
+            self._event_version(zone_id, cycle_id), load,
+        )
 
     def event_keys(self, zone_id: int, cycle_id: int) -> list[tuple[EventKind, int]]:
         """(kind, occurred_at) всех событий цикла зоны — для дедупа при эмите.
@@ -989,11 +1186,16 @@ class Database:
         Читает только ключи (покрывается UNIQUE-индексом), без выборки полных
         строк с LIMIT-окном, которое сужало дедуп на зонах с >500 событиями.
         """
-        rows = self.conn.execute(
-            "SELECT kind, occurred_at FROM event WHERE zone_id=? AND cycle_id=?",
-            (zone_id, cycle_id),
-        ).fetchall()
-        return [(EventKind(r["kind"]), r["occurred_at"]) for r in rows]
+        def load() -> list[tuple[EventKind, int]]:
+            rows = self.conn.execute(
+                "SELECT kind, occurred_at FROM event WHERE zone_id=? AND cycle_id=?",
+                (zone_id, cycle_id),
+            ).fetchall()
+            return [(EventKind(r["kind"]), r["occurred_at"]) for r in rows]
+        return self._rc_cached(
+            self._event_cache, ("event_keys", zone_id, cycle_id),
+            self._event_version(zone_id, cycle_id), load,
+        )
 
     # ---------- deliveries ----------
 
@@ -1005,7 +1207,7 @@ class Database:
             (json.dumps(d.event_ids), d.destination, d.status, d.idempotency_key,
              d.delivered_at, d.error),
         )
-        self.conn.commit()
+        self._commit()
         # rowcount надёжен в отличие от lastrowid после проигнорированной вставки
         return int(cur.lastrowid) if cur.rowcount == 1 else None
 
@@ -1015,7 +1217,7 @@ class Database:
             "UPDATE delivery SET status=?, delivered_at=?, error=? WHERE id=?",
             (status, delivered_at, error, delivery_id),
         )
-        self.conn.commit()
+        self._commit()
 
     def pending_deliveries(self) -> list[Delivery]:
         rows = self.conn.execute(
@@ -1059,7 +1261,7 @@ class Database:
             (st.zone_id, st.cycle_id, st.event_kind, st.user, st.last_delivered_at,
              st.muted_until, int(st.acknowledged)),
         )
-        self.conn.commit()
+        self._commit()
 
     def set_mute(self, zone_id: int, cycle_id: int, muted_until: Optional[int],
                  user: str = "owner") -> None:
@@ -1067,7 +1269,7 @@ class Database:
             "UPDATE alert_state SET muted_until=? WHERE zone_id=? AND cycle_id=? AND user=?",
             (muted_until, zone_id, cycle_id, user),
         )
-        self.conn.commit()
+        self._commit()
 
     # ---------- Telegram-бот: watchlist (ТЗ п.8) ----------
 
@@ -1092,14 +1294,14 @@ class Database:
                VALUES (?,?,1,?)""",
             (chat_id, instrument_id, now_ms()),
         )
-        self.conn.commit()
+        self._commit()
 
     def watchlist_remove(self, chat_id: str, instrument_id: int) -> None:
         self.conn.execute(
             "DELETE FROM bot_watchlist WHERE chat_id=? AND instrument_id=?",
             (chat_id, instrument_id),
         )
-        self.conn.commit()
+        self._commit()
 
     def watchlist_set_alerts(
         self, chat_id: str, instrument_id: int, enabled: bool
@@ -1109,7 +1311,7 @@ class Database:
             "WHERE chat_id=? AND instrument_id=?",
             (int(enabled), chat_id, instrument_id),
         )
-        self.conn.commit()
+        self._commit()
 
     def watchlist_alerts_disabled(self, chat_id: str, instrument_id: int) -> bool:
         """True только если инструмент в списке с выключенными уведомлениями;
@@ -1158,7 +1360,7 @@ class Database:
                DO UPDATE SET enabled=excluded.enabled""",
             (chat_id, scope, scope_ref, grp, kind, int(enabled)),
         )
-        self.conn.commit()
+        self._commit()
 
     def alert_pref_enabled(
         self, chat_id: str, scope: str, scope_ref: str, grp: str, kind: str
@@ -1183,14 +1385,14 @@ class Database:
                DO UPDATE SET until=excluded.until""",
             (chat_id, scope, scope_ref, until),
         )
-        self.conn.commit()
+        self._commit()
 
     def clear_mute_scope(self, chat_id: str, scope: str, scope_ref: str) -> None:
         self.conn.execute(
             "DELETE FROM bot_mute WHERE chat_id=? AND scope=? AND scope_ref=?",
             (chat_id, scope, scope_ref),
         )
-        self.conn.commit()
+        self._commit()
 
     def get_mutes(self, chat_id: str, now: int) -> list[dict[str, Any]]:
         """Активные (не истёкшие) мьюты владельца."""
@@ -1211,7 +1413,7 @@ class Database:
             (rev.zone_id, rev.decision, rev.author, rev.text, rev.boundary_version,
              rev.created_at),
         )
-        self.conn.commit()
+        self._commit()
         return int(cur.lastrowid)
 
     def get_reviews(self, zone_id: Optional[int] = None) -> list[Review]:
@@ -1243,7 +1445,7 @@ class Database:
              a.lifecycle_verdict, a.reason_code, a.evidence_source, a.assessed_as_of,
              a.reviewed_at, int(a.requires_clarification)),
         )
-        self.conn.commit()
+        self._commit()
         return int(cur.lastrowid)
 
     def get_assessments(self, zone_id: int) -> list[ReviewAssessment]:
@@ -1276,7 +1478,7 @@ class Database:
              c.corrected_lower, c.corrected_upper, c.anchor_candle_open_time,
              c.reason, c.created_at),
         )
-        self.conn.commit()
+        self._commit()
         return int(cur.lastrowid)
 
     def get_boundary_corrections(self, zone_id: int) -> list[BoundaryCorrection]:
@@ -1312,7 +1514,7 @@ class Database:
                 norm[k] = v
         cols = ", ".join(f'"{k}"=?' for k in norm)
         self.conn.execute(f"UPDATE {table} SET {cols} WHERE id=?", (*norm.values(), row_id))
-        self.conn.commit()
+        self._commit()
         self._bump_ltf_cache()
 
     # ---------- LTF: observations ----------
@@ -1332,7 +1534,7 @@ class Database:
              o.direction.value, o.state, o.activated_at, o.data_quality,
              o.created_at, o.updated_at, json.dumps(o.evidence, ensure_ascii=False)),
         )
-        self.conn.commit()
+        self._commit()
         self._bump_ltf_cache()
         if cur.rowcount == 1:
             o.id = int(cur.lastrowid)
@@ -1425,7 +1627,7 @@ class Database:
              s.trigger_event_id, s.cancellation_reason, s.cancelled_at,
              s.created_at, s.updated_at),
         )
-        self.conn.commit()
+        self._commit()
         self._bump_ltf_cache()
         s.id = int(cur.lastrowid)
         return s
@@ -1496,7 +1698,7 @@ class Database:
              p.role_assigned_at, p.left, p.right, p.candle_open_time, p.state,
              p.calc_version_id, p.superseded_by),
         )
-        self.conn.commit()
+        self._commit()
         self._bump_ltf_cache()
         return int(cur.lastrowid)
 
@@ -1523,7 +1725,7 @@ class Database:
             " VALUES (?,?,?,?)",
             (kind, blob, rule_version, created_at),
         )
-        self.conn.commit()
+        self._commit()
         return int(cur.lastrowid), True
 
     def get_calc_version(self, calc_version_id: int) -> Optional[dict[str, Any]]:
@@ -1550,7 +1752,7 @@ class Database:
             "WHERE instrument_id=? AND superseded_by IS NULL",
             (calc_version_id, instrument_id),
         )
-        self.conn.commit()
+        self._commit()
         self._bump_ltf_cache()
         return cur.rowcount
 
@@ -1596,7 +1798,7 @@ class Database:
         cur = self.conn.execute(
             "DELETE FROM ltf_pivot WHERE instrument_id=?", (instrument_id,)
         )
-        self.conn.commit()
+        self._commit()
         self._bump_ltf_cache()
         return cur.rowcount
 
@@ -1617,7 +1819,7 @@ class Database:
                VALUES (?,?,?,?)""",
             (pivot_id, old_role, new_role, changed_at),
         )
-        self.conn.commit()
+        self._commit()
         self._bump_ltf_cache()
 
     def list_ltf_pivot_role_log(self, pivot_id: int) -> list[dict[str, Any]]:
@@ -1668,7 +1870,7 @@ class Database:
              json.dumps(e.ref_pivot_ids), int(e.accompanying), e.level_key,
              json.dumps(e.evidence, ensure_ascii=False)),
         )
-        self.conn.commit()
+        self._commit()
         self._bump_ltf_cache()
         if cur.rowcount == 1:
             e.id = int(cur.lastrowid)
@@ -1736,7 +1938,7 @@ class Database:
              m.break_event_id, m.confirmed_at, json.dumps(m.source_candle_ids),
              m.provenance_status),
         )
-        self.conn.commit()
+        self._commit()
         self._bump_ltf_cache()
         return int(cur.lastrowid)
 
@@ -1782,7 +1984,7 @@ class Database:
              rng.anchor_low_pivot_id, rng.anchor_high_pivot_id, rng.available_at,
              rng.prev_version_id),
         )
-        self.conn.commit()
+        self._commit()
         self._bump_ltf_cache()
         return int(cur.lastrowid)
 
@@ -1884,6 +2086,7 @@ class Database:
             for r in self.conn.execute(
                 "SELECT instrument_id, COUNT(*) AS n FROM zone "
                 "WHERE status='candidate' "
+                "AND market_validity='active' AND display_until IS NULL "
                 "AND NOT EXISTS (SELECT 1 FROM review r WHERE r.zone_id = zone.id) "
                 "GROUP BY instrument_id"
             ).fetchall()
@@ -1919,7 +2122,7 @@ class Database:
              z.validity, z.max_test_depth, z.test_extreme, z.source,
              z.rule_version, z.evidence_json()),
         )
-        self.conn.commit()
+        self._commit()
         self._bump_ltf_cache()
         if cur.rowcount == 1:
             z.id = int(cur.lastrowid)
@@ -1999,7 +2202,7 @@ class Database:
             (se.scenario_id, se.entry_zone_id, se.range_version, int(se.eligible),
              se.overlap, se.state, se.reason, se.added_at, se.updated_at),
         )
-        self.conn.commit()
+        self._commit()
         self._bump_ltf_cache()
         # после upsert lastrowid ненадёжен — читаем строку по уникальному ключу
         r = self.conn.execute(
@@ -2067,7 +2270,7 @@ class Database:
             (t.entry_zone_id, t.scenario_id, t.level, t.touch_at,
              t.candle_open_time, t.state, t.close_price, t.sweep_at, t.resolved_at),
         )
-        self.conn.commit()
+        self._commit()
         self._bump_ltf_cache()
         return int(cur.lastrowid)
 
@@ -2124,7 +2327,7 @@ class Database:
              e.detected_at, e.dedupe_key, int(e.delivered), int(e.delayed),
              e.processing_mode, e.detection_lag_ms),
         )
-        self.conn.commit()
+        self._commit()
         self._bump_ltf_cache()
         if cur.rowcount == 1:
             e.id = int(cur.lastrowid)
@@ -2187,7 +2390,7 @@ class Database:
         self.conn.execute(
             "UPDATE ltf_event SET delivered=1 WHERE id=?", (event_id,)
         )
-        self.conn.commit()
+        self._commit()
         self._bump_ltf_cache()
 
     def pending_ltf_events(self, limit: int = 200) -> list[LtfEvent]:
@@ -2227,7 +2430,7 @@ class Database:
             (rev.entry_zone_id, rev.scenario_id, rev.decision, rev.author,
              rev.text, rev.created_at),
         )
-        self.conn.commit()
+        self._commit()
         return int(cur.lastrowid)
 
     def get_ltf_reviews(self, entry_zone_id: int) -> list[LtfReview]:
@@ -2256,7 +2459,7 @@ class Database:
              a.assessed_as_of, a.reviewed_at, int(a.requires_clarification),
              a.corrected_lower, a.corrected_upper),
         )
-        self.conn.commit()
+        self._commit()
         return int(cur.lastrowid)
 
     def get_ltf_assessments(self, entry_zone_id: int) -> list[LtfReviewAssessment]:

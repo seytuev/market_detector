@@ -126,16 +126,18 @@ def test_f_impulse_passage_is_not_a_test(db, cfg, instrument_id):
     # кандидат OB (ещё не подтверждён): проход импульса насквозь через диапазон
     z = _ob(db, instrument_id, confirmed=False)
     scanner = Scanner(db, cfg)
+    # ТЗ 06.10.2026 §3.1: наблюдения имеют смысл только после завершения базы
+    be = T0 + D1_MS
     # проход через диапазон (95→115) одним движением — не тест (фаза forming)
-    scanner.on_price(instrument_id, 105.0, T0 + 1000)
+    scanner.on_price(instrument_id, 105.0, be + 1000)
     assert db.get_visits(z.id, 1) == []
     assert db.get_events(z.id) == []
     # наблюдение полностью за ближней границей — фиксация выхода
-    scanner.on_price(instrument_id, 115.0, T0 + 2000)
+    scanner.on_price(instrument_id, 115.0, be + 2000)
     assert db.get_visits(z.id, 1) == []
     # самостоятельный возврат — это тест (пусть и silent у кандидата)
-    scanner.on_price(instrument_id, 108.0, T0 + 3000)
-    scanner.on_price(instrument_id, 112.0, T0 + 4000)
+    scanner.on_price(instrument_id, 108.0, be + 3000)
+    scanner.on_price(instrument_id, 112.0, be + 4000)
     after = db.get_zone(z.id)
     assert after.has_tests is True
     assert after.max_test_depth == pytest.approx(0.2)
@@ -214,9 +216,11 @@ def test_p_early_test_before_confirmation_persists(db, cfg, instrument_id,
                                                    price, expected_depth, eligible):
     z = _ob(db, instrument_id, confirmed=False)  # кандидат до FVG
     scanner = Scanner(db, cfg)
-    scanner.on_price(instrument_id, 115.0, T0 + 1000)   # выход из базы
-    scanner.on_price(instrument_id, price, T0 + 2000)   # ранний тест (silent)
-    scanner.on_price(instrument_id, 112.0, T0 + 3000)   # возврат
+    # ТЗ 06.10.2026 §3.1: наблюдения — после завершения базы
+    be = T0 + D1_MS
+    scanner.on_price(instrument_id, 115.0, be + 1000)   # выход из базы
+    scanner.on_price(instrument_id, price, be + 2000)   # ранний тест (silent)
+    scanner.on_price(instrument_id, 112.0, be + 3000)   # возврат
     assert db.get_events(z.id) == []                    # без ретро-уведомлений
 
     # подтверждение FVG позже: история тестов НЕ обнуляется,

@@ -276,6 +276,9 @@ def render_htf(
     zones = db.get_zones(
         instrument_id=instrument_id, statuses=_ACTIVE_ZONE_STATUSES
     )
+    # ТЗ 06.10.2026 §13 (T21): единый canonical state — invalidated и
+    # неподтверждённые не показываем как актуальные даже при плоском status
+    zones = [z for z in zones if z.is_currently_relevant()]
     quote = db.get_quote(instrument_id)
     price = quote[0] if quote else None
     if filt in ("d1", "w1"):

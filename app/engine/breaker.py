@@ -37,13 +37,35 @@ def far_boundary_broken(zone: Zone, candle: Candle) -> bool:
     return candle.close > zone.upper
 
 
+def first_close_beyond(
+    candles: list[Candle], zone: Zone, from_ms: int, to_ms: int
+) -> Optional[Candle]:
+    """Первая закрытая свеча ТФ зоны со строгим закрытием за дальней границей
+    в интервале (from_ms, to_ms] по границам закрытия (ТЗ 06.10.2026 §6).
+
+    Сканирование в возрастающем порядке от момента, когда зона стала
+    наблюдаемой (confirmed_at, для кандидата — конец базы), а не от свечи
+    детекции: первое событие пробоя не подменяется поздним (T03–T06).
+    Тень за границей и Close ровно на границе пробоем не являются (T12).
+    """
+    tf_ms = TIMEFRAME_MINUTES[zone.timeframe] * 60_000
+    for c in sorted((c for c in candles if c.closed), key=lambda c: c.open_time):
+        boundary = c.open_time + tf_ms
+        if boundary <= from_ms or boundary > to_ms:
+            continue
+        if far_boundary_broken(zone, c):
+            return c
+    return None
+
+
 def converts_to_breaker(ob: Zone, candle: Candle) -> bool:
     """Первое из двух условий §15.6: закрытие за дальней границей."""
     return ob.type == ZoneType.OB and far_boundary_broken(ob, candle)
 
 
 def breaker_forbidden(
-    ob: Zone, visits: list[Visit], candles: list[Candle], cfg: DetectorConfig
+    ob: Zone, visits: list[Visit], candles: list[Candle], cfg: DetectorConfig,
+    before_ms: Optional[int] = None,
 ) -> bool:
     """§15.6/§9.5: предыдущий отдельный тест >50% исключает Breaker навсегда.
 
@@ -51,6 +73,8 @@ def breaker_forbidden(
     Порог — cfg.depth_mid (§2). ТЗ «Единый движок» §4/§6: сравнение глубины —
     точное, по экстремуму захода (без epsilon); ранние самостоятельные тесты
     до подтверждения FVG учитываются (хранятся визитами кандидата).
+    ТЗ 06.10.2026 §10 (T20): учитывается история именно ДО первого пробоя —
+    before_ms ограничивает визиты сверху (open_time пробойной свечи).
     Рабочая интерпретация (§15.6 — открыто для формализации):
     - заход с выходом обратно (exit_kind='return') и глубиной >depth_mid — тест;
     - заход, завершённый отработкой 90% ('worked'), — тоже отдельный тест,
@@ -62,6 +86,8 @@ def breaker_forbidden(
     ordered = sorted(visits, key=lambda v: v.entered_at)
     for v in ordered:
         if v.exited_at is None:
+            continue
+        if before_ms is not None and v.entered_at >= before_ms:
             continue
         if v.extreme is not None:
             deep = geom.strictly_deeper(ob, v.extreme, cfg.depth_mid)
@@ -75,6 +101,8 @@ def breaker_forbidden(
         if v.exit_kind == "worked":
             for c in candles:
                 if not c.closed or c.open_time < v.entered_at:
+                    continue
+                if before_ms is not None and c.open_time >= before_ms:
                     continue
                 if ob.direction == Direction.BULL and c.close > ob.upper:
                     return True

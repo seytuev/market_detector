@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..models import Candle, Direction, TIMEFRAME_MINUTES
+from ..models import Candle, Direction, close_boundary_ms
 
 
 @dataclass
@@ -30,7 +30,6 @@ def scan_fvgs(candles: list[Candle], timeframe: str) -> list[FvgRecord]:
     Учитываются только закрытые свечи: до закрытия третьей свечи FVG
     для алгоритма не существует (§3, приёмка §13.1).
     """
-    tf_ms = TIMEFRAME_MINUTES[timeframe] * 60_000
     closed = sorted((c for c in candles if c.closed), key=lambda c: c.open_time)
     out: list[FvgRecord] = []
     for i in range(2, len(closed)):
@@ -47,7 +46,7 @@ def scan_fvgs(candles: list[Candle], timeframe: str) -> list[FvgRecord]:
                 lower=lower,
                 upper=upper,
                 formed_at=c3.open_time,
-                confirmed_at=c3.open_time + tf_ms,
+                confirmed_at=close_boundary_ms(c3.open_time, timeframe),
                 candle_open_times=(c1.open_time, _c2.open_time, c3.open_time),
             )
         )

@@ -88,15 +88,37 @@ def migrate_display_fields(db: Database) -> dict:
 
     # §15.3/R12: починка связей OB↔FVG, испорченных старой перезаписью —
     # evidence.confirming_fvg_formed_at (записан при первом подтверждении)
-    # указывает истинный FVG; relation выравниваем по нему
+    # указывает истинный FVG; relation выравниваем по нему.
+    # ТЗ 06.10.2026 §7 (T08): зоны, подтверждённые при создании (у legacy-
+    # записей нет confirming_fvg_formed_at), дозаполняются из relation —
+    # evidence и relation должны ссылаться на один и тот же объект.
     repaired = 0
     for z in db.get_zones():
         if z.type not in (ZoneType.OB, ZoneType.PRB):
             continue
+        rel = db.get_relation(z.id)
         formed = z.evidence.get("confirming_fvg_formed_at")
+        if formed is None and rel is not None and rel.confirming_fvg_id:
+            src = db.get_zone(rel.confirming_fvg_id)
+            if src is not None:
+                # обратная заливка evidence из relation (legacy-зоны,
+                # подтверждённые при создании до унификации ТЗ 06.10.2026)
+                ev = dict(z.evidence)
+                ev["external_fvg"] = True
+                ev["confirming_fvg_formed_at"] = src.formed_at
+                ev["confirming_fvg_range"] = [src.lower, src.upper]
+                ev["actual_confirming_fvg"] = {
+                    "formed_at": src.formed_at,
+                    "open_times": list(src.source_candles),
+                    "range": [src.lower, src.upper],
+                }
+                ev["source_candles"] = z.source_candles
+                db.update_zone(z.id, evidence=ev)
+                z = db.get_zone(z.id)
+                formed = src.formed_at
+                repaired += 1
         if formed is None:
             continue
-        rel = db.get_relation(z.id)
         fvg = next(
             (c for c in db.get_zones(z.instrument_id, types=[ZoneType.FVG])
              if c.formed_at == formed and c.timeframe == z.timeframe),

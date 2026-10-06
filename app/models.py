@@ -14,6 +14,19 @@ from typing import Any, Optional
 TIMEFRAME_MINUTES = {"H1": 60, "H4": 240, "D1": 1440, "W1": 10080}
 
 
+def close_boundary_ms(open_time: int, timeframe: str) -> int:
+    """Единая временная конвенция движка (ТЗ 06.10.2026 §3.6/§5).
+
+    Граница закрытия свечи = open_time + длительность ТФ. Это EXCLUSIVE
+    close boundary: первая миллисекунда СЛЕДУЮЩЕГО интервала, т.е.
+    close_time + 1 мс (close_time — последняя мс своего интервала).
+    Событие «свеча закрылась» доступно алгоритму с этого момента; разница
+    в 1 мс между boundary и close_time — следствие конвенции, а не
+    использование будущих данных.
+    """
+    return open_time + TIMEFRAME_MINUTES[timeframe] * 60_000
+
+
 class ZoneType(str, Enum):
     FVG = "fvg"
     OB = "ob"
@@ -54,6 +67,7 @@ class EventKind(str, Enum):
     FVG_FILLED = "fvg_filled"        # полное перекрытие
     # Структура
     OB_CONFIRMED = "ob_confirmed"
+    OB_INVALIDATED = "ob_invalidated"  # ТЗ 06.10.2026 §6: первое закрытие за границей
     BREAKER_CREATED = "breaker_created"
     BREAKER_ARCHIVED = "breaker_archived"
     PRB_ARCHIVED = "prb_archived"
@@ -158,6 +172,32 @@ class Zone:
     @property
     def is_level(self) -> bool:
         return self.type in (ZoneType.SSL, ZoneType.BSL) or self.lower == self.upper
+
+    @property
+    def manual_confirmation_only(self) -> bool:
+        """ТЗ 06.10.2026 §4 (T09): зона одобрена владельцем без
+        подтверждающего FVG — ручное одобрение не создаёт доказательств."""
+        return bool(self.evidence.get("manual_confirmation_only"))
+
+    def is_currently_relevant(self) -> bool:
+        """ТЗ 06.10.2026 §4/§13 (T21): единый canonical state актуальной зоны
+        для API, графика, Telegram, HTF-списка и LTF-контекстов.
+
+        Актуальна = подтверждена (FVG или явно только вручную) И рыночно
+        валидна И не завершена. Candidate, rejected и invalidated сюда не
+        входят — они доступны в проверке/истории отдельно."""
+        return (
+            self.status in (ZoneStatus.ACTIVE, ZoneStatus.WEAKENED)
+            and self.market_validity == "active"
+            and self.display_until is None
+            # подтверждение: FVG, явное «только вручную» (T09) или ручная
+            # зона владельца (source=manual — одобрена по определению)
+            and (
+                self.confirmed_at is not None
+                or self.manual_confirmation_only
+                or self.source == "manual"
+            )
+        )
 
     def evidence_json(self) -> str:
         return json.dumps(

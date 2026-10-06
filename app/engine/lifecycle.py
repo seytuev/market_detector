@@ -44,7 +44,17 @@ from typing import Optional
 
 from ..config import DetectorConfig
 from ..db import Database
-from ..models import Direction, Event, EventKind, Visit, Zone, ZoneStatus, ZoneType
+from ..models import (
+    Direction,
+    Event,
+    EventKind,
+    TIMEFRAME_MINUTES,
+    Visit,
+    Zone,
+    ZoneStatus,
+    ZoneType,
+    close_boundary_ms,
+)
 from . import depth as geom
 
 # Пороги глубины по типам зон строятся из DetectorConfig (§2/§3/§6):
@@ -111,13 +121,31 @@ def is_delayed(cfg: DetectorConfig, occurred_at: int, detected_at: int) -> bool:
 
 
 def set_zone_end(db: Database, zone: Zone, ts: int, status: Optional[ZoneStatus],
-             end_reason: str) -> None:
+             end_reason: str, force: bool = False) -> None:
     """Терминальный переход: статус + display_until/end_reason — колонки зоны
-    (§15.1.3: завершённые объекты не тянутся вправо на экране активных зон)."""
-    fields: dict = {"display_until": ts, "end_reason": end_reason}
+    (§15.1.3: завершённые объекты не тянутся вправо на экране активных зон).
+
+    ТЗ 06.10.2026 §5/§6 (T06): первое событие пробоя не перезаписывается
+    более поздним — display_until/end_reason устанавливаются по самой ранней
+    свече события; более поздний вызов меняет только статус. Уточнение
+    причины ТОГО ЖЕ события (равный ts — например, close_beyond →
+    close_beyond_no_breaker после решения о Breaker) допустимо. force=True —
+    явный версионированный перерасчёт (конверсия в Breaker, коррекция
+    границ): прежняя дата первого пробоя при этом сохраняется в
+    evidence/событии OB_INVALIDATED.
+    """
+    fields: dict = {}
+    if force or zone.display_until is None or ts <= zone.display_until:
+        fields["display_until"] = ts
+        fields["end_reason"] = end_reason
     if status is not None:
         fields["status"] = status
-    db.update_zone(zone.id, **fields)
+    if fields:
+        db.update_zone(zone.id, **fields)
+        zone.display_until = fields.get("display_until", zone.display_until)
+        zone.end_reason = fields.get("end_reason", zone.end_reason)
+        if status is not None:
+            zone.status = status
 
 
 def _set_evidence(db: Database, zone: Zone, **updates) -> None:
@@ -136,6 +164,25 @@ def _departed_beyond_near(zone: Zone, lo: float, hi: float) -> bool:
     if zone.direction == Direction.BULL:
         return lo > zone.upper
     return hi < zone.lower
+
+
+def base_end_ms(zone: Zone) -> Optional[int]:
+    """Граница закрытия последней свечи базы (exclusive close boundary).
+
+    Нижняя временная граница всех lifecycle-событий кандидата (ТЗ 06.10.2026
+    §3.1/§5): выход из базы не может предшествовать завершению самой базы.
+    None — свечи базы неизвестны (нет source_candles и formed_at).
+    """
+    if zone.source_candles:
+        last_open = max(zone.source_candles)
+    elif zone.formed_at:
+        last_open = zone.formed_at
+    else:
+        return None
+    tf = TIMEFRAME_MINUTES.get(zone.timeframe)
+    if tf is None:
+        return None
+    return close_boundary_ms(last_open, zone.timeframe)
 
 
 def _update_test_stats(db: Database, cfg: DetectorConfig, zone: Zone,
@@ -157,6 +204,16 @@ def _update_test_stats(db: Database, cfg: DetectorConfig, zone: Zone,
         zone.market_validity == "active"
         and not geom.reaches_depth(zone, new_extreme, cfg.entry_reuse_max_depth)
     )
+    # значения не изменились — записи нет: update_zone инвалидирует кэш
+    # get_zones, а вызов идёт на каждом касании OB (в т.ч. на каждой свече
+    # replay с открытым визитом)
+    if (
+        zone.has_tests
+        and new_extreme == zone.test_extreme
+        and float(d_clamped) == zone.max_test_depth
+        and eligible == zone.entry_eligible
+    ):
+        return
     db.update_zone(
         zone.id, test_extreme=new_extreme, max_test_depth=float(d_clamped),
         has_tests=True, entry_eligible=eligible,
@@ -215,10 +272,22 @@ def track_zone(
     # (внешний FVG доказывает выход из базы) — departed; кандидат ждёт
     # наблюдаемого выхода.
     if ob_like:
+        be = base_end_ms(zone)
         phase = zone.evidence.get("phase")
         if phase is None:
             phase = "departed" if zone.confirmed_at is not None else "forming"
+        import os as _os
+        if _os.environ.get("HTF_DEBUG_ZONE") == str(zone.id):
+            print(f"DBG ts={ts} ev_phase={zone.evidence.get('phase')} phase={phase} "
+                  f"departed_at={zone.evidence.get('departed_at')} be={be} "
+                  f"confirmed={zone.confirmed_at} mv={zone.market_validity} "
+                  f"lo={lo} hi={hi} intersects={geom.interval_intersects(zone, lo, hi)}",
+                  flush=True)
         if phase != "departed":
+            # ТЗ 06.10.2026 §3.1/§5: наблюдения до завершения базы не могут
+            # быть её выходом — нижняя временная граница сканирования
+            if be is not None and ts <= be:
+                return created
             if _departed_beyond_near(zone, lo, hi):
                 _set_evidence(db, zone, phase="departed", departed_at=ts)
             else:
@@ -229,6 +298,23 @@ def track_zone(
                     if not zone.evidence.get("pre_departure_overlap_unknown"):
                         _set_evidence(db, zone, pre_departure_overlap_unknown=True)
                 return created
+        elif be is not None:
+            # Испорченное ранее состояние: выход записан не позднее конца
+            # базы — он не может относиться к движению этой базы. Сигналы
+            # из такого состояния не порождаем (T02: evidence_incomplete),
+            # расхождение фиксируем явно.
+            departed_at = zone.evidence.get("departed_at")
+            if departed_at is not None and departed_at <= be:
+                if zone.evidence.get("integrity") != "inconsistent":
+                    _set_evidence(
+                        db, zone, integrity="inconsistent",
+                        departure_evidence_incomplete=True,
+                        inconsistent_reason=(
+                            "departed_at не позднее конца базы — выход не "
+                            "относится к этой базе (ТЗ 06.10.2026 §3.1)"
+                        ),
+                    )
+                return created
 
     # точные ключи уже записанных событий — db.insert_event при проигнорированном
     # INSERT OR IGNORE может вернуть устаревший lastrowid (контрактный db.py не
@@ -238,6 +324,10 @@ def track_zone(
     existing_keys = set(keys)
     kind_thr = _kind_thresholds(cfg)
     visit = db.open_visit_for(zone.id, zone.cycle_id)
+    import os as _os2
+    if _os2.environ.get("HTF_DEBUG_ZONE") == str(zone.id):
+        print(f"DBG2 ts={ts} visit={None if visit is None else (visit.id, visit.entered_at, visit.exited_at, visit.max_depth)} "
+              f"intersects={geom.interval_intersects(zone, lo, hi)}", flush=True)
     thresholds = (
         _fvg_thresholds(cfg) if zone.type == ZoneType.FVG else _block_thresholds(cfg)
     )
@@ -288,6 +378,10 @@ def track_zone(
                 extreme=extreme0, d_raw=float(geom.exact_depth(zone, extreme0)),
             ))
             visit = db.open_visit_for(zone.id, zone.cycle_id)
+            import os as _os3
+            if _os3.environ.get("HTF_DEBUG_ZONE") == str(zone.id):
+                print(f"DBG3 ts={ts} opened vid={vid} reloaded={None if visit is None else visit.id}",
+                      flush=True)
         elif dmax > visit.max_depth:
             extreme = _visit_extreme(zone, visit, lo, hi)
             db.update_visit_depth(visit.id, dmax, extreme=extreme,

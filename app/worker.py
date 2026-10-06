@@ -467,6 +467,10 @@ class Worker:
         for zone in zones:
             if not self._ltf_is_context_zone(zone):
                 continue
+            # ТЗ 06.10.2026 §13 (T21): невалидный/неподтверждённый HTF OB не
+            # порождает новые LTF-сценарии
+            if not zone.is_currently_relevant():
+                continue
             existing = await asyncio.to_thread(
                 self.db.get_ltf_observation_by_zone, zone.id, zone.cycle_id
             )
@@ -492,6 +496,10 @@ class Worker:
         )
         for zone in zones:
             if not self._ltf_is_context_zone(zone):
+                continue
+            # ТЗ 06.10.2026 §13 (T21): невалидный/неподтверждённый HTF OB не
+            # порождает новые LTF-сценарии
+            if not zone.is_currently_relevant():
                 continue
             existing = await asyncio.to_thread(
                 self.db.get_ltf_observation_by_zone, zone.id, zone.cycle_id
@@ -576,6 +584,8 @@ class Worker:
                 # только валидный родитель (WEAKENED FVG валиден — общий
                 # движок не прекращает FVG по касанию 50%)
                 or zone.status not in LTF_PARENT_VALID_STATUSES
+                # ТЗ 06.10.2026 §13 (T21): единый canonical state
+                or not zone.is_currently_relevant()
             ):
                 continue
             await self._ltf_open_observation(ins, zone, e.occurred_at)

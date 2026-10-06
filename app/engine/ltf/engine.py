@@ -1177,6 +1177,11 @@ class LtfEngine:
             zone.status == ZoneStatus.ARCHIVED
             and zone.end_reason is not None
             and zone.end_reason.startswith(_INVALIDATING_REASONS)
+        ) or (
+            # ТЗ 06.10.2026 §10 (T21): невалидный HTF OB не порождает новые
+            # LTF-сценарии — рыночная инвалидность закрывает наблюдение
+            # независимо от плоского status (candidate/active)
+            zone.market_validity == "invalid"
         )
         if not invalidated:
             return False
