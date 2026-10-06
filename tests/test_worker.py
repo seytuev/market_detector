@@ -68,6 +68,8 @@ class FakeAdapter:
 def _make_worker(db, adapter, sender=None):
     settings = Settings()
     settings.detector = DetectorConfig()
+    # быстрый цикл котировок выключен — тесты гоняют котировку через poll_once
+    settings.quote_poll_seconds = 0
     sender = sender or LogSender()
     dispatcher = EventDispatcher(db, settings.detector, sender)
     worker = Worker(db, settings, settings.detector, {"binance": adapter}, dispatcher)

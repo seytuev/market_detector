@@ -108,11 +108,14 @@ def _instrument(db, symbol: str, ltf_analyze: bool = True) -> int:
 def _make_live(db, instrument_id: int, price: float = 100.0) -> None:
     """Свежая закрытая H1 + котировка → data_state ok (как в test_ltf_current_setup)."""
     now = now_ms()
-    db.insert_candles([make_candle(
+    c = make_candle(
         now - 30 * 60_000, price, price + 1, price - 1, price,
         timeframe="H1", instrument_id=instrument_id,
-    )])
+    )
+    db.insert_candles([c])
     db.set_quote(instrument_id, price, now)
+    # F03: курсор обработки на последней закрытой — иначе processing_lag
+    db.set_meta(f"ltf:h1:last_close:{instrument_id}", str(c.close_time))
 
 
 @pytest.fixture()

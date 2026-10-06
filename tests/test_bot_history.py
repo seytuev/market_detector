@@ -83,11 +83,13 @@ def test_service_status_quotes_ok_and_stale(db, seeded):
 
 def test_service_status_h1_lag_and_gaps(db, seeded):
     settings = _settings()
+    # F03: _make_live теперь ставит курсор обработки — для проверки
+    # отставания сбрасываем его (worker-метки нет — H1 не обработаны)
+    db.set_meta(f"ltf:h1:last_close:{seeded['eth']}", "")
     st = service_status(db, settings)
-    # worker-метки нет — H1 не обработаны
     assert "ETHUSDT" in st["h1"]["lagging"]
     assert st["h1"]["last_closed"] is not None
-    # метка обработки на последней свече — отставания нет
+    # метка обработки на последней свече (close_time, F03) — отставания нет
     db.set_meta(f"ltf:h1:last_close:{seeded['eth']}",
                 str(st["h1"]["last_closed"]))
     st = service_status(db, settings)

@@ -31,6 +31,7 @@ from app.notify.telegram import LogSender, TelegramSender, build_application
 from tests.test_bot_cards import (  # noqa: F401 — фикстуры/хелперы
     _command,
     _context,
+    _make_live,
     _nav_callback,
     db,
     seeded,
@@ -125,6 +126,9 @@ async def test_ltf_keyboard_per_kind(db, instrument_id):
     zone, obs, sc = _setup_ltf(db, instrument_id)
     sender = RecSender()
     disp = LtfDispatcher(db, DetectorConfig(), sender, settings=_settings())
+    # F03: entries_ready/touch доставляются только при data_state ok —
+    # свежие H1/котировка/курсор (иначе гейт единой оценки качества)
+    _make_live(db, instrument_id)
 
     cases = {
         "bos": (BOS_PAYLOAD, "nav:entries:"),

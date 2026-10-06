@@ -16,7 +16,6 @@ from ..engine.ltf.eligibility import (
     admitted_scenario_entries,
     evaluate_final,
 )
-from ..engine.ltf.entries import H1_MS
 from ..engine.ltf.pivots import PivotCandidate
 from ..engine.ltf.ranges import provisional_range, zone_half
 from ..models import TIMEFRAME_MINUTES, now_ms
@@ -26,6 +25,7 @@ from ..models_ltf import (
     LtfScenario,
     LtfScenarioEntry,
 )
+from .quality import data_quality, quote_stale_limit_ms
 
 # вкладка «active» списка наблюдений (§3.2)
 _ACTIVE_STATES = {"waiting_structure", "active", "paused_data"}
@@ -96,48 +96,16 @@ def _data_state(
 ) -> dict[str, Any]:
     """Состояние данных инструмента (§14, D02): каналы раздельно — котировка
     (возраст/порог), последняя закрытая H1, флаг источника от воркера
-    (meta stale:), восстановление (meta replaying:). «ok» — только при
-    подтверждённой свежести всех каналов; устаревшая котировка не даёт
-    заявлять положение цены актуальным (§6). Пороги — настройкой
-    stale_* (0/авто для котировки: 2 интервала опроса)."""
-    det = settings.detector
-    quote_limit_ms = (
-        det.stale_quote_seconds * 1000
-        if det.stale_quote_seconds > 0
-        else 2 * settings.poll_seconds * 1000
-    )
-    h1_limit_ms = det.stale_h1_intervals * H1_MS
-    last_h1 = db.last_candle(instrument_id, "H1")
-    quote_age_s = round((now - quote[1]) / 1000, 1) if quote else None
-    h1_age_s = (
-        round((now - last_h1.close_time) / 1000, 1) if last_h1 else None
-    )
-    quote_stale = quote is not None and now - quote[1] > quote_limit_ms
-    h1_stale = last_h1 is not None and now - last_h1.close_time > h1_limit_ms
-    source_stale = db.get_meta(f"stale:{instrument_id}:H1") == "1"
-    replaying = db.get_meta(f"replaying:{instrument_id}") == "1"
-    out: dict[str, Any] = {
-        "quote_at": quote[1] if quote else None,
-        "quote_age_s": quote_age_s,
-        "quote_stale": quote_stale,
-        "h1_last_close": last_h1.close_time if last_h1 else None,
-        "h1_age_s": h1_age_s,
-        "h1_stale": h1_stale,
-        "source_stale": source_stale,
-    }
-    if replaying:
-        return {"state": "replaying", "reason": "replay_in_progress", **out}
-    if last_h1 is None:
-        return {"state": "data_pending", "reason": "no_h1_candles", **out}
-    if quote is None:
-        return {"state": "data_pending", "reason": "no_quote", **out}
-    if quote_stale:
-        return {"state": "stale", "reason": "quote_stale", **out}
-    if h1_stale:
-        return {"state": "stale", "reason": "h1_stale", **out}
-    if source_stale:
-        return {"state": "stale", "reason": "source_stale", **out}
-    return {"state": "ok", "reason": None, **out}
+    (meta stale:), восстановление (meta replaying:), курсор обработки и
+    непрерывность истории. «ok» — только при подтверждённой свежести всех
+    каналов; устаревшая котировка не даёт заявлять положение цены
+    актуальным (§6). Пороги — настройкой stale_* (0/авто для котировки:
+    2 интервала опроса).
+
+    F03: тонкая обёртка над единой quality.data_quality — то же решение
+    используют service_status и гейт доставки LTF; параметр quote
+    сохранён для совместимости вызовов (котировку читает сама оценка)."""
+    return data_quality(db, settings, instrument_id, now)
 
 
 # Основания выбора контекста (L05): стабильные коды для снимка /current.
@@ -696,8 +664,11 @@ def instrument_current(
         "instrument": _instrument_brief(db, instrument_id),
         "price": price,
         "quote_at": quote[1] if quote else None,
+        # F03: last_closed_h1 — close_time последней закрытой H1, в тех же
+        # единицах, что курсор движка last_processed_h1 (раньше отдавался
+        # open_time — сравнение «свеча обработана» было смещено на час)
         "last_closed_h1": (
-            last_closed.open_time if last_closed is not None else None
+            last_closed.close_time if last_closed is not None else None
         ),
         "last_processed_h1": (
             int(last_processed) if last_processed else None
@@ -926,15 +897,15 @@ def observation_chart_layers(
 
 def service_status(db: Database, settings) -> dict[str, Any]:
     """Состояние сервиса: котировки (свежесть как в _data_state), обработка
-    H1 (последняя закрытая vs последняя обработанная — meta ltf:h1:last_close),
-    свежесть HTF-свечей D1/W1 (логика /api/health), очередь доставки,
-    пропуски данных по активам. Цель — отличить «сетапа нет» от «данные
-    не обработаны»."""
+    H1 (close_time последней закрытой vs курсор ltf:h1:last_close — канал
+    processing единой оценки качества, F03), свежесть HTF-свечей D1/W1
+    (логика /api/health), очередь доставки, пропуски данных по активам.
+    Цель — отличить «сетапа нет» от «данные не обработаны»."""
     now = now_ms()
     instruments = {i.id: i for i in db.get_instruments(enabled_only=True)}
 
     quotes = db.get_all_quotes()
-    horizon = 2 * settings.poll_seconds * 1000
+    horizon = quote_stale_limit_ms(settings)
     stale_symbols: list[str] = []
     last_quote_at: Optional[int] = None
     for iid, ins in instruments.items():
@@ -947,19 +918,21 @@ def service_status(db: Database, settings) -> dict[str, Any]:
             stale_symbols.append(ins.symbol)
     quotes_ok = bool(instruments) and not stale_symbols
 
+    # F03: отставание обработки — канал processing единой оценки качества:
+    # курсор ltf:h1:last_close и последняя закрытая H1 сравниваются в одних
+    # единицах (close_time); раньше курсор (close_time) мерился с open_time
     last_closed: Optional[int] = None
     last_processed: Optional[int] = None
     h1_lagging: list[str] = []
     for iid, ins in instruments.items():
-        c = db.last_candle(iid, "H1")
-        if c is None:
+        ch = data_quality(db, settings, iid, now)["channels"]
+        if ch["h1"]["last_at"] is None:
             continue
-        last_closed = max(last_closed or 0, c.open_time)
-        raw = db.get_meta(f"ltf:h1:last_close:{iid}")
-        processed = int(raw) if raw else None
+        last_closed = max(last_closed or 0, ch["h1"]["last_at"])
+        processed = ch["processing"]["last_at"]
         if processed is not None:
             last_processed = max(last_processed or 0, processed)
-        if processed is None or processed < c.open_time:
+        if ch["processing"]["status"] == "lagging":
             h1_lagging.append(ins.symbol)
 
     # HTF-свечи — как /api/health: просрочено, если последняя закрытая свеча

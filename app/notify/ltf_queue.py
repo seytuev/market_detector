@@ -13,7 +13,9 @@ import logging
 
 from ..config import DetectorConfig
 from ..db import Database
+from ..models import now_ms
 from ..models_ltf import LtfEvent
+from ..services.quality import data_quality
 from .ltf_templates import LtfContext, render_ltf_messages
 from .queue import Sender
 from .suppress import bot_delivery_blocked, bot_group_for_ltf_kind
@@ -65,19 +67,29 @@ class LtfDispatcher:
         return LtfContext(instrument=ins, zone=zone, observation=obs, scenario=sc)
 
     def _delivery_blocked(self, ev: LtfEvent) -> bool:
-        """D02: при gap/replaying/stale новые уведомления о пригодности не
-        отправляются до проверки нужных данных. Событие остаётся
+        """D02/F03: при gap/replaying/stale новые уведомления о пригодности
+        не отправляются до проверки нужных данных. Событие остаётся
         недоставленным (delivered=False) и уйдёт ретраем после
-        восстановления свежести; рыночное состояние это не меняет."""
+        восстановления свежести; рыночное состояние это не меняет.
+
+        Решение — единая quality.data_quality: блокируем всё, кроме «ok»
+        (включая отставание расчёта processing_lag и разрыв истории).
+        Без Settings (конструктор без settings) — прежняя проверка только
+        по флагам воркера replaying:/stale:."""
         if ev.kind not in ("entries_ready", "range_ready", "touch"):
             return False
         obs = self.db.get_ltf_observation(ev.observation_id)
         if obs is None:
             return False
         iid = obs.instrument_id
+        if self.settings is None:
+            return (
+                self.db.get_meta(f"replaying:{iid}") == "1"
+                or self.db.get_meta(f"stale:{iid}:H1") == "1"
+            )
         return (
-            self.db.get_meta(f"replaying:{iid}") == "1"
-            or self.db.get_meta(f"stale:{iid}:H1") == "1"
+            data_quality(self.db, self.settings, iid, now_ms())["state"]
+            != "ok"
         )
 
     async def deliver(self, events: list[LtfEvent]) -> int:

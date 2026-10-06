@@ -47,6 +47,8 @@ const state = {
   reloadTimer: null,
   currentReqSeq: 0,          // D01: номер запроса снимка — поздний ответ
                              // ранее выбранного инструмента экран не перезаписывает
+  appliedSeq: 0,             // F04: state_seq последнего применённого снимка —
+                             // WS-сообщения старше него (позднее эхо) игнорируются
   reviewFlash: null,
   inspectorDismissed: true,
 };
@@ -88,6 +90,8 @@ const DATA_STATE_REASON_RU = {
   h1_stale: 'свечи H1 устарели',
   source_stale: 'источник недоступен',
   replay_in_progress: 'идёт догрузка и пересчёт',
+  processing_lag: 'Расчёт отстаёт',
+  history_gap: 'Разрыв истории',
 };
 // reason-коды пригодности (§10/§12) — серверные стабильные коды
 const REASON_RU = {
@@ -411,20 +415,44 @@ async function reloadCurrent({ keepRange }) {
   const stale = () => req !== state.currentReqSeq || id !== state.instrumentId;
   const keep = keepRange && state.chart ? state.chart.timeScale().getVisibleLogicalRange() : null;
   const keepFocus = keepRange ? state.priceFocus : null;
-  const view = await api(`/api/ltf/instruments/${id}/current`);
-  if (stale()) return;
-  state.current = view;
-  state.lastPrice = view.price;
-  const obsId = view.selected_context_id;
-  const [layers, candles, journal] = await Promise.all([
-    obsId ? api(`/api/ltf/observations/${obsId}/chart`) : Promise.resolve(null),
-    api(`/api/candles?instrument_id=${id}&timeframe=H1&limit=2500`),
-    obsId ? api(`/api/ltf/observations/${obsId}/journal`) : Promise.resolve([]),
-  ]);
-  if (stale()) return;
-  state.layers = layers;
-  state.candles = candles;
-  state.journal = journal;
+  // F04: снимок /current и слои (chart/journal) связаны одной версией
+  // state_version (общий счётчик state_seq); расхождение версий означает,
+  // что запись вклинилась между запросами, — пакет перечитывается целиком
+  const loadBundle = async () => {
+    const view = await api(`/api/ltf/instruments/${id}/current`);
+    if (stale()) return null;
+    const obsId = view.selected_context_id;
+    const [layers, candles, journal] = await Promise.all([
+      obsId ? api(`/api/ltf/observations/${obsId}/chart`) : Promise.resolve(null),
+      api(`/api/candles?instrument_id=${id}&timeframe=H1&limit=2500`),
+      obsId ? api(`/api/ltf/observations/${obsId}/journal`) : Promise.resolve(null),
+    ]);
+    if (stale()) return null;
+    return { view, layers, candles, journal };
+  };
+  const mismatch = (b) =>
+    (b.layers && b.layers.state_version !== b.view.state_version) ||
+    (b.journal && b.journal.state_version !== b.view.state_version);
+  let bundle = await loadBundle();
+  if (!bundle) return;
+  if (mismatch(bundle)) {
+    bundle = await loadBundle(); // один повтор всего пакета
+    if (!bundle) return;
+    if (mismatch(bundle)) {
+      // запись идёт непрерывно — применяем последний снимок /current и его
+      // слои; следующее WS-сообщение поднимет версию ещё раз
+      console.debug('ltf: state_version пакета расходятся после повтора',
+        { current: bundle.view.state_version,
+          layers: bundle.layers && bundle.layers.state_version,
+          journal: bundle.journal && bundle.journal.state_version });
+    }
+  }
+  state.current = bundle.view;
+  state.lastPrice = bundle.view.price;
+  state.layers = bundle.layers;
+  state.candles = bundle.candles;
+  state.journal = bundle.journal ? bundle.journal.events : [];
+  state.appliedSeq = bundle.view.state_version;
   state.historyRows = null;
   state.excludedRows = null;
   renderTopbar();
@@ -502,7 +530,8 @@ async function noZonesReason(v) {
   if (!sc) return null;
   if (!v.range) return null; // ждём диапазон — не «нет зон»
   if (state.excludedRows === null) {
-    state.excludedRows = await api(`/api/ltf/scenarios/${sc.id}/entries?view=excluded`);
+    const resp = await api(`/api/ltf/scenarios/${sc.id}/entries?view=excluded`);
+    state.excludedRows = resp.entries; // F04: конверт {state_version, entries}
   }
   const rows = state.excludedRows;
   if (!rows.length) return 'нет зон нужного движения (кандидаты не сформированы)';
@@ -1031,7 +1060,8 @@ async function loadHistoryRows() {
     return;
   }
   const view = $('flt-hist-view').value || 'excluded';
-  state.historyRows = await api(`/api/ltf/scenarios/${scId}/entries?view=${view}`);
+  const resp = await api(`/api/ltf/scenarios/${scId}/entries?view=${view}`);
+  state.historyRows = resp.entries; // F04: конверт {state_version, entries}
 }
 
 function renderHistoryCount() {
@@ -1747,6 +1777,10 @@ function setupLtfWorkspace() {
 // ---------------------------------------------------------------------------
 
 function handleWsMessage(data) {
+  // F04: каждое WS-сообщение несёт state_seq; сообщение старше уже
+  // применённого снимка — позднее эхо, перезагружать экран не нужно
+  if (typeof data.state_seq === 'number' && state.appliedSeq &&
+      data.state_seq < state.appliedSeq) return;
   if (data.type === 'price') {
     const ins = state.current && state.current.instrument;
     if (ins && data.instrument_id === ins.id && data.price) {

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import os
 from dataclasses import asdict, fields, replace
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -49,6 +51,8 @@ from .auth import check_ws_token, make_auth_dependency
 
 APP_VERSION = "0.1.0"
 _STATIC_DIR = Path(__file__).with_name("static")
+
+logger = logging.getLogger(__name__)
 
 
 class _NoCacheStaticFiles(StaticFiles):
@@ -474,8 +478,13 @@ def _apply_detector_payload(cfg: DetectorConfig, payload: dict[str, Any]) -> lis
             else:
                 setattr(cfg, key, known[key](value))
             applied.append(key)
-        except (ValueError, TypeError):
-            continue
+        except (ValueError, TypeError) as exc:
+            # A05: битое значение в settings.json не роняет старт, но
+            # видно в журнале (поле, значение, причина)
+            logger.warning(
+                "settings.json: поле %s со значением %r пропущено (%s)",
+                key, value, exc,
+            )
     return applied
 
 
@@ -486,18 +495,57 @@ def _load_detector_from_file(settings: Settings) -> None:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
         _apply_detector_payload(settings.detector, payload.get("detector", payload))
-    except (json.JSONDecodeError, OSError):
-        pass  # битый файл настроек не должен ронять старт
+    except (json.JSONDecodeError, OSError) as exc:
+        # битый файл настроек не должен ронять старт — но и не прячется
+        logger.warning("settings.json не прочитан (%s); используются значения по умолчанию", exc)
 
 
-def _save_detector_to_file(settings: Settings) -> Path:
+def _save_detector_to_file(
+    settings: Settings, detector: Optional[DetectorConfig] = None
+) -> Path:
+    """Атомарная запись настроек (A05): через временный файл и os.replace,
+    чтобы сбой записи не оставлял обрезанный settings.json."""
     path = _settings_path(settings)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps({"detector": asdict(settings.detector)}, ensure_ascii=False, indent=2),
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(
+        json.dumps({"detector": asdict(detector or settings.detector)},
+                   ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    os.replace(tmp, path)
     return path
+
+
+# ---------------------------------------------------------------------------
+# A05: задание пересчёта после смены настроек — статус в meta БД
+# ---------------------------------------------------------------------------
+
+_RECALC_META_KEY = "settings:recalc"
+# потолок ожидания пересчёта в запросе; дольше — ответ со status=running,
+# задание продолжается в фоне и видно через GET /api/settings
+_RECALC_WAIT_SECONDS = 25.0
+
+
+def _get_recalc_status(db: Database) -> Optional[dict[str, Any]]:
+    raw = db.get_meta(_RECALC_META_KEY)
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+
+
+def _set_recalc_status(db: Database, status: str, *, started_at: int,
+                       finished_at: Optional[int] = None,
+                       error: Optional[str] = None,
+                       result: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    recalc: dict[str, Any] = {"status": status, "started_at": started_at,
+                              "finished_at": finished_at,
+                              "error": error, "result": result}
+    db.set_meta(_RECALC_META_KEY, json.dumps(recalc, ensure_ascii=False))
+    return recalc
 
 
 # ---------------------------------------------------------------------------
@@ -519,6 +567,14 @@ def create_app(
     сценариев); None — LTF-маршруты работают в режиме чтения.
     """
     _load_detector_from_file(settings)
+    # A05: recalc-задание в статусе running при старте — процесс умер посреди
+    # пересчёта (безопасное завершение после краша/перезапуска)
+    _stale_recalc = _get_recalc_status(db)
+    if _stale_recalc is not None and _stale_recalc.get("status") == "running":
+        _set_recalc_status(
+            db, "failed", started_at=_stale_recalc.get("started_at") or now_ms(),
+            finished_at=now_ms(), error="interrupted_by_restart",
+        )
     require_auth = make_auth_dependency(settings)
     hub = WsHub(state_seq_provider=db.get_state_seq)
 
@@ -933,13 +989,20 @@ def create_app(
                 for f in fields(DetectorConfig)
             },
             "deprecated": sorted(DETECTOR_DEPRECATED_FIELDS),
+            # A05: статус последнего задания пересчёта (или null, если не было)
+            "recalc": _get_recalc_status(db),
         }
 
     @app.post("/api/settings", dependencies=[Depends(require_auth)])
-    def save_settings(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    async def save_settings(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         """L04: строгая схема и атомарное применение. Любая ошибка (неизвестное
         или устаревшее поле, тип, диапазон, перечисление, зависимость порогов)
-        — 422 с ошибками по полям; память и файл настроек не меняются."""
+        — 422 с ошибками по полям; память и файл настроек не меняются.
+
+        A05: порядок применения — валидация → атомарная запись файла → память →
+        пересчёт (tracked-задание, meta settings:recalc). Сбой записи файла —
+        500, память не тронута; сбой пересчёта — откат памяти и файла к прежнему
+        конфигу, задание помечается failed, ответ 500."""
         values, errors = validate_detector_payload(payload)
         if not errors:
             candidate = replace(settings.detector, **values)
@@ -949,34 +1012,85 @@ def create_app(
                 status_code=422,
                 detail={"error": "invalid_settings", "fields": errors},
             )
-        old_left = settings.detector.ltf_structure_left
-        old_right = settings.detector.ltf_structure_right
-        old_entry_types = settings.detector.ltf_entry_types
+        # файл — первым: при ошибке записи память ещё не изменена
+        try:
+            path = _save_detector_to_file(settings, candidate)
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": "settings_save_failed", "reason": str(exc)},
+            )
+        # DetectorConfig разделён по ссылке с движком/воркером — применяем
+        # по полям, чтобы объект оставался тем же
+        old_values = {key: getattr(settings.detector, key) for key in values}
         for key, value in values.items():
             setattr(settings.detector, key, value)
         applied = sorted(values)
-        path = _save_detector_to_file(settings)
         # смена профиля l/r структурных pivots: новая версия расчёта (L03),
         # прежние опоры помечаются superseded и сохраняются (движок делит
         # DetectorConfig с настройками и уже видит новые значения)
-        resynced = False
-        if ltf_engine is not None and (
-            settings.detector.ltf_structure_left != old_left
-            or settings.detector.ltf_structure_right != old_right
-        ):
-            ltf_engine.resync_structure_params()
-            resynced = True
+        need_resync = ltf_engine is not None and (
+            settings.detector.ltf_structure_left != old_values.get(
+                "ltf_structure_left", settings.detector.ltf_structure_left)
+            or settings.detector.ltf_structure_right != old_values.get(
+                "ltf_structure_right", settings.detector.ltf_structure_right)
+        )
         # ТЗ «LTF Current Setup» §10/п.14: смена ltf_entry_types — лёгкий
         # пересчёт привязок активных сценариев (без replay свечей и без
         # новых событий/уведомлений; история строк сохраняется)
-        entries_reclassified: dict[int, int] = {}
-        if ltf_engine is not None and (
-            settings.detector.ltf_entry_types != old_entry_types
-        ):
-            entries_reclassified = ltf_engine.reclassify_active_entries()
+        need_reclassify = ltf_engine is not None and (
+            settings.detector.ltf_entry_types != old_values.get(
+                "ltf_entry_types", settings.detector.ltf_entry_types)
+        )
+        if not (need_resync or need_reclassify):
+            return {"applied": applied, "saved_to": str(path),
+                    "structure_resynced": False,
+                    "entries_reclassified": {},
+                    "detector": asdict(settings.detector)}
+
+        def _run_recalc() -> dict[str, Any]:
+            result: dict[str, Any] = {"structure_resynced": False,
+                                      "entries_reclassified": {}}
+            if need_resync:
+                ltf_engine.resync_structure_params()
+                result["structure_resynced"] = True
+            if need_reclassify:
+                result["entries_reclassified"] = ltf_engine.reclassify_active_entries()
+            return result
+
+        started = now_ms()
+        _set_recalc_status(db, "running", started_at=started)
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(_run_recalc), timeout=_RECALC_WAIT_SECONDS)
+        except asyncio.TimeoutError:
+            # длинный пересчёт: задание живёт дальше в потоке, статус —
+            # running в meta и виден через GET /api/settings
+            return {"applied": applied, "saved_to": str(path),
+                    "structure_resynced": need_resync,
+                    "entries_reclassified": {},
+                    "recalc": {"status": "running"},
+                    "detector": asdict(settings.detector)}
+        except Exception as exc:
+            # откат: память — к прежним значениям, файл — к прежнему конфигу
+            for key, value in old_values.items():
+                setattr(settings.detector, key, value)
+            try:
+                _save_detector_to_file(settings)
+            except OSError:
+                logger.warning("откат settings.json не записался", exc_info=True)
+            _set_recalc_status(db, "failed", started_at=started,
+                               finished_at=now_ms(), error=str(exc))
+            raise HTTPException(
+                status_code=500,
+                detail={"error": "settings_recalc_failed", "reason": str(exc)},
+            )
+        _set_recalc_status(db, "ready", started_at=started,
+                           finished_at=now_ms(), result=result)
         return {"applied": applied, "saved_to": str(path),
-                "structure_resynced": resynced,
-                "entries_reclassified": entries_reclassified,
+                "structure_resynced": result["structure_resynced"],
+                "entries_reclassified": result["entries_reclassified"],
+                "recalc": {"status": "ready"},
                 "detector": asdict(settings.detector)}
 
     @app.get("/api/labels", dependencies=[Depends(require_auth)])

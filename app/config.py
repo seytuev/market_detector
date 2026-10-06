@@ -6,9 +6,12 @@
 """
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field, fields
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 def _env(name: str, default: str) -> str:
@@ -257,6 +260,10 @@ def validate_detector_payload(
             elif typ is int:
                 if isinstance(raw, bool):
                     raise ValueError("bool вместо int")
+                # A12: дробный float нельзя молча усечь (3.9 → 3) — отклоняем;
+                # целый 3.0 допустим
+                if isinstance(raw, float) and not raw.is_integer():
+                    raise ValueError("дробное число вместо int")
                 value = int(raw)  # type: ignore[arg-type]
             elif typ is float:
                 if isinstance(raw, bool):
@@ -307,6 +314,10 @@ class Settings:
         default_factory=lambda: _env("HYPERLIQUID_BASE_URL", "https://api.hyperliquid.xyz")
     )
     poll_seconds: int = int(_env("HTF_POLL_SECONDS", "1800"))  # 30 мин — достаточно для D1/W1
+    # F02/A02: отдельный быстрый цикл котировок — короткий заход цены в зону
+    # между HTF-опросами не теряется; 0 — цикл выключен, котировку забирает
+    # HTF-цикл (прежнее поведение)
+    quote_poll_seconds: int = int(_env("HTF_QUOTE_POLL_SECONDS", "10"))
     host: str = field(default_factory=lambda: _env("HTF_HOST", "127.0.0.1"))
     port: int = int(_env("HTF_PORT", "8000"))
     # Публичный URL сайта для ссылок из Telegram (кнопка «Открыть график»);
@@ -339,6 +350,11 @@ def load_detector_config() -> DetectorConfig:
                 setattr(cfg, f.name, parse_bool(raw))
             else:
                 setattr(cfg, f.name, type(f.default)(raw))
-        except (ValueError, TypeError):
-            pass
+        except (ValueError, TypeError) as exc:
+            # A05: некорректный ENV не роняет старт, но и не прячется —
+            # предупреждение с полем, значением и причиной
+            logger.warning(
+                "HTF_DET_%s: значение %r отклонено (%s), используется %r",
+                f.name.upper(), raw, exc, getattr(cfg, f.name),
+            )
     return cfg

@@ -4,7 +4,10 @@
   ltf_*);
 - /current и карточка наблюдения отдают state_version == state_seq;
 - WS-сообщения несут state_seq (версия изменения);
-- read_tx даёт серию чтений одной версии.
+- read_tx даёт серию чтений одной версии;
+- F04: слоевые эндпоинты (chart/journal/entries) отдают state_version из
+  того же счётчика — на спокойной БД версии всех слоёв одного инструмента
+  равны.
 """
 from __future__ import annotations
 
@@ -22,7 +25,7 @@ from app.models import (
     ZoneStatus,
     ZoneType,
 )
-from app.models_ltf import LtfObservation
+from app.models_ltf import LtfEvent, LtfObservation, LtfScenario
 from app.web.api import create_app
 from tests.conftest import make_candle
 
@@ -119,3 +122,63 @@ def test_ws_broadcast_carries_state_seq(db, client, instrument_id: int):
         msg = ws.receive_json()
     assert msg["type"] == "zone"
     assert msg["state_seq"] == db.get_state_seq()
+
+
+def _seed_observation_with_scenario(db: Database, instrument_id: int):
+    """Наблюдение + сценарий + событие — минимум для слоевых эндпоинтов."""
+    zid = _zone(db, instrument_id)
+    obs = db.insert_ltf_observation(LtfObservation(
+        id=None, instrument_id=instrument_id, zone_id=zid, zone_version=1,
+        cycle_id=1, direction=Direction.BEAR, state="active", activated_at=T0,
+    ))
+    sc = db.insert_ltf_scenario(LtfScenario(
+        id=None, observation_id=obs.id, direction=Direction.BEAR,
+        trigger="BOS", stage="primary", state="monitoring_entries",
+        created_at=T0 + 100, updated_at=T0 + 100,
+    ))
+    db.insert_ltf_event(LtfEvent(
+        id=None, observation_id=obs.id, scenario_id=sc.id, kind="bos",
+        payload={"break_level": 105.0}, occurred_at=T0 + 100,
+        detected_at=T0 + 100, dedupe_key="bos:sc",
+    ))
+    return obs.id, sc.id
+
+
+def test_layer_endpoints_share_state_version(db, client, instrument_id: int):
+    """F04: chart/journal/entries несут state_version из общего state_seq;
+    на спокойной БД версии всех слоёв инструмента совпадают с /current."""
+    obs_id, sc_id = _seed_observation_with_scenario(db, instrument_id)
+    current = client.get(f"/api/ltf/instruments/{instrument_id}/current",
+                         headers=AUTH).json()
+    chart = client.get(f"/api/ltf/observations/{obs_id}/chart",
+                       headers=AUTH).json()
+    obs_journal = client.get(f"/api/ltf/observations/{obs_id}/journal",
+                             headers=AUTH).json()
+    sc_journal = client.get(f"/api/ltf/scenarios/{sc_id}/journal",
+                            headers=AUTH).json()
+    entries = client.get(f"/api/ltf/scenarios/{sc_id}/entries",
+                         headers=AUTH).json()
+    # конверты: верхнеуровневые поля chart сохранены, списки — в events/entries
+    assert chart["timeframe"] == "H1"
+    assert [e["kind"] for e in obs_journal["events"]] == ["bos"]
+    assert [e["kind"] for e in sc_journal["events"]] == ["bos"]
+    assert entries["entries"] == []
+    versions = {
+        current["state_version"], chart["state_version"],
+        obs_journal["state_version"], sc_journal["state_version"],
+        entries["state_version"],
+    }
+    assert versions == {db.get_state_seq()}
+    # запись поднимает версию всех слоёв
+    db.insert_candles([make_candle(T0 + 3_600_000, 100, 101, 99, 100.5,
+                            timeframe="H1", instrument_id=instrument_id)])
+    bumped = db.get_state_seq()
+    assert bumped > chart["state_version"]
+    chart2 = client.get(f"/api/ltf/observations/{obs_id}/chart",
+                        headers=AUTH).json()
+    journal2 = client.get(f"/api/ltf/observations/{obs_id}/journal",
+                          headers=AUTH).json()
+    entries2 = client.get(f"/api/ltf/scenarios/{sc_id}/entries",
+                          headers=AUTH).json()
+    assert (chart2["state_version"], journal2["state_version"],
+            entries2["state_version"]) == (bumped, bumped, bumped)

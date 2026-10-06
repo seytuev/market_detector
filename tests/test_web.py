@@ -418,6 +418,55 @@ def test_settings_strict_schema(seeded, client, settings, tmp_path):
     assert settings.detector.ltf_entry_types == "FVG,OB"
 
 
+def test_settings_int_rejects_fractional(seeded, client, settings):
+    """A12: дробный float для int-поля отклоняется, а не усекается молча
+    (3.9 → 3); целый 3.0 допустим и приводится к int."""
+    before = asdict(settings.detector)
+    resp = client.post("/api/settings", headers=AUTH,
+                       json={"ltf_structure_left": 3.9})
+    assert resp.status_code == 422
+    assert "ltf_structure_left" in resp.json()["detail"]["fields"]
+    assert asdict(settings.detector) == before
+    resp = client.post("/api/settings", headers=AUTH,
+                       json={"ltf_structure_left": 3.0})
+    assert resp.status_code == 200
+    assert settings.detector.ltf_structure_left == 3
+    assert isinstance(settings.detector.ltf_structure_left, int)
+
+
+def test_settings_save_failure_keeps_memory(
+    seeded, client, settings, tmp_path, monkeypatch,
+):
+    """A05: сбой записи файла — 500, память и прежний файл не тронуты."""
+    before = asdict(settings.detector)
+
+    def boom(*args, **kwargs):
+        raise OSError("диск переполнен")
+
+    monkeypatch.setattr("os.replace", boom)
+    resp = client.post("/api/settings", headers=AUTH,
+                       json={"approach_pct": 0.04})
+    assert resp.status_code == 500
+    assert resp.json()["detail"]["error"] == "settings_save_failed"
+    assert asdict(settings.detector) == before
+    assert not (tmp_path / "settings.json").exists()
+
+
+def test_settings_recalc_interrupted_by_restart(db, settings):
+    """A05: задание пересчёта в статусе running при старте — процесс умер
+    посреди пересчёта; помечается failed/interrupted_by_restart."""
+    db.set_meta("settings:recalc", json.dumps({
+        "status": "running", "started_at": 123, "finished_at": None,
+        "error": None, "result": None,
+    }))
+    create_app(db, settings)
+    recalc = json.loads(db.get_meta("settings:recalc"))
+    assert recalc["status"] == "failed"
+    assert recalc["error"] == "interrupted_by_restart"
+    assert recalc["started_at"] == 123
+    assert recalc["finished_at"] is not None
+
+
 def test_labels_endpoint(client):
     """/api/labels отдаёт формулировки из единого источника (app/texts_ru.py)."""
     resp = client.get("/api/labels", headers=AUTH)

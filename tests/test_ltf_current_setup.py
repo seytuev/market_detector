@@ -126,11 +126,14 @@ def seeded(db, client, instrument_id):
 def _make_live(db, instrument_id, price: float) -> None:
     """Свежая закрытая H1 и котировка → data_state ok."""
     now = now_ms()
-    db.insert_candles([make_candle(
+    c = make_candle(
         now - 30 * 60_000, price, price + 1, price - 1, price,
         timeframe="H1", instrument_id=instrument_id,
-    )])
+    )
+    db.insert_candles([c])
     db.set_quote(instrument_id, price, now)
+    # F03: курсор обработки на последней закрытой — иначе processing_lag
+    db.set_meta(f"ltf:h1:last_close:{instrument_id}", str(c.close_time))
 
 
 # ------------------------------ список активов (§4.2) ------------------------------
@@ -326,9 +329,11 @@ def test_current_counts_and_state_version_consistent(client, db, seeded,
     # dist подходящих зон посчитан от свежей котировки
     fvg = next(e for e in cur["eligible_entries"] if e["type"] == "FVG")
     assert fvg["dist_abs"] == 0.0              # цена 100 внутри 98–102
-    # last_processed_h1 — из meta-курсора движка (не выдуман)
-    assert cur["last_processed_h1"] is None
+    # F03: last_processed_h1 — meta-курсор движка (close_time), _make_live
+    # ставит его на последнюю закрытую; last_closed_h1 — в тех же единицах
+    assert cur["last_processed_h1"] is not None
     assert cur["last_closed_h1"] is not None
+    assert cur["last_processed_h1"] >= cur["last_closed_h1"]
     assert cur["quote_at"] is not None
 
 

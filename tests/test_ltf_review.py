@@ -364,7 +364,7 @@ def test_entries_include_reviews_and_latest_assessment(client, seeded):
     client.post(f"/api/ltf/entry-zones/{ez.id}/review", headers=AUTH,
                 json={"decision": "no_context", "text": "вторая",
                       "scenario_id": sc.id})
-    rows = client.get(f"/api/ltf/scenarios/{sc.id}/entries", headers=AUTH).json()
+    rows = client.get(f"/api/ltf/scenarios/{sc.id}/entries", headers=AUTH).json()["entries"]
     fvg = next(r for r in rows if r["entry_zone_id"] == ez.id)
     assert [r["decision"] for r in fvg["reviews"]] == ["correct", "no_context"]
     assert fvg["reviews"][0]["text"] == "первая"

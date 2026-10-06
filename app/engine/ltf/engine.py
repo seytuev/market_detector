@@ -186,8 +186,11 @@ class LtfEngine:
         obs = self.db.get_ltf_observation(observation_id)
         if obs is None:
             return result
-        now = _real_now_ms()
         closed = self.db.get_candles(obs.instrument_id, "H1")
+        # «сейчас» replay — голова истории, а не реальное время: иначе
+        # detection_lag_ms событий зависел бы от wall-clock и повторный
+        # replay давал бы другое состояние (§13: replay детерминирован)
+        now = closed[-1].close_time if closed else _real_now_ms()
         self._batch = StructureBatch() if self.scan_cursors else None
         try:
             for idx, c in enumerate(closed):

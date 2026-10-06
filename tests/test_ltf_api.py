@@ -2,6 +2,8 @@
 графика, таблица Entry Zones с dist-формулами, журнал, ручное завершение."""
 from __future__ import annotations
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -228,7 +230,7 @@ def test_entries_table_with_dist(client, seeded):
     sc1 = seeded["sc1"]
     r = client.get(f"/api/ltf/scenarios/{sc1.id}/entries?price=95", headers=AUTH)
     assert r.status_code == 200
-    rows = {row["type"]: row for row in r.json()}
+    rows = {row["type"]: row for row in r.json()["entries"]}
     # ТЗ §10: по умолчанию — только подходящие (reason ok); строка v0 скрыта
     assert set(rows) == {"FVG", "OB"}
     fvg = rows["FVG"]
@@ -245,7 +247,7 @@ def test_entries_table_with_dist(client, seeded):
     excluded = client.get(
         f"/api/ltf/scenarios/{sc1.id}/entries?view=excluded&price=95",
         headers=AUTH,
-    ).json()
+    ).json()["entries"]
     assert [row["type"] for row in excluded] == ["BSL"]
     bsl = excluded[0]
     assert bsl["dist_abs"] == 20.0                # уровень: abs(P−K)
@@ -253,18 +255,18 @@ def test_entries_table_with_dist(client, seeded):
     assert bsl["reason"] == "outside_pd"          # fallback из state до миграции
     assert bsl["liquidity_state"] == "awaiting_close"  # ≠ «подтверждено» (§3.4)
     # без price — dist пустые, не выдумываем
-    rows2 = client.get(f"/api/ltf/scenarios/{sc1.id}/entries", headers=AUTH).json()
+    rows2 = client.get(f"/api/ltf/scenarios/{sc1.id}/entries", headers=AUTH).json()["entries"]
     assert rows2[0]["dist_abs"] is None
     # include_all: строки всех версий среди подходящих (v0 tested → ok)
     rows3 = client.get(
         f"/api/ltf/scenarios/{sc1.id}/entries?include_all=true", headers=AUTH
-    ).json()
+    ).json()["entries"]
     assert len(rows3) == 3
     assert any(r["range_version"] == 0 and r["outdated"] for r in rows3)
     # history: все строки всех версий, включая исключённые (история причин)
     rows4 = client.get(
         f"/api/ltf/scenarios/{sc1.id}/entries?view=history", headers=AUTH
-    ).json()
+    ).json()["entries"]
     assert len(rows4) == 4
     assert any(r["range_version"] == 0 and r["outdated"] for r in rows4)
     assert {r["reason"] for r in rows4} == {"ok", "outside_pd"}
@@ -278,7 +280,7 @@ def test_journal(client, seeded):
     sc1 = seeded["sc1"]
     r = client.get(f"/api/ltf/scenarios/{sc1.id}/journal", headers=AUTH)
     assert r.status_code == 200
-    journal = r.json()
+    journal = r.json()["events"]
     assert [e["kind"] for e in journal] == ["bos", "touch"]  # по occurred_at
     assert journal[0]["payload"]["break_level"] == 110.0
     assert journal[0]["delivered"] is False and journal[0]["delayed"] is False
@@ -295,10 +297,10 @@ def test_observation_journal_without_active_scenario(client, db, seeded):
     ))
     r = client.get(f"/api/ltf/observations/{obs2.id}/journal", headers=AUTH)
     assert r.status_code == 200
-    kinds = [e["kind"] for e in r.json()]
+    kinds = [e["kind"] for e in r.json()["events"]]
     assert kinds == ["cancellation"]
     # то же наблюдение через сценарийный маршрут даёт тот же merged-набор
-    both = client.get(f"/api/ltf/observations/{obs1.id}/journal", headers=AUTH).json()
+    both = client.get(f"/api/ltf/observations/{obs1.id}/journal", headers=AUTH).json()["events"]
     assert [e["kind"] for e in both] == ["bos", "touch"]
     assert client.get("/api/ltf/observations/999/journal", headers=AUTH).status_code == 404
 
@@ -493,11 +495,11 @@ def test_invalid_entries_excluded(client, db, seeded):
         eligible=False, overlap="none", state="invalid",
         added_at=T0 + 60, updated_at=T0 + 60,
     ))
-    rows = client.get(f"/api/ltf/scenarios/{sc1.id}/entries", headers=AUTH).json()
+    rows = client.get(f"/api/ltf/scenarios/{sc1.id}/entries", headers=AUTH).json()["entries"]
     assert all(r["entry_zone_id"] != ez.id for r in rows)
     rows_all = client.get(
         f"/api/ltf/scenarios/{sc1.id}/entries?include_all=true", headers=AUTH
-    ).json()
+    ).json()["entries"]
     assert all(r["entry_zone_id"] != ez.id for r in rows_all)
     chart = client.get(
         f"/api/ltf/observations/{seeded['obs1'].id}/chart", headers=AUTH
@@ -524,7 +526,7 @@ def test_entries_table_without_current_range_uses_max_version(client, db, seeded
         eligible=True, overlap="full", state="fresh",
         added_at=T0 + 230, updated_at=T0 + 230,
     ))
-    rows = client.get(f"/api/ltf/scenarios/{sc.id}/entries", headers=AUTH).json()
+    rows = client.get(f"/api/ltf/scenarios/{sc.id}/entries", headers=AUTH).json()["entries"]
     assert [r["entry_zone_id"] for r in rows] == [ez.id]
 
 
@@ -541,6 +543,42 @@ def test_settings_structure_resync(client, db, seeded):
     assert body["structure_resynced"] is True
     assert body["detector"]["ltf_structure_left"] == 5
     assert db.list_ltf_pivots(seeded["obs1"].instrument_id) == []
+
+
+def test_settings_recalc_job_status(client, db):
+    """A05: успешный пересчёт — задание помечается ready с результатом,
+    статус виден через GET /api/settings."""
+    r = client.post("/api/settings", headers=AUTH, json={"ltf_structure_left": 4})
+    assert r.status_code == 200
+    assert r.json()["structure_resynced"] is True
+    recalc = client.get("/api/settings", headers=AUTH).json()["recalc"]
+    assert recalc["status"] == "ready"
+    assert recalc["result"]["structure_resynced"] is True
+    assert recalc["finished_at"] >= recalc["started_at"]
+
+
+def test_settings_recalc_failure_rolls_back(db, settings, tmp_path, monkeypatch):
+    """A05: сбой пересчёта — 500, память и файл откачены к прежнему конфигу,
+    задание помечается failed."""
+    engine = LtfEngine(db, settings.detector)
+    client = TestClient(create_app(db, settings, ltf_engine=engine))
+
+    def boom():
+        raise RuntimeError("сбой пересчёта")
+
+    monkeypatch.setattr(engine, "resync_structure_params", boom)
+    r = client.post("/api/settings", headers=AUTH, json={"ltf_structure_left": 5})
+    assert r.status_code == 500
+    assert r.json()["detail"]["error"] == "settings_recalc_failed"
+    # память откачена
+    assert settings.detector.ltf_structure_left == 3
+    # файл переписан прежним конфигом
+    saved = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
+    assert saved["detector"]["ltf_structure_left"] == 3
+    # задание failed, статус виден через GET
+    recalc = client.get("/api/settings", headers=AUTH).json()["recalc"]
+    assert recalc["status"] == "failed"
+    assert "сбой пересчёта" in recalc["error"]
 
 
 def test_settings_entry_types_reclassify(client, db, seeded):
@@ -564,7 +602,7 @@ def test_settings_entry_types_reclassify(client, db, seeded):
     assert fvg_v0.reason == "" and fvg_v0.state == "tested"  # история цела
     # подходящие и счётчик: только OB
     rows = client.get(f"/api/ltf/scenarios/{sc1.id}/entries",
-                      headers=AUTH).json()
+                      headers=AUTH).json()["entries"]
     assert [row["type"] for row in rows] == ["OB"]
     card = client.get(f"/api/ltf/observations/{seeded['obs1'].id}",
                       headers=AUTH).json()
@@ -572,7 +610,7 @@ def test_settings_entry_types_reclassify(client, db, seeded):
     # исключённые с причиной; график — eligible/excluded группами
     excluded = client.get(
         f"/api/ltf/scenarios/{sc1.id}/entries?view=excluded", headers=AUTH
-    ).json()
+    ).json()["entries"]
     assert {row["type"]: row["reason"] for row in excluded} == {
         "FVG": "type_disabled", "BSL": "outside_pd",
     }

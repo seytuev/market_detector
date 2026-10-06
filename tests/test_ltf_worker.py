@@ -58,6 +58,8 @@ class FakeAdapter:
 def _make_worker(db, adapter, cfg: DetectorConfig | None = None, with_ltf=True):
     settings = Settings()
     settings.detector = cfg or DetectorConfig()
+    # быстрый цикл котировок выключен — тесты гоняют котировку через poll_once
+    settings.quote_poll_seconds = 0
     dispatcher = EventDispatcher(db, settings.detector, LogSender())
     engine = LtfEngine(db, settings.detector) if with_ltf else None
     worker = Worker(db, settings, settings.detector, {"binance": adapter},

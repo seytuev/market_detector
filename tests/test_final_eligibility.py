@@ -224,7 +224,7 @@ def _projection_ids(db, client, seeded, instrument_id):
     r = client.get(
         f"/api/ltf/scenarios/{sc.id}/entries?view=eligible", headers=AUTH
     )
-    entries_ids = {row["entry_zone_id"] for row in r.json()}
+    entries_ids = {row["entry_zone_id"] for row in r.json()["entries"]}
     r = client.get(
         f"/api/ltf/instruments/{instrument_id}/current", headers=AUTH
     )

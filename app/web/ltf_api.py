@@ -254,11 +254,15 @@ def register_ltf_routes(app, db: Database, settings, require_auth, ltf_engine=No
     @app.get("/api/ltf/observations/{observation_id}/chart",
              dependencies=[Depends(require_auth)])
     def ltf_observation_chart(observation_id: int) -> dict[str, Any]:
-        # сборка слоёв — app/services/overview.py (используется и ботом)
-        layers = observation_chart_layers(db, settings, observation_id)
+        # сборка слоёв — app/services/overview.py (используется и ботом);
+        # F04: чтение в одной read-транзакции, state_version — из того же
+        # счётчика state_seq, что и /current (клиент сверяет версии пакета)
+        with db.read_tx():
+            layers = observation_chart_layers(db, settings, observation_id)
+            seq = db.get_state_seq()
         if layers is None:
             raise HTTPException(status_code=404, detail="Наблюдение не найдено")
-        return layers
+        return {"state_version": seq, **layers}
 
     # ------------------- read model «LTF Current Setup» (§14) -------------------
 
@@ -308,18 +312,27 @@ def register_ltf_routes(app, db: Database, settings, require_auth, ltf_engine=No
 
     @app.get("/api/ltf/observations/{observation_id}/journal",
              dependencies=[Depends(require_auth)])
-    def ltf_observation_journal(observation_id: int) -> list[dict[str, Any]]:
+    def ltf_observation_journal(observation_id: int) -> dict[str, Any]:
         """Все события наблюдения, включая события отменённых сценариев
         (§6.5: отмена не стирает историю); нужен, когда активного
-        сценария ещё/уже нет."""
-        obs = db.get_ltf_observation(observation_id)
+        сценария ещё/уже нет. F04: конверт {state_version, events} —
+        версия из того же state_seq, чтение в одной read-транзакции."""
+        with db.read_tx():
+            obs = db.get_ltf_observation(observation_id)
+            events = (
+                db.list_ltf_events(observation_id=obs.id, limit=1000)
+                if obs is not None else []
+            )
+            seq = db.get_state_seq()
         if obs is None:
             raise HTTPException(status_code=404, detail="Наблюдение не найдено")
-        events = db.list_ltf_events(observation_id=obs.id, limit=1000)
-        return [
-            e.to_dict()
-            for e in sorted(events, key=lambda e: (e.occurred_at, e.id))
-        ]
+        return {
+            "state_version": seq,
+            "events": [
+                e.to_dict()
+                for e in sorted(events, key=lambda e: (e.occurred_at, e.id))
+            ],
+        }
 
     # ------------------------- таблица Entry Zones (§3.4) -------------------------
 
@@ -328,73 +341,90 @@ def register_ltf_routes(app, db: Database, settings, require_auth, ltf_engine=No
     def ltf_scenario_entries(
         scenario_id: int, price: Optional[float] = None,
         include_all: bool = False, view: str = "eligible",
-    ) -> list[dict[str, Any]]:
+    ) -> dict[str, Any]:
         """Таблица Entry Zones сценария.
 
         view (ТЗ «LTF Current Setup» §10/§12): eligible — только подходящие
         (reason == "ok", по умолчанию); excluded — исключённые с причиной
         (reason != "ok"); history — все строки всех версий (история причин).
-        invalid-зоны скрыты во всех представлениях (рыночно неактуальны)."""
+        invalid-зоны скрыты во всех представлениях (рыночно неактуальны).
+        F04: конверт {state_version, entries} — версия из того же state_seq,
+        чтение в одной read-транзакции."""
         if view not in ("eligible", "excluded", "history"):
             raise HTTPException(
                 status_code=400,
                 detail="view: eligible | excluded | history",
             )
-        sc = db.get_ltf_scenario(scenario_id)
+        with db.read_tx():
+            sc = db.get_ltf_scenario(scenario_id)
+            rows = []
+            if sc is not None:
+                current = db.get_current_ltf_range(sc.id)
+                entries = [
+                    e for e in db.list_ltf_scenario_entries(sc.id)
+                    if e.state != "invalid"
+                ]
+                if current is not None:
+                    ver = current.version
+                elif entries:
+                    # диапазона ещё нет — последняя версия среди строк
+                    # сценария, иначе фильтр по несуществующей v0 скрывал
+                    # бы всё
+                    ver = max(e.range_version for e in entries)
+                else:
+                    ver = 0
+                allow_outside = context_complete(_context_flags(db, sc.id))
+                for e in entries:
+                    z = db.get_ltf_entry_zone(e.entry_zone_id)
+                    if z is None:
+                        continue
+                    admitted = evaluate_final(
+                        e, z, allow_outside=allow_outside
+                    ).eligible_now
+                    if view == "eligible" and not admitted:
+                        continue
+                    if view == "excluded" and admitted:
+                        continue
+                    if (view != "history" and not include_all
+                            and e.range_version != ver):
+                        continue
+                    rows.append(_entry_row(db, e, z, sc, price))
+                rows.sort(key=lambda r: (_ENTRY_ORDER.get(r["type"], 9),
+                                         r["confirmed_at"] or 0))
+            seq = db.get_state_seq()
         if sc is None:
             raise HTTPException(status_code=404, detail="Сценарий не найден")
-        current = db.get_current_ltf_range(sc.id)
-        entries = [
-            e for e in db.list_ltf_scenario_entries(sc.id)
-            if e.state != "invalid"
-        ]
-        if current is not None:
-            ver = current.version
-        elif entries:
-            # диапазона ещё нет — последняя версия среди строк сценария,
-            # иначе фильтр по несуществующей v0 скрывал бы всё
-            ver = max(e.range_version for e in entries)
-        else:
-            ver = 0
-        allow_outside = context_complete(_context_flags(db, sc.id))
-        rows = []
-        for e in entries:
-            z = db.get_ltf_entry_zone(e.entry_zone_id)
-            if z is None:
-                continue
-            admitted = evaluate_final(
-                e, z, allow_outside=allow_outside
-            ).eligible_now
-            if view == "eligible" and not admitted:
-                continue
-            if view == "excluded" and admitted:
-                continue
-            if view != "history" and not include_all and e.range_version != ver:
-                continue
-            rows.append(_entry_row(db, e, z, sc, price))
-        rows.sort(key=lambda r: (_ENTRY_ORDER.get(r["type"], 9),
-                                 r["confirmed_at"] or 0))
-        return rows
+        return {"state_version": seq, "entries": rows}
 
     # ------------------------- журнал (§3.2) -------------------------
 
     @app.get("/api/ltf/scenarios/{scenario_id}/journal",
              dependencies=[Depends(require_auth)])
-    def ltf_scenario_journal(scenario_id: int) -> list[dict[str, Any]]:
-        sc = db.get_ltf_scenario(scenario_id)
+    def ltf_scenario_journal(scenario_id: int) -> dict[str, Any]:
+        """F04: конверт {state_version, events} — версия из того же
+        state_seq, чтение в одной read-транзакции."""
+        with db.read_tx():
+            sc = db.get_ltf_scenario(scenario_id)
+            merged: dict[int, Any] = {}
+            if sc is not None:
+                merged = {
+                    e.id: e
+                    for e in db.list_ltf_events(scenario_id=sc.id, limit=1000)
+                }
+                for e in db.list_ltf_events(observation_id=sc.observation_id,
+                                            limit=1000):
+                    merged.setdefault(e.id, e)
+            seq = db.get_state_seq()
         if sc is None:
             raise HTTPException(status_code=404, detail="Сценарий не найден")
-        events = {
-            e.id: e
-            for e in db.list_ltf_events(scenario_id=sc.id, limit=1000)
+        return {
+            "state_version": seq,
+            "events": [
+                e.to_dict()
+                for e in sorted(merged.values(),
+                                key=lambda e: (e.occurred_at, e.id))
+            ],
         }
-        for e in db.list_ltf_events(observation_id=sc.observation_id, limit=1000):
-            events.setdefault(e.id, e)
-        return [
-            e.to_dict()
-            for e in sorted(events.values(),
-                            key=lambda e: (e.occurred_at, e.id))
-        ]
 
     # ------------------------- ручное завершение (§12) -------------------------
 

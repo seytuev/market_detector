@@ -101,11 +101,14 @@ def seeded(db, client, instrument_id):
 def _make_live(db, instrument_id, price: float) -> None:
     """Свежая закрытая H1 и котировка → data_state ok."""
     now = now_ms()
-    db.insert_candles([make_candle(
+    c = make_candle(
         now - 30 * 60_000, price, price + 1, price - 1, price,
         timeframe="H1", instrument_id=instrument_id,
-    )])
+    )
+    db.insert_candles([c])
     db.set_quote(instrument_id, price, now)
+    # F03: курсор обработки на последней закрытой — иначе processing_lag
+    db.set_meta(f"ltf:h1:last_close:{instrument_id}", str(c.close_time))
 
 
 def _current(client, instrument_id):

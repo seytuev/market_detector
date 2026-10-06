@@ -56,8 +56,8 @@ async function main() {
     return r.status === 200 ? await r.json() : null;
   });
   if (!apiJournal) failures.push('GET /api/ltf/observations/1/journal не 200');
-  else if (String(apiJournal.length) !== journalCount) {
-    failures.push(`журнал: API=${apiJournal.length}, UI=${journalCount}`);
+  else if (String(apiJournal.events.length) !== journalCount) {
+    failures.push(`журнал: API=${apiJournal.events.length}, UI=${journalCount}`);
   }
 
   // ожидаемый блок карточки: даты зоны подписаны

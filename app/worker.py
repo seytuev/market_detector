@@ -34,6 +34,12 @@ DEFAULT_TIMEFRAMES = ("D1", "W1")  # запасной вариант, если s
                                    # (§1: H1/H4 убраны по решению пользователя)
 STALE_FACTOR = 2  # данные старше N интервалов — проблема (§11)
 
+# F02/A02: изоляция ошибок быстрого цикла котировок — после QUOTE_FAIL_K
+# подряд идущих ошибок по инструменту включается пауза 2**min(fails-K, CAP)
+# циклов; счётчики сбрасываются первым успешным опросом
+QUOTE_FAIL_K = 3
+QUOTE_BACKOFF_CAP = 5
+
 # §4 LTF-спеки: наблюдение открывается при фактическом достижении
 # подтверждённой HTF-зоны D1/W1 разрешённого типа (настройка
 # htf_context_types, ТЗ «LTF Current Setup» §16.1: OB — согласованный
@@ -84,6 +90,10 @@ class Worker:
             if t.strip() in TIMEFRAME_MS
         ) or DEFAULT_TIMEFRAMES
         self._stale: dict[tuple[int, str], bool] = {}
+        # F02: счётчики ошибок цикла котировок по инструменту — подряд
+        # идущие ошибки и остаток паузы (в циклах опроса)
+        self._quote_fails: dict[int, int] = {}
+        self._quote_skip: dict[int, int] = {}
         self._stop = asyncio.Event()
 
     # ---------- подготовка ----------
@@ -277,11 +287,26 @@ class Worker:
                 })
             await self._check_freshness(ins, tf)
 
+        # F02: при включённом быстром цикле котировку обновляет он
+        # (quote_loop) — HTF-цикл цену не запрашивает; выключен
+        # (quote_poll_seconds = 0) — прежний путь, котировка вместе с HTF
+        if self.settings.quote_poll_seconds <= 0:
+            events += await self._poll_quote(ins)
+        await self._dispatch_events(events)
+        await self._ltf_on_poll(ins, events)
+
+    async def _poll_quote(self, ins: Instrument) -> list[Event]:
+        """Котировка инструмента: last_price → meta → on_price → WS-цена.
+
+        Общий хвост HTF-цикла (quote_poll_seconds = 0) и быстрого цикла
+        котировок (F02). События возвращает — доставку и запуск
+        LTF-наблюдений выполняет вызывающий."""
+        adapter = self.adapters[ins.venue]
         price, ts = await adapter.last_price(ins.symbol)
         # последняя котировка — в meta: read model LTF (§14) считает положение
         # цены относительно HTF-зон серверно по свежей котировке
         self.db.set_quote(ins.id, price, ts)
-        events += await asyncio.to_thread(
+        events = await asyncio.to_thread(
             self.scanner.on_price, ins.id, price, ts, True, set(self.scan_tfs)
         )
         if self.broadcast:
@@ -298,15 +323,20 @@ class Worker:
                         "low": bar.low, "close": bar.close,
                     }
             self.broadcast(payload)
-        if events:
-            await self.dispatcher.dispatch(events)
-            if self.broadcast:
-                for e in events:
-                    self.broadcast({
-                        "type": "event", "zone_id": e.zone_id, "kind": e.kind.value,
-                        "price": e.price, "occurred_at": e.occurred_at,
-                    })
-        await self._ltf_on_poll(ins, events)
+        return events
+
+    async def _dispatch_events(self, events: list[Event]) -> None:
+        """Доставка событий детектора и их WS-рассылка (одинаково во всех
+        циклах — HTF, LTF, котировки)."""
+        if not events:
+            return
+        await self.dispatcher.dispatch(events)
+        if self.broadcast:
+            for e in events:
+                self.broadcast({
+                    "type": "event", "zone_id": e.zone_id, "kind": e.kind.value,
+                    "price": e.price, "occurred_at": e.occurred_at,
+                })
 
     def _apply_price_to_forming(
         self, instrument_id: int, timeframe: str, price: float
@@ -323,6 +353,65 @@ class Worker:
         )
         self.db.insert_candles([updated])
         return updated
+
+    # ---------- быстрый цикл котировок (F02/A02) ----------
+
+    def _quote_on_success(self, instrument_id: int) -> None:
+        """Успешный опрос сбрасывает счётчики ошибок и паузу инструмента."""
+        self._quote_fails.pop(instrument_id, None)
+        self._quote_skip.pop(instrument_id, None)
+
+    def _quote_on_failure(self, ins: Instrument) -> None:
+        """Ошибка опроса: после QUOTE_FAIL_K подряд — экспоненциальная
+        пауза 2**min(fails-K, QUOTE_BACKOFF_CAP) циклов."""
+        fails = self._quote_fails.get(ins.id, 0) + 1
+        self._quote_fails[ins.id] = fails
+        if fails >= QUOTE_FAIL_K:
+            pause = 2 ** min(fails - QUOTE_FAIL_K, QUOTE_BACKOFF_CAP)
+            self._quote_skip[ins.id] = pause
+            log.warning(
+                "%s: котировка недоступна %d раз подряд — пауза %d циклов",
+                ins.symbol, fails, pause,
+            )
+
+    async def _quote_poll_once(self) -> None:
+        """Один проход цикла котировок: цена каждого инструмента независимо —
+        ошибка одного не останавливает остальных, проблемный уходит в паузу."""
+        for ins in self.db.get_instruments(enabled_only=True):
+            left = self._quote_skip.get(ins.id, 0)
+            if left > 0:
+                self._quote_skip[ins.id] = left - 1
+                continue
+            try:
+                events = await self._poll_quote(ins)
+            except AdapterError as exc:
+                log.warning("%s: котировка недоступна: %s", ins.symbol, exc)
+                self._quote_on_failure(ins)
+                continue
+            except Exception:
+                log.exception("ошибка опроса котировки %s", ins.symbol)
+                self._quote_on_failure(ins)
+                continue
+            self._quote_on_success(ins.id)
+            await self._dispatch_events(events)
+            # касание по тику запускает LTF-наблюдение, не дожидаясь HTF-цикла
+            await self._ltf_on_poll(ins, events)
+
+    async def quote_loop(self) -> None:
+        """F02/A02: быстрый цикл котировок — короткий заход цены в зону
+        между HTF-опросами (poll_seconds) больше не теряется. Интервал
+        читается каждый цикл — живое изменение настройки подхватывается."""
+        while not self._stop.is_set():
+            try:
+                await self._quote_poll_once()
+            except Exception:
+                log.exception("ошибка цикла котировок")
+            try:
+                await asyncio.wait_for(
+                    self._stop.wait(), self.settings.quote_poll_seconds
+                )
+            except asyncio.TimeoutError:
+                pass
 
     # ---------- LTF Confirmations (LTF-спека §4, §13) ----------
 
@@ -712,7 +801,11 @@ class Worker:
         # §13 LTF: восстановить наблюдения/сценарии/диапазоны после перезапуска
         await self._ltf_restore_all()
         log.info("воркер запущен, опрос каждые %s с", self.settings.poll_seconds)
-        await asyncio.gather(self._main_loop(), self.ltf_loop())
+        loops = [self._main_loop(), self.ltf_loop()]
+        if self.settings.quote_poll_seconds > 0:
+            # F02: котировки — отдельным быстрым циклом
+            loops.append(self.quote_loop())
+        await asyncio.gather(*loops)
 
     async def _main_loop(self) -> None:
         while not self._stop.is_set():
