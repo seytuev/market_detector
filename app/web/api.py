@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import asdict, fields
+from dataclasses import asdict, fields, replace
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -17,7 +17,16 @@ from fastapi import Body, Depends, FastAPI, HTTPException, Query, WebSocket, Web
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from ..config import DetectorConfig, Settings, load_settings, parse_bool
+from ..config import (
+    DETECTOR_DEPRECATED_FIELDS,
+    DETECTOR_FIELD_GROUPS,
+    DetectorConfig,
+    Settings,
+    load_settings,
+    parse_bool,
+    validate_detector_config,
+    validate_detector_payload,
+)
 from ..db import Database
 from ..engine import Scanner
 from ..models import (
@@ -396,9 +405,12 @@ class WsHub:
     из своего потока, отправка планируется в цикле событий приложения.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, state_seq_provider=None) -> None:
         self.connections: set[WebSocket] = set()
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        # D01: провайдер монотонной версии состояния (db.get_state_seq);
+        # каждое сообщение несёт версию изменения
+        self._state_seq_provider = state_seq_provider
 
     async def connect(self, ws: WebSocket) -> None:
         self._loop = asyncio.get_running_loop()
@@ -420,9 +432,18 @@ class WsHub:
             self.connections.discard(ws)
 
     def broadcast(self, message: dict[str, Any]) -> None:
-        """Трансляция {type: price|event|zone, ...} всем подключённым клиентам."""
+        """Трансляция {type: price|event|zone|ltf, state_seq, ...} всем
+        подключённым клиентам."""
         if self._loop is None or not self.connections:
             return
+        if self._state_seq_provider is not None:
+            try:
+                message = {
+                    **message,
+                    "state_seq": self._state_seq_provider(),
+                }
+            except Exception:
+                pass  # версия — дополнение, не должна ронять доставку
         asyncio.run_coroutine_threadsafe(self._broadcast_async(message), self._loop)
 
 
@@ -498,7 +519,7 @@ def create_app(
     """
     _load_detector_from_file(settings)
     require_auth = make_auth_dependency(settings)
-    hub = WsHub()
+    hub = WsHub(state_seq_provider=db.get_state_seq)
 
     app = FastAPI(title="HTF Zones", version=APP_VERSION)
     app.state.db = db
@@ -895,24 +916,46 @@ def create_app(
     @app.get("/api/settings", dependencies=[Depends(require_auth)])
     def get_settings() -> dict[str, Any]:
         """DetectorConfig; uncalibrated-поля помечены отдельным списком (§14).
-        Секреты процесса сюда не попадают (§11 п.8)."""
+        Секреты процесса сюда не попадают (§11 п.8).
+        L04: groups — представление/доставка/анализ/эксперимент/deprecated;
+        устаревшие поля отдаются (миграционная совместимость), но не
+        редактируются."""
         return {
             "detector": asdict(settings.detector),
             "uncalibrated": [
                 f.name for f in fields(DetectorConfig) if f.name.startswith("uncalibrated_")
             ],
+            "groups": {
+                f.name: DETECTOR_FIELD_GROUPS.get(f.name, "analysis")
+                for f in fields(DetectorConfig)
+            },
+            "deprecated": sorted(DETECTOR_DEPRECATED_FIELDS),
         }
 
     @app.post("/api/settings", dependencies=[Depends(require_auth)])
     def save_settings(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        """L04: строгая схема и атомарное применение. Любая ошибка (неизвестное
+        или устаревшее поле, тип, диапазон, перечисление, зависимость порогов)
+        — 422 с ошибками по полям; память и файл настроек не меняются."""
+        values, errors = validate_detector_payload(payload)
+        if not errors:
+            candidate = replace(settings.detector, **values)
+            errors = validate_detector_config(candidate)
+        if errors:
+            raise HTTPException(
+                status_code=422,
+                detail={"error": "invalid_settings", "fields": errors},
+            )
         old_left = settings.detector.ltf_structure_left
         old_right = settings.detector.ltf_structure_right
         old_entry_types = settings.detector.ltf_entry_types
-        applied = _apply_detector_payload(settings.detector, payload)
+        for key, value in values.items():
+            setattr(settings.detector, key, value)
+        applied = sorted(values)
         path = _save_detector_to_file(settings)
-        # смена профиля l/r структурных pivots: старые pivots недействительны —
-        # перестраиваем их по сохранённым H1-свечам (движок делит DetectorConfig
-        # с настройками и уже видит новые значения)
+        # смена профиля l/r структурных pivots: новая версия расчёта (L03),
+        # прежние опоры помечаются superseded и сохраняются (движок делит
+        # DetectorConfig с настройками и уже видит новые значения)
         resynced = False
         if ltf_engine is not None and (
             settings.detector.ltf_structure_left != old_left

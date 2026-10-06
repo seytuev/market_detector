@@ -15,7 +15,7 @@ from typing import Any, Optional
 from ...config import DetectorConfig
 from ...db import Database
 from ...models import Candle
-from ...models_ltf import LtfPivot
+from ...models_ltf import RULE_VERSION_LTF, LtfPivot
 from .breaks import (
     BreakCursor,
     CancellationSignal,
@@ -182,6 +182,19 @@ class StructureBatch:
         return cur
 
 
+def _structure_calc_version_id(
+    db: Database, cfg: DetectorConfig, now_ms: int
+) -> int:
+    """Текущая версия расчёта структуры (L03): те же l/r и правила —
+    переиспользуется; изменение параметров создаёт новую версию."""
+    cv_id, _created = db.get_or_create_calc_version(
+        "ltf_structure",
+        {"left": cfg.ltf_structure_left, "right": cfg.ltf_structure_right},
+        RULE_VERSION_LTF, now_ms,
+    )
+    return cv_id
+
+
 def sync_structure(
     db: Database,
     cfg: DetectorConfig,
@@ -212,6 +225,7 @@ def sync_structure(
     cands = find_h1_pivots(candles, cfg.ltf_structure_left, cfg.ltf_structure_right)
 
     # --- pivots → БД; идемпотентность по (instrument_id, kind, pivot_at) ---
+    cv_id = _structure_calc_version_id(db, cfg, now_ms)
     existing = {
         (p.kind, p.pivot_at): p for p in db.list_ltf_pivots(instrument_id)
     }
@@ -224,6 +238,7 @@ def sync_structure(
                 kind=c.kind, pivot_at=c.pivot_at, confirmed_at=c.confirmed_at,
                 role="none", left=c.left, right=c.right,
                 candle_open_time=c.candle_open_time, state=c.state,
+                calc_version_id=cv_id,
             ))
             new_count += 1
         else:
@@ -311,6 +326,7 @@ def _sync_structure_batch(
     # в пакете проверяются только новые кандидаты этой свечи: прежние уже
     # материализованы (existing внутри пакета растёт только добавлением)
     existing = batch.existing_for(db, instrument_id)
+    cv_id = _structure_calc_version_id(db, cfg, now_ms)
     new_count = 0
     for c in batch.new_cands:
         row = existing.get((c.kind, c.pivot_at))
@@ -320,6 +336,7 @@ def _sync_structure_batch(
                 kind=c.kind, pivot_at=c.pivot_at, confirmed_at=c.confirmed_at,
                 role="none", left=c.left, right=c.right,
                 candle_open_time=c.candle_open_time, state=c.state,
+                calc_version_id=cv_id,
             ))
             row = db.get_ltf_pivot(c.pivot_id)
             if row is not None:

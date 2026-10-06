@@ -38,6 +38,24 @@ const state = {
   // ТЗ §5: внутренние уровни выбранной зоны (рисуются, пока зона выбрана)
   innerLevels: [],
   innerLevelsZoneId: null,
+  // выбор свечи-якоря на графике для модалки исправления границ (U04)
+  anchorPickMode: false,
+};
+
+// Режим «Проверка» (U04): собственный график + очередь + инспектор в одном
+// экране. График создаётся лениво при первом входе во вкладку и живёт дальше.
+const reviewState = {
+  chart: null,
+  candleSeries: null,
+  candles: [],
+  zone: null,        // карточка текущего кандидата (из GET /api/zones/{id})
+  all: [],           // все кандидаты с сервера
+  doneMap: new Map(), // id → кандидат: решения этой сессии (зона может остаться кандидатом)
+  currentId: null,
+  tfFilter: '',
+  saving: false,
+  advanceTimer: null,
+  pointerDown: false,
 };
 
 // Статусы, видимые на графике по умолчанию
@@ -177,6 +195,11 @@ function initChart() {
   // режим рисования ручной зоны: два клика; первый задаёт цену И время
   // начала (якорь, ТЗ §7), второй — вторую цену
   state.chart.subscribeClick((param) => {
+    if (state.anchorPickMode) {
+      const t = pickCandleTime(param, state.candles, state.chart);
+      if (t !== null) finishAnchorPick(t * 1000);
+      return;
+    }
     if (!state.drawMode || !param.point) return;
     const price = state.candleSeries.coordinateToPrice(param.point.y);
     if (price === null) return;
@@ -618,17 +641,21 @@ async function reviewZoneAction(zoneId, decision, lower, upper) {
 window.reviewZoneAction = reviewZoneAction;
 
 let boundsResolve = null;
+let boundsOriginal = null; // {lower, upper} — для предпросмотра «было → станет»
 function askBounds(lower, upper, anchorEnabled) {
   $('bounds-title').textContent = anchorEnabled ? 'Исправить границы зоны' : 'Исправить кандидата';
+  boundsOriginal = { lower, upper };
   $('bounds-lower').value = lower;
   $('bounds-upper').value = upper;
-  $('bounds-anchor').value = '';
+  setBoundsAnchor(null);
+  updateBoundsPreview();
   $('bounds-anchor-wrap').classList.toggle('hidden', !anchorEnabled);
   $('bounds-error').textContent = '';
   HTF.openModal($('bounds-modal'));
   return new Promise((resolve) => { boundsResolve = resolve; });
 }
 function closeBounds(value = null) {
+  if (state.anchorPickMode) finishAnchorPick(null);
   HTF.closeModal($('bounds-modal'));
   if (boundsResolve) { boundsResolve(value); boundsResolve = null; }
 }
@@ -649,6 +676,71 @@ function saveBounds() {
     value.anchor_candle_open_time = anchor;
   }
   closeBounds(value);
+}
+
+// Предпросмотр правки границ до сохранения (U04): «было → станет».
+function updateBoundsPreview() {
+  const el = $('bounds-preview');
+  if (!el) return;
+  if (!boundsOriginal) { el.textContent = ''; return; }
+  const loV = $('bounds-lower').value;
+  const upV = $('bounds-upper').value;
+  const lo = Number(loV);
+  const up = Number(upV);
+  if (!loV || !upV || !Number.isFinite(lo) || !Number.isFinite(up) || lo > up) {
+    el.textContent = '';
+    return;
+  }
+  el.textContent = `Было: ${fmtPrice(boundsOriginal.lower)} – ${fmtPrice(boundsOriginal.upper)}` +
+    ` → станет: ${fmtPrice(lo)} – ${fmtPrice(up)}`;
+}
+
+// Якорь без ручного ввода миллисекунд (U04): datetime-local или клик по
+// свече; сырые мс живут только в readonly-поле «Технические подробности».
+function setBoundsAnchor(ms) {
+  if (ms === null) {
+    $('bounds-anchor').value = '';
+    $('bounds-anchor-dt').value = '';
+    $('bounds-anchor-display').textContent = '';
+    return;
+  }
+  ms = Math.round(ms);
+  $('bounds-anchor').value = String(ms);
+  $('bounds-anchor-dt').value = toLocalInput(ms);
+  $('bounds-anchor-display').textContent = 'Якорь: ' + fmtTime(ms);
+}
+
+// Режим выбора свечи-якоря кликом: модалка прячется, следующий клик по
+// видимому графику (Обзор или Проверка) заполняет якорь и возвращает модалку.
+function startAnchorPick() {
+  state.anchorPickMode = true;
+  $('bounds-modal').classList.add('hidden');
+  $('anchor-pick-hint').classList.remove('hidden');
+}
+function finishAnchorPick(ms) {
+  state.anchorPickMode = false;
+  $('anchor-pick-hint').classList.add('hidden');
+  if (boundsResolve) $('bounds-modal').classList.remove('hidden');
+  if (ms !== null) setBoundsAnchor(ms);
+}
+
+// Время свечи по клику: param.time или координата, с привязкой к ближайшей
+// загруженной свече (чтобы якорь всегда был временем открытия реальной свечи).
+function pickCandleTime(param, candles, chart) {
+  let timeSec = param.time !== undefined && param.time !== null
+    ? Number(param.time)
+    : (param.point ? Number(chart.timeScale().coordinateToTime(param.point.x)) : NaN);
+  if (!Number.isFinite(timeSec)) return null;
+  if (candles && candles.length) {
+    let best = candles[0].time;
+    let bestDist = Math.abs(best - timeSec);
+    for (const c of candles) {
+      const d = Math.abs(c.time - timeSec);
+      if (d < bestDist) { bestDist = d; best = c.time; }
+    }
+    timeSec = best;
+  }
+  return timeSec;
 }
 
 const REVIEW_DECISION_RU = {
@@ -698,7 +790,7 @@ async function loadZoneDetail(zoneId, focusChart) {
     <p class="inspector-actions">
       <button type="button" class="btn primary" id="btn-focus-zone">На графике</button>
       ${(z.type === 'ob' && HTF_TFS.has(z.timeframe))
-        ? `<a class="btn small" href="/ltf.html?zone_id=${z.id}&token=${encodeURIComponent(state.token)}">Открыть LTF →</a>`
+        ? `<a class="btn small" href="/ltf.html?zone_id=${z.id}&token=${encodeURIComponent(state.token)}&instrument=${state.instrumentId}">Открыть LTF →</a>`
         : ''}
     </p>
     <dl>
@@ -845,70 +937,332 @@ function explanationText(ev) {
 }
 
 async function loadCandidates() {
-  const drafts = {};
-  const activeCard = document.activeElement && document.activeElement.closest
-    ? document.activeElement.closest('.candidate-card') : null;
-  const activeId = activeCard && activeCard.dataset.zoneId;
-  document.querySelectorAll('#candidates-list .candidate-card').forEach((card) => {
-    const ta = card.querySelector('textarea');
-    if (ta && ta.value) drafts[card.dataset.zoneId] = ta.value;
-  });
   const list = (await api('/api/candidates')).filter(isHtf); // только HTF
+  reviewState.all = list;
   $('candidates-count').textContent = list.length;
+  renderReviewQueue();
+}
+
+// Очередь с учётом фильтра ТФ и решений этой сессии: решения вроде
+// no_context / now_irrelevant не меняют статус зоны, поэтому проверенные
+// убираем из очереди локально (doneMap), иначе крутились бы по кругу.
+function visibleCandidates() {
+  return reviewState.all.filter((c) =>
+    !reviewState.doneMap.has(c.id) &&
+    (!reviewState.tfFilter || c.timeframe === reviewState.tfFilter));
+}
+
+function renderReviewQueue() {
   const box = $('candidates-list');
+  const visible = visibleCandidates();
+  const done = [...reviewState.doneMap.values()]
+    .filter((c) => !reviewState.tfFilter || c.timeframe === reviewState.tfFilter).length;
+  $('review-progress').textContent = `Проверено ${done} из ${done + visible.length}`;
   box.innerHTML = '';
-  if (!list.length) {
+  if (!visible.length) {
     box.innerHTML = '<div class="ltf-empty">Кандидатов на проверку нет.</div>';
     return;
   }
-  for (const c of list) {
+  for (const c of visible) {
     const card = document.createElement('div');
-    card.className = 'candidate-card';
+    card.className = 'candidate-card' + (c.id === reviewState.currentId ? ' selected' : '');
     card.dataset.zoneId = String(c.id);
     const why = explanationText(c.explanation);
     card.innerHTML = `
       <div class="cand-title">${c.instrument ? esc(c.instrument.symbol) : ''} · ${c.type.toUpperCase()} ${c.timeframe} ${c.direction === 'bull' ? '▲ Рост' : '▼ Снижение'}</div>
       <div>${fmtPrice(c.lower)} – ${fmtPrice(c.upper)}</div>
-      ${why ? `<p class="cand-explain">${esc(why)}</p>` : ''}
-      <textarea rows="1" placeholder="Комментарий (необязательно)"></textarea>
-      <div class="cand-actions">
-        <button class="btn small primary" data-act="confirmed">Подтвердить</button>
-        <button class="btn small" data-act="corrected">Исправить</button>
-        <button class="btn small danger" data-act="rejected">Отклонить</button>
-      </div>`;
-    const ta = card.querySelector('textarea');
-    if (drafts[c.id]) ta.value = drafts[c.id];
-    card.querySelectorAll('button').forEach((btn) => {
-      btn.onclick = () => reviewCandidate(c, btn.dataset.act, ta.value);
-    });
-    card.onclick = (ev) => {
-      if (ev.target.closest('button, textarea')) return;
-      openZoneDetail(c.id);
-    };
+      ${why ? `<p class="cand-explain">${esc(why)}</p>` : ''}`;
+    card.onclick = () => openReviewCandidate(c);
     box.appendChild(card);
-    if (activeId && String(c.id) === activeId) ta.focus();
   }
 }
 
-async function reviewCandidate(c, decision, text) {
-  const body = { decision, text };
-  if (decision === 'corrected') {
-    const bounds = await askBounds(c.lower, c.upper, false);
+// График режима проверки: отдельный экземпляр от графика «Обзора».
+function initReviewChart() {
+  const theme = HTF.chartTheme();
+  reviewState.chart = LightweightCharts.createChart($('review-chart'), {
+    layout: {
+      background: { color: theme.background },
+      textColor: theme.text,
+    },
+    grid: {
+      vertLines: { color: theme.grid },
+      horzLines: { color: theme.grid },
+    },
+    timeScale: { timeVisible: true, secondsVisible: false },
+    rightPriceScale: { borderColor: theme.border },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    autoSize: true,
+  });
+  reviewState.candleSeries = reviewState.chart.addCandlestickSeries({
+    upColor: theme.up, downColor: theme.down,
+    wickUpColor: theme.up, wickDownColor: theme.down,
+    borderVisible: false,
+  });
+  reviewState.chart.timeScale().subscribeVisibleLogicalRangeChange(() => drawReviewZone());
+  // как в Обзоре: перетаскивание шкал не даёт событий ТФ — перерисовываем
+  // зону по движению указателя (троттлинг через rAF)
+  let redrawQueued = false;
+  const queueRedraw = () => {
+    if (redrawQueued) return;
+    redrawQueued = true;
+    requestAnimationFrame(() => { redrawQueued = false; drawReviewZone(); });
+  };
+  reviewState.chart.subscribeCrosshairMove(() => {
+    if (reviewState.pointerDown) queueRedraw();
+  });
+  const wrap = $('review-chart-container');
+  wrap.addEventListener('pointerdown', () => { reviewState.pointerDown = true; });
+  window.addEventListener('pointerup', () => {
+    if (!reviewState.pointerDown) return;
+    reviewState.pointerDown = false;
+    queueRedraw();
+  });
+  wrap.addEventListener('dblclick', () => queueRedraw());
+  // выбор свечи-якоря кликом (модалка исправления границ, U04)
+  reviewState.chart.subscribeClick((param) => {
+    if (!state.anchorPickMode) return;
+    const t = pickCandleTime(param, reviewState.candles, reviewState.chart);
+    if (t !== null) finishAnchorPick(t * 1000);
+  });
+  new ResizeObserver(() => drawReviewZone()).observe(wrap);
+}
+
+// Вход во вкладку «Проверка»: график при первом входе, очередь, автовыбор
+// первого кандидата, если текущий не выбран или уже выпал из очереди.
+async function enterReviewMode() {
+  if (!reviewState.chart) initReviewChart();
+  await loadCandidates();
+  const visible = visibleCandidates();
+  if (!visible.length) return;
+  if (!visible.some((c) => c.id === reviewState.currentId)) {
+    openReviewCandidate(visible[0]);
+  }
+}
+
+// Клик по кандидату: НЕ переключаем вкладку — грузим его инструмент/ТФ,
+// свечи вокруг формирования зоны и открываем инспектор здесь же.
+async function openReviewCandidate(c) {
+  if (reviewState.advanceTimer) {
+    clearTimeout(reviewState.advanceTimer);
+    reviewState.advanceTimer = null;
+  }
+  reviewState.currentId = c.id;
+  renderReviewQueue();
+  const insp = $('review-inspector');
+  insp.innerHTML = '<h2>Проверка зоны</h2><p class="muted">Загружаю зону и свечи…</p>';
+  if (!reviewState.chart) initReviewChart();
+  const [detail, candles] = await Promise.all([
+    api(`/api/zones/${c.id}`),
+    api(`/api/candles?instrument_id=${c.instrument_id}&timeframe=${c.timeframe}&limit=5000`),
+  ]);
+  if (reviewState.currentId !== c.id) return; // пользователь выбрал другого
+  reviewState.zone = detail.zone;
+  reviewState.candles = candles;
+  reviewState.candleSeries.setData(candles);
+  // окно: от display_from/formed_at с запасом до текущего момента
+  const z = detail.zone;
+  const tfSec = TF_SECONDS[z.timeframe] || 86400;
+  const fromMs = z.display_from || z.formed_at;
+  const firstBar = candles.length ? candles[0].time : Math.floor(fromMs / 1000);
+  const to = Math.floor(Date.now() / 1000) + 3 * tfSec;
+  let from = Math.max(firstBar, Math.floor(fromMs / 1000) - 15 * tfSec);
+  if (from >= to) from = Math.max(firstBar, to - 95 * tfSec); // зона старше загруженных свечей
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    reviewState.chart.timeScale().setVisibleRange({ from, to });
+    drawReviewZone();
+  }));
+  renderReviewInspector(detail);
+  drawReviewZone();
+}
+
+// Зона на графике проверки: границы, середина, статус — как в Обзоре,
+// но всегда одна зона.
+function drawReviewZone() {
+  const overlay = $('review-zone-overlay');
+  if (!overlay) return;
+  overlay.innerHTML = '';
+  const z = reviewState.zone;
+  if (!z || !reviewState.candleSeries || !reviewState.candles.length) return;
+  const chartEl = $('review-chart');
+  const width = chartEl.clientWidth;
+  const height = chartEl.clientHeight;
+  const paneRight = width - reviewState.chart.priceScale('right').width();
+  const ts = reviewState.chart.timeScale();
+  const y1 = reviewState.candleSeries.priceToCoordinate(z.upper);
+  const y2 = reviewState.candleSeries.priceToCoordinate(z.lower);
+  if (y1 === null || y2 === null) return;
+  let top = Math.min(y1, y2);
+  let bottom = Math.max(y1, y2);
+  if (bottom < 0 || top > height) return;
+  top = Math.max(0, top);
+  bottom = Math.min(height, bottom);
+  const fromMs = z.display_from || z.formed_at;
+  let x1 = ts.timeToCoordinate(Math.floor(fromMs / 1000));
+  if (x1 === null || x1 < 0) x1 = 0;
+  if (x1 > paneRight) return;
+  let x2 = paneRight;
+  if (z.display_until) {
+    const xc = ts.timeToCoordinate(Math.floor(z.display_until / 1000));
+    if (xc !== null) x2 = Math.min(paneRight, xc);
+  }
+  if (x2 <= x1) return;
+  const div = document.createElement('div');
+  div.className = `zone-rect z-${z.type} status-${z.status}` +
+    (z.display_until ? ' status-completed' : '') + ' selected';
+  div.style.top = top + 'px';
+  div.style.height = Math.max(2, bottom - top) + 'px';
+  div.style.left = x1 + 'px';
+  div.style.width = Math.max(8, x2 - x1) + 'px';
+  if (!z.is_level) {
+    const midY = reviewState.candleSeries.priceToCoordinate(z.mid);
+    if (midY !== null && midY >= 0 && midY <= height) {
+      const mid = document.createElement('div');
+      mid.className = 'zone-mid';
+      mid.style.top = (midY - top) + 'px';
+      div.appendChild(mid);
+    }
+  }
+  const label = document.createElement('span');
+  label.className = 'zone-label review-zone-label';
+  label.textContent =
+    `${z.type.toUpperCase()} ${z.timeframe} · ${STATUS_RU[z.status] || z.status}` +
+    (z.name ? ` · ${z.name}` : '');
+  div.appendChild(label);
+  div.title = label.textContent;
+  overlay.appendChild(div);
+}
+
+const VERDICT_GEOM_RU = {
+  valid: 'верна', invalid: 'ошибка', needs_correction: 'исправлена', unknown: 'нет оценки',
+};
+const VERDICT_LIFE_RU = { completed: 'завершён', converted: 'конвертирован' };
+
+// Инспектор кандидата внутри вкладки «Проверка»: решения о геометрии;
+// рыночная актуальность показана отдельным блоком и не смешивается с ними.
+function renderReviewInspector(detail) {
+  const z = detail.zone;
+  const el = $('review-inspector');
+  const ins = detail.instrument;
+  const assessments = detail.assessments || [];
+  const lastA = assessments[assessments.length - 1];
+  const range = z.is_level ? fmtPrice(z.lower) : `${fmtPrice(z.lower)} – ${fmtPrice(z.upper)}`;
+  el.innerHTML = `
+    <h3>${ins ? esc(ins.symbol) + ' · ' : ''}${z.type.toUpperCase()} ${z.timeframe}${z.name ? ' · ' + esc(z.name) : ''} <span class="badge ${z.status}">${STATUS_RU[z.status] || z.status}</span></h3>
+    <dl>
+      <dt>Диапазон</dt><dd>${range}</dd>
+      <dt>Середина</dt><dd>${fmtPrice(z.mid)}</dd>
+      <dt>Направление</dt><dd class="dir ${z.direction}">${z.direction === 'bull' ? 'Рост' : 'Снижение'}</dd>
+      <dt>Основание зоны</dt><dd>${fmtTime(z.formed_at)}</dd>
+    </dl>
+    <div class="rv-status">
+      <h4>Актуальность зоны</h4>
+      <p>Статус: ${STATUS_RU[z.status] || z.status}${z.display_until ? ' · завершена' + (z.end_reason ? ' (' + esc(z.end_reason) + ')' : '') : ' · живая'}</p>
+      ${lastA
+        ? `<p>Последняя оценка (${fmtTime(lastA.reviewed_at)}): геометрия — ${VERDICT_GEOM_RU[lastA.geometry_verdict] || lastA.geometry_verdict}` +
+          `, цикл — ${lastA.lifecycle_verdict ? (VERDICT_LIFE_RU[lastA.lifecycle_verdict] || lastA.lifecycle_verdict) : '—'}` +
+          `${lastA.requires_clarification ? ' · требует уточнения' : ''}</p>`
+        : '<p>Оценок пока нет.</p>'}
+      <p class="muted">Это справка об актуальности — решение ниже только о геометрии разметки.</p>
+    </div>
+    <div class="review-block">
+      <h4>Решение о разметке</h4>
+      <textarea id="rv-comment" rows="2" placeholder="Комментарий к решению"></textarea>
+      <div class="review-actions">
+        <button class="btn ok" type="button" data-review="correct">1 · Размечено верно</button>
+        <button class="btn primary" type="button" data-review="fix_boundaries">2 · Исправить границы</button>
+        <button class="btn danger" type="button" data-review="wrong_type">3 · Отклонить (неверный тип)</button>
+        <details data-section="other-reviews"><summary class="btn">Другие решения</summary><div class="review-actions">
+          <button class="btn" type="button" data-review="wrong_base">Другое основание</button>
+          <button class="btn" type="button" data-review="now_irrelevant">Сейчас неактуально</button>
+          <button class="btn" type="button" data-review="already_breaker">Уже Breaker</button>
+          <button class="btn" type="button" data-review="no_context">Нет контекста</button>
+        </div></details>
+      </div>
+      <div id="rv-verdict" class="review-verdict"></div>
+    </div>
+    <details data-section="history"><summary>История</summary>
+      <h4>События (${detail.events.length})</h4>
+      <ul>${detail.events.map((e) => `<li><span class="ev-time">${fmtTime(e.occurred_at)}</span>${EVENT_KIND_RU[e.kind] || e.kind} @ ${fmtPrice(e.price)}${e.delayed ? ' (восстановлено)' : ''}</li>`).join('') || '<li>нет</li>'}</ul>
+      <h4>Проверки (${detail.reviews.length})</h4>
+      <ul>${detail.reviews.map((r) => `<li><span class="ev-time">${fmtTime(r.created_at)}</span>${REVIEW_DECISION_RU[r.decision] || r.decision}${r.text ? ': ' + esc(r.text) : ''}</li>`).join('') || '<li>нет</li>'}</ul>
+      ${detail.boundary_corrections.length ? `<h4>Правки границ</h4><ul>${detail.boundary_corrections.map((c) => `<li>${fmtPrice(c.original_lower)}–${fmtPrice(c.original_upper)} → ${fmtPrice(c.corrected_lower)}–${fmtPrice(c.corrected_upper)}${c.anchor_candle_open_time ? ' · якорь ' + fmtTime(c.anchor_candle_open_time) : ''}${c.reason ? ' · ' + esc(c.reason) : ''}</li>`).join('')}</ul>` : ''}
+      ${assessments.length ? `<h4>Оценки</h4><ul>${assessments.map((a) => `<li><span class="ev-time">${fmtTime(a.reviewed_at)}</span>${REVIEW_DECISION_RU[a.review_decision] || a.review_decision}: геометрия ${VERDICT_GEOM_RU[a.geometry_verdict] || a.geometry_verdict}${a.lifecycle_verdict ? ', цикл ' + (VERDICT_LIFE_RU[a.lifecycle_verdict] || a.lifecycle_verdict) : ''}${a.requires_clarification ? ', требует уточнения' : ''}</li>`).join('')}</ul>` : ''}
+    </details>
+  `;
+  el.querySelectorAll('[data-review]').forEach((btn) => {
+    btn.onclick = () => submitReviewDecision(btn.dataset.review);
+  });
+}
+
+// Решение в режиме проверки (U04): тот же POST /api/zones/{id}/review, что и
+// в инспекторе Обзора. При ошибке кандидат остаётся в очереди, перехода к
+// следующему нет. После успеха — автопереход к следующему кандидату.
+async function submitReviewDecision(decision) {
+  const z = reviewState.zone;
+  if (!z || reviewState.saving) return;
+  const textEl = $('rv-comment');
+  const body = { decision, text: textEl ? textEl.value.trim() : '' };
+  if (decision === 'fix_boundaries') {
+    const bounds = await askBounds(z.lower, z.upper, true);
     if (!bounds) return;
     Object.assign(body, bounds);
   }
-  // та же длительная переоценка, что и в панели деталей — блокируем кнопки
-  const card = document.querySelector(`#candidates-list .candidate-card[data-zone-id="${c.id}"]`);
-  const btns = card ? card.querySelectorAll('button') : [];
+  reviewState.saving = true;
+  const btns = document.querySelectorAll('#review-inspector [data-review]');
+  const vEl = $('rv-verdict');
   btns.forEach((b) => { b.disabled = true; });
+  if (vEl) vEl.textContent = 'Сохраняю решение… первая проверка зоны может занять до минуты';
+  let res;
   try {
-    await api(`/api/zones/${c.id}/review`, { method: 'POST', body: JSON.stringify(body) });
+    res = await api(`/api/zones/${z.id}/review`, {
+      method: 'POST', body: JSON.stringify(body),
+    });
   } catch (err) {
+    reviewState.saving = false;
     btns.forEach((b) => { b.disabled = false; });
-    alert('Ошибка сохранения проверки: ' + err.message);
+    if (vEl) vEl.textContent = 'Ошибка: ' + err.message + ' — кандидат остался в очереди.';
     return;
   }
-  await Promise.all([loadCandidates(), loadZones(), loadEvents()]);
+  reviewState.saving = false;
+  const cand = reviewState.all.find((c) => c.id === z.id) || z;
+  reviewState.doneMap.set(z.id, cand);
+  if (vEl && res.assessment) {
+    const a = res.assessment;
+    vEl.textContent = `Сохранено. Геометрия: ${VERDICT_GEOM_RU[a.geometry_verdict] || a.geometry_verdict}` +
+      (a.lifecycle_verdict ? ` · цикл: ${VERDICT_LIFE_RU[a.lifecycle_verdict] || a.lifecycle_verdict}` : '') +
+      (a.requires_clarification ? ' · требует уточнения' : '');
+  }
+  loadZones(); // вкладка «Обзор» увидит новые статусы
+  reviewState.advanceTimer = setTimeout(async () => {
+    reviewState.advanceTimer = null;
+    await loadCandidates();
+    advanceReviewQueue();
+  }, 400);
+}
+
+// Следующий кандидат очереди (по кругу); после решения — первый видимый.
+function nextReviewCandidate() {
+  const visible = visibleCandidates();
+  if (!visible.length) return;
+  const idx = visible.findIndex((c) => c.id === reviewState.currentId);
+  openReviewCandidate(visible[(idx + 1) % visible.length]);
+}
+
+function advanceReviewQueue() {
+  const visible = visibleCandidates();
+  if (!visible.length) {
+    reviewState.currentId = null;
+    reviewState.zone = null;
+    reviewState.candles = [];
+    if (reviewState.candleSeries) reviewState.candleSeries.setData([]);
+    drawReviewZone();
+    renderReviewQueue();
+    $('review-inspector').innerHTML =
+      '<h2>Проверка зоны</h2><p class="muted">Очередь пуста — все кандидаты проверены.</p>';
+    return;
+  }
+  openReviewCandidate(visible[0]);
 }
 
 // ---------------------------------------------------------------------------
@@ -1108,58 +1462,97 @@ const SETTINGS_META = {
   },
 };
 
-const SETTINGS_GROUP_ORDER = [
-  'Поиск зон',
-  'Касания и глубина',
-  'Уведомления',
-  'Не калибровано',
-  'Служебное',
-];
+// L04: группы настроек — из GET /api/settings (поле groups), не из META
+const SETTINGS_GROUP_TITLES = {
+  analysis: 'Анализ',
+  delivery: 'Доставка и уведомления',
+  experimental: 'Экспериментальные (не калиброваны)',
+};
+
+function settingsFieldHtml(key, value, uncal) {
+  const meta = SETTINGS_META[key] || { title: key, desc: '' };
+  const badge = uncal
+    ? '<span class="uncalibrated-hint">не калибровано</span>' : '';
+  const desc = (meta.desc || '').replace(/\s*§[\d.]+/g, '');
+  const head = `<div class="field-title">${meta.title}${badge}</div>` +
+    (desc ? `<div class="field-desc">${desc}</div>` : '');
+  if (typeof value === 'boolean') {
+    return head +
+      `<label class="check-label"><input type="checkbox" data-key="${key}" ` +
+      `${value ? 'checked' : ''}><span>${value ? 'включено' : 'выключено'}</span></label>`;
+  }
+  return head + `<input data-key="${key}" value="${esc(value)}">`;
+}
 
 async function openSettings() {
   const data = await api('/api/settings');
   const form = $('settings-form');
   form.innerHTML = '';
-  const uncal = new Set(data.uncalibrated);
+  const uncal = new Set(data.uncalibrated || []);
+  const deprecated = new Set(data.deprecated || []);
+  const groupOf = data.groups || {};
   const entries = Object.entries(data.detector);
-  for (const group of SETTINGS_GROUP_ORDER) {
-    const inGroup = entries.filter(([k]) => (SETTINGS_META[k]?.group || 'Служебное') === group);
+  settingsOriginal = data.detector || {};
+  const navGroups = [];
+  for (const group of ['analysis', 'delivery', 'experimental']) {
+    const inGroup = entries.filter(
+      ([k]) => !deprecated.has(k) && (groupOf[k] || 'analysis') === group);
     if (!inGroup.length) continue;
-    const header = document.createElement('div');
-    header.className = 'settings-group';
-    header.dataset.group = group;
-    header.textContent = group;
-    form.appendChild(header);
-    for (const [key, value] of inGroup) {
-      const meta = SETTINGS_META[key] || { title: key, desc: '' };
-      const badge = uncal.has(key)
-        ? '<span class="uncalibrated-hint">не калибровано</span>' : '';
-      const wrap = document.createElement('div');
-      wrap.className = 'settings-field';
-      const desc = (meta.desc || '').replace(/\s*§[\d.]+/g, '');
-      const head = `<div class="field-title">${meta.title}${badge}</div>` +
-        (desc ? `<div class="field-desc">${desc}</div>` : '');
-      if (typeof value === 'boolean') {
-        wrap.innerHTML = head +
-          `<label class="check-label"><input type="checkbox" data-key="${key}" ` +
-          `${value ? 'checked' : ''}><span>${value ? 'включено' : 'выключено'}</span></label>`;
-      } else {
-        wrap.innerHTML = head + `<input data-key="${key}" value="${esc(value)}">`;
+    navGroups.push(group);
+    if (group === 'experimental') {
+      // сворачиваемый раздел внизу формы с явной пометкой о влиянии на расчёты
+      const det = document.createElement('details');
+      det.className = 'settings-exp';
+      det.innerHTML =
+        `<summary class="settings-group" data-group="${group}">${SETTINGS_GROUP_TITLES[group]}</summary>` +
+        '<div class="field-desc settings-exp-note">Значения не калиброваны и ' +
+        'могут влиять на расчёты: найденные зоны, экстремумы и допуски.</div>';
+      for (const [key, value] of inGroup) {
+        const wrap = document.createElement('div');
+        wrap.className = 'settings-field';
+        wrap.innerHTML = settingsFieldHtml(key, value, uncal.has(key));
+        det.appendChild(wrap);
       }
-      form.appendChild(wrap);
+      form.appendChild(det);
+    } else {
+      const header = document.createElement('div');
+      header.className = 'settings-group';
+      header.dataset.group = group;
+      header.textContent = SETTINGS_GROUP_TITLES[group];
+      form.appendChild(header);
+      for (const [key, value] of inGroup) {
+        const wrap = document.createElement('div');
+        wrap.className = 'settings-field';
+        wrap.innerHTML = settingsFieldHtml(key, value, uncal.has(key));
+        form.appendChild(wrap);
+      }
     }
   }
+  // устаревшие поля (L04): не редактируются — только строка-примечание
+  const depEntries = entries.filter(([k]) => deprecated.has(k));
+  if (depEntries.length) {
+    const note = document.createElement('div');
+    note.className = 'settings-deprecated';
+    note.innerHTML = depEntries.map(([k]) =>
+      `<div>Поле <code>${esc(k)}</code> устарело и не редактируется.</div>`).join('');
+    form.appendChild(note);
+  }
+  // сайдбар-навигация по группам: переход к разделу без перезагрузки
   const nav = $('settings-nav');
   if (nav) {
     nav.innerHTML = '';
-    for (const group of groups) {
+    for (const group of navGroups) {
       const btn = document.createElement('button');
       btn.type = 'button';
-      btn.textContent = group;
+      btn.textContent = SETTINGS_GROUP_TITLES[group];
       btn.onclick = () => {
         nav.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b === btn));
         const target = form.querySelector(`.settings-group[data-group="${group}"]`);
-        if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        if (target) {
+          const det = target.closest('details');
+          if (det) det.open = true;
+          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
       };
       nav.appendChild(btn);
     }
@@ -1168,17 +1561,84 @@ async function openSettings() {
   $('settings-status').textContent = '';
 }
 
+// POST /api/settings напрямую через fetch: общий api() сворачивает тело 422
+// в строку, а для показа ошибок по полям нужен detail.fields (L04)
+async function postSettings(payload) {
+  const doFetch = () => fetch('/api/settings', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ' + HTF.getToken(),
+    },
+    body: JSON.stringify(payload),
+  });
+  let resp = await doFetch();
+  if (resp.status === 401) {
+    localStorage.removeItem('htf_token');
+    await HTF.ensureToken('Токен не подошёл. Проверьте значение и попробуйте снова.');
+    resp = await doFetch();
+  }
+  return resp;
+}
+
+// L04: сервер валидирует патч строго — отправляем только изменённые поля
+let settingsOriginal = {};
+
 async function saveSettings() {
   const payload = {};
   document.querySelectorAll('#settings-form [data-key]').forEach((inp) => {
-    if (inp.type === 'checkbox') payload[inp.dataset.key] = inp.checked;
-    else {
+    const key = inp.dataset.key;
+    const orig = settingsOriginal[key];
+    if (inp.type === 'checkbox') {
+      if (inp.checked !== Boolean(orig)) payload[key] = inp.checked;
+    } else if (inp.value !== String(orig ?? '')) {
       const num = Number(inp.value);
-      payload[inp.dataset.key] = inp.value !== '' && !isNaN(num) ? num : inp.value;
+      payload[key] = inp.value !== '' && !isNaN(num) ? num : inp.value;
     }
   });
-  const res = await api('/api/settings', { method: 'POST', body: JSON.stringify(payload) });
-  $('settings-status').textContent = `Сохранено: ${res.applied.length} параметров.`;
+  const status = $('settings-status');
+  const form = $('settings-form');
+  form.querySelectorAll('.field-error').forEach((e) => e.remove());
+  form.querySelectorAll('.settings-field.invalid').forEach((e) => e.classList.remove('invalid'));
+  status.textContent = '';
+  let resp;
+  try {
+    resp = await postSettings(payload);
+  } catch (err) {
+    status.textContent = 'Не удалось сохранить: ' + err.message;
+    return;
+  }
+  if (resp.status === 422) {
+    // ошибки по полям: подсветка у полей + сводка сверху; форма не закрывается
+    let fields = {};
+    try { fields = ((await resp.json()).detail || {}).fields || {}; } catch (e) { /* не JSON */ }
+    const names = [];
+    for (const [key, msg] of Object.entries(fields)) {
+      names.push(`${(SETTINGS_META[key] || {}).title || key}: ${msg}`);
+      const inp = form.querySelector(`[data-key="${key}"]`);
+      const wrap = inp && inp.closest('.settings-field');
+      if (wrap) {
+        wrap.classList.add('invalid');
+        const err = document.createElement('div');
+        err.className = 'field-error';
+        err.textContent = msg;
+        wrap.appendChild(err);
+      }
+    }
+    status.textContent = names.length
+      ? 'Не сохранено: ' + names.join('; ')
+      : 'Не сохранено: настройки отклонены сервером.';
+    return;
+  }
+  if (!resp.ok) {
+    let detail = resp.statusText;
+    try { detail = (await resp.json()).detail || detail; } catch (e) { /* не JSON */ }
+    status.textContent = 'Не сохранено: ' +
+      (typeof detail === 'string' ? detail : 'ошибка сервера');
+    return;
+  }
+  const res = await resp.json();
+  status.textContent = `Сохранено: ${res.applied.length} параметров.`;
 }
 
 function showView(name) {
@@ -1190,6 +1650,7 @@ function showView(name) {
   });
   if (name === 'settings') openSettings();
   if (name === 'overview') requestAnimationFrame(drawZones);
+  if (name === 'review') enterReviewMode().catch((e) => console.warn('review mode:', e));
   if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
 }
 
@@ -1252,6 +1713,38 @@ function connectWs() {
 // Инструменты и старт
 // ---------------------------------------------------------------------------
 
+// U01-lite: единый ключ выбранного инструмента для обеих страниц (HTF/LTF).
+// Приоритет: ?instrument= в URL → localStorage → первый в списке.
+const INSTRUMENT_KEY = 'htf:instrument';
+
+function resolveInitialInstrument() {
+  const ids = new Set(state.instruments.map((i) => i.id));
+  const fromUrl = Number(new URLSearchParams(location.search).get('instrument'));
+  if (fromUrl && ids.has(fromUrl)) return fromUrl;
+  const saved = Number(localStorage.getItem(INSTRUMENT_KEY));
+  if (saved && ids.has(saved)) return saved;
+  return state.instruments[0].id;
+}
+
+function updateLtfLinks() {
+  const url = new URL('/ltf.html', location.origin);
+  if (state.token) url.searchParams.set('token', state.token);
+  if (state.instrumentId) url.searchParams.set('instrument', String(state.instrumentId));
+  const href = url.pathname + url.search;
+  if ($('lnk-ltf')) $('lnk-ltf').href = href;
+  if ($('lnk-ltf-mobile')) $('lnk-ltf-mobile').href = href;
+}
+
+function syncInstrumentContext() {
+  // выбор инструмента разделяется со страницей LTF: localStorage + ?instrument=
+  // (history.replaceState, без перезагрузки; hash вкладки сохраняется)
+  localStorage.setItem(INSTRUMENT_KEY, String(state.instrumentId));
+  const url = new URL(location.href);
+  url.searchParams.set('instrument', String(state.instrumentId));
+  history.replaceState(null, '', url.pathname + url.search + url.hash);
+  updateLtfLinks();
+}
+
 async function loadInstruments() {
   state.instruments = await api('/api/instruments');
   const sel = $('instrument-select');
@@ -1263,7 +1756,7 @@ async function loadInstruments() {
     sel.appendChild(opt);
   }
   if (state.instruments.length && !state.instrumentId) {
-    state.instrumentId = state.instruments[0].id;
+    state.instrumentId = resolveInitialInstrument();
     sel.value = state.instrumentId;
   }
 }
@@ -1277,8 +1770,6 @@ async function main() {
   await ensureToken();
   setupViews();
   initChart();
-  $('lnk-ltf').href = '/ltf.html?token=' + encodeURIComponent(state.token);
-  if ($('lnk-ltf-mobile')) $('lnk-ltf-mobile').href = $('lnk-ltf').href;
 
   const hideInspector = () => {
     showInspector(false);
@@ -1286,6 +1777,7 @@ async function main() {
   };
   $('instrument-select').onchange = (e) => {
     state.instrumentId = Number(e.target.value);
+    syncInstrumentContext();
     hideInspector();
     reloadAll();
   };
@@ -1340,6 +1832,23 @@ async function main() {
   };
   $('bounds-save').onclick = saveBounds;
   $('bounds-cancel').onclick = () => closeBounds();
+  $('bounds-lower').oninput = updateBoundsPreview;
+  $('bounds-upper').oninput = updateBoundsPreview;
+  $('bounds-anchor-dt').onchange = (e) => {
+    const raw = e.target.value;
+    if (!raw) { setBoundsAnchor(null); return; }
+    const ms = new Date(raw).getTime(); // datetime-local → локальное время
+    if (!isNaN(ms)) setBoundsAnchor(ms);
+  };
+  $('bounds-anchor-pick').onclick = startAnchorPick;
+  $('bounds-anchor-clear').onclick = () => setBoundsAnchor(null);
+  $('anchor-pick-cancel').onclick = () => finishAnchorPick(null);
+  if ($('review-tf-filter')) {
+    $('review-tf-filter').onchange = (e) => {
+      reviewState.tfFilter = e.target.value;
+      renderReviewQueue();
+    };
+  }
   $('draw-cancel').onclick = exitDrawMode;
   $('btn-settings').onclick = () => showView('settings');
   $('settings-save').onclick = saveSettings;
@@ -1352,7 +1861,8 @@ async function main() {
   $('choice-cancel').onclick = () => HTF.closeModal($('zone-create-choice'));
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
-    if (!$('bounds-modal').classList.contains('hidden')) closeBounds();
+    if (state.anchorPickMode) finishAnchorPick(null);
+    else if (!$('bounds-modal').classList.contains('hidden')) closeBounds();
     else if (!$('zone-create-choice').classList.contains('hidden')) HTF.closeModal($('zone-create-choice'));
     else if (!$('manual-modal').classList.contains('hidden')) HTF.closeModal($('manual-modal'));
     else if (!$('settings-modal').classList.contains('hidden')) HTF.closeModal($('settings-modal'));
@@ -1363,8 +1873,25 @@ async function main() {
       requestAnimationFrame(drawZones);
     } else exitDrawMode();
   });
+  // Горячие клавиши режима проверки (U04): 1 — верно, 2 — границы,
+  // 3 — отклонить, → / Enter — следующий. Не срабатывают из полей ввода.
+  document.addEventListener('keydown', (e) => {
+    if (!$('view-review').classList.contains('active')) return;
+    // открыта модалка (границы, ручная зона) или идёт выбор якоря — не вмешиваемся
+    if (state.anchorPickMode) return;
+    if (document.querySelector('.modal:not(.hidden)')) return;
+    const ae = document.activeElement;
+    if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT')) return;
+    // Enter на сфокусированной кнопке — её собственное действие, не «следующий»
+    if (e.key === 'Enter' && ae && ae.tagName === 'BUTTON') return;
+    if (e.key === '1') { e.preventDefault(); submitReviewDecision('correct'); }
+    else if (e.key === '2') { e.preventDefault(); submitReviewDecision('fix_boundaries'); }
+    else if (e.key === '3') { e.preventDefault(); submitReviewDecision('wrong_type'); }
+    else if (e.key === 'ArrowRight' || e.key === 'Enter') { e.preventDefault(); nextReviewCandidate(); }
+  });
 
   await loadInstruments();
+  syncInstrumentContext();
   await loadLabels();
   await reloadAll();
   connectWs();

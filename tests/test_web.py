@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 
 import pytest
 from fastapi.testclient import TestClient
@@ -347,7 +348,7 @@ def test_settings_roundtrip(seeded, client, settings, tmp_path):
     assert "auth_token" not in json.dumps(data)
 
     resp = client.post("/api/settings", headers=AUTH, json={
-        "approach_pct": 0.03, "notify_only_reviewed": True, "unknown_field": 1,
+        "approach_pct": 0.03, "notify_only_reviewed": True,
     })
     assert resp.status_code == 200
     assert set(resp.json()["applied"]) == {"approach_pct", "notify_only_reviewed"}
@@ -356,6 +357,51 @@ def test_settings_roundtrip(seeded, client, settings, tmp_path):
     # сохранено в файл
     saved = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
     assert saved["detector"]["approach_pct"] == pytest.approx(0.03)
+
+
+def test_settings_strict_schema(seeded, client, settings, tmp_path):
+    """L04: неизвестные/устаревшие поля и невалидные значения отклоняются
+    422 с ошибками по полям; память и файл не меняются (атомарность)."""
+    before = asdict(settings.detector)
+    resp = client.post("/api/settings", headers=AUTH, json={
+        "approach_pct": 0.05,          # валидное, но применено не будет
+        "unknown_field": 1,            # неизвестное — отклонить
+        "pivot_left": -5,              # вне диапазона
+        "ltf_range_right": 4,          # устаревшее — не редактируется
+        "ltf_entry_types": "FVG,XXX",  # недопустимое перечисление
+        "depth_mid": 0.95,             # ломает зависимость depth_mid < depth_worked
+    })
+    assert resp.status_code == 422
+    fields_err = resp.json()["detail"]["fields"]
+    assert "unknown_field" in fields_err
+    assert "pivot_left" in fields_err
+    assert "ltf_range_right" in fields_err
+    assert "ltf_entry_types" in fields_err
+    # ничего не применилось: ни память, ни файл
+    assert asdict(settings.detector) == before
+    assert not (tmp_path / "settings.json").exists()
+    # зависимость порогов — на итоговом конфиге чистого патча
+    resp = client.post("/api/settings", headers=AUTH,
+                       json={"depth_mid": 0.95})
+    assert resp.status_code == 422
+    assert "depth_mid" in resp.json()["detail"]["fields"]
+    assert asdict(settings.detector) == before
+    assert not (tmp_path / "settings.json").exists()
+    # GET отдаёт группы и устаревшие поля
+    data = client.get("/api/settings", headers=AUTH).json()
+    assert data["groups"]["suppress_hours"] == "delivery"
+    assert data["groups"]["approach_pct"] == "analysis"
+    assert data["groups"]["ltf_range_right"] == "deprecated"
+    assert data["groups"]["ltf_provisional_range_enabled"] == "experimental"
+    assert data["deprecated"] == ["ltf_range_right"]
+    # валидные CSV-перечисления проходят (в т.ч. lowercase ltf_notify_kinds)
+    resp = client.post("/api/settings", headers=AUTH, json={
+        "ltf_notify_kinds": "bos_sms,touch",
+        "ltf_entry_types": "FVG,OB",
+    })
+    assert resp.status_code == 200
+    assert settings.detector.ltf_notify_kinds == "bos_sms,touch"
+    assert settings.detector.ltf_entry_types == "FVG,OB"
 
 
 def test_labels_endpoint(client):

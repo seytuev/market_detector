@@ -11,7 +11,11 @@ from typing import Any, Optional
 
 from ..db import Database
 from ..engine.ltf.context import context_complete, context_flags
-from ..engine.ltf.eligibility import REASON_OK, REASON_OUTSIDE_PD, entry_reason
+from ..engine.ltf.eligibility import (
+    ADMISSION_CONTEXT,
+    admitted_scenario_entries,
+    evaluate_final,
+)
 from ..engine.ltf.entries import H1_MS
 from ..engine.ltf.pivots import PivotCandidate
 from ..engine.ltf.ranges import provisional_range, zone_half
@@ -68,41 +72,18 @@ def _context_flags(db: Database, scenario_id: int) -> dict[str, Any]:
     )
 
 
-def _current_version(db: Database, scenario_id: int) -> int:
-    rng = db.get_current_ltf_range(scenario_id)
-    return rng.version if rng is not None else 0
-
-
 def _fresh_entries(
     db: Database, scenario_id: int
 ) -> list[tuple[LtfScenarioEntry, LtfEntryZone]]:
     """Подходящие зоны текущей версии диапазона (§3.2 счётчик).
 
-    ТЗ «LTF Current Setup» §10/п.11: счётчик — только reason == "ok";
-    outside_pd и отключённые типы в него не входят (строки до миграции
-    без reason — fallback из state, eligibility.entry_reason).
-    §18: при полном контексте (снятие SSL/BSL + тест 50% D1 FVG) в счётчик
-    входят и контекстно допущенные FVG с reason == "outside_pd"."""
-    ver = _current_version(db, scenario_id)
-    rows = db.list_ltf_scenario_entries(scenario_id, state="fresh")
-    if context_complete(_context_flags(db, scenario_id)):
-        rows += db.list_ltf_scenario_entries(scenario_id, state="out_of_range")
-    out = []
-    for e in rows:
-        if e.range_version != ver:
-            continue
-        if e.state == "fresh":
-            if not e.eligible or entry_reason(e) != REASON_OK:
-                continue
-        elif entry_reason(e) != REASON_OUTSIDE_PD:
-            continue
-        zone = db.get_ltf_entry_zone(e.entry_zone_id)
-        if zone is None:
-            continue
-        if e.state != "fresh" and zone.type != "FVG":
-            continue  # §18: допуск вне Premium — только для FVG
-        out.append((e, zone))
-    return out
+    Отбор делегирован admitted_scenario_entries — единому источнику правила
+    допуска (L01): reason == "ok" по обычному правилу; при полном контексте
+    §18 — и контекстно допущенные FVG с reason == "outside_pd"."""
+    return [
+        (e, zone)
+        for e, zone, _fe in admitted_scenario_entries(db, scenario_id)
+    ]
 
 
 # --------------------------------------------------------------------- #
@@ -113,25 +94,84 @@ def _data_state(
     db: Database, settings, instrument_id: int,
     quote: Optional[tuple[float, int]], now: int,
 ) -> dict[str, Any]:
-    """Состояние данных инструмента (§14): «данные поступают» и «последняя
-    закрытая H1 обработана» — раздельно; устаревшая котировка не даёт
-    заявлять положение цены актуальным (§6)."""
+    """Состояние данных инструмента (§14, D02): каналы раздельно — котировка
+    (возраст/порог), последняя закрытая H1, флаг источника от воркера
+    (meta stale:), восстановление (meta replaying:). «ok» — только при
+    подтверждённой свежести всех каналов; устаревшая котировка не даёт
+    заявлять положение цены актуальным (§6). Пороги — настройкой
+    stale_* (0/авто для котировки: 2 интервала опроса)."""
+    det = settings.detector
+    quote_limit_ms = (
+        det.stale_quote_seconds * 1000
+        if det.stale_quote_seconds > 0
+        else 2 * settings.poll_seconds * 1000
+    )
+    h1_limit_ms = det.stale_h1_intervals * H1_MS
     last_h1 = db.last_candle(instrument_id, "H1")
+    quote_age_s = round((now - quote[1]) / 1000, 1) if quote else None
+    h1_age_s = (
+        round((now - last_h1.close_time) / 1000, 1) if last_h1 else None
+    )
+    quote_stale = quote is not None and now - quote[1] > quote_limit_ms
+    h1_stale = last_h1 is not None and now - last_h1.close_time > h1_limit_ms
+    source_stale = db.get_meta(f"stale:{instrument_id}:H1") == "1"
+    replaying = db.get_meta(f"replaying:{instrument_id}") == "1"
+    out: dict[str, Any] = {
+        "quote_at": quote[1] if quote else None,
+        "quote_age_s": quote_age_s,
+        "quote_stale": quote_stale,
+        "h1_last_close": last_h1.close_time if last_h1 else None,
+        "h1_age_s": h1_age_s,
+        "h1_stale": h1_stale,
+        "source_stale": source_stale,
+    }
+    if replaying:
+        return {"state": "replaying", "reason": "replay_in_progress", **out}
     if last_h1 is None:
-        return {"state": "data_pending", "reason": "no_h1_candles"}
+        return {"state": "data_pending", "reason": "no_h1_candles", **out}
     if quote is None:
-        return {"state": "data_pending", "reason": "no_quote"}
-    if now - quote[1] > 2 * settings.poll_seconds * 1000:
-        return {"state": "stale", "reason": "quote_stale"}
-    if now - last_h1.close_time > 2 * H1_MS:
-        return {"state": "stale", "reason": "h1_stale"}
-    return {"state": "ok", "reason": None}
+        return {"state": "data_pending", "reason": "no_quote", **out}
+    if quote_stale:
+        return {"state": "stale", "reason": "quote_stale", **out}
+    if h1_stale:
+        return {"state": "stale", "reason": "h1_stale", **out}
+    if source_stale:
+        return {"state": "stale", "reason": "source_stale", **out}
+    return {"state": "ok", "reason": None, **out}
 
 
-def _select_context(
+# Основания выбора контекста (L05): стабильные коды для снимка /current.
+# Автовыбор — навигационная политика («что показать»), не доказательство
+# силы сценария; в UI — нейтральная подпись «Показан контекст: …».
+BASIS_MANUAL = "manual"                # «Выбран вручную»
+BASIS_PRICE_INSIDE = "price_inside"    # «Цена внутри зоны»
+BASIS_LAST_SCENARIO = "last_scenario"  # «Последний действующий сценарий»
+BASIS_LAST_CONTACT = "last_contact"    # «Последний контакт с зоной»
+
+# L06: группы приоритета внимания списка активов — по убыванию. Показывают
+# необходимость внимания, НЕ вероятность успеха/оценку прибыльности.
+ATTENTION_ORDER = [
+    "review",         # «Требует проверки» — есть зоны-кандидаты (status candidate)
+    "price_in_zone",  # «Цена в зоне» — свежая котировка внутри HTF-зоны
+    "eligible",       # «Есть подходящие зоны»
+    "awaiting",       # «Ожидается структура» — наблюдение без сценария/диапазона
+    "data_problem",   # «Проблема данных» — data_state != ok
+    "none",
+]
+ATTENTION_REASON_RU = {
+    "review": "Требует проверки",
+    "price_in_zone": "Цена в зоне",
+    "eligible": "Есть подходящие зоны",
+    "awaiting": "Ожидается структура",
+    "data_problem": "Проблема данных",
+    "none": "—",
+}
+
+
+def _select_context_with_basis(
     db: Database, instrument_id: int, observations: list[LtfObservation],
     price: Optional[float] = None, fresh: bool = False,
-) -> Optional[LtfObservation]:
+) -> tuple[Optional[LtfObservation], Optional[str]]:
     """Политика выбора контекста (§7, приоритет «цена внутри» согласован
     владельцем): ручной выбор (meta), если он ещё доступен → контекст, чья
     HTF-зона сейчас содержит цену (план «в реализации»: сначала с действующим
@@ -139,10 +179,13 @@ def _select_context(
     действующим сценарием → последний валидный контакт. Правило навигации,
     не оценка торговой силы; ручной выбор, ушедший в историю, игнорируется
     (fallback-политика). При stale-котировке приоритет «цена внутри» не
-    применяется: навигация по устаревшим данным недопустима."""
+    применяется: навигация по устаревшим данным недопустима.
+
+    Возвращает (контекст, основание) — код BASIS_* или None, если активных
+    контекстов нет."""
     active = [o for o in observations if o.state in _ACTIVE_STATES]
     if not active:
-        return None
+        return None, None
     raw = db.get_meta(f"ltf:selected_context:{instrument_id}")
     if raw:
         try:
@@ -151,7 +194,7 @@ def _select_context(
             manual_id = None
         manual = next((o for o in active if o.id == manual_id), None)
         if manual is not None:
-            return manual
+            return manual, BASIS_MANUAL
 
     def with_scenario(candidates: list[LtfObservation]):
         return [
@@ -168,14 +211,29 @@ def _select_context(
         if inside:
             sc_pairs = with_scenario(inside)
             if sc_pairs:
-                return max(sc_pairs,
-                           key=lambda so: (so[0].created_at, so[0].id))[1]
-            return max(inside, key=lambda o: (o.activated_at, o.id))
+                return (max(sc_pairs,
+                            key=lambda so: (so[0].created_at, so[0].id))[1],
+                        BASIS_PRICE_INSIDE)
+            return (max(inside, key=lambda o: (o.activated_at, o.id)),
+                    BASIS_PRICE_INSIDE)
     with_scenario_pairs = with_scenario(active)
     if with_scenario_pairs:
-        return max(with_scenario_pairs,
-                   key=lambda so: (so[0].created_at, so[0].id))[1]
-    return max(active, key=lambda o: (o.activated_at, o.id))
+        return (max(with_scenario_pairs,
+                    key=lambda so: (so[0].created_at, so[0].id))[1],
+                BASIS_LAST_SCENARIO)
+    return (max(active, key=lambda o: (o.activated_at, o.id)),
+            BASIS_LAST_CONTACT)
+
+
+def _select_context(
+    db: Database, instrument_id: int, observations: list[LtfObservation],
+    price: Optional[float] = None, fresh: bool = False,
+) -> Optional[LtfObservation]:
+    """Выбор контекста без основания (совместимость); логика и docstring
+    политики — в _select_context_with_basis."""
+    return _select_context_with_basis(
+        db, instrument_id, observations, price, fresh
+    )[0]
 
 
 def _context_view(
@@ -253,17 +311,11 @@ def _scenario_block(db: Database, sc: LtfScenario) -> dict[str, Any]:
 def _state_version(
     db: Database, obs: LtfObservation, sc: Optional[LtfScenario]
 ) -> int:
-    """Единый маркер снимка (§14): график, правая карточка, счётчик и
-    таблица относятся к одному scenario_id/state_version."""
-    marks = [obs.updated_at, obs.activated_at]
-    if sc is not None:
-        marks += [sc.created_at, sc.updated_at, sc.cancelled_at or 0]
-        rng = db.get_current_ltf_range(sc.id)
-        if rng is not None:
-            marks += [rng.available_at, rng.version]
-        entries = db.list_ltf_scenario_entries(sc.id)
-        marks += [e.updated_at for e in entries] or [0]
-    return max(marks)
+    """Единый маркер снимка (§14, D01): монотонный счётчик версии состояния
+    state_seq — график, правая карточка, счётчик и таблица относятся к
+    одному scenario_id/state_version; WS сообщает ту же версию, и по её
+    возрастанию клиент перечитывает снимок после reconnect."""
+    return db.get_state_seq()
 
 
 def _contexts_direction(observations: list[LtfObservation]) -> Optional[str]:
@@ -400,7 +452,10 @@ def _entry_row(
             liquidity_state = tests[-1].state
     # история ручных оценок зоны (разметка; на состояние зоны не влияет)
     assessments = db.get_ltf_assessments(zone.id)
-    reason = entry_reason(entry)
+    fe = evaluate_final(
+        entry, zone,
+        allow_outside=context_complete(_context_flags(db, sc.id)),
+    )
     return {
         "entry_id": entry.id,
         "entry_zone_id": zone.id,
@@ -417,12 +472,13 @@ def _entry_row(
         "partial": entry.overlap == "partial",
         "eligible": entry.eligible,
         "state": entry.state,
-        "reason": reason,
+        # L01: итоговое решение — единая функция evaluate_final
+        "eligible_now": fe.eligible_now,
+        "reason": fe.primary_reason,
+        "blocking_reasons": list(fe.blocking_reasons),
+        "admission_basis": fe.admission_basis,
         # §18: контекстный допуск FVG вне Premium — отображается, не блокирует
-        "outside_premium": (
-            reason == REASON_OUTSIDE_PD
-            and context_complete(_context_flags(db, sc.id))
-        ),
+        "outside_premium": fe.admission_basis == ADMISSION_CONTEXT,
         "max_test_depth": zone.max_test_depth,
         "first_test_at": zone.first_test_at,
         "liquidity_state": liquidity_state,
@@ -446,6 +502,35 @@ def _entry_row(
 # Публичный интерфейс read model
 # --------------------------------------------------------------------- #
 
+def _attention_group(
+    db: Database, instrument_id: int,
+    observations: list[LtfObservation], eligible_count: int,
+    stage: str, ds: dict[str, Any],
+    price: Optional[float], fresh: bool,
+    has_candidates: bool,
+) -> str:
+    """L06: первая применимая группа из ATTENTION_ORDER (по убыванию
+    приоритета). «Цена в зоне» — только по свежей котировке: при stale
+    защита _select_context_with_basis приоритет «цена внутри» не применяет,
+    и группа не присваивается."""
+    if has_candidates:
+        return "review"
+    if fresh and price is not None:
+        selected = _select_context(db, instrument_id, observations,
+                                   price, fresh)
+        if selected is not None:
+            zone = db.get_zone(selected.zone_id)
+            if zone is not None and zone.lower <= price <= zone.upper:
+                return "price_in_zone"
+    if eligible_count > 0:
+        return "eligible"
+    if stage in (STAGE_WAIT_BOS, STAGE_WAIT_RANGE):
+        return "awaiting"
+    if ds["state"] != "ok":
+        return "data_problem"
+    return "none"
+
+
 def instruments_overview(db: Database, settings) -> list[dict[str, Any]]:
     """Левая панель «Активы» (§4.2): одна строка на instrument_id
     (symbol/venue/market), сколько бы Observation ни было у инструмента.
@@ -467,6 +552,8 @@ def instruments_overview(db: Database, settings) -> list[dict[str, Any]]:
             row["instrument_id"], []
         ).append(row)
     last_event = db.get_ltf_last_event_at()
+    # L06: зоны-кандидаты на проверку — одним агрегатным запросом (без N+1)
+    candidate_counts = db.count_candidate_zones()
     out = []
     for iid, obs_list in by_instrument.items():
         ins = instruments.get(iid)
@@ -488,6 +575,11 @@ def instruments_overview(db: Database, settings) -> list[dict[str, Any]]:
                 htf_context = {
                     "type": zone.type.value, "timeframe": zone.timeframe,
                 }
+        attention = _attention_group(
+            db, iid, obs_list, len(eligible), stage, ds,
+            quote[0] if quote else None, fresh,
+            candidate_counts.get(iid, 0) > 0,
+        )
         out.append({
             "instrument": {
                 "id": ins.id, "symbol": ins.symbol, "asset": ins.asset,
@@ -504,6 +596,10 @@ def instruments_overview(db: Database, settings) -> list[dict[str, Any]]:
                 1 for o in obs_list if o.state in _ACTIVE_STATES
             ),
             "data_state": ds,
+            # L06: приоритет внимания — код группы (ATTENTION_ORDER) и
+            # краткая причина; НЕ оценка прибыльности сетапа
+            "attention": attention,
+            "attention_reason": ATTENTION_REASON_RU[attention],
         })
     out.sort(key=lambda r: (r["instrument"]["symbol"],
                             r["instrument"]["venue"],
@@ -529,7 +625,9 @@ def instrument_current(
     ds = _data_state(db, settings, instrument_id, quote, now)
     fresh = ds["state"] == "ok"
     observations = db.list_ltf_observations(instrument_id=instrument_id)
-    selected = _select_context(db, instrument_id, observations, price, fresh)
+    selected, basis = _select_context_with_basis(
+        db, instrument_id, observations, price, fresh
+    )
     contexts = [
         _context_view(db, o, price, fresh)
         for o in observations if o.state in _ACTIVE_STATES
@@ -571,20 +669,15 @@ def instrument_current(
             if e.range_version != ver:
                 counts["historical"] += 1
                 continue
-            reason = entry_reason(e)
-            z = None
-            if reason == REASON_OK:
-                z = db.get_ltf_entry_zone(e.entry_zone_id)
-            elif allow_outside and reason == REASON_OUTSIDE_PD:
-                # §18: контекстный допуск FVG вне Premium
-                z0 = db.get_ltf_entry_zone(e.entry_zone_id)
-                if z0 is not None and z0.type == "FVG":
-                    z = z0
-            if z is not None:
+            z = db.get_ltf_entry_zone(e.entry_zone_id)
+            if z is None:
+                continue
+            fe = evaluate_final(e, z, allow_outside=allow_outside)
+            if fe.eligible_now:
                 eligible_rows.append(
                     _entry_row(db, e, z, sc, price if fresh else None)
                 )
-            elif reason != REASON_OK:
+            else:
                 counts["excluded"] += 1
         counts["eligible"] = len(eligible_rows)
         eligible_rows.sort(key=lambda r: (
@@ -614,6 +707,12 @@ def instrument_current(
         "direction": direction,
         "contexts": contexts,
         "selected_context_id": selected.id if selected else None,
+        # L05: основание выбора (код BASIS_*) — навигационная политика,
+        # не оценка силы сценария; None, когда активных контекстов нет
+        "selected_context_basis": basis,
+        # L05: среди активных контекстов есть противоположные направления
+        # (direction тогда уже "mixed" — семантика сохранена)
+        "contexts_conflict": _contexts_direction(observations) == "mixed",
         "current_scenario": sc_block,
         "scenario_waiting": waiting,
         "range": rng_block,
@@ -631,11 +730,7 @@ def instrument_current(
         ),
         "eligible_entries": eligible_rows,
         "counts": counts,
-        "state_version": (
-            _state_version(db, selected, sc)
-            if selected is not None
-            else max((o.updated_at for o in observations), default=0)
-        ),
+        "state_version": _state_version(db, selected, sc),
     }
 
 
@@ -780,27 +875,28 @@ def observation_chart_layers(
             z = db.get_ltf_entry_zone(e.entry_zone_id)
             if z is None:
                 continue
-            reason = entry_reason(e)
-            admitted = reason == REASON_OK or (
-                allow_outside and reason == REASON_OUTSIDE_PD
-                and z.type == "FVG"
-            )
+            fe = evaluate_final(e, z, allow_outside=allow_outside)
             row = {
                 **z.to_dict(),
                 "entry_zone_id": z.id,
                 "entry_state": e.state,
                 "overlap": e.overlap,
                 "eligible": e.eligible,
-                "reason": reason,
+                "eligible_now": fe.eligible_now,
+                "reason": fe.primary_reason,
+                "blocking_reasons": list(fe.blocking_reasons),
+                "admission_basis": fe.admission_basis,
                 "half": _half_label(z, current, sc.direction.value),
                 # §18: контекстный допуск FVG вне Premium
-                "outside_premium": admitted and reason == REASON_OUTSIDE_PD,
+                "outside_premium": (
+                    fe.admission_basis == ADMISSION_CONTEXT
+                ),
             }
             # ТЗ §10/§4.3: рабочий слой — только подходящие зоны
             # (§18: и контекстно допущенные FVG вне Premium); исключённые
             # доступны отдельной группой (слой «Исключённые зоны»
             # включается в UI отдельно)
-            (entries if admitted else entries_excluded).append(row)
+            (entries if fe.eligible_now else entries_excluded).append(row)
         liquidity_tests = [
             t.to_dict() for t in db.list_ltf_liquidity_tests(scenario_id=sc.id)
         ]

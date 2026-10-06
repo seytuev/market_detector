@@ -100,7 +100,11 @@ def test_archive_respects_recent_structure_events(db: Database, cfg,
     assert db.get_ltf_observation(obs.id).state == "active"
 
 
-def test_resync_replaces_pivots(db: Database, cfg, instrument_id: int):
+def test_resync_supersedes_pivots_keeping_history(db: Database, cfg,
+                                                  instrument_id: int):
+    """L03: смена l/r создаёт новую версию расчёта; старые pivots помечаются
+    superseded, а не удаляются — исторические ссылки и журнал ролей
+    сохраняются."""
     engine = LtfEngine(db, cfg)
     engine.on_htf_zone_touched(instrument_id, db.get_zone(_zone(db, instrument_id)), T0)
     candles = _series(SERIES_H_HL, SERIES_H_CLOSES, instrument_id)
@@ -111,17 +115,70 @@ def test_resync_replaces_pivots(db: Database, cfg, instrument_id: int):
     assert old and all((p.left, p.right) == (3, 3) for p in old)
     old_ids = {p.id for p in old}
     old_keys = {(p.kind, p.pivot_at) for p in old}
+    logs_before = {pid: db.list_ltf_pivot_role_log(pid) for pid in old_ids}
 
     cfg.ltf_structure_left = 5
     cfg.ltf_structure_right = 5
     res = engine.resync_structure_params(now_ms=now)
     new = db.list_ltf_pivots(instrument_id)
     assert res[instrument_id] == len(new)
-    assert not old_ids & {p.id for p in new}      # старые pivots удалены
+    assert not old_ids & {p.id for p in new}      # новая версия — новые строки
     assert all((p.left, p.right) == (5, 5) for p in new)
     assert {(p.kind, p.pivot_at) for p in new} != old_keys
-    # журнал ролей старых pivots тоже удалён (FK)
-    assert all(db.list_ltf_pivot_role_log(pid) == [] for pid in old_ids)
+    # старые опоры сохранены и разрешимы: читаются по id с пометкой superseded
+    kept = db.list_ltf_pivots(instrument_id, include_superseded=True)
+    assert {p.id for p in kept} >= old_ids
+    for pid in old_ids:
+        p = db.get_ltf_pivot(pid)
+        assert p is not None and p.superseded_by is not None
+    # журнал ролей старых pivots не тронут
+    assert all(
+        db.list_ltf_pivot_role_log(pid) == logs_before[pid] for pid in old_ids
+    )
+    # версии расчёта: старая и новая существуют, новые pivots — новой версии
+    new_cv = {p.calc_version_id for p in new}
+    assert len(new_cv) == 1
+    cv = db.get_calc_version(new_cv.pop())
+    assert cv["params"] == {"left": 5, "right": 5}
+    # повторный resync без смены параметров — no-op
+    assert engine.resync_structure_params(now_ms=now) == {}
+
+
+def test_resync_keeps_old_structure_events_resolvable(db: Database, cfg,
+                                                      instrument_id: int):
+    """Приёмка L03: смена left/right не ломает просмотр старого BOS/SMS —
+    событие и его опоры читаются после перестройки."""
+    engine = LtfEngine(db, cfg)
+    obs = engine.on_htf_zone_touched(
+        instrument_id, db.get_zone(_zone(db, instrument_id)), T0
+    )
+    candles = _series(SERIES_H_HL, SERIES_H_CLOSES, instrument_id)
+    db.insert_candles(candles)
+    now = candles[-1].close_time
+    sync_structure(db, cfg, instrument_id, candles, now)
+    old_pivot = db.list_ltf_pivots(instrument_id)[0]
+    sc = db.insert_ltf_scenario(LtfScenario(
+        id=None, observation_id=obs.id, direction=Direction.BEAR,
+        trigger="BOS", stage="primary", state="monitoring_entries",
+        created_at=now, updated_at=now,
+    ))
+    ev = db.insert_ltf_structure_event(LtfStructureEvent(
+        id=None, scenario_id=sc.id, kind="BOS", stage="primary",
+        direction=Direction.BEAR, break_level=old_pivot.price,
+        break_candle_open_time=candles[-2].open_time,
+        occurred_at=candles[-2].close_time, detected_at=now,
+        level_key="bos:primary:test:1", ref_pivot_ids=[old_pivot.id],
+    ))
+
+    cfg.ltf_structure_left = 5
+    cfg.ltf_structure_right = 5
+    engine.resync_structure_params(now_ms=now)
+
+    got = db.list_ltf_structure_events(sc.id)
+    assert [e.id for e in got] == [ev.id]
+    ref = db.get_ltf_pivot(got[0].ref_pivot_ids[0])
+    assert ref is not None and ref.price == old_pivot.price
+    assert ref.superseded_by is not None
 
 
 def test_resync_without_observations_is_noop(db: Database, cfg,

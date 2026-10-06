@@ -68,19 +68,31 @@ def detect_counter_sweeps(
 
 
 def find_htf_fvg50_test(
-    db, instrument_id: int, extreme_price: float, direction: Direction
+    db, instrument_id: int, extreme_price: float, direction: Direction,
+    *, as_of: Optional[int] = None, event_time: Optional[int] = None,
 ) -> Optional[dict[str, Any]]:
     """D1 FVG противоположного направления, чей 50%-уровень достигнут
     экстремумом движения (для bear — бычья D1 FVG ниже, extreme <= mid).
 
     Приоритет — зона с уже зафиксированным HTF-событием DEPTH_50/FVG_WEAKENED
     (факт теста 50% пишет общий движок); запасной вариант — чистая геометрия.
+
+    Причинность (L02): as_of — момент решения; учитываются только зоны,
+    сформированные (formed_at) и события, происшедшие (occurred_at) не позднее
+    as_of — позднее известный контекст историческому движению не приписывается.
+    event_time — момент самого теста (закрытие свечи-экстремума): зона обязана
+    существовать к нему, иначе геометрическое достижение не является её тестом.
+    Геометрический fallback возвращает confirmed=True только при доказанной
+    временной связи; confirmed=False — неподтверждённый факт, он не включает
+    контекстное исключение §18 (движок его не эмитит).
     """
     opposite = Direction.BULL if direction == Direction.BEAR else Direction.BEAR
     zones = db.get_zones(
         instrument_id=instrument_id, statuses=list(_FVG50_STATUSES),
         types=[ZoneType.FVG], timeframes={"D1"},
     )
+    if as_of is not None:
+        zones = [z for z in zones if z.formed_at <= as_of]
     reached = [
         z for z in zones
         if z.direction == opposite and (
@@ -92,22 +104,31 @@ def find_htf_fvg50_test(
     for z in reached:
         if any(
             e.kind in _FVG50_EVENTS
+            and (as_of is None or e.occurred_at <= as_of)
             for e in db.get_events(zone_id=z.id, limit=100)
         ):
-            return {"zone_id": z.id, "tf": z.timeframe, "via": "event"}
+            return {"zone_id": z.id, "tf": z.timeframe, "via": "event",
+                    "confirmed": True}
     if reached:
         z = reached[0]
-        return {"zone_id": z.id, "tf": z.timeframe, "via": "geometry"}
+        # геометрический fallback: доказанным тестом считается только
+        # пересечение зоны при допустимой последовательности событий —
+        # зона сформирована не позднее момента теста (L02)
+        confirmed = event_time is not None and z.formed_at <= event_time
+        return {"zone_id": z.id, "tf": z.timeframe, "via": "geometry",
+                "confirmed": confirmed}
     return None
 
 
 def scenario_context(
     db, instrument_id: int, direction: Direction,
     pivots: list[PivotCandidate], candles: list[Candle],
-    since_at: int,
+    since_at: int, *, as_of: Optional[int] = None,
 ) -> dict[str, Any]:
     """Агрегатор §18: снятые контр-уровни и тест 50% D1 FVG экстремумом
-    движения (минимум Low / максимум High закрытых H1 от триггера)."""
+    движения (минимум Low / максимум High закрытых H1 от триггера).
+    as_of — момент решения: учитываются только факты, доступные к нему
+    (L02); момент теста для причинности — закрытие свечи-экстремума."""
     bear = direction == Direction.BEAR
     swept = detect_counter_sweeps(direction, pivots, candles, since_at)
     tail = [c for c in candles if c.closed and c.close_time >= since_at]
@@ -118,7 +139,10 @@ def scenario_context(
             if bear else max(tail, key=lambda c: c.high)
         )
         extreme = bar.low if bear else bar.high
-        fvg50 = find_htf_fvg50_test(db, instrument_id, extreme, direction)
+        fvg50 = find_htf_fvg50_test(
+            db, instrument_id, extreme, direction,
+            as_of=as_of, event_time=bar.close_time,
+        )
         if fvg50 is not None:
             fvg50 = {**fvg50, "extreme": extreme, "tested_at": bar.close_time}
     return {"counter_swept": swept, "htf_fvg50": fvg50}

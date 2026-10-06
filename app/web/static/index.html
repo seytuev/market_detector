@@ -111,14 +111,21 @@
     <div class="review-layout">
       <aside class="review-queue">
         <div class="rail-head"><h2>Очередь кандидатов</h2><span id="review-progress" class="muted">0 из 0</span></div>
+        <div class="list-filters">
+          <select id="review-tf-filter" title="Таймфрейм кандидатов"><option value="">D1 + W1</option><option value="D1">D1</option><option value="W1">W1</option></select>
+        </div>
         <div id="candidates-list" class="candidates"></div>
       </aside>
-      <section class="chart-block review-chart-hint">
-        <p class="muted">Клик по кандидату слева открывает зону в инспекторе вкладки «Обзор»; график Обзора сохраняет выбранный инструмент.</p>
+      <section class="chart-block review-chart-block">
+        <div id="review-chart-container">
+          <div id="review-chart"></div>
+          <div id="review-zone-overlay"></div>
+        </div>
+        <div class="review-keys muted">Клавиши: <b>1</b> — верно · <b>2</b> — исправить границы · <b>3</b> — отклонить · <b>→</b>/<b>Enter</b> — следующий</div>
       </section>
-      <aside class="review-inspector muted" id="review-inspector-placeholder">
+      <aside class="review-inspector" id="review-inspector">
         <h2>Проверка зоны</h2>
-        <p>Очередь использует те же решения ревью, что и карточка зоны: подтвердить геометрию, исправить границы или отклонить.</p>
+        <p class="muted">Выберите кандидата из очереди слева.</p>
       </aside>
     </div>
   </section>
@@ -159,7 +166,9 @@
   <span id="chart-tf-label" class="hidden">D1</span>
 
   <div id="zone-create-choice" class="modal hidden"><div class="modal-card choice-card" role="dialog" aria-modal="true" aria-labelledby="choice-title"><h3 id="choice-title">Добавить зону</h3><p>Выберите способ задания границ.</p><button id="choice-draw" class="btn primary" type="button">Нарисовать на графике</button><button id="choice-form" class="btn" type="button">Ввести границы</button><button id="choice-cancel" class="btn subtle" type="button">Отмена</button></div></div>
-  <div id="bounds-modal" class="modal hidden"><div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="bounds-title"><h3 id="bounds-title">Исправить границы</h3><label>Нижняя граница <input id="bounds-lower" type="number" step="any"></label><label>Верхняя граница <input id="bounds-upper" type="number" step="any"></label><label id="bounds-anchor-wrap">Свеча-якорь, время открытия в мс (необязательно) <input id="bounds-anchor" type="number" step="1"></label><p id="bounds-error" class="form-error" role="alert"></p><div class="modal-actions"><button id="bounds-save" class="btn primary" type="button">Сохранить</button><button id="bounds-cancel" class="btn" type="button">Отмена</button></div></div></div>
+  <div id="bounds-modal" class="modal hidden"><div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="bounds-title"><h3 id="bounds-title">Исправить границы</h3><label>Нижняя граница <input id="bounds-lower" type="number" step="any"></label><label>Верхняя граница <input id="bounds-upper" type="number" step="any"></label><div id="bounds-preview" class="bounds-preview muted"></div><div id="bounds-anchor-wrap"><span class="field-label">Свеча-якорь (необязательно)</span><div class="anchor-controls"><input id="bounds-anchor-dt" type="datetime-local" step="60" title="Время открытия свечи-якоря"><button id="bounds-anchor-pick" class="btn small" type="button">На графике</button><button id="bounds-anchor-clear" class="btn small subtle" type="button">Сбросить</button></div><p id="bounds-anchor-display" class="anchor-display muted"></p></div><details class="tech-details"><summary>Технические подробности</summary><label>Время якоря, мс <input id="bounds-anchor" type="number" step="1" readonly></label></details><p id="bounds-error" class="form-error" role="alert"></p><div class="modal-actions"><button id="bounds-save" class="btn primary" type="button">Сохранить</button><button id="bounds-cancel" class="btn" type="button">Отмена</button></div></div></div>
+
+  <div id="anchor-pick-hint" class="draw-hint hidden">Кликните по свече на графике — она станет якорем. <button id="anchor-pick-cancel" class="btn small" type="button">Отмена</button></div>
 
   <div id="manual-modal" class="modal hidden">
     <div class="modal-card">

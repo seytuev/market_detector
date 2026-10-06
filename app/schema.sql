@@ -252,9 +252,20 @@ CREATE TABLE IF NOT EXISTS ltf_pivot (
     "left" INTEGER NOT NULL DEFAULT 3,  -- настройки l/r (§5.1)
     "right" INTEGER NOT NULL DEFAULT 3,
     candle_open_time INTEGER NOT NULL,
-    state TEXT NOT NULL DEFAULT 'candidate'  -- candidate | confirmed | ambiguous
+    state TEXT NOT NULL DEFAULT 'candidate',  -- candidate | confirmed | ambiguous
+    calc_version_id INTEGER,            -- версия расчёта (L03)
+    superseded_by INTEGER               -- id версии, заменившей опору; NULL — действующая
 );
 CREATE INDEX IF NOT EXISTS ix_ltf_pivot_instr ON ltf_pivot (instrument_id, pivot_at);
+
+-- L03: версии расчётов (параметры + правила); опоры и результаты ссылаются
+CREATE TABLE IF NOT EXISTS calc_version (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,                 -- ltf_structure | ...
+    params TEXT NOT NULL DEFAULT '{}',  -- JSON параметров расчёта
+    rule_version TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+);
 
 -- §5.2: при пересмотре роли история сохраняется
 CREATE TABLE IF NOT EXISTS ltf_pivot_role_log (

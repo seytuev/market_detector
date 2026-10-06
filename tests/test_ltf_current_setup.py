@@ -252,7 +252,9 @@ def test_current_stale_quote_hides_inside(client, db, seeded, instrument_id):
     cur = client.get(
         f"/api/ltf/instruments/{instrument_id}/current", headers=AUTH
     ).json()
-    assert cur["data_state"] == {"state": "stale", "reason": "quote_stale"}
+    ds = cur["data_state"]
+    assert ds["state"] == "stale" and ds["reason"] == "quote_stale"
+    assert ds["quote_stale"] is True and ds["quote_age_s"] is not None
     ctx = cur["contexts"][0]
     assert ctx["is_price_inside_now"] is None
     assert ctx["price_position"] is None

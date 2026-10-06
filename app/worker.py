@@ -601,6 +601,7 @@ class Worker:
             ]
             if not observations:
                 continue
+            self._set_replaying(ins.id, True)
             try:
                 last = self.db.last_candle(ins.id, "H1")
                 start = (
@@ -632,14 +633,21 @@ class Worker:
                 log.warning("LTF %s: восстановление пропущено: %s", ins.symbol, exc)
             except Exception:
                 log.exception("LTF: ошибка восстановления %s", ins.symbol)
+            finally:
+                self._set_replaying(ins.id, False)
 
     async def _check_freshness(self, ins: Instrument, tf: str) -> None:
-        """Устаревшие данные — показать и уведомить (§11)."""
+        """Устаревшие данные — показать и уведомить (§11).
+
+        D02: порог — настройка stale_<tf>_intervals; флаг дублируется в meta
+        (stale:{id}:{tf}), чтобы API показывал состояние источника и после
+        перезапуска процесса."""
         last = self.db.last_candle(ins.id, tf)
         stale = (
             last is None
-            or now_ms() - last.close_time > STALE_FACTOR * TIMEFRAME_MS[tf]
+            or now_ms() - last.close_time > self._stale_limit_ms(tf)
         )
+        self.db.set_meta(f"stale:{ins.id}:{tf}", "1" if stale else "0")
         key = (ins.id, tf)
         was = self._stale.get(key, False)
         if stale and not was:
@@ -654,6 +662,20 @@ class Worker:
             )
         self._stale[key] = stale
 
+    def _stale_limit_ms(self, tf: str) -> int:
+        """D02: порог устаревания ТФ — отдельной настройкой в интервалах."""
+        intervals = {
+            "H1": self.cfg.stale_h1_intervals,
+            "D1": self.cfg.stale_d1_intervals,
+            "W1": self.cfg.stale_w1_intervals,
+        }.get(tf, STALE_FACTOR)
+        return intervals * TIMEFRAME_MS[tf]
+
+    def _set_replaying(self, instrument_id: int, on: bool) -> None:
+        """D02: маркер восстановления/replay в meta — API помечает снимок
+        replaying, пока идёт догрузка истории инструмента."""
+        self.db.set_meta(f"replaying:{instrument_id}", "1" if on else "0")
+
     async def _mark_stale(self, ins: Instrument, reason: str) -> None:
         """Источник недоступен целиком: одно сообщение на инструмент,
         флаги stale — на все ТФ (восстановление отслеживается по каждому)."""
@@ -663,6 +685,7 @@ class Worker:
             )
         for tf in self.scan_tfs:
             self._stale[(ins.id, tf)] = True
+            self.db.set_meta(f"stale:{ins.id}:{tf}", "1")
 
     async def _service_message(self, text: str) -> None:
         """Сервисное уведомление владельцу (не рыночное событие, §11) —
@@ -679,10 +702,13 @@ class Worker:
         if any(mig.values()):
             log.info("миграция display-полей: %s", mig)
         for ins in self.db.get_instruments(enabled_only=True):
+            self._set_replaying(ins.id, True)
             try:
                 await self.backfill(ins)
             except Exception:
                 log.exception("backfill %s", ins.symbol)
+            finally:
+                self._set_replaying(ins.id, False)
         # §13 LTF: восстановить наблюдения/сценарии/диапазоны после перезапуска
         await self._ltf_restore_all()
         log.info("воркер запущен, опрос каждые %s с", self.settings.poll_seconds)

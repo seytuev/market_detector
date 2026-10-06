@@ -64,12 +64,27 @@ async def run_bot_polling(settings, db) -> None:
         await asyncio.Event().wait()  # живём до остановки процесса
 
 
+def check_deploy_token(settings) -> None:
+    """§7.6: запуск со стандартным dev-token на не-loopback хосте запрещён —
+    иначе сервис с известным токеном доступен сети. Локальный режим
+    (127.0.0.1/localhost/::1) остаётся явно разрешённым."""
+    if settings.auth_token == "dev-token" and settings.host not in (
+        "127.0.0.1", "localhost", "::1",
+    ):
+        raise SystemExit(
+            f"Отказ запуска: HTF_HOST={settings.host}, а токен — стандартный "
+            "dev-token. Задайте HTF_AUTH_TOKEN (§7.6) либо верните "
+            "loopback-host для локального режима."
+        )
+
+
 async def async_main() -> None:
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
     load_dotenv()
     settings = load_settings()
+    check_deploy_token(settings)
     # ENV-переопределения детектора — базовый слой; далее create_app применит
     # переопределения из data/settings.json (файл приоритетнее), и воркер
     # получит тот же итоговый конфиг, что виден в веб-настройках

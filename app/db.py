@@ -3,6 +3,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 import threading
@@ -275,6 +276,31 @@ class Database:
                     "ALTER TABLE ltf_scenario_entry "
                     "ADD COLUMN reason TEXT NOT NULL DEFAULT ''"
                 )
+            # L03: версии расчётов и мягкая замена опор (supersede вместо
+            # удаления — исторические ссылки сценариев остаются разрешимыми)
+            self.conn.execute(
+                """CREATE TABLE IF NOT EXISTS calc_version (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    kind TEXT NOT NULL,
+                    params TEXT NOT NULL DEFAULT '{}',
+                    rule_version TEXT NOT NULL DEFAULT '',
+                    created_at INTEGER NOT NULL
+                )"""
+            )
+            ltf_p_cols = {
+                r["name"]
+                for r in self.conn.execute(
+                    "PRAGMA table_info(ltf_pivot)"
+                ).fetchall()
+            }
+            for col, ddl in (
+                ("calc_version_id", "INTEGER"),
+                ("superseded_by", "INTEGER"),
+            ):
+                if col not in ltf_p_cols:
+                    self.conn.execute(
+                        f"ALTER TABLE ltf_pivot ADD COLUMN {col} {ddl}"
+                    )
             self.conn.commit()
 
     def get_meta(self, key: str) -> Optional[str]:
@@ -399,6 +425,7 @@ class Database:
             rows,
         )
         self.conn.commit()
+        self.bump_state_seq()
         return cur.rowcount
 
     def get_candles(
@@ -517,6 +544,43 @@ class Database:
         with self._zone_cache_lock:
             self._zone_cache_version += 1
             self._zone_cache.clear()
+        self.bump_state_seq()
+
+    # ---------- версия состояния (D01) ----------
+
+    def bump_state_seq(self) -> None:
+        """Монотонный счётчик версии состояния (D01): инкремент при любой
+        записи предметного состояния (зоны, события, свечи, ltf_*). WS и
+        снимки отдают его как state_version; по возрастанию клиент видит
+        изменение, а после reconnect перечитывает полный снимок."""
+        self.conn.execute(
+            """INSERT INTO meta (key, value) VALUES ('state_seq', '1')
+               ON CONFLICT (key) DO UPDATE SET
+               value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)"""
+        )
+        self.conn.commit()
+
+    def get_state_seq(self) -> int:
+        r = self.conn.execute(
+            "SELECT value FROM meta WHERE key='state_seq'"
+        ).fetchone()
+        return int(r["value"]) if r else 0
+
+    @contextlib.contextmanager
+    def read_tx(self):
+        """Согласованное чтение снимка (D01): замок соединения удерживается
+        на всю read-транзакцию, поэтому серия запросов видит одну версию
+        состояния без вклинивания записей между ними."""
+        lock = self.conn._lock
+        with lock:
+            self.conn.execute("BEGIN DEFERRED")
+            try:
+                yield
+            finally:
+                try:
+                    self.conn.execute("ROLLBACK")
+                except Exception:
+                    pass  # транзакцию уже завершил commit вложенной записи
 
     # ---------- кэш горячих LTF-чтений (replay: per-candle N+1) ----------
 
@@ -526,6 +590,7 @@ class Database:
         with self._ltf_cache_lock:
             self._ltf_cache_version += 1
             self._ltf_cache.clear()
+        self.bump_state_seq()
 
     def _ltf_cached(self, key: tuple, loader) -> Any:
         """Выборка через кэш версии _ltf_cache_version. Списки отдаются
@@ -818,7 +883,10 @@ class Database:
         )
         self.conn.commit()
         # rowcount надёжен в отличие от lastrowid после проигнорированной вставки
-        return int(cur.lastrowid) if cur.rowcount == 1 else None
+        if cur.rowcount == 1:
+            self.bump_state_seq()
+            return int(cur.lastrowid)
+        return None
 
     def get_events(
         self,
@@ -1387,14 +1455,70 @@ class Database:
         cur = self.conn.execute(
             """INSERT INTO ltf_pivot
                (instrument_id, price, kind, pivot_at, confirmed_at, role,
-                role_assigned_at, "left", "right", candle_open_time, state)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                role_assigned_at, "left", "right", candle_open_time, state,
+                calc_version_id, superseded_by)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (p.instrument_id, p.price, p.kind, p.pivot_at, p.confirmed_at, p.role,
-             p.role_assigned_at, p.left, p.right, p.candle_open_time, p.state),
+             p.role_assigned_at, p.left, p.right, p.candle_open_time, p.state,
+             p.calc_version_id, p.superseded_by),
         )
         self.conn.commit()
         self._bump_ltf_cache()
         return int(cur.lastrowid)
+
+    def get_or_create_calc_version(
+        self, kind: str, params: dict[str, Any], rule_version: str,
+        created_at: int,
+    ) -> tuple[int, bool]:
+        """Текущая версия расчёта kind с теми же params/rule_version или
+        новая строка (L03): изменение параметров создаёт новую версию,
+        предыдущая сохраняется. Возвращает (id, created)."""
+        blob = json.dumps(params, sort_keys=True)
+        r = self.conn.execute(
+            "SELECT id, params, rule_version FROM calc_version "
+            "WHERE kind=? ORDER BY id DESC LIMIT 1",
+            (kind,),
+        ).fetchone()
+        if (
+            r is not None and r["params"] == blob
+            and r["rule_version"] == rule_version
+        ):
+            return int(r["id"]), False
+        cur = self.conn.execute(
+            "INSERT INTO calc_version (kind, params, rule_version, created_at)"
+            " VALUES (?,?,?,?)",
+            (kind, blob, rule_version, created_at),
+        )
+        self.conn.commit()
+        return int(cur.lastrowid), True
+
+    def get_calc_version(self, calc_version_id: int) -> Optional[dict[str, Any]]:
+        r = self.conn.execute(
+            "SELECT * FROM calc_version WHERE id=?", (calc_version_id,)
+        ).fetchone()
+        if r is None:
+            return None
+        return {
+            "id": r["id"], "kind": r["kind"],
+            "params": json.loads(r["params"] or "{}"),
+            "rule_version": r["rule_version"], "created_at": r["created_at"],
+        }
+
+    def supersede_ltf_pivots(
+        self, instrument_id: int, calc_version_id: int
+    ) -> int:
+        """Пометить действующие pivots инструмента заменёнными версией
+        calc_version_id (L03): строки и журнал ролей сохраняются, ссылки
+        исторических сценариев/движений остаются разрешимыми; из текущей
+        выдачи (list_ltf_pivots) они исключаются."""
+        cur = self.conn.execute(
+            "UPDATE ltf_pivot SET superseded_by=? "
+            "WHERE instrument_id=? AND superseded_by IS NULL",
+            (calc_version_id, instrument_id),
+        )
+        self.conn.commit()
+        self._bump_ltf_cache()
+        return cur.rowcount
 
     def get_ltf_pivot(self, pivot_id: int) -> Optional[LtfPivot]:
         def load() -> Optional[LtfPivot]:
@@ -1405,23 +1529,31 @@ class Database:
         return self._ltf_cached(("ltf_pivot", pivot_id), load)
 
     def list_ltf_pivots(
-        self, instrument_id: int, since_ms: Optional[int] = None
+        self, instrument_id: int, since_ms: Optional[int] = None,
+        include_superseded: bool = False,
     ) -> list[LtfPivot]:
+        """Действующие pivots инструмента; include_superseded=True — включая
+        заменённые версиями пересчёта (L03, исторические опоры)."""
         def load() -> list[LtfPivot]:
             q = "SELECT * FROM ltf_pivot WHERE instrument_id=?"
             args: list[Any] = [instrument_id]
             if since_ms is not None:
                 q += " AND pivot_at>=?"
                 args.append(since_ms)
+            if not include_superseded:
+                q += " AND (superseded_by IS NULL)"
             q += " ORDER BY pivot_at, id"
             return [self._to_ltf_pivot(r) for r in self.conn.execute(q, args).fetchall()]
-        return self._ltf_cached(("ltf_pivots", instrument_id, since_ms), load)
+        return self._ltf_cached(
+            ("ltf_pivots", instrument_id, since_ms, include_superseded), load
+        )
 
     def delete_ltf_pivots(self, instrument_id: int) -> int:
-        """Удалить все pivots инструмента (resync при смене l/r). Журнал ролей
-        удаляется первым — он ссылается на ltf_pivot по FK. Якоря диапазонов и
-        движений (anchor_*_pivot_id, start/end_pivot_id) — обычные int без FK;
-        после удаления читаются через get_ltf_pivot как None."""
+        """Удалить все pivots инструмента. Журнал ролей удаляется первым —
+        он ссылается на ltf_pivot по FK. ВНИМАНИЕ (L03): для перестройки по
+        новым l/r используется supersede_ltf_pivots — удаление разрывает
+        исторические ссылки сценариев (anchor_*_pivot_id, start/end_pivot_id
+        читаются как None). Оставлено для явной очистки в тестах."""
         self.conn.execute(
             """DELETE FROM ltf_pivot_role_log WHERE pivot_id IN
                (SELECT id FROM ltf_pivot WHERE instrument_id=?)""",
@@ -1466,12 +1598,19 @@ class Database:
 
     @staticmethod
     def _to_ltf_pivot(r: sqlite3.Row) -> LtfPivot:
+        keys = r.keys()
         return LtfPivot(
             id=r["id"], instrument_id=r["instrument_id"], price=r["price"],
             kind=r["kind"], pivot_at=r["pivot_at"], confirmed_at=r["confirmed_at"],
             role=r["role"], role_assigned_at=r["role_assigned_at"],
             left=r["left"], right=r["right"],
             candle_open_time=r["candle_open_time"], state=r["state"],
+            calc_version_id=(
+                r["calc_version_id"] if "calc_version_id" in keys else None
+            ),
+            superseded_by=(
+                r["superseded_by"] if "superseded_by" in keys else None
+            ),
         )
 
     # ---------- LTF: structure events (BOS/SMS, §6) ----------
@@ -1647,11 +1786,14 @@ class Database:
         }
 
     def list_ltf_eligible_zones(self) -> list[dict[str, Any]]:
-        """Подходящие зоны (reason ok) активных сценариев на текущей версии
-        диапазона — один агрегирующий запрос для всех инструментов
-        (eligible_count списка активов без N+1, §4.2/§14). reason='' —
-        строки до миграции: пригодность выводится из state (fallback
-        eligibility.entry_reason: fresh+eligible → ok)."""
+        """Подходящие зоны активных сценариев на текущей версии диапазона —
+        один агрегирующий запрос для всех инструментов (eligible_count
+        списка активов без N+1, §4.2/§14). reason='' — строки до миграции:
+        пригодность выводится из state (fallback eligibility.entry_reason:
+        fresh+eligible → ok). §18 (L01): контекстно допущенные FVG вне
+        Premium входят, когда у сценария полный контекст — оба факта
+        context_update (counter_sweep и htf_fvg50); правило зеркалит
+        eligibility.evaluate_final."""
         q = """
             SELECT o.instrument_id AS instrument_id,
                    se.scenario_id AS scenario_id,
@@ -1661,12 +1803,28 @@ class Database:
             JOIN ltf_observation o ON o.id = s.observation_id
             JOIN ltf_entry_zone z ON z.id = se.entry_zone_id
             WHERE s.state IN ('range_pending', 'monitoring_entries')
-              AND se.state = 'fresh' AND se.eligible = 1
-              AND (se.reason = 'ok' OR se.reason = '')
               AND se.range_version = COALESCE((
                   SELECT MAX(r.version) FROM ltf_range r
                   WHERE r.scenario_id = se.scenario_id
               ), 0)
+              AND (
+                  (se.state = 'fresh' AND se.eligible = 1
+                   AND (se.reason = 'ok' OR se.reason = ''))
+                  OR (se.state = 'out_of_range' AND se.reason = 'outside_pd'
+                      AND z.type = 'FVG'
+                      AND EXISTS (
+                          SELECT 1 FROM ltf_event e1
+                          WHERE e1.scenario_id = se.scenario_id
+                            AND e1.kind = 'context_update'
+                            AND json_extract(e1.payload, '$.fact')
+                                = 'counter_sweep')
+                      AND EXISTS (
+                          SELECT 1 FROM ltf_event e2
+                          WHERE e2.scenario_id = se.scenario_id
+                            AND e2.kind = 'context_update'
+                            AND json_extract(e2.payload, '$.fact')
+                                = 'htf_fvg50'))
+              )
         """
         return [dict(r) for r in self.conn.execute(q).fetchall()]
 
@@ -1680,6 +1838,18 @@ class Database:
                 "FROM ltf_event e "
                 "JOIN ltf_observation o ON o.id = e.observation_id "
                 "GROUP BY o.instrument_id"
+            ).fetchall()
+        }
+
+    def count_candidate_zones(self) -> dict[int, int]:
+        """instrument_id → число зон-кандидатов (status='candidate') — один
+        агрегатный запрос для приоритета внимания списка активов (L06,
+        без N+1)."""
+        return {
+            int(r["instrument_id"]): int(r["n"])
+            for r in self.conn.execute(
+                "SELECT instrument_id, COUNT(*) AS n FROM zone "
+                "WHERE status='candidate' GROUP BY instrument_id"
             ).fetchall()
         }
 

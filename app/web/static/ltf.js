@@ -28,9 +28,10 @@ const state = {
   historyRows: null,         // ленивая загрузка вкладки «История»
   historyScenarioId: null,
   excludedRows: null,        // лениво — причины «нет подходящих зон»
-  contextsCache: new Map(),  // instrument_id -> contexts[] (раскрытие в списке)
+  contextsCache: new Map(),  // instrument_id -> снимок /current (раскрытие в списке)
   bottomTab: 'eligible',
   mode: 'now',               // now | history
+  sortMode: 'alpha',         // alpha | priority (L06; в localStorage не сохраняется)
   scaleDays: 3,
   layerToggles: { structure: false, liquidity: false, excluded: false, history: false, provisional: false },
   provUserSet: false,          // пользователь сам трогал переключатель §16.2
@@ -44,6 +45,8 @@ const state = {
   priceLine: null,
   ws: null,
   reloadTimer: null,
+  currentReqSeq: 0,          // D01: номер запроса снимка — поздний ответ
+                             // ранее выбранного инструмента экран не перезаписывает
   reviewFlash: null,
   inspectorDismissed: true,
 };
@@ -76,12 +79,15 @@ const DATA_STATE_RU = {
   ok: 'данные поступают',
   stale: 'данные устарели',
   data_pending: 'данных недостаточно',
+  replaying: 'восстановление истории',
 };
 const DATA_STATE_REASON_RU = {
   no_quote: 'нет котировки',
   no_h1_candles: 'нет свечей H1',
   quote_stale: 'котировка устарела',
   h1_stale: 'свечи H1 устарели',
+  source_stale: 'источник недоступен',
+  replay_in_progress: 'идёт догрузка и пересчёт',
 };
 // reason-коды пригодности (§10/§12) — серверные стабильные коды
 const REASON_RU = {
@@ -119,6 +125,39 @@ let LTF_REVIEW_REASON_RU = {
   duplicate_zone: 'дублирует существующую зону',
   no_context: 'не могу оценить',
 };
+// L05: основание выбора контекста (коды сервера) — автовыбор есть
+// навигационная политика, не доказательство силы сценария
+const CONTEXT_BASIS_RU = {
+  manual: 'Выбран вручную',
+  price_inside: 'Цена внутри зоны',
+  last_scenario: 'Последний действующий сценарий',
+  last_contact: 'Последний контакт с зоной',
+};
+// L06: группы внимания по убыванию приоритета (зеркалит серверный
+// ATTENTION_ORDER); внимание ≠ вероятность успеха сетапа
+const ATTENTION_ORDER = ['review', 'price_in_zone', 'eligible', 'awaiting', 'data_problem', 'none'];
+const ATTENTION_RU = {
+  review: 'Требует проверки',
+  price_in_zone: 'Цена в зоне',
+  eligible: 'Есть подходящие зоны',
+  awaiting: 'Ожидается структура',
+  data_problem: 'Проблема данных',
+};
+
+// U01-lite: единый ключ выбранного инструмента для обеих страниц (HTF/LTF)
+const INSTRUMENT_KEY = 'htf:instrument';
+function readSavedInstrument() {
+  const saved = Number(localStorage.getItem(INSTRUMENT_KEY));
+  if (saved) return saved;
+  // миграция со старого ключа LTF-страницы — читаем и переносим один раз
+  const legacy = localStorage.getItem('ltf:instrument');
+  if (legacy) {
+    localStorage.setItem(INSTRUMENT_KEY, legacy);
+    localStorage.removeItem('ltf:instrument');
+    return Number(legacy) || null;
+  }
+  return null;
+}
 
 function dirWord(d) {
   return d === 'bull' ? 'рост' : d === 'bear' ? 'снижение' : d === 'mixed' ? 'разные контексты' : '—';
@@ -208,8 +247,27 @@ function assetVisible(a) {
 function renderAssetsList() {
   const el = $('ltf-obs-list');
   const items = state.assets.filter(assetVisible);
+  // L06: автоматически по приоритету НЕ пересортировываем — порядок строк
+  // стабилен при обновлениях; сортировка — только по кнопке «По приоритету».
+  // Array.prototype.sort в JS стабилен: внутри группы остаётся алфавитный
+  // порядок сервера.
+  if (state.sortMode === 'priority') {
+    const rank = (a) => {
+      const i = ATTENTION_ORDER.indexOf(a.attention || 'none');
+      return i === -1 ? ATTENTION_ORDER.length : i;
+    };
+    items.sort((a, b) => rank(a) - rank(b));
+  }
   if (!items.length) {
-    el.innerHTML = '<div class="ltf-empty">По фильтрам активов нет.</div>';
+    el.innerHTML = emptyStateHtml('По фильтрам активов нет.', 'ltf-flt-reset', 'Сбросить фильтр');
+    $('ltf-flt-reset').onclick = () => {
+      $('flt-symbol').value = '';
+      $('flt-venue').value = '';
+      $('flt-stage').value = '';
+      $('flt-direction').value = '';
+      // change на контейнере фильтров обновит и счётчик, и список
+      $('ltf-filters').dispatchEvent(new Event('change'));
+    };
     return;
   }
   el.innerHTML = items.map((a) => {
@@ -226,6 +284,7 @@ function renderAssetsList() {
         </div>
         <div class="ltf-obs-sub">
           <span class="stage-badge">${esc(a.stage)}</span>
+          ${a.attention && a.attention !== 'none' ? `<span class="badge attn-${esc(a.attention)}" title="${esc(a.attention_reason || '')}">${esc(ATTENTION_RU[a.attention] || a.attention)}</span>` : ''}
           ${ds.state && ds.state !== 'ok' ? `<span class="badge dq-stale">${esc(DATA_STATE_RU[ds.state] || ds.state)}</span>` : ''}
         </div>
         <div class="ltf-asset-meta">
@@ -256,29 +315,40 @@ function renderAssetsList() {
 
 async function renderContextsList(instrumentId, container) {
   container.innerHTML = '<div class="ltf-empty">Загрузка…</div>';
-  let contexts = state.contextsCache.get(instrumentId);
-  if (!contexts || instrumentId === state.instrumentId) {
-    const view = instrumentId === state.instrumentId && state.current
+  let view = state.contextsCache.get(instrumentId);
+  if (!view || instrumentId === state.instrumentId) {
+    view = instrumentId === state.instrumentId && state.current
       ? state.current
       : await api(`/api/ltf/instruments/${instrumentId}/current`);
-    contexts = view.contexts || [];
-    state.contextsCache.set(instrumentId, contexts);
+    state.contextsCache.set(instrumentId, view);
   }
+  const contexts = view.contexts || [];
   if (!contexts.length) {
     container.innerHTML = '<div class="ltf-empty">Действующих контекстов нет.</div>';
     return;
   }
-  container.innerHTML = contexts.map((c) => {
+  // L05: конфликт направлений — обе зоны видны и помечены
+  const conflict = new Set(contexts.map((c) => c.direction)).size > 1;
+  container.innerHTML =
+    (conflict
+      ? '<div class="ctx-conflict-note">Конфликт контекстов: активны зоны противоположных направлений</div>'
+      : '') +
+    contexts.map((c) => {
     const z = c.parent_zone || {};
-    const selected = state.instrumentId === instrumentId &&
-      state.current && c.observation_id === state.current.selected_context_id;
+    const selected = c.observation_id === view.selected_context_id;
+    // L05: нейтральная подпись основания (навигационная политика сервера)
+    const basis = selected && view.selected_context_basis
+      ? `<div class="ctx-basis">Показан контекст: ${esc(CONTEXT_BASIS_RU[view.selected_context_basis] || view.selected_context_basis)}</div>`
+      : '';
     // §4.2: границы, направление, последнее касание, актуальность — даты
     // подписаны по смыслу; дата создания OB не выдаётся за время контакта
-    return `<div class="ctx-item${selected ? ' selected' : ''}" data-ctx-obs="${c.observation_id}" data-ctx-ins="${instrumentId}">
+    return `<div class="ctx-item${selected ? ' selected' : ''}${conflict ? ' conflict' : ''}" data-ctx-obs="${c.observation_id}" data-ctx-ins="${instrumentId}">
       <div><b>${esc(ctxLabel(z.type, z.timeframe, c.direction))}</b>
-        <span class="badge">${esc(c.parent_validity === 'active' ? 'актуален' : (c.parent_validity || '—'))}</span></div>
+        <span class="badge">${esc(c.parent_validity === 'active' ? 'актуален' : (c.parent_validity || '—'))}</span>
+        ${conflict ? '<span class="badge ctx-conflict" title="Активны контексты противоположных направлений">конфликт</span>' : ''}</div>
       <div class="ctx-bounds">[${fmtPrice(z.lower)}–${fmtPrice(z.upper)}]</div>
       <div class="ctx-touch">последнее касание: ${c.last_touch_at ? fmtTime(c.last_touch_at) : '—'}</div>
+      ${basis}
     </div>`;
   }).join('');
   for (const item of container.querySelectorAll('.ctx-item')) {
@@ -301,10 +371,22 @@ async function renderContextsList(instrumentId, container) {
 // Текущий снимок инструмента (§14): один ответ — график/карточка/счётчик/таблица
 // ---------------------------------------------------------------------------
 
+// U01-lite: ссылка LTF→HTF несёт выбранный инструмент (токен, как и раньше,
+// common.js заберёт из URL в localStorage и подчистит адресную строку)
+function updateHtfLink() {
+  const link = $('lnk-htf');
+  if (!link) return;
+  const url = new URL('/', location.origin);
+  url.searchParams.set('token', window.HTF.getToken());
+  if (state.instrumentId) url.searchParams.set('instrument', String(state.instrumentId));
+  link.href = url.pathname + url.search;
+}
+
 async function selectInstrument(id) {
   if (!id) return;
   state.instrumentId = id;
-  localStorage.setItem('ltf:instrument', String(id));
+  localStorage.setItem(INSTRUMENT_KEY, String(id));
+  updateHtfLink();
   $('ltf-instrument').value = id;
   state.historyRows = null;
   state.excludedRows = null;
@@ -323,9 +405,14 @@ async function selectInstrument(id) {
 
 async function reloadCurrent({ keepRange }) {
   const id = state.instrumentId;
+  // D01: защита от поздних ответов при быстром переключении активов —
+  // применяется только последний запрос и только для текущего инструмента
+  const req = ++state.currentReqSeq;
+  const stale = () => req !== state.currentReqSeq || id !== state.instrumentId;
   const keep = keepRange && state.chart ? state.chart.timeScale().getVisibleLogicalRange() : null;
   const keepFocus = keepRange ? state.priceFocus : null;
   const view = await api(`/api/ltf/instruments/${id}/current`);
+  if (stale()) return;
   state.current = view;
   state.lastPrice = view.price;
   const obsId = view.selected_context_id;
@@ -334,6 +421,7 @@ async function reloadCurrent({ keepRange }) {
     api(`/api/candles?instrument_id=${id}&timeframe=H1&limit=2500`),
     obsId ? api(`/api/ltf/observations/${obsId}/journal`) : Promise.resolve([]),
   ]);
+  if (stale()) return;
   state.layers = layers;
   state.candles = candles;
   state.journal = journal;
@@ -386,8 +474,12 @@ function renderTopbar() {
   const indData = $('ltf-ind-data');
   indData.textContent = DATA_STATE_RU[ds.state] || ds.state || '—';
   indData.className = 'data-ind di-' + (ds.state === 'ok' ? 'ok' : 'bad');
+  // D02: возраст каналов — отдельно: котировка и последняя закрытая H1
   indData.title = 'Поступление данных' +
-    (ds.reason ? ': ' + (DATA_STATE_REASON_RU[ds.reason] || ds.reason) : '');
+    (ds.reason ? ': ' + (DATA_STATE_REASON_RU[ds.reason] || ds.reason) : '') +
+    (ds.quote_age_s != null ? `\nКотировка: ${Math.round(ds.quote_age_s)} с назад` : '') +
+    (ds.h1_age_s != null ? `\nЗакрытая H1: ${Math.round(ds.h1_age_s / 60)} мин назад` : '') +
+    (ds.source_stale ? '\nИсточник: недоступен (флаг воркера)' : '');
   const processed = v.last_processed_h1 != null && v.last_closed_h1 != null &&
     v.last_processed_h1 >= v.last_closed_h1;
   const indProc = $('ltf-ind-processed');
@@ -422,15 +514,131 @@ async function noZonesReason(v) {
   return 'исключены: ' + parts.join('; ');
 }
 
+// ---------------------------------------------------------------------------
+// U02: первые строки карточки — «что происходит / почему / чего ждём /
+// что отменит». Данных нет — об этом написано явно, ничего не выдумываем.
+// ---------------------------------------------------------------------------
+
+function expectedBreakText(v, ctx) {
+  const exp = (state.layers && state.layers.expected) || {};
+  const dir = (exp.bos && exp.bos.direction) || (ctx && ctx.direction) || v.direction;
+  const side = dir === 'bear' ? 'ниже' : 'выше';
+  const parts = [];
+  if (exp.bos) parts.push(`BOS — закрытие H1 строго ${side} ${fmtPrice(exp.bos.level)}`);
+  if (exp.sms) parts.push(`SMS — закрытие H1 строго ${side} ${fmtPrice(exp.sms.level)}`);
+  if (!parts.length) {
+    return 'Уровень ожидаемого слома пока не определён: структура H1 ещё не подтверждена.';
+  }
+  return 'Сценарий откроется после подтверждённого слома: ' + parts.join('; ') +
+    '. Тень без закрытия сломом не считается.';
+}
+
+function scenarioWaitText(v) {
+  if (!v.range) {
+    return 'Ждём подтверждения опор диапазона: экстремум становится опорой ' +
+      'после трёх закрытых свечей справа.';
+  }
+  const n = v.counts.eligible;
+  if (n > 0) {
+    if (v.stage === 'Цена в Entry Zone') {
+      return 'Цена уже в подходящей зоне — сценарий в точке входа.';
+    }
+    if (n === 1) return 'Ждём возврат цены к подходящей зоне.';
+    return `Ждём возврат цены к ${n} подходящим зонам.`;
+  }
+  return 'Подходящих зон нет: все исключены правилами — причины во вкладке «История».';
+}
+
+function cancellationText(sc) {
+  // Отмена на сервере — обратный слом структуры (reverse BOS/SMS): закрытие
+  // H1 за уровнем противоположной стороны. Уровень берём из подтверждённых
+  // экстремумов слоёв графика, сформированных после слома-триггера.
+  const pivots = (state.layers && state.layers.pivots) || [];
+  const oppKind = sc.direction === 'bear' ? 'high' : 'low';
+  const since = sc.break_candle_open_time || 0;
+  const after = pivots.filter((p) =>
+    p.state === 'confirmed' && p.kind === oppKind && p.pivot_at >= since);
+  if (!after.length) {
+    return 'Условие отмены не определено текущей версией правил: обратный ' +
+      'экстремум структуры ещё не подтверждён.';
+  }
+  const last = after.reduce((a, b) => (a.pivot_at > b.pivot_at ? a : b));
+  const side = sc.direction === 'bear' ? 'выше' : 'ниже';
+  return `Отменит обратный слом структуры: закрытие H1 строго ${side} ` +
+    `${fmtPrice(last.price)}.`;
+}
+
+function scenarioQa(v, ctx) {
+  const sc = v.current_scenario;
+  const z = (ctx && ctx.parent_zone) || null;
+  if (!ctx) {
+    return {
+      what: 'Активного сценария нет: цена ещё не коснулась подходящей HTF-зоны.',
+      why: 'HTF-контекста нет — LTF-наблюдение откроется после касания ' +
+        'подтверждённой зоны OB/FVG (D1/W1).',
+      wait: 'Ждём касания HTF-зоны. Действие: наблюдать.',
+      cancel: 'Отменять нечего: сценарий ещё не открыт.',
+    };
+  }
+  const zoneTxt = z
+    ? `родительская HTF-зона ${ctxLabel(z.type, z.timeframe, ctx.direction)} ` +
+      `[${fmtPrice(z.lower)}–${fmtPrice(z.upper)}]`
+    : 'нет данных о родительской зоне';
+  if (!sc) {
+    let what = `HTF-контекст ${z ? ctxLabel(z.type, z.timeframe, ctx.direction) : ''} ` +
+      'активен; сценария пока нет — ждём подтверждённого слома структуры на H1.';
+    const c = v.scenario_waiting && v.scenario_waiting.last_cancellation;
+    if (c) {
+      what += ` Предыдущий сценарий отменён: ` +
+        `${LTF_CANCEL_RU[c.reason] || c.reason || '—'} · ${fmtTime(c.cancelled_at)}.`;
+    }
+    return {
+      what,
+      why: zoneTxt +
+        (ctx.last_touch_at ? `, последнее касание ${fmtTime(ctx.last_touch_at)}` : '') + '.',
+      wait: expectedBreakText(v, ctx),
+      cancel: 'Отменять нечего: сценарий ещё не открыт.',
+    };
+  }
+  const dirTxt = sc.direction === 'bear' ? 'снижения' : 'роста';
+  const sideTxt = sc.direction === 'bear' ? 'ниже' : 'выше';
+  const brkTxt = sc.break_level != null
+    ? ` (${sc.trigger || 'слом'} ${fmtPrice(sc.break_level)})` : '';
+  const whyParts = [zoneTxt];
+  if (sc.break_level != null) {
+    whyParts.push(`подтверждённый ${sc.trigger || 'слом'} уровня ${fmtPrice(sc.break_level)}` +
+      (sc.break_candle_open_time
+        ? ` (закрытие H1 ${fmtTime(sc.break_candle_open_time + H1_MS - 1)})` : ''));
+  } else {
+    whyParts.push('уровень подтверждающего слома — нет данных');
+  }
+  const rng = v.range;
+  if (rng) {
+    whyParts.push(`диапазон v${rng.version} [${fmtPrice(rng.lower)}–${fmtPrice(rng.upper)}]` +
+      (rng.available_at ? `, подтверждён ${fmtTime(rng.available_at)}` : ''));
+  } else {
+    whyParts.push('диапазон ещё не подтверждён');
+  }
+  return {
+    what: `Сценарий ${dirTxt}: H1 закрылся ${sideTxt} уровня структуры${brkTxt}. ` +
+      `Этап: ${v.stage || '—'}.`,
+    why: whyParts.join('; ') + '.',
+    wait: scenarioWaitText(v),
+    cancel: cancellationText(sc),
+  };
+}
+
 async function renderCard() {
   const el = $('ltf-card');
   const v = state.current;
   if (!v) { el.innerHTML = '<div class="ltf-empty">Выберите актив слева.</div>'; return; }
   const ins = v.instrument || {};
   const sc = v.current_scenario;
-  const ctx = (v.contexts || []).find((c) => c.observation_id === v.selected_context_id) || {};
+  const ctxFound = (v.contexts || []).find((c) => c.observation_id === v.selected_context_id) || null;
+  const ctx = ctxFound || {};
   const z = ctx.parent_zone || {};
   const ds = v.data_state || {};
+  const qa = scenarioQa(v, ctxFound);
 
   let positionText;
   if (ctx.price_position === 'inside') positionText = 'цена в HTF-зоне';
@@ -443,9 +651,17 @@ async function renderCard() {
       <span class="stage-label">Текущий этап</span><strong>${esc(v.stage || '—')}</strong>
     </div>
     ${ds.state && ds.state !== 'ok' ? `<div class="ltf-cancel-note">${esc(DATA_STATE_RU[ds.state] || ds.state)}${ds.reason ? ': ' + esc(DATA_STATE_REASON_RU[ds.reason] || ds.reason) : ''}. Положение цены и расстояния могут быть неактуальны.</div>` : ''}
+    ${v.contexts_conflict ? '<div class="ltf-cancel-note ctx-conflict-banner">Конфликт контекстов: активны HTF-зоны противоположных направлений — направление не усредняется. Обе зоны — в списке контекстов панели «Активы».</div>' : ''}
+    <ul class="scenario-qa">
+      <li><span class="qa-q">Что происходит</span><span class="qa-a">${esc(qa.what)}</span></li>
+      <li><span class="qa-q">Почему</span><span class="qa-a">${esc(qa.why)}</span></li>
+      <li><span class="qa-q">Чего ждём</span><span class="qa-a">${esc(qa.wait)}</span></li>
+      <li><span class="qa-q">Что отменит</span><span class="qa-a">${esc(qa.cancel)}</span></li>
+    </ul>
     <dl>
       <dt>Инструмент</dt><dd>${esc(ins.symbol || '?')} · ${esc(ins.venue || '')} · ${esc(ins.market_type || '')}</dd>
       <dt>HTF-контекст</dt><dd>${esc(ctxLabel(z.type, z.timeframe, ctx.direction))} [${fmtPrice(z.lower)}–${fmtPrice(z.upper)}]</dd>
+      <dt>Показан контекст</dt><dd>${esc(CONTEXT_BASIS_RU[v.selected_context_basis] || '—')}</dd>
       <dt>Положение цены</dt><dd>${esc(positionText)}</dd>
       <dt>Актуальность родителя</dt><dd>${esc(ctx.parent_validity === 'active' ? 'актуален' : (ctx.parent_validity || '—'))}</dd>
       <dt>Последнее касание HTF</dt><dd>${ctx.last_touch_at ? fmtTime(ctx.last_touch_at) : '—'}</dd>`;
@@ -495,8 +711,6 @@ async function renderCard() {
       html += `<div class="scenario-stage wait"><span class="stage-label">Сценарий</span><strong>Ожидание нового сценария</strong>
         ${c ? `<div class="stage-line">Предыдущий отменён: ${esc(LTF_CANCEL_RU[c.reason] || c.reason || '—')} · ${fmtTime(c.cancelled_at)} — подробности во вкладке «История».</div>` : ''}
       </div>`;
-    } else {
-      html += `<div class="ltf-empty">Сценарий откроется после подтверждённого слома: BOS — закрытие H1 строго за опорным HL/LH; SMS — закрытие H1 за внутренним экстремумом. Тень без закрытия сломом не считается.</div>`;
     }
   }
   html += `<details class="context-detail"><summary>Время и происхождение</summary><dl>
@@ -558,10 +772,16 @@ function zoneRowsHtml(rows, { withReason }) {
     const expanded = row.entry_zone_id === state.expandedEntryId;
     const depth = row.max_test_depth != null ? Math.round(row.max_test_depth * 100) + '%' : '—';
     const reasonTxt = REASON_RU[row.reason] || row.reason || '—';
+    // L01: дополнительные блокирующие причины и контекстный допуск (§18)
+    const blocking = (row.blocking_reasons || [])
+      .filter((r) => r && r !== row.reason)
+      .map((r) => REASON_RU[r] || r);
+    const contextAdmitted = row.admission_basis === 'context_exception' || row.outside_premium;
     const colspan = withReason ? 9 : 8;
     const detail = `<tr class="entry-detail${expanded ? '' : ' hidden'}" data-detail-of="${row.entry_zone_id}"><td colspan="${colspan}"><dl>
       <dt>Почему ${withReason ? 'исключена' : 'показана'}</dt><dd>${esc(reasonTxt)}</dd>
-      ${row.outside_premium ? '<dt>Контекст §18</dt><dd>Зона вне Premium — допущена по контексту (снятие SSL/BSL + тест 50% D1 FVG); не критично для этого сценария</dd>' : ''}
+      ${blocking.length ? `<dt>Также блокирует</dt><dd>${esc(blocking.join('; '))}</dd>` : ''}
+      ${contextAdmitted ? '<dt>Контекст §18</dt><dd>Зона вне Premium — допущена по контексту (снятие SSL/BSL + тест 50% D1 FVG); не критично для этого сценария</dd>' : ''}
       <dt>Сформирована</dt><dd>${fmtTime(row.formed_at)}</dd>
       <dt>Подтверждена</dt><dd>${fmtTime(row.confirmed_at)}</dd>
       <dt>Первое касание</dt><dd>${row.first_test_at ? fmtTime(row.first_test_at) : '—'}</dd>
@@ -576,7 +796,7 @@ function zoneRowsHtml(rows, { withReason }) {
       <td data-label="Глубина тестов">${depth}</td>
       <td data-label="Расстояние" class="col-dist" title="${DIST_TITLE}">${d ? d.pct.toFixed(2) + '%' : '—'}</td>
       <td data-label="Статус"><span class="badge es-${esc(row.state)}">${esc(ENTRY_STATE_RU[row.state] || row.state)}</span> ${liq}</td>
-      ${withReason ? `<td data-label="Причина">${esc(reasonTxt)}</td>` : ''}
+      ${withReason ? `<td data-label="Причина">${esc(reasonTxt)}${contextAdmitted ? ' <span class="badge ltf-badge-op">допущена по контексту</span>' : ''}</td>` : ''}
       <td data-label="Действия" class="row-actions">
         <button class="btn small" data-act="chart" title="Показать на графике">На графике</button>
         ${ins ? `<a class="btn small" target="_blank" href="${tradingviewUrl(ins)}" title="TradingView">TV</a>` : ''}
@@ -717,6 +937,21 @@ async function reviewEntryZone(zoneId, decision, box) {
   await reloadCurrent({ keepRange: true });
 }
 
+// U05: пустые состояния с причиной и действием
+function emptyStateHtml(text, actionId, actionLabel) {
+  return `<div class="ltf-empty">${esc(text)}` +
+    (actionId
+      ? `<div class="ltf-empty-actions"><button class="btn small" id="${actionId}">${esc(actionLabel)}</button></div>`
+      : '') +
+    `</div>`;
+}
+
+function openExcludedView() {
+  $('flt-hist-view').value = 'excluded';
+  state.historyRows = null;
+  activateBottomTab('history');
+}
+
 function renderEntries() {
   const el = $('ltf-entries');
   const v = state.current;
@@ -724,12 +959,41 @@ function renderEntries() {
   // §4.5: основной счётчик — число подходящих зон сценария
   $('ltf-eligible-count').textContent = v ? v.counts.eligible : 0;
   if (!v) { el.innerHTML = ''; return; }
+  const ds = v.data_state || {};
+  if (ds.state && ds.state !== 'ok') {
+    // отсутствие данных — не «нет сетапа»: причина + действие «Проверить данные»
+    el.innerHTML = emptyStateHtml(
+      'Данные не поступают: ' + (DATA_STATE_REASON_RU[ds.reason] || DATA_STATE_RU[ds.state] || ds.state || '—') +
+      '. Подходящие зоны и расстояния могут быть неактуальны.',
+      'ltf-empty-check', 'Проверить данные');
+    $('ltf-empty-check').onclick = () => reloadCurrent({ keepRange: true });
+    return;
+  }
+  if (!v.selected_context_id) {
+    el.innerHTML = emptyStateHtml(
+      'Ждём HTF-зону: наблюдение откроется после касания подтверждённой зоны OB/FVG (D1/W1). Действие: наблюдать.');
+    return;
+  }
   if (!v.current_scenario) {
-    el.innerHTML = '<div class="ltf-empty">Активного сценария нет — зоны появятся после слома и диапазона.</div>';
+    el.innerHTML = emptyStateHtml(
+      'Ожидание структуры: сценарий откроется после подтверждённого слома — закрытия H1 за уровнем. Зоны появятся после слома и диапазона.');
+    return;
+  }
+  if (!v.range) {
+    el.innerHTML = emptyStateHtml(
+      'Ожидание опор диапазона: слом подтверждён, ждём подтверждения экстремумов тремя закрытыми свечами справа.');
     return;
   }
   if (!rows.length) {
-    el.innerHTML = '<div class="ltf-empty">Подходящих Entry Zones сейчас нет — причина в карточке справа и во вкладке «История».</div>';
+    if (v.counts.excluded > 0) {
+      el.innerHTML = emptyStateHtml(
+        `Все зоны исключены правилами (${v.counts.excluded}).`,
+        'ltf-empty-excluded', 'Открыть исключённые');
+      $('ltf-empty-excluded').onclick = openExcludedView;
+    } else {
+      el.innerHTML = emptyStateHtml(
+        'Подходящих зон сейчас нет: кандидаты нужного движения ещё не сформированы — причина в карточке справа.');
+    }
     return;
   }
   el.innerHTML = `<div class="table-wrap"><table id="ltf-entries-table">
@@ -796,7 +1060,15 @@ async function renderHistory() {
     ? state.historyRows.filter((r) => r.reason === reasonSel.value)
     : state.historyRows;
   if (!rows.length) {
-    el.innerHTML = '<div class="ltf-empty">Строк по фильтрам нет.</div>';
+    if (state.historyRows.length) {
+      // строки есть, но фильтр по причине их скрыл
+      el.innerHTML = emptyStateHtml('Строк по фильтрам нет.', 'ltf-hist-reset', 'Сбросить фильтр');
+      $('ltf-hist-reset').onclick = () => { $('flt-hist-reason').value = ''; renderHistory(); };
+    } else {
+      el.innerHTML = emptyStateHtml($('flt-hist-view').value === 'history'
+        ? 'Исторических строк нет: зон прошлых версий диапазона не было.'
+        : 'Исключённых зон в текущей версии диапазона нет.');
+    }
     return;
   }
   el.innerHTML = `<div class="table-wrap"><table id="ltf-history-table">
@@ -819,7 +1091,13 @@ function renderJournal() {
     events = events.filter((e) => e.payload && e.payload.entry_zone_id === state.journalZoneFilter);
   }
   if (!events.length) {
-    el.innerHTML = '<li class="ltf-empty">Событий пока нет.</li>';
+    if (state.journalZoneFilter) {
+      el.innerHTML = '<li class="ltf-empty">По выбранной зоне событий нет. ' +
+        '<button class="btn small" id="ltf-journal-reset">Сбросить фильтр</button></li>';
+      $('ltf-journal-reset').onclick = () => { state.journalZoneFilter = null; renderJournal(); };
+    } else {
+      el.innerHTML = '<li class="ltf-empty">Событий пока нет.</li>';
+    }
     return;
   }
   const brief = (e) => {
@@ -1240,6 +1518,7 @@ async function openSettings() {
   const instruments = await api('/api/instruments');
   const s = await api('/api/settings');
   const d = s.detector;
+  state.ltfSettingsOriginal = d;
   const entryTypes = new Set((d.ltf_entry_types || '').split(','));
   const notifyKinds = new Set((d.ltf_notify_kinds || '').split(','));
   const ctxTypes = new Set((d.htf_context_types || 'OB').split(','));
@@ -1255,8 +1534,8 @@ async function openSettings() {
     <label>Структурные pivots справа (3–5)
       <input id="ls-right" type="number" min="3" max="5" value="${d.ltf_structure_right}"></label>
     <label>Опоры диапазона: правые свечи
-      <input id="ls-range-right" type="number" min="3" max="3" value="${d.ltf_range_right}">
-      <small>Фиксировано уточнением спеки: три закрытые свечи справа, отдельно от структурного профиля.</small></label>
+      <input id="ls-range-right" type="number" value="${d.ltf_range_right}" disabled>
+      <small>Поле устарело и не редактируется: опоры диапазона подтверждаются ровно тремя закрытыми свечами справа, отдельно от структурного профиля.</small></label>
     <fieldset><legend>Типы отображаемых Entry Zones</legend>
       ${['FVG', 'OB', 'BSL', 'SSL'].map((t) =>
         `<label><input type="checkbox" class="ls-et" value="${t}" ${entryTypes.has(t) ? 'checked' : ''}> ${t}</label>`).join('')}
@@ -1282,19 +1561,55 @@ async function openSettings() {
 async function saveSettings() {
   const status = $('ltf-settings-status');
   status.textContent = '';
+  const d = state.ltfSettingsOriginal || {};
+  const cand = {
+    ltf_enabled: $('ls-enabled').checked,
+    ltf_structure_left: Number($('ls-left').value),
+    ltf_structure_right: Number($('ls-right').value),
+    // ltf_range_right — устаревшее поле (L04), сервер его отклоняет
+    ltf_entry_types: [...document.querySelectorAll('.ls-et:checked')].map((c) => c.value).join(','),
+    ltf_notify_kinds: [...document.querySelectorAll('.ls-nk:checked')].map((c) => c.value).join(','),
+    htf_context_types: [...document.querySelectorAll('.ls-ctx:checked')].map((c) => c.value).join(',') || 'OB',
+    ltf_provisional_range_enabled: $('ls-provisional').checked,
+    ltf_poll_seconds: Number($('ls-poll').value),
+  };
+  // L04: сервер валидирует патч строго — отправляем только изменённые поля
+  const payload = {};
+  for (const [key, val] of Object.entries(cand)) {
+    if (val !== d[key]) payload[key] = val;
+  }
   try {
-    const payload = {
-      ltf_enabled: $('ls-enabled').checked,
-      ltf_structure_left: Number($('ls-left').value),
-      ltf_structure_right: Number($('ls-right').value),
-      ltf_range_right: Number($('ls-range-right').value),
-      ltf_entry_types: [...document.querySelectorAll('.ls-et:checked')].map((c) => c.value).join(','),
-      ltf_notify_kinds: [...document.querySelectorAll('.ls-nk:checked')].map((c) => c.value).join(','),
-      htf_context_types: [...document.querySelectorAll('.ls-ctx:checked')].map((c) => c.value).join(',') || 'OB',
-      ltf_provisional_range_enabled: $('ls-provisional').checked,
-      ltf_poll_seconds: Number($('ls-poll').value),
-    };
-    const r = await api('/api/settings', { method: 'POST', body: JSON.stringify(payload) });
+    const doFetch = () => fetch('/api/settings', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + window.HTF.getToken(),
+      },
+      body: JSON.stringify(payload),
+    });
+    let resp = await doFetch();
+    if (resp.status === 401) {
+      localStorage.removeItem('htf_token');
+      await window.HTF.ensureToken('Токен не подошёл. Проверьте значение и попробуйте снова.');
+      resp = await doFetch();
+    }
+    if (resp.status === 422) {
+      let fields = {};
+      try { fields = ((await resp.json()).detail || {}).fields || {}; } catch (e) { /* не JSON */ }
+      status.textContent = 'Не удалось сохранить: ' +
+        (Object.entries(fields).map(([k, m]) => `${k}: ${m}`).join('; ') ||
+          'настройки отклонены сервером');
+      return;
+    }
+    if (!resp.ok) {
+      let detail = resp.statusText;
+      try { detail = (await resp.json()).detail || detail; } catch (e) { /* не JSON */ }
+      status.textContent = 'Не удалось сохранить: ' +
+        (typeof detail === 'string' ? detail : 'ошибка сервера');
+      return;
+    }
+    const r = await resp.json();
+    state.ltfSettingsOriginal = r.detector || { ...d, ...payload };
     let analyzeSaved = 0;
     for (const c of document.querySelectorAll('.ls-analyze')) {
       const id = Number(c.dataset.instrumentId);
@@ -1379,6 +1694,21 @@ function setupLtfWorkspace() {
   $('flt-symbol').addEventListener('input', () => { updateCount(); renderAssetsList(); });
   updateCount();
 
+  // L06: сортировка «По приоритету» — только по кнопке (повторное нажатие —
+  // возврат к алфавитному порядку); режим хранится в состоянии страницы,
+  // не в localStorage. Фильтры работают поверх любого порядка.
+  const sortBtn = $('ltf-sort-priority');
+  sortBtn.onclick = () => {
+    state.sortMode = state.sortMode === 'priority' ? 'alpha' : 'priority';
+    const active = state.sortMode === 'priority';
+    sortBtn.setAttribute('aria-pressed', String(active));
+    sortBtn.classList.toggle('active', active);
+    renderAssetsList();
+    // выбранный актив остаётся выделенным и видимым при любой сортировке
+    const sel = $('ltf-obs-list').querySelector('.ltf-asset.selected');
+    if (sel) sel.scrollIntoView({ block: 'nearest' });
+  };
+
   document.querySelectorAll('.ltf-scale-group .ltf-tab').forEach((btn) => {
     btn.onclick = () => {
       document.querySelectorAll('.ltf-scale-group .ltf-tab').forEach((b) => b.classList.remove('active'));
@@ -1409,6 +1739,7 @@ function setupLtfWorkspace() {
     };
   });
   $('flt-hist-view').onchange = () => { state.historyRows = null; renderHistory(); };
+  $('flt-hist-reason').onchange = () => renderHistory();
 }
 
 // ---------------------------------------------------------------------------
@@ -1493,7 +1824,7 @@ async function resolveDeepLink() {
   if (instrumentParam && state.assets.some((a) => a.instrument.id === instrumentParam)) {
     return instrumentParam;
   }
-  const saved = Number(localStorage.getItem('ltf:instrument')) || null;
+  const saved = readSavedInstrument();
   if (saved && state.assets.some((a) => a.instrument.id === saved)) return saved;
   return state.assets.length ? state.assets[0].instrument.id : null;
 }
@@ -1505,7 +1836,7 @@ async function resolveDeepLink() {
 async function main() {
   await window.HTF.ensureToken();
   setupLtfWorkspace();
-  $('lnk-htf').href = '/?token=' + encodeURIComponent(window.HTF.getToken());
+  updateHtfLink();
   initChart();
 
   $('ltf-instrument').onchange = (e) => {

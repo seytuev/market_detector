@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field, fields
+from typing import Optional
 
 
 def _env(name: str, default: str) -> str:
@@ -102,6 +103,11 @@ class DetectorConfig:
     ltf_history_days: int = 30               # §4: H1-история до касания HTF
     ltf_observation_stale_days: int = 14     # автоархивация наблюдения без
                                              # активности дольше N дней (0 — выкл.)
+    # D02: пороги устаревания — отдельно для котировок и каждого ТФ
+    stale_quote_seconds: int = 0             # 0 — авто: 2 интервала опроса
+    stale_h1_intervals: int = 2              # в интервалах ТФ (2 × H1)
+    stale_d1_intervals: int = 2
+    stale_w1_intervals: int = 2
 
     def lookback_days_for(self, timeframe: str) -> int:
         """Глубина первичного поиска для ТФ: D1 — год, W1 — 2 года."""
@@ -130,6 +136,154 @@ class DetectorConfig:
             for t in self.htf_context_types.split(",")
             if t.strip()
         } & {"OB", "FVG"}
+
+
+# ---------------------------------------------------------------------------
+# L04: строгая схема настроек детектора
+# ---------------------------------------------------------------------------
+
+# Устаревшие поля: сохраняются для миграционной совместимости (settings.json,
+# ENV, GET /api/settings), но из редактирования исключены
+DETECTOR_DEPRECATED_FIELDS = {"ltf_range_right"}
+
+# Группы настроек (L04): представление/доставка/анализ/эксперимент;
+# всё не перечисленное — analysis
+DETECTOR_FIELD_GROUPS: dict[str, str] = {
+    **{n: "delivery" for n in (
+        "suppress_hours", "delivery_target_seconds", "notify_only_reviewed",
+        "ltf_notify_kinds",
+    )},
+    **{n: "experimental" for n in (
+        "uncalibrated_cluster_denominator",
+        "uncalibrated_consolidation_max_candles",
+        "uncalibrated_consolidation_overlap_pct",
+        "uncalibrated_ob_delay_max_candles",
+        "uncalibrated_plateau_equal_peaks",
+        "uncalibrated_breakout_fvg_back_candles",
+        "uncalibrated_breakout_fvg_delay_candles",
+        "uncalibrated_approach_base",
+        "htf_context_types",
+        "ltf_provisional_range_enabled",
+    )},
+    "ltf_range_right": "deprecated",
+}
+
+# Числовые границы (согласованы с правилами движка: периоды положительные,
+# глубины/доли в [0,1], структурные pivots — согласованные 3–5)
+_NUMERIC_RANGES: dict[str, tuple[float, float]] = {
+    "lookback_days": (1, 3650),
+    "lookback_days_d1": (1, 3650),
+    "lookback_days_w1": (1, 7300),
+    "suppress_hours": (0, 8784),
+    "approach_pct": (0.0001, 0.5),
+    "cluster_tolerance_pct": (0.0001, 0.5),
+    "depth_mid": (0.0, 1.0),
+    "depth_worked": (0.0, 1.0),
+    "pivot_left": (1, 20),
+    "pivot_right": (1, 20),
+    "delivery_target_seconds": (1, 3600),
+    "uncalibrated_consolidation_max_candles": (1, 1000),
+    "uncalibrated_consolidation_overlap_pct": (0.0, 1.0),
+    "uncalibrated_ob_delay_max_candles": (1, 10000),
+    "uncalibrated_breakout_fvg_back_candles": (0, 100),
+    "uncalibrated_breakout_fvg_delay_candles": (0, 10000),
+    "entry_reuse_max_depth": (0.0, 1.0),
+    "inner_level_pivot_left": (1, 20),
+    "inner_level_pivot_right": (1, 20),
+    "ltf_structure_left": (3, 5),
+    "ltf_structure_right": (3, 5),
+    "ltf_poll_seconds": (30, 86400),
+    "ltf_history_days": (1, 365),
+    "ltf_observation_stale_days": (0, 365),
+    "stale_quote_seconds": (0, 86400),
+    "stale_h1_intervals": (1, 100),
+    "stale_d1_intervals": (1, 100),
+    "stale_w1_intervals": (1, 100),
+}
+
+# CSV-поля с допустимым перечислением значений
+_CSV_ENUMS: dict[str, set[str]] = {
+    "scan_timeframes": {"D1", "W1"},
+    "ltf_entry_types": {"FVG", "OB", "BSL", "SSL"},
+    "htf_context_types": {"OB", "FVG"},
+    "ltf_notify_kinds": {
+        "bos_sms", "entries_ready", "touch", "sweep_outcome", "cancellation",
+    },
+}
+
+
+def _validate_csv(name: str, value: str, allowed: set[str]) -> Optional[str]:
+    allowed_upper = {a.upper() for a in allowed}
+    bad = [t for t in (s.strip() for s in value.split(","))
+           if t and t.upper() not in allowed_upper]
+    if bad:
+        return (
+            f"недопустимые значения: {', '.join(bad)}; "
+            f"разрешены: {', '.join(sorted(allowed))}"
+        )
+    return None
+
+
+def validate_detector_payload(
+    payload: dict[str, object],
+) -> tuple[dict[str, object], dict[str, str]]:
+    """Строгая валидация патча настроек (L04).
+
+    Возвращает (приведённые значения, ошибки по полям). Неизвестные и
+    устаревшие поля отклоняются; типы приводятся строго (bool — parse_bool);
+    диапазоны и перечисления проверяются по схеме. При любой ошибке
+    применять НЕЛЬЗЯ ничего (атомарность обеспечивает вызывающий).
+    """
+    known = {f.name: type(f.default) for f in fields(DetectorConfig)}
+    values: dict[str, object] = {}
+    errors: dict[str, str] = {}
+    for key, raw in payload.items():
+        if key in DETECTOR_DEPRECATED_FIELDS:
+            errors[key] = "поле устарело и не редактируется"
+            continue
+        if key not in known:
+            errors[key] = "неизвестное поле"
+            continue
+        typ = known[key]
+        try:
+            if typ is bool:
+                value: object = parse_bool(raw)
+            elif typ is int:
+                if isinstance(raw, bool):
+                    raise ValueError("bool вместо int")
+                value = int(raw)  # type: ignore[arg-type]
+            elif typ is float:
+                if isinstance(raw, bool):
+                    raise ValueError("bool вместо float")
+                value = float(raw)  # type: ignore[arg-type]
+            else:
+                value = str(raw)
+        except (ValueError, TypeError):
+            errors[key] = f"ожидается {typ.__name__}, получено {raw!r}"
+            continue
+        if key in _NUMERIC_RANGES:
+            lo, hi = _NUMERIC_RANGES[key]
+            if not (lo <= value <= hi):  # type: ignore[operator]
+                errors[key] = f"допустимо от {lo} до {hi}"
+                continue
+        if key in _CSV_ENUMS:
+            msg = _validate_csv(key, str(value), _CSV_ENUMS[key])
+            if msg is not None:
+                errors[key] = msg
+                continue
+        values[key] = value
+    return values, errors
+
+
+def validate_detector_config(cfg: DetectorConfig) -> dict[str, str]:
+    """Межполевые зависимости порогов (L04) — проверка итогового конфига."""
+    errors: dict[str, str] = {}
+    if not (0.0 < cfg.depth_mid < cfg.depth_worked):
+        errors["depth_mid"] = (
+            "требуется 0 < depth_mid < depth_worked "
+            f"(сейчас {cfg.depth_mid} и {cfg.depth_worked})"
+        )
+    return errors
 
 
 @dataclass

@@ -117,6 +117,110 @@ def evaluate_entry(
     return EligibilityResult(REASON_OK, "fresh", True, overlap)
 
 
+# Основание допуска (ТЗ переработки L01): обычное правило или контекстное
+# исключение §18 (FVG вне половины диапазона при полном контексте)
+ADMISSION_RULE = "rule"
+ADMISSION_CONTEXT = "context_exception"
+
+
+@dataclass(frozen=True)
+class FinalEligibility:
+    """Окончательное решение о допустимости привязки (L01).
+
+    eligible учитывает только пространственный фильтр своей версии диапазона
+    и НЕ описывает итоговую допустимость; итог — eligible_now с явным
+    основанием admission_basis. Решение производное (контекст может
+    дополниться без смены строки), поэтому вычисляется проекцией, а не
+    сохраняется в строке. Пространственное пересечение — отдельное поле
+    spatial_overlap, в решении не участвует (outside_pd решает reason).
+    """
+
+    eligible_now: bool                # итоговая допустимость для нового входа
+    primary_reason: str               # ELIGIBILITY_REASONS
+    blocking_reasons: tuple[str, ...] # причины отказа (пусто при допуске)
+    admission_basis: Optional[str]    # rule | context_exception | None
+    state: str                        # fresh | out_of_range | tested | invalid
+    spatial_overlap: str              # full | partial | none | pending
+    range_version: int
+    rule_version: str
+
+
+def evaluate_final(
+    entry: LtfScenarioEntry,
+    zone: LtfEntryZone,
+    *,
+    allow_outside: bool,
+) -> FinalEligibility:
+    """Единая функция окончательного решения (L01): конъюнкция evaluate_entry
+    (сохранённая в строке как state+reason) плюс контекстный допуск §18.
+
+    Допуск по обычному правилу: строка пространственно подходит,
+    reason == ok и состояние fresh (или tested у строк до миграции с
+    пустым reason — прежний fallback tested → ok, eligibility.entry_reason;
+    мигрированные tested-строки всегда несут явный reason отказа).
+    Контекстное исключение: при полном контексте §18 FVG с
+    reason == outside_pd допускается с основанием context_exception.
+    """
+    reason = entry_reason(entry)
+    base = dict(
+        primary_reason=reason,
+        state=entry.state,
+        spatial_overlap=entry.overlap,
+        range_version=entry.range_version,
+        rule_version=zone.rule_version,
+    )
+    if (entry.eligible and reason == REASON_OK
+            and entry.state in ("fresh", "tested")):
+        return FinalEligibility(
+            eligible_now=True, blocking_reasons=(),
+            admission_basis=ADMISSION_RULE, **base,
+        )
+    if allow_outside and reason == REASON_OUTSIDE_PD and zone.type == "FVG":
+        # §18: контекстный допуск FVG вне Premium при полном контексте
+        return FinalEligibility(
+            eligible_now=True, blocking_reasons=(),
+            admission_basis=ADMISSION_CONTEXT, **base,
+        )
+    return FinalEligibility(
+        eligible_now=False,
+        blocking_reasons=(() if reason == REASON_OK else (reason,)),
+        admission_basis=None, **base,
+    )
+
+
+def admitted_scenario_entries(
+    db, scenario_id: int
+) -> list[tuple[LtfScenarioEntry, LtfEntryZone, FinalEligibility]]:
+    """Единый отбор допущенных зон сценария на текущей версии диапазона.
+
+    Единственный источник правила допуска для движка (уведомления), API
+    (карточка, график) и счётчиков — замена дублирующихся отборов
+    engine._entry_candidates и ltf_api._fresh_entries (L01). ver=0 до
+    появления первой пары диапазона.
+    """
+    from .context import context_complete, context_flags
+
+    cur = db.get_current_ltf_range(scenario_id)
+    ver = cur.version if cur is not None else 0
+    allow_outside = context_complete(
+        context_flags(db.list_ltf_events(scenario_id=scenario_id, limit=1000))
+    )
+    rows = db.list_ltf_scenario_entries(scenario_id, state="fresh")
+    if allow_outside:
+        rows += db.list_ltf_scenario_entries(scenario_id, state="out_of_range")
+    out: list[tuple[LtfScenarioEntry, LtfEntryZone, FinalEligibility]] = []
+    for e in rows:
+        if e.range_version != ver:
+            continue
+        zone = db.get_ltf_entry_zone(e.entry_zone_id)
+        if zone is None:
+            continue
+        fe = evaluate_final(e, zone, allow_outside=allow_outside)
+        if fe.eligible_now:
+            out.append((e, zone, fe))
+    return out
+
+
 # Строки до миграции (reason == ''): пригодность выводится из прежнего state
 _STATE_FALLBACK_REASON = {
     "fresh": REASON_OK,

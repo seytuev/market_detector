@@ -24,6 +24,7 @@ from ...config import DetectorConfig
 from ...db import Database
 from ...models import Direction, Zone, ZoneStatus, now_ms as _real_now_ms
 from ...models_ltf import (
+    RULE_VERSION_LTF,
     LtfEntryZone,
     LtfEvent,
     LtfLiquidityTest,
@@ -36,7 +37,13 @@ from ...models_ltf import (
 )
 from .breaks import StructureEventDraft, detect_breaks
 from .context import context_complete, context_flags, scenario_context
-from .eligibility import REASON_OK, REASON_OUTSIDE_PD, entry_reason, evaluate_entry
+from .eligibility import (
+    ADMISSION_CONTEXT,
+    REASON_OUTSIDE_PD,
+    admitted_scenario_entries,
+    entry_reason,
+    evaluate_entry,
+)
 from .entries import (
     H1_MS,
     build_movement,
@@ -559,7 +566,7 @@ class LtfEngine:
         since = trig.occurred_at if trig is not None else sc.created_at
         ctx = scenario_context(
             self.db, self._scenario_instrument(sc), sc.direction,
-            avail, up_to, since,
+            avail, up_to, since, as_of=now,
         )
         for s in ctx["counter_swept"]:
             self._emit(obs.id, sc.id, "context_update", {
@@ -567,7 +574,9 @@ class LtfEngine:
             }, s["swept_at"], now,
                 f"context:{sc.id}:sweep:{s['pivot_ref']}", delayed, result)
         f = ctx["htf_fvg50"]
-        if f is not None:
+        if f is not None and f.get("confirmed", False):
+            # L02: неподтверждённый геометрический fallback не эмитится —
+            # контекстное исключение §18 он не включает
             self._emit(obs.id, sc.id, "context_update", {
                 "fact": "htf_fvg50", "scenario_id": sc.id, **f,
             }, f.get("tested_at") or now, now,
@@ -975,38 +984,13 @@ class LtfEngine:
         """Зоны, допущенные к выбору на текущей версии диапазона (ver=0 до
         пары): свежие и повторно выбранные протестированные с глубиной
         тестов < 90% (ТЗ §3 — переклассификация в _update_range).
-        ТЗ §10: только reason == "ok" — отключённый тип (type_disabled) не
-        попадает и в новые уведомления.
-        §18: при полном контексте (снятие SSL/BSL + тест 50% D1 FVG)
-        дополнительно допускаются FVG с reason == "outside_pd"; третий
-        элемент кортежа — признак такого контекстного допуска."""
-        cur = self.db.get_current_ltf_range(sc.id)
-        ver = cur.version if cur is not None else 0
-        allow_outside = context_complete(self._scenario_context(sc.id))
-        rows = self.db.list_ltf_scenario_entries(sc.id, state="fresh")
-        if allow_outside:
-            rows += self.db.list_ltf_scenario_entries(sc.id,
-                                                      state="out_of_range")
-        out = []
-        for e in rows:
-            if e.range_version != ver:
-                continue
-            outside = False
-            if e.state == "fresh":
-                if not e.eligible or entry_reason(e) != REASON_OK:
-                    continue
-            else:
-                # §18: контекстный допуск — только FVG вне половины диапазона
-                if entry_reason(e) != REASON_OUTSIDE_PD:
-                    continue
-                outside = True
-            zone = self.db.get_ltf_entry_zone(e.entry_zone_id)
-            if zone is None:
-                continue
-            if outside and zone.type != "FVG":
-                continue
-            out.append((e, zone, outside))
-        return out
+        Отбор делегирован admitted_scenario_entries — единому источнику
+        правила допуска (L01); третий элемент кортежа — признак контекстного
+        допуска §18 (admission_basis == context_exception)."""
+        return [
+            (e, zone, fe.admission_basis == ADMISSION_CONTEXT)
+            for e, zone, fe in admitted_scenario_entries(self.db, sc.id)
+        ]
 
     def _announced_entry_ids(self, scenario_id: int) -> set[int]:
         """Уже сообщённые зоны (§11.5): id из payload прошлых bos/sms/
@@ -1259,19 +1243,31 @@ class LtfEngine:
     ) -> dict[int, int]:
         """Перестроить pivots по текущим ltf_structure_left/right.
 
-        Для каждого инструмента с LTF-наблюдениями хранимые pivots удаляются
-        и детекция запускается заново по сохранённым закрытым H1-свечам через
-        sync_structure (та же вставка и роли, что в рабочем цикле). События,
-        диапазоны и зоны — исторические записи и не пересчитываются; их
-        ссылки на удалённые pivots читаются как None. Возвращает
+        L03: изменение параметров создаёт новую версию расчёта
+        (calc_version); прежние pivots не удаляются, а помечаются
+        superseded_by — ссылки исторических сценариев, диапазонов и движений
+        (anchor_*_pivot_id, start/end_pivot_id) остаются разрешимыми, старые
+        BOS/SMS читаются со своими опорами. Детекция запускается заново по
+        сохранённым закрытым H1-свечам через sync_structure (та же вставка и
+        роли, что в рабочем цикле). События, диапазоны и зоны — исторические
+        записи и не пересчитываются. Если версия параметров не изменилась,
+        перестройка не выполняется (идемпотентно). Возвращает
         {instrument_id: число новых pivots}."""
         now = now_ms if now_ms is not None else _real_now_ms()
+        cv_id, created = self.db.get_or_create_calc_version(
+            "ltf_structure",
+            {"left": self.cfg.ltf_structure_left,
+             "right": self.cfg.ltf_structure_right},
+            RULE_VERSION_LTF, now,
+        )
+        if not created:
+            return {}  # параметры не менялись — перестройка не требуется
         instrument_ids = sorted(
             {o.instrument_id for o in self.db.list_ltf_observations()}
         )
         out: dict[int, int] = {}
         for iid in instrument_ids:
-            self.db.delete_ltf_pivots(iid)
+            self.db.supersede_ltf_pivots(iid, cv_id)
             candles = self.db.get_candles(iid, "H1")
             sync = sync_structure(self.db, self.cfg, iid, candles, now)
             out[iid] = sync.pivots_new

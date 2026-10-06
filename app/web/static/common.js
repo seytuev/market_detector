@@ -41,13 +41,16 @@ window.HTF = (() => {
   }
 
   function setConnectionState(online) {
+    // D02: индикатор отражает только транспорт (WS). Свежесть данных —
+    // отдельные индикаторы data_state (котировка/свечи/обработка); открытие
+    // WebSocket ничего не говорит о свежести котировок и расчётов.
     const dot = document.getElementById('ws-indicator');
     const label = document.getElementById('connection-label')
       || document.querySelector('.connection-label');
-    const text = online ? 'Данные обновлены' : 'Переподключение';
+    const text = online ? 'Соединение установлено' : 'Переподключение…';
     if (dot) {
       dot.className = 'ws-dot ' + (online ? 'online' : 'offline');
-      dot.title = text;
+      dot.title = online ? 'WebSocket подключён' : 'Нет соединения';
     }
     if (label) label.textContent = text;
   }

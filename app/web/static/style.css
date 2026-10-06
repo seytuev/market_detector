@@ -1046,6 +1046,46 @@ input[type="checkbox"] { min-height: auto; accent-color: var(--accent); }
   background: var(--bg-panel); border: 1px solid var(--border); border-radius: 8px;
   overflow: auto; padding: 12px;
 }
+
+/* Режим проверки (U04): очередь → собственный график → инспектор */
+.review-chart-block { display: flex; flex-direction: column; min-height: 0; gap: 6px; }
+#review-chart-container {
+  flex: 1; min-width: 0; position: relative; height: 100%; min-height: 320px;
+  background: var(--bg-panel); border: 1px solid var(--border);
+  border-radius: 8px; overflow: hidden;
+}
+#review-chart { position: absolute; inset: 0; }
+#review-zone-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 10; }
+.review-keys { flex: none; font-size: 12px; }
+.candidate-card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.review-zone-label { opacity: 1; }
+.review-inspector h3 { margin: 0 0 10px; font-size: 15px; }
+.review-inspector dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; margin: 8px 0; }
+.review-inspector dt { color: var(--text-dim); }
+.review-inspector dd { margin: 0; font-variant-numeric: tabular-nums; }
+.review-inspector h4 { margin: 12px 0 6px; font-size: 12px; color: var(--text-dim); text-transform: uppercase; }
+.review-inspector ul { margin: 0; padding-left: 18px; font-size: 12px; }
+.review-inspector p { margin: 6px 0; font-size: 13px; }
+.rv-status {
+  margin-top: 10px; padding: 10px;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--bg-card);
+}
+.rv-status p { font-size: 12px; }
+.rv-status .muted { font-size: 11px; }
+
+/* Модалка исправления границ (U04): якорь без ручного ввода миллисекунд */
+#bounds-anchor-wrap { display: block; margin-bottom: 8px; }
+#bounds-anchor-wrap .field-label { color: var(--text-dim); font-size: 13px; }
+.anchor-controls { display: flex; gap: 6px; align-items: center; margin-top: 5px; }
+.anchor-controls input { flex: 1; min-width: 0; color: var(--text); }
+.anchor-display { margin: 4px 0 0; font-size: 12px; }
+.bounds-preview { margin: 2px 0 8px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.tech-details { margin: 4px 0 8px; font-size: 12px; color: var(--text-dim); }
+.tech-details summary { cursor: pointer; }
+.tech-details label { margin-top: 6px; }
+
+/* Подсказка режима выбора свечи-якоря кликом по графику */
+#anchor-pick-hint { position: fixed; top: 70px; left: 50%; transform: translateX(-50%); z-index: 150; }
 .page-pad { padding: 16px 20px; overflow: auto; }
 .events-full { max-width: 960px; }
 .settings-layout { display: grid; grid-template-columns: 220px minmax(0,1fr); flex: 1; min-height: 0; }
@@ -1068,6 +1108,7 @@ input[type="checkbox"] { min-height: auto; accent-color: var(--accent); }
   .zone-rail { max-height: 42vh; }
   .review-layout { grid-template-columns: minmax(0,1fr); }
   .review-queue { max-height: 28vh; }
+  #review-chart-container { height: 46vh; flex: none; }
 }
 @media (max-width: 767px) {
   .app-tabs, .app-nav-right { display: none; }
@@ -1086,6 +1127,8 @@ input[type="checkbox"] { min-height: auto; accent-color: var(--accent); }
   .last-price { font-size: 20px; }
   .overview-layout { padding: 0 12px 12px; }
   #chart-container { min-height: 280px; }
+  #review-chart-container { height: 42vh; min-height: 260px; }
+  .review-layout { padding: 8px 12px; }
 }
 
 /* Сплиттеры изменения размеров панелей (см. initLayoutSplitters в common.js) */
@@ -1189,3 +1232,51 @@ input[type="checkbox"] { min-height: auto; accent-color: var(--accent); }
   .layer-toggles { margin-left: 0; }
   .quote-at { display: none; }
 }
+
+/* ---------------------------------------------------------------------------
+   Блок B переработки интерфейса: карточка сценария (U02), пустые состояния
+   (U05), группы настроек (L04)
+   --------------------------------------------------------------------------- */
+
+/* U02: блок «что происходит / почему / чего ждём / что отменит» */
+.scenario-qa {
+  list-style: none; margin: 0 0 14px; padding: 0;
+  display: grid; gap: 8px;
+}
+.scenario-qa li { background: var(--bg-card); border-radius: 8px; padding: 8px 10px; }
+.scenario-qa .qa-q {
+  display: block; color: var(--text-dim); font-size: 11px;
+  text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 2px;
+}
+.scenario-qa .qa-a { font-size: 13px; line-height: 1.4; }
+
+/* U05: пустые состояния с действием */
+.ltf-empty-actions { margin-top: 8px; }
+.ltf-empty .btn { margin-top: 6px; }
+
+/* L04: группы настроек */
+.settings-exp { margin-bottom: 14px; }
+.settings-exp > summary.settings-group { cursor: pointer; }
+.settings-exp-note { margin: 4px 0 10px; }
+.settings-deprecated {
+  margin-top: 14px; padding: 8px 10px;
+  border: 1px dashed var(--border); border-radius: 8px;
+  color: var(--text-dim); font-size: 12px;
+}
+.settings-field.invalid input { border-color: var(--red); }
+.field-error { color: var(--red); font-size: 12px; margin-top: 4px; }
+
+/* L05: конфликт контекстов и основание выбора */
+.ctx-conflict-note { color: #ffb74d; font-size: 12px; margin-bottom: 6px; }
+.ctx-item.conflict { border-color: #ffb74d; }
+.badge.ctx-conflict { color: #ffb74d; border-color: #ffb74d; }
+.ctx-conflict-banner { border-color: #ffb74d; color: #ffb74d; }
+.ctx-item .ctx-basis { color: var(--text-dim); font-size: 11px; margin-top: 2px; }
+
+/* L06: приоритет внимания в списке активов */
+.badge.attn-review { color: var(--accent); border-color: var(--accent); }
+.badge.attn-price_in_zone { color: var(--green); border-color: var(--green); }
+.badge.attn-eligible { color: var(--green); }
+.badge.attn-awaiting { color: #ffb74d; border-color: #ffb74d; }
+.badge.attn-data_problem { color: var(--red); border-color: var(--red); }
+#ltf-sort-priority.active { border-color: var(--accent); color: var(--accent); }

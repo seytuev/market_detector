@@ -106,6 +106,8 @@ class LtfPivot:
     left: int = 3                      # настройка l свечей слева (§5.1, default 3+3)
     right: int = 3                     # настройка r свечей справа
     state: str = "candidate"           # candidate | confirmed | ambiguous
+    calc_version_id: Optional[int] = None   # версия расчёта (L03): параметры l/r + правила
+    superseded_by: Optional[int] = None     # id версии, заменившей эту опору (история сохраняется)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -121,6 +123,8 @@ class LtfPivot:
             "right": self.right,
             "candle_open_time": self.candle_open_time,
             "state": self.state,
+            "calc_version_id": self.calc_version_id,
+            "superseded_by": self.superseded_by,
         }
 
 

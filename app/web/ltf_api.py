@@ -26,7 +26,8 @@ from fastapi import HTTPException
 from pydantic import BaseModel
 
 from ..db import Database
-from ..engine.ltf.eligibility import REASON_OK, entry_reason
+from ..engine.ltf.context import context_complete
+from ..engine.ltf.eligibility import evaluate_final
 from ..models import now_ms
 from ..models_ltf import (
     LTF_LEGACY_DECISIONS,
@@ -39,6 +40,7 @@ from ..models_ltf import (
 from ..services.overview import (
     _ACTIVE_STATES,
     _ENTRY_ORDER,
+    _context_flags,
     _entry_row,
     _expected_levels,
     _fresh_entries,
@@ -275,8 +277,11 @@ def register_ltf_routes(app, db: Database, settings, require_auth, ltf_engine=No
         current_scenario — только не отменённый; отменённый — в истории
         (journal/observations). После reconnect тот же снимок: отменённый
         сценарий текущим не удерживается.
-        Вычисление — app/services/overview.py."""
-        data = instrument_current(db, settings, instrument_id)
+        Вычисление — app/services/overview.py. Чтение — в одной
+        read-транзакции (D01): серия запросов снимка видит одну версию
+        состояния."""
+        with db.read_tx():
+            data = instrument_current(db, settings, instrument_id)
         if data is None:
             raise HTTPException(status_code=404, detail="Инструмент не найден")
         return data
@@ -351,18 +356,22 @@ def register_ltf_routes(app, db: Database, settings, require_auth, ltf_engine=No
             ver = max(e.range_version for e in entries)
         else:
             ver = 0
+        allow_outside = context_complete(_context_flags(db, sc.id))
         rows = []
         for e in entries:
-            ok = entry_reason(e) == REASON_OK
-            if view == "eligible" and not ok:
+            z = db.get_ltf_entry_zone(e.entry_zone_id)
+            if z is None:
                 continue
-            if view == "excluded" and ok:
+            admitted = evaluate_final(
+                e, z, allow_outside=allow_outside
+            ).eligible_now
+            if view == "eligible" and not admitted:
+                continue
+            if view == "excluded" and admitted:
                 continue
             if view != "history" and not include_all and e.range_version != ver:
                 continue
-            z = db.get_ltf_entry_zone(e.entry_zone_id)
-            if z is not None:
-                rows.append(_entry_row(db, e, z, sc, price))
+            rows.append(_entry_row(db, e, z, sc, price))
         rows.sort(key=lambda r: (_ENTRY_ORDER.get(r["type"], 9),
                                  r["confirmed_at"] or 0))
         return rows
