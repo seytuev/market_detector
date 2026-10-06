@@ -23,6 +23,7 @@ from ..models import (
     ZoneStatus,
     now_ms,
 )
+from ..services.zone_groups import group_members_by_zone
 from .suppress import (
     BOT_GRP_HTF,
     BOT_GRP_SERVICE,
@@ -53,6 +54,9 @@ class MessagePayload:
     views: list[EventView]
     user: str = "owner"
     image_path: Optional[str] = None  # PNG из chartimg (§11 п.7), если сгенерирован
+    # §10: zone_id -> прочие зоны той же визуальной группы (для пометки
+    # в тексте, что зона визуально объединена с соседними)
+    group_members: dict[int, list[Zone]] = field(default_factory=dict)
 
 
 class Sender(Protocol):
@@ -119,6 +123,21 @@ class EventDispatcher:
             instrument_id=zone.instrument_id if zone is not None else None,
             zone_id=view.event.zone_id,
         )
+
+    def _group_members(self, views: list[EventView]) -> dict[int, list[Zone]]:
+        """§10: состав визуальных групп для зон пакета (только пометка в
+        тексте — сами зоны и правила уведомлений не меняются).
+
+        Группировка та же, что на графике (/api/zones/grouped): пересекающиеся
+        актуальные ACTIVE-зоны инструмента."""
+        members: dict[int, list[Zone]] = {}
+        instrument_ids = {v.zone.instrument_id for v in views if v.zone is not None}
+        for iid in instrument_ids:
+            zones = [z for z in self.db.get_zones(
+                instrument_id=iid, statuses=[ZoneStatus.ACTIVE])
+                if z.is_currently_relevant()]
+            members.update(group_members_by_zone(zones))
+        return members
 
     def _record_pending(self, event: Event) -> Optional[int]:
         """Пишет delivery pending по UNIQUE idempotency_key.
@@ -218,6 +237,7 @@ class EventDispatcher:
             zones=[v.zone for v in views if v.zone is not None],
             views=views,
             user=self.user,
+            group_members=self._group_members(views),
         )
         await self._attach_image(payload)
         try:
@@ -303,6 +323,7 @@ class EventDispatcher:
                 zones=[v.zone for v in views if v.zone is not None],
                 views=views,
                 user=self.user,
+                group_members=self._group_members(views),
             )
             await self._attach_image(payload)
             try:

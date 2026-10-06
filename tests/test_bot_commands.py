@@ -100,7 +100,6 @@ def _instrument(db, symbol: str, ltf_analyze: bool = True) -> int:
         id=None, asset=symbol.removesuffix("USDT"), venue="binance",
         market_type="spot", symbol=symbol, quote_asset="USDT",
     ))
-    # upsert_instrument ltf_analyze не пишет — отдельный флаг настроек LTF
     db.set_instrument_ltf_analyze(iid, ltf_analyze)
     return iid
 

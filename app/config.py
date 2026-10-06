@@ -100,6 +100,12 @@ class DetectorConfig:
     # подтверждения опор тремя правыми свечами. На подтверждённые диапазоны,
     # eligibility, отмену сценария и уведомления НЕ влияет.
     ltf_provisional_range_enabled: bool = False
+    # §7 (Этап 4): политика якорей диапазона. origin_reversal (по умолчанию):
+    # до первой валидной continuation-пары LH→LL / HL→HH диапазон строится от
+    # якоря-источника причинного движения первичного слома (kind='origin_reversal',
+    # роль HH/LL не переименовывается); continuation_only — прежнее поведение:
+    # без валидной пары честный range_pending (чужой старый диапазон не показывается)
+    ltf_range_anchor_policy: str = "origin_reversal"
     # типы доставки LTF (этап D); выключение не меняет рыночный анализ
     ltf_notify_kinds: str = "bos_sms,entries_ready,touch,sweep_outcome,cancellation"
     ltf_poll_seconds: int = 300              # свой цикл опроса H1
@@ -218,6 +224,7 @@ _CSV_ENUMS: dict[str, set[str]] = {
     "ltf_notify_kinds": {
         "bos_sms", "entries_ready", "touch", "sweep_outcome", "cancellation",
     },
+    "ltf_range_anchor_policy": {"origin_reversal", "continuation_only"},
 }
 
 

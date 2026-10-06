@@ -222,6 +222,14 @@ class _SideScan:
                 "anchor_price": self.anchor.price if self.anchor else None,
                 "ref_price": self.ref.price if self.ref else None,
                 "close": candle.close,
+                # §5/§12: пробитый уровень с происхождением — pivot машины,
+                # его роль и подтверждение на момент события
+                "broken_pivot_id": _ref(level_pivot),
+                "role_at_event": level_pivot.role,
+                "level_price": level_pivot.price,
+                "pivot_confirmed_at": level_pivot.confirmed_at,
+                "candle_close_time": candle.close_time,
+                "close_price": candle.close,
             },
         )
 

@@ -77,6 +77,9 @@ def _ctx(db: Database, obs, sc) -> LtfContext:
 def test_short_fvg_outside_premium_ssl_fvg50_context(
     db: Database, cfg, instrument_id: int
 ):
+    # §18-контракт (допуск вне Premium) pinned на continuation-политике,
+    # чтобы журнал событий не зависел от origin-диапазона (§7 Этап 4)
+    cfg.ltf_range_anchor_policy = "continuation_only"
     engine = LtfEngine(db, cfg)
     candles = _series(SERIES_CTX_HL, SERIES_CTX_CLOSES, instrument_id)
     d1fvg_id = _setup(db, instrument_id)

@@ -67,6 +67,15 @@ class LtfScenario:
     trigger_event_id: Optional[int] = None
     cancellation_reason: Optional[str] = None
     cancelled_at: Optional[int] = None
+    # §5/§12: причинная цепочка сценария
+    origin_break_event_id: Optional[int] = None   # событие-триггер (ltf_structure_event)
+    origin_movement_id: Optional[int] = None      # движение триггера (§8.1)
+    structural_epoch_id: int = 1                  # эпоха структуры наблюдения (+1 на отмену)
+    # уровень отмены (обратный слом) — хранимый факт с происхождением
+    reverse_break_level_price: Optional[float] = None
+    reverse_break_pivot_id: Optional[int] = None  # опорный pivot обратной машины
+    reverse_break_confirmed_at: Optional[int] = None  # confirmed_at того pivot
+    last_processed_close: Optional[int] = None    # ms: close_time последней обработанной H1
     created_at: int = 0
     updated_at: int = 0
 
@@ -81,6 +90,13 @@ class LtfScenario:
             "trigger_event_id": self.trigger_event_id,
             "cancellation_reason": self.cancellation_reason,
             "cancelled_at": self.cancelled_at,
+            "origin_break_event_id": self.origin_break_event_id,
+            "origin_movement_id": self.origin_movement_id,
+            "structural_epoch_id": self.structural_epoch_id,
+            "reverse_break_level_price": self.reverse_break_level_price,
+            "reverse_break_pivot_id": self.reverse_break_pivot_id,
+            "reverse_break_confirmed_at": self.reverse_break_confirmed_at,
+            "last_processed_close": self.last_processed_close,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -207,6 +223,9 @@ class LtfRange:
     anchor_low_pivot_id: Optional[int] = None
     anchor_high_pivot_id: Optional[int] = None
     prev_version_id: Optional[int] = None
+    kind: str = "continuation"           # continuation | origin_reversal (резерв §12)
+    anchor_policy: Optional[str] = None
+    structural_epoch_id: int = 1         # эпоха сценария-владельца на момент версии
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -220,6 +239,9 @@ class LtfRange:
             "anchor_high_pivot_id": self.anchor_high_pivot_id,
             "available_at": self.available_at,
             "prev_version_id": self.prev_version_id,
+            "kind": self.kind,
+            "anchor_policy": self.anchor_policy,
+            "structural_epoch_id": self.structural_epoch_id,
         }
 
 

@@ -717,7 +717,7 @@ async function renderCard() {
         ? `${name} ${fmtPrice(p.price)} · экстремум ${fmtTime(p.pivot_at)}, подтверждён ${p.confirmed_at ? fmtTime(p.confirmed_at) : '—'}`
         : null;
       html += `
-      <dt>Диапазон v${rng.version}</dt><dd>${fmtPrice(rng.lower)} – ${fmtPrice(rng.upper)}</dd>
+      <dt>Диапазон v${rng.version}</dt><dd>${fmtPrice(rng.lower)} – ${fmtPrice(rng.upper)}${rng.kind === 'origin_reversal' ? ' · origin' : ''}</dd>
       ${anchorLine('Опора low', anchors.low) ? `<dt>Опоры</dt><dd>${esc(anchorLine('Опора low', anchors.low))}</dd>` : ''}
       ${anchorLine('Опора high', anchors.high) ? `<dt></dt><dd>${esc(anchorLine('Опора high', anchors.high))}</dd>` : ''}
       <dt>Середина</dt><dd>${fmtPrice(rng.mid)}</dd>`;

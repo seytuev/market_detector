@@ -83,6 +83,10 @@ def _events(db: Database, obs_id: int):
 
 
 def test_full_flow_bos_range_entries_cancellation(db: Database, cfg, instrument_id: int):
+    # классический continuation-лайфцикл — политика continuation_only
+    # (§7 Этап 4); поток с origin_reversal по умолчанию —
+    # tests/test_ltf_origin_range.py
+    cfg.ltf_range_anchor_policy = "continuation_only"
     engine = LtfEngine(db, cfg)
     candles = _series(SERIES_H_HL, SERIES_H_CLOSES, instrument_id)
     zid = _setup(db, instrument_id)
@@ -340,7 +344,8 @@ def test_replay_is_idempotent(db: Database, cfg, instrument_id: int):
     assert res.events == []
     assert counts() == before
     # восстановленные события replay помечены delayed и не удвоились
-    assert len(db.list_ltf_events(observation_id=obs.id, limit=1000)) == 6
+    # (7: с §7 Этап 4 диапазон origin_reversal на idx17 добавляет entries_ready)
+    assert len(db.list_ltf_events(observation_id=obs.id, limit=1000)) == 7
 
 
 def _role_log_rows(db: Database) -> int:
@@ -777,16 +782,16 @@ def test_a01_catchup_backlog_suppressed_then_live(db: Database, cfg,
     assert bos[0].delayed is True
     assert db.pending_ltf_events() == []
 
-    # последующие живые закрытия (lag=0) — события снова live: откат idx18
-    # трогает FVG причинного движения (см. test_full_flow)
+    # последующие живые закрытия (lag=0) — события снова live: диапазон
+    # origin_reversal (§7 Этап 4) подтверждается на idx17 → entries_ready
     for c in candles[15:19]:
         db.insert_candles([c])
         engine.process_h1_close(instrument_id, now_ms=c.close_time)
-    touch = [e for e in _events(db, obs.id) if e.kind == "touch"]
-    assert len(touch) == 1
-    assert touch[0].processing_mode == "live"
-    assert touch[0].delayed is False
-    assert [e.id for e in db.pending_ltf_events()] == [touch[0].id]
+    ready = [e for e in _events(db, obs.id) if e.kind == "entries_ready"]
+    assert len(ready) == 1
+    assert ready[0].processing_mode == "live"
+    assert ready[0].delayed is False
+    assert [e.id for e in db.pending_ltf_events()] == [ready[0].id]
 
 
 def test_a01_replay_marks_replay_and_stays_suppressed(db: Database, cfg,
@@ -800,8 +805,11 @@ def test_a01_replay_marks_replay_and_stays_suppressed(db: Database, cfg,
     db.insert_candles(candles)
     engine.replay_observation(obs.id)
     evs = _events(db, obs.id)
+    # §7 Этап 4: диапазон origin_reversal на idx17 (entries_ready), касание
+    # FVG происходит на idx24, когда она стала подходящей на continuation v2
     assert [e.kind for e in evs] == [
-        "bos", "touch", "entries_ready", "touch", "sweep_failed", "cancellation",
+        "bos", "entries_ready", "entries_ready", "touch", "touch",
+        "sweep_failed", "cancellation",
     ]
     assert all(e.processing_mode == "replay" for e in evs)
     assert all(e.delayed for e in evs)

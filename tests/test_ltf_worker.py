@@ -223,6 +223,9 @@ async def test_ltf_analyze_flag_opens_without_touch():
     zone = _parent_zone(db, ins.id, Direction.BULL)
     _parent_zone(db, eth.id, Direction.BULL)
 
+    db.set_instrument_ltf_analyze(ins.id, False)  # по умолчанию включён — снимаем для теста
+    db.set_instrument_ltf_analyze(eth.id, False)
+
     await worker.ltf_poll_once()  # без галочки наблюдение не открывается
     assert db.list_ltf_observations(instrument_id=ins.id) == []
 

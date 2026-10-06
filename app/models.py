@@ -94,7 +94,7 @@ class Instrument:
     enabled: bool = True
     # «Анализировать» (настройки LTF): LTF-наблюдения на подтверждённые
     # OB D1/W1 открываются без ожидания касания
-    ltf_analyze: bool = False
+    ltf_analyze: bool = True
 
 
 @dataclass
@@ -180,14 +180,21 @@ class Zone:
         return bool(self.evidence.get("manual_confirmation_only"))
 
     def is_currently_relevant(self) -> bool:
-        """ТЗ 06.10.2026 §4/§13 (T21): единый canonical state актуальной зоны
-        для API, графика, Telegram, HTF-списка и LTF-контекстов.
+        """ТЗ 06.10.2026 §4/§13 (T21) + ТЗ 07.10.2026 §3: единый canonical
+        state актуальной зоны для API, графика, Telegram, HTF-списка и
+        LTF-контекстов.
 
-        Актуальна = подтверждена (FVG или явно только вручную) И рыночно
-        валидна И не завершена. Candidate, rejected и invalidated сюда не
-        входят — они доступны в проверке/истории отдельно."""
+        Актуальна = подтверждена (автоматический FVG, явно только вручную
+        или ручная зона владельца) И рыночно валидна И не завершена.
+        Статус candidate — признак рабочего процесса РЕВЬЮ (очередь ручной
+        проверки), а не рыночного состояния: подтверждённый кандидат
+        актуален и отображается сразу, без ожидания оценки (ТЗ 07.10.2026:
+        распознавание отделено от review_state). Неподтверждённые кандидаты,
+        rejected и invalidated сюда не входят — они доступны в проверке и
+        истории отдельными выборками."""
         return (
-            self.status in (ZoneStatus.ACTIVE, ZoneStatus.WEAKENED)
+            self.status in (ZoneStatus.ACTIVE, ZoneStatus.WEAKENED,
+                            ZoneStatus.CANDIDATE)
             and self.market_validity == "active"
             and self.display_until is None
             # подтверждение: FVG, явное «только вручную» (T09) или ручная

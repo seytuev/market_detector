@@ -275,3 +275,39 @@ async def test_chart_image_skipped_without_charts_dir():
     )
     assert len(sender.sent) == 1
     assert sender.sent[0].image_path is None
+
+
+async def test_notification_marks_visually_merged_zone():
+    """§10: зона из визуальной группы — в тексте перечислены участники
+    объединения; сами зоны и их границы не меняются."""
+    db, z = _make_db()
+    t0 = now_ms()
+    btc_zone = db.get_zone(z["btc_zone"])
+    # вторая актуальная ACTIVE-зона того же инструмента, пересекающаяся
+    # с исходной OB W1 65000–66000
+    db.insert_zone(
+        Zone(None, btc_zone.instrument_id, ZoneType.FVG, Direction.BULL, "D1",
+             lower=65500.0, upper=66500.0, formed_at=t0 - 8_000,
+             confirmed_at=t0 - 7_000, status=ZoneStatus.ACTIVE, created_at=t0)
+    )
+    sender = LogSender()
+    disp = EventDispatcher(db, DetectorConfig(), sender)
+    await disp.dispatch(
+        [_new_event(db, z["btc_zone"], EventKind.TOUCH, 65600.0, t0)]
+    )
+    assert len(sender.sent) == 1
+    text = render_text(sender.sent[0])
+    assert "Визуально объединена с" in text
+    assert "FVG D1" in text and "65,500" in text  # тип/ТФ и граница участника
+
+
+async def test_notification_without_group_has_no_merge_mark():
+    """Одиночная зона (группы нет) — пометки об объединении в тексте нет."""
+    db, z = _make_db()
+    sender = LogSender()
+    disp = EventDispatcher(db, DetectorConfig(), sender)
+    await disp.dispatch(
+        [_new_event(db, z["btc_zone"], EventKind.TOUCH, 65500.0, now_ms())]
+    )
+    text = render_text(sender.sent[0])
+    assert "Визуально объединена" not in text

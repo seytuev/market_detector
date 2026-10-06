@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS instrument (
     enabled INTEGER NOT NULL DEFAULT 1,
     -- «Анализировать» (настройки LTF): наблюдения открываются на все
     -- подтверждённые OB D1/W1 инструмента сразу, без касания
-    ltf_analyze INTEGER NOT NULL DEFAULT 0,
+    ltf_analyze INTEGER NOT NULL DEFAULT 1,
     UNIQUE (venue, market_type, symbol)
 );
 
@@ -234,6 +234,15 @@ CREATE TABLE IF NOT EXISTS ltf_scenario (
     trigger_event_id INTEGER,
     cancellation_reason TEXT,
     cancelled_at INTEGER,
+    -- §5/§12: причинная цепочка — триггерное событие, движение, эпоха
+    origin_break_event_id INTEGER,
+    origin_movement_id INTEGER,
+    structural_epoch_id INTEGER NOT NULL DEFAULT 1,
+    -- §5/§12: уровень отмены как хранимый факт с происхождением (pivot машины)
+    reverse_break_level_price REAL,
+    reverse_break_pivot_id INTEGER,
+    reverse_break_confirmed_at INTEGER,
+    last_processed_close INTEGER,       -- ms: close_time последней обработанной H1
     created_at INTEGER NOT NULL DEFAULT 0,
     updated_at INTEGER NOT NULL DEFAULT 0
 );
@@ -324,6 +333,11 @@ CREATE TABLE IF NOT EXISTS ltf_range (
     anchor_high_pivot_id INTEGER,
     available_at INTEGER NOT NULL,
     prev_version_id INTEGER,
+    -- §5/§12: continuation — диапазон продолжения; origin_reversal —
+    -- зарезервировано для следующего этапа; anchor_policy — политика якорей
+    kind TEXT NOT NULL DEFAULT 'continuation',
+    anchor_policy TEXT,
+    structural_epoch_id INTEGER NOT NULL DEFAULT 1,
     UNIQUE (scenario_id, version)
 );
 CREATE INDEX IF NOT EXISTS ix_ltf_range_scenario ON ltf_range (scenario_id, version);

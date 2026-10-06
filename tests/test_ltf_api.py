@@ -417,20 +417,20 @@ def test_ltf_analyze_flag_roundtrip(client, instrument_id):
     """Галочка «Анализировать» пишется в инструмент и читается обратно."""
     ins = client.get("/api/instruments", headers=AUTH).json()
     row = next(i for i in ins if i["id"] == instrument_id)
-    assert row["ltf_analyze"] is False
-    r = client.post(
-        f"/api/instruments/{instrument_id}/ltf-analyze",
-        headers=AUTH, json={"analyze": True},
-    )
-    assert r.status_code == 200, r.text
-    assert r.json()["ltf_analyze"] is True
-    again = client.get("/api/instruments", headers=AUTH).json()
-    assert next(i for i in again if i["id"] == instrument_id)["ltf_analyze"] is True
+    assert row["ltf_analyze"] is True  # включён по умолчанию
     r = client.post(
         f"/api/instruments/{instrument_id}/ltf-analyze",
         headers=AUTH, json={"analyze": False},
     )
+    assert r.status_code == 200, r.text
     assert r.json()["ltf_analyze"] is False
+    again = client.get("/api/instruments", headers=AUTH).json()
+    assert next(i for i in again if i["id"] == instrument_id)["ltf_analyze"] is False
+    r = client.post(
+        f"/api/instruments/{instrument_id}/ltf-analyze",
+        headers=AUTH, json={"analyze": True},
+    )
+    assert r.json()["ltf_analyze"] is True
 
 
 def test_history_tab_includes_closed_stale(client, db, seeded):

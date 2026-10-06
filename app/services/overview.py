@@ -265,6 +265,15 @@ def _scenario_block(db: Database, sc: LtfScenario) -> dict[str, Any]:
         "break_candle_open_time": (
             trigger_event.break_candle_open_time if trigger_event else None
         ),
+        # §5/§12: уровень отмены с происхождением (для живого сценария — None)
+        "reverse_break": (
+            {
+                "price": sc.reverse_break_level_price,
+                "pivot_id": sc.reverse_break_pivot_id,
+                "confirmed_at": sc.reverse_break_confirmed_at,
+            }
+            if sc.reverse_break_level_price is not None else None
+        ),
         "range": rng.to_dict() if rng is not None else None,
         "anchors": anchors,
         "fresh_entries": len(_fresh_entries(db, sc.id)),
@@ -382,6 +391,10 @@ def _last_cancellation(
         "scenario_id": last.id,
         "reason": last.cancellation_reason,
         "cancelled_at": last.cancelled_at,
+        # §5/§12: «почему отменён» — уровень обратного слома и его pivot
+        "reverse_break_level_price": last.reverse_break_level_price,
+        "reverse_break_pivot_id": last.reverse_break_pivot_id,
+        "reverse_break_confirmed_at": last.reverse_break_confirmed_at,
     }
 
 
@@ -690,6 +703,7 @@ def instrument_current(
         "context_id": selected.id if selected else None,
         "scenario_id": sc.id if sc is not None else None,
         "movement_id": movements[-1].id if movements else None,
+        "structural_epoch_id": sc.structural_epoch_id if sc is not None else None,
         "range_version": rng_block["version"] if rng_block else None,
         "as_of": now,
         "price": price,

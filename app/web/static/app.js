@@ -288,11 +288,13 @@ function drawZones() {
     return div;
   };
 
-  // Визуальное объединение групп на графике отключено по решению пользователя:
-  // объединённая подсветка охватывала почти весь график и была бессмысленна.
-  // Состав групп доступен через API /api/zones/grouped; исходные зоны,
-  // границы и правила уведомлений не меняются (§10).
-  const groupedIds = new Set();
+  // §10: пересекающиеся зоны не накладываются друг на друга — для визуальной
+  // группы рисуется ОДНА объединённая полоса (состав — в подписи и tooltip).
+  // Исходные зоны, границы, середины и правила уведомлений не меняются.
+  const groupByZone = new Map();
+  for (const g of state.groups) {
+    for (const zid of g.zone_ids) groupByZone.set(zid, g);
+  }
 
   // пул зон для отрисовки: статус + ТФ + переключатель кандидатов;
   // при переполнении — ближайшие к текущей цене (выбранная зона — всегда).
@@ -312,7 +314,28 @@ function drawZones() {
     }
   }
 
+  // Группы с 2+ участниками в пуле рисуются одной объединённой полосой —
+  // их зоны по отдельности не рисуем. При выбранной зоне (клик) показываем
+  // только её, без объединения.
+  const mergedGroups = new Map(); // group.id -> [zones from pool]
+  if (!state.selectedZoneId) {
+    for (const z of pool) {
+      const g = groupByZone.get(z.id);
+      if (!g) continue;
+      if (!mergedGroups.has(g.id)) mergedGroups.set(g.id, []);
+      mergedGroups.get(g.id).push(z);
+    }
+    for (const [gid, members] of mergedGroups) {
+      if (members.length < 2) mergedGroups.delete(gid);
+    }
+  }
+  const mergedIds = new Set();
+  for (const members of mergedGroups.values()) {
+    for (const z of members) mergedIds.add(z.id);
+  }
+
   for (const z of pool) {
+    if (mergedIds.has(z.id)) continue; // входит в объединённую полосу ниже
     // §15.1.7: рисунок начинается от display_from (для FVG — средняя свеча
     // исходной тройки); formed_at — запасной вариант
     const fromMs = z.display_from || z.formed_at;
@@ -359,11 +382,41 @@ function drawZones() {
     label.className = 'zone-label';
     label.textContent =
       `${z.type.toUpperCase()} ${z.timeframe} · ${STATUS_RU[z.status] || z.status}` +
-      (z.name ? ` · ${z.name}` : '') + (groupedIds.has(z.id) ? ' ⧉' : '');
+      (z.name ? ` · ${z.name}` : '');
     // подписи только у некандидатов — иначе подписи кандидатов превращают
     // график в кашу; текст кандидата доступен в tooltip (div.title)
     if (z.status !== 'candidate') div.appendChild(label);
     div.title = label.textContent;
+    overlay.appendChild(div);
+  }
+
+  // §10: объединённые полосы визуальных групп — вместо наложения зон друг
+  // на друга. Состав группы — в бейдже и tooltip; клик открывает первую
+  // зону группы (исходные зоны доступны и в таблице ниже).
+  for (const [gid, members] of mergedGroups) {
+    const g = groupByZone.get(members[0].id);
+    // начало полосы — самое раннее формирование участников
+    let x1 = null;
+    for (const z of members) {
+      const fromMs = z.display_from || z.formed_at;
+      let zx = ts.timeToCoordinate(Math.floor(fromMs / 1000));
+      if (zx === null || zx < 0) zx = 0;
+      if (x1 === null || zx < x1) x1 = zx;
+    }
+    if (x1 === null || x1 > paneRight) continue;
+    const div = makeBand(g.upper, g.lower, 'zone-group');
+    if (!div) continue;
+    div.style.left = x1 + 'px';
+    div.style.width = Math.max(8, paneRight - x1) + 'px';
+    const ordered = members.slice().sort((a, b) => a.id - b.id);
+    const badge = document.createElement('span');
+    badge.className = 'zone-group-badge';
+    badge.textContent = `⧉ ${ordered.map((z) => `${z.type.toUpperCase()} ${z.timeframe}`).join(' + ')}`;
+    div.appendChild(badge);
+    div.title = ordered.map((z) =>
+      `${z.type.toUpperCase()} ${z.timeframe} · ${fmtPrice(z.lower)}–${fmtPrice(z.upper)}` +
+      ` · ${STATUS_RU[z.status] || z.status}`).join('\n');
+    div.onclick = () => openZoneDetail(g.id);
     overlay.appendChild(div);
   }
 

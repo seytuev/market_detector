@@ -513,6 +513,8 @@ class LtfEngine:
         sc = self.db.insert_ltf_scenario(LtfScenario(
             id=None, observation_id=obs.id, direction=obs.direction,
             trigger=main.kind, stage="primary", state="range_pending",
+            structural_epoch_id=self._structural_epoch(obs),
+            last_processed_close=candle.close_time,
             created_at=now, updated_at=now,
         ))
         self.db.update_ltf_observation(obs.id, state="active", updated_at=now)
@@ -521,13 +523,21 @@ class LtfEngine:
         for e in primaries:
             se_ids[e.level_key] = self._insert_structure_event(sc.id, e, now).id
         self.db.update_ltf_scenario(
-            sc.id, trigger_event_id=se_ids[main.level_key], updated_at=now,
+            sc.id, trigger_event_id=se_ids[main.level_key],
+            origin_break_event_id=se_ids[main.level_key], updated_at=now,
         )
+        sc.trigger_event_id = se_ids[main.level_key]
+        sc.origin_break_event_id = se_ids[main.level_key]
         # §11.2/п.18: диапазон и зоны готовы на закрытии слома — одно
         # объединённое событие, иначе range_pending и позже дополнение
         self._update_range(sc, up_to, now, result, avail=avail)
         self._build_entries(obs, sc, main, se_ids[main.level_key], avail,
                             up_to, now, result)
+        # §7 (Этап 4): второй проход — причинное движение появляется только
+        # в _build_entries, поэтому диапазон origin_reversal от его якоря
+        # строится здесь, на том же закрытии слома; при валидной
+        # continuation-паре первый проход уже создал версию, а этот — no-op
+        self._update_range(sc, up_to, now, result, avail=avail)
         # §18: контекст (снятие SSL/BSL + тест 50% D1 FVG) — до публикации
         # входов, чтобы допуск вне Premium применился уже в событии слома
         self._update_scenario_context(obs, sc, avail, up_to, now,
@@ -554,9 +564,17 @@ class LtfEngine:
                 self._insert_structure_event(sc.id, e, now)
             rev = cancel.event
             self._insert_structure_event(sc.id, rev, now)
+            # §5/§12: уровень отмены — хранимый факт с происхождением
+            # (опорный pivot обратной машины из evidence события-слома)
+            rev_pivot_id = rev.evidence.get("broken_pivot_id")
+            rev_confirmed_at = rev.evidence.get("pivot_confirmed_at")
             self.db.update_ltf_scenario(
                 sc.id, state="cancelled", cancellation_reason=cancel.pattern,
                 cancelled_at=now, updated_at=now,
+                reverse_break_level_price=rev.break_level,
+                reverse_break_pivot_id=rev_pivot_id,
+                reverse_break_confirmed_at=rev_confirmed_at,
+                last_processed_close=candle.close_time,
             )
             self.db.update_ltf_observation(obs.id, state="waiting_structure",
                                            updated_at=now)
@@ -565,11 +583,16 @@ class LtfEngine:
                 "scenario_id": sc.id, "reason": cancel.pattern,
                 "break_level": rev.break_level,
                 "break_candle_open_time": rev.break_candle_open_time,
+                "reverse_break_pivot_id": rev_pivot_id,
+                "reverse_break_confirmed_at": rev_confirmed_at,
             }, rev.occurred_at, now, f"cancellation:{sc.id}:{rev.level_key}",
                 processing_mode, detection_lag_ms, result)
             result.cancellations.append(sc.id)
             return
 
+        self.db.update_ltf_scenario(
+            sc.id, last_processed_close=candle.close_time,
+        )
         se_ids = [(e, self._insert_structure_event(sc.id, e, now).id)
                   for e in fresh]
         # (4) диапазон: новая подтверждённая опора → версия; старые события
@@ -682,6 +705,16 @@ class LtfEngine:
             windows.append((start, end))
         return windows
 
+    def _structural_epoch(self, obs) -> int:
+        """§5/§12: эпоха структуры наблюдения — 1 + число отмен обратным
+        сломом. Выводится из строк сценариев: replay даёт ту же эпоху
+        (детерминизм §13), хранить счётчик в наблюдении не нужно."""
+        return 1 + sum(
+            1
+            for s in self.db.list_ltf_scenarios(observation_id=obs.id)
+            if s.cancellation_reason in ("reverse_bos", "reverse_sms")
+        )
+
     def _insert_structure_event(
         self, scenario_id: int, e: StructureEventDraft, now: int
     ) -> LtfStructureEvent:        return self.db.insert_ltf_structure_event(LtfStructureEvent(
@@ -704,7 +737,16 @@ class LtfEngine:
             anchor_low_ref=row.anchor_low_pivot_id,
             anchor_high_ref=row.anchor_high_pivot_id,
             available_at=row.available_at,
+            kind=row.kind,
         )
+
+    def _origin_start_ref(self, sc) -> Optional[int]:
+        """§7 (Этап 4): start-pivot причинного движения первичного слома —
+        якорь-источник диапазона origin_reversal (никогда «максимум окна»)."""
+        if sc.origin_movement_id is None:
+            return None
+        mv = self.db.get_ltf_movement(sc.origin_movement_id)
+        return mv.start_pivot_id if mv is not None else None
 
     def _range_pivots(
         self, instrument_id: int, up_to: list, now: int,
@@ -767,9 +809,13 @@ class LtfEngine:
                                     avail=avail)
         prev = self.db.get_current_ltf_range(sc.id)
         prev_draft = self._row_to_draft(prev, sc.direction) if prev else None
+        policy = self.cfg.ltf_range_anchor_policy
+        origin_ref = self._origin_start_ref(sc)
         # пакетная обработка: draft детерминирован (avail, prev_draft); avail
-        # растёт добавлением, поэтому (len(avail), отпечаток prev) — полный
-        # ключ. Пересмотр ролей инвалидирует range_memo (StructureBatch).
+        # растёт добавлением, поэтому (len(avail), origin_ref, отпечаток prev)
+        # — полный ключ (policy — константа конфига; origin_ref меняется
+        # между первым и вторым проходом при открытии сценария). Пересмотр
+        # ролей инвалидирует range_memo (StructureBatch).
         # Мемо только когда опоры — avail структурного профиля 3/3 (транзитный
         # расчёт при ином профиле меняется каждую свечу и не мемоизируется).
         memo_key = None
@@ -779,20 +825,26 @@ class LtfEngine:
             == (RANGE_PIVOT_LEFT, RANGE_PIVOT_RIGHT)
         ):
             memo_key = (
-                sc.id, len(pivots),
+                sc.id, len(pivots), origin_ref,
                 None if prev_draft is None else (
                     prev_draft.lower, prev_draft.upper,
                     prev_draft.anchor_low_ref, prev_draft.anchor_high_ref,
-                    prev_draft.available_at,
+                    prev_draft.available_at, prev_draft.kind,
                 ),
             )
             if memo_key in self._batch.range_memo:
                 draft = self._batch.range_memo[memo_key]
             else:
-                draft = range_recalc(prev_draft, pivots, sc.direction, now)
+                draft = range_recalc(
+                    prev_draft, pivots, sc.direction, now,
+                    origin_start_ref=origin_ref, anchor_policy=policy,
+                )
                 self._batch.range_memo[memo_key] = draft
         else:
-            draft = range_recalc(prev_draft, pivots, sc.direction, now)
+            draft = range_recalc(
+                prev_draft, pivots, sc.direction, now,
+                origin_start_ref=origin_ref, anchor_policy=policy,
+            )
         if draft is None:
             return None
         # якоря — id ltf_pivot: pivots текущего sync (профиль 3/3) уже с id,
@@ -827,6 +879,9 @@ class LtfEngine:
             anchor_high_pivot_id=high_id,
             available_at=draft.available_at,
             prev_version_id=prev.id if prev else None,
+            kind=draft.kind,
+            anchor_policy=policy,
+            structural_epoch_id=sc.structural_epoch_id,
         ))
         result.ranges_created.append(row_id)
         if sc.state == "range_pending":
@@ -956,6 +1011,10 @@ class LtfEngine:
             source_candle_ids=mv.source_candle_ids,
             provenance_status=mv.provenance_status,
         ))
+        # §5/§12: движение триггерного слома — исходное движение сценария
+        if sc.origin_movement_id is None and se_id == sc.origin_break_event_id:
+            self.db.update_ltf_scenario(sc.id, origin_movement_id=movement_id)
+            sc.origin_movement_id = movement_id
         det = detect_entry_zones(up_to, mv, avail, sc.direction, self.cfg)
         rng = self.db.get_current_ltf_range(sc.id)
         rng_draft = self._row_to_draft(rng, sc.direction) if rng else None
@@ -1022,7 +1081,7 @@ class LtfEngine:
     @staticmethod
     def _range_payload(rng: LtfRange) -> dict[str, Any]:
         return {"lower": rng.lower, "upper": rng.upper, "mid": rng.mid,
-                "version": rng.version}
+                "version": rng.version, "kind": rng.kind}
 
     def _entry_payload(
         self, sc, entry: LtfScenarioEntry, zone: LtfEntryZone, rng,

@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from ..config import DetectorConfig
-from ..models import Candle, Direction
+from ..models import Candle, Direction, close_boundary_ms
 from .fvg import FvgRecord
 
 
@@ -152,6 +152,16 @@ def find_base(
             d.get("independent_fvg_member") for d in decisions
         ),
         "stop": stop_note,
+        # ТЗ 07.10.2026 §4.2 (T04): технический лимит сканирования — НЕ
+        # рыночная граница базы. Поиск ограничен, более ранний контекст не
+        # проверен — зона помечается, а не объявляется окончательной
+        **({"base_search_limited": True,
+            "base_search_limited_reason": (
+                f"достигнут технический лимит сканирования "
+                f"{cfg.uncalibrated_consolidation_max_candles} свечей — "
+                f"более ранний контекст не проверен (ТЗ 07.10.2026 §4.2)"
+            )} if stop_note and "лимит длины базы" in stop_note.get("reason", "")
+           else {}),
         # ТЗ 06.10.2026 §7 (T08): первая проверенная тройка (FVG, породивший
         # поиск базы) хранится отдельно от фактического подтверждающего FVG
         # (evidence.actual_confirming_fvg + relation.confirming_fvg_id)
@@ -163,18 +173,31 @@ def find_base(
     # расширяющая экстремум основания, входит в OB — только соответствующий
     # конец (для бычьего OB — Low, для медвежьего — High), не вся свеча.
     # Кейс-образец: 164407 (нижний якорь 57800.19).
+    # ТЗ 07.10.2026 §6 (T09): anchor — только ПРИЧИННАЯ свеча первоначального
+    # движения (окрашена в направление импульса), не любой поздний ретест;
+    # OHLC и момент доступности новой границы сохраняются
     next_candle = closed[end_idx + 1] if end_idx + 1 < len(closed) else None
+    if next_candle is not None and not _is_impulse_color(next_candle, direction):
+        next_candle = None
     if next_candle is not None:
+        anchor_common = {
+            "open_time": next_candle.open_time,
+            "ohlc": [next_candle.open, next_candle.high,
+                     next_candle.low, next_candle.close],
+            "direction": direction.value,
+            "available_at": close_boundary_ms(next_candle.open_time,
+                                              next_candle.timeframe),
+        }
         if direction == Direction.BULL and next_candle.low < lo:
             evidence["boundary_anchor"] = {
-                "open_time": next_candle.open_time, "side": "low",
+                **anchor_common, "side": "low",
                 "original": lo, "extended": next_candle.low,
                 "rule": "§9.3: нижняя тень импульсной свечи расширяет основание",
             }
             lo = next_candle.low
         elif direction == Direction.BEAR and next_candle.high > hi:
             evidence["boundary_anchor"] = {
-                "open_time": next_candle.open_time, "side": "high",
+                **anchor_common, "side": "high",
                 "original": hi, "extended": next_candle.high,
                 "rule": "§9.3: верхняя тень импульсной свечи расширяет основание",
             }

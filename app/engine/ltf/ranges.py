@@ -34,6 +34,9 @@ class RangeDraft:
     anchor_low_ref: Optional[int]    # pivot_id опоры минимума (или pivot_at до БД)
     anchor_high_ref: Optional[int]
     available_at: int                # ms: подтверждение младшей опоры пары
+    # §7 (Этап 4): continuation — связанная пара LH→LL / HL→HH;
+    # origin_reversal — от якоря-источника причинного движения первичного слома
+    kind: str = "continuation"
     evidence: dict[str, Any] = field(default_factory=dict)
 
 
@@ -106,11 +109,78 @@ def current_range(
     )
 
 
+def origin_reversal_range(
+    pivots: list[PivotCandidate],
+    movement_start_ref: int,
+    direction: Direction,
+    now_ms: int,
+) -> Optional[RangeDraft]:
+    """§7 (Этап 4): диапазон от якоря-источника разворотного движения.
+
+    Стартовый якорь — start-pivot причинного движения ПЕРВИЧНОГО слома
+    (для bear это HH прежней восходящей структуры; роль НЕ переименовывается
+    в LH, чтобы пройти фильтр связанной пары). Конечный якорь —
+    подтверждённый (теми же 3 правыми закрытыми свечами) экстремум движения:
+    для bear — минимальный low-pivot от start, для bull — максимальный
+    high-pivot (при равной цене — более поздний по pivot_at). Произвольный
+    экстремум окна («максимальный хай видимых дней») не подставляется:
+    start приходит только из ltf_movement.origin.
+
+    Оба якоря должны быть подтверждены на now_ms, иначе None → range_pending
+    (предварительного торгуемого диапазона нет). Диапазон, подтверждённый
+    до самого BOS, — не ошибка: важна принадлежность якорей движению слома.
+    """
+    ps = sorted(
+        (
+            p for p in pivots
+            if p.state == "confirmed" and p.confirmed_at <= now_ms
+        ),
+        key=lambda p: p.pivot_at,
+    )
+    start = next((p for p in ps if _ref(p) == movement_start_ref), None)
+    if start is None:
+        return None
+    bear = direction == Direction.BEAR
+    end_kind = "low" if bear else "high"
+    cands = [
+        p for p in ps
+        if p.kind == end_kind and p.pivot_at >= start.pivot_at
+    ]
+    if not cands:
+        return None
+    if bear:
+        end = min(cands, key=lambda p: (p.price, -p.pivot_at))
+    else:
+        end = max(cands, key=lambda p: (p.price, p.pivot_at))
+    low, high = (end.price, start.price) if bear else (start.price, end.price)
+    if high <= low:
+        return None
+    return RangeDraft(
+        direction=direction,
+        lower=low,
+        upper=high,
+        mid=(low + high) / 2,
+        anchor_low_ref=_ref(end) if bear else _ref(start),
+        anchor_high_ref=_ref(start) if bear else _ref(end),
+        available_at=max(start.confirmed_at, end.confirmed_at),
+        kind="origin_reversal",
+        evidence={
+            "range_kind": "origin_reversal",
+            # фактические роли: start может быть HH/LL прежней структуры
+            "anchor_role": start.role, "ref_role": end.role,
+            "anchor_pivot_at": start.pivot_at, "ref_pivot_at": end.pivot_at,
+        },
+    )
+
+
 def range_recalc(
     prev: Optional[RangeDraft],
     pivots: list[PivotCandidate],
     direction: Direction,
     now_ms: int,
+    *,
+    origin_start_ref: Optional[int] = None,
+    anchor_policy: str = "continuation_only",
 ) -> Optional[RangeDraft]:
     """Пересчёт после подтверждения новой опоры (§7).
 
@@ -118,8 +188,21 @@ def range_recalc(
     None — диапазон прежний (или пары всё ещё нет → range_pending).
     Старые версии не переписываются: запись LtfRange(version+1,
     prev_version_id) — на слое БД.
+
+    §7 (Этап 4): при anchor_policy='origin_reversal' и отсутствии валидной
+    continuation-пары диапазон строится от якоря-источника причинного
+    движения первичного слома (kind='origin_reversal'). Переход возможен
+    только origin_reversal → continuation (новая версия при подтверждении
+    первой валидной пары); обратно continuation → origin_reversal — никогда.
     """
     cur = current_range(pivots, direction, now_ms)
+    if (
+        cur is None
+        and anchor_policy == "origin_reversal"
+        and origin_start_ref is not None
+        and (prev is None or prev.kind != "continuation")
+    ):
+        cur = origin_reversal_range(pivots, origin_start_ref, direction, now_ms)
     if cur is None:
         return None
     if (

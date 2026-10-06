@@ -33,6 +33,7 @@ from ..config import (
 from ..db import Database
 from ..engine import Scanner
 from ..engine.scanner import review_replay_start_ms
+from ..services.zone_groups import union_find_groups
 from ..models import (
     TIMEFRAME_MINUTES,
     BoundaryCorrection,
@@ -182,6 +183,9 @@ def zone_to_dict(z: Zone) -> dict[str, Any]:
             else "manual_only" if z.evidence.get("manual_confirmation_only")
             else "unconfirmed"
         ),
+        # ТЗ 07.10.2026 §3/§11: единый canonical state — актуальные зоны
+        # рисуются сразу, статус candidate означает только очередь ревью
+        "relevant": z.is_currently_relevant(),
         "market_validity": z.market_validity,
         "evidence": z.evidence,
         "rule_version": z.rule_version,
@@ -683,7 +687,7 @@ def create_app(
         zones = [z for z in db.get_zones(instrument_id=instrument_id,
                                          statuses=[ZoneStatus.ACTIVE])
                  if z.is_currently_relevant()]  # ТЗ 06.10.2026 §13 (T21)
-        groups = _union_find_groups(zones)
+        groups = union_find_groups(zones)
         return {
             "instrument_id": instrument_id,
             "groups": [
@@ -1487,34 +1491,6 @@ def _add_review(db: Database, zone_id: int, decision: str, text: str) -> int:
         boundary_version=1, created_at=now_ms(),
     )
     return db.add_review(review)
-
-
-def _union_find_groups(zones: list[Zone]) -> list[list[Zone]]:
-    """Union-find по пересечению диапазонов [lower, upper] (§10: визуальное
-    объединение). Касание границ считается пересечением."""
-    parent = {z.id: z.id for z in zones}
-
-    def find(x: int) -> int:
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    def union(a: int, b: int) -> None:
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent[rb] = ra
-
-    ordered = sorted(zones, key=lambda z: z.lower)
-    for i, a in enumerate(ordered):
-        for b in ordered[i + 1:]:
-            if b.lower > a.upper:
-                break  # отсортировано: дальше пересечений с a не будет
-            union(a.id, b.id)
-    groups: dict[int, list[Zone]] = {}
-    for z in zones:
-        groups.setdefault(find(z.id), []).append(z)
-    return list(groups.values())
 
 
 def create_app_from_env() -> FastAPI:

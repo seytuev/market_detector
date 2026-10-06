@@ -233,7 +233,16 @@ class Database:
             )
             if ins_table and "ltf_analyze" not in ins_cols:
                 self.conn.execute(
-                    "ALTER TABLE instrument ADD COLUMN ltf_analyze INTEGER NOT NULL DEFAULT 0"
+                    "ALTER TABLE instrument ADD COLUMN ltf_analyze INTEGER NOT NULL DEFAULT 1"
+                )
+            # LTF-анализ включён по умолчанию: одноразово включаем для всех
+            # уже заведённых инструментов (ручное снятие галочки дальше сохраняется)
+            if ins_table and not self.conn.execute(
+                "SELECT 1 FROM meta WHERE key='ltf_analyze_default_on'"
+            ).fetchone():
+                self.conn.execute("UPDATE instrument SET ltf_analyze=1")
+                self.conn.execute(
+                    "INSERT INTO meta (key, value) VALUES ('ltf_analyze_default_on', '1')"
                 )
             # §15: раздельная оценка ревью и версионированные правки границ.
             # CREATE TABLE IF NOT EXISTS — без потерь для существующих данных.
@@ -389,6 +398,43 @@ class Database:
                     self.conn.execute(
                         f"ALTER TABLE ltf_event ADD COLUMN {col} {ddl}"
                     )
+            # §5/§12 (этап 2): причинная цепочка сценария — триггерное
+            # событие, движение, структурная эпоха, уровень отмены с
+            # происхождением и курсор обработки; старые строки — NULL/эпоха 1
+            ltf_sc_cols = {
+                r["name"]
+                for r in self.conn.execute(
+                    "PRAGMA table_info(ltf_scenario)"
+                ).fetchall()
+            }
+            for col, ddl in (
+                ("origin_break_event_id", "INTEGER"),
+                ("origin_movement_id", "INTEGER"),
+                ("structural_epoch_id", "INTEGER NOT NULL DEFAULT 1"),
+                ("reverse_break_level_price", "REAL"),
+                ("reverse_break_pivot_id", "INTEGER"),
+                ("reverse_break_confirmed_at", "INTEGER"),
+                ("last_processed_close", "INTEGER"),
+            ):
+                if col not in ltf_sc_cols:
+                    self.conn.execute(
+                        f"ALTER TABLE ltf_scenario ADD COLUMN {col} {ddl}"
+                    )
+            ltf_rng_cols = {
+                r["name"]
+                for r in self.conn.execute(
+                    "PRAGMA table_info(ltf_range)"
+                ).fetchall()
+            }
+            for col, ddl in (
+                ("kind", "TEXT NOT NULL DEFAULT 'continuation'"),
+                ("anchor_policy", "TEXT"),
+                ("structural_epoch_id", "INTEGER NOT NULL DEFAULT 1"),
+            ):
+                if col not in ltf_rng_cols:
+                    self.conn.execute(
+                        f"ALTER TABLE ltf_range ADD COLUMN {col} {ddl}"
+                    )
             self.conn.commit()
 
     def get_meta(self, key: str) -> Optional[str]:
@@ -446,13 +492,13 @@ class Database:
 
     def upsert_instrument(self, ins: Instrument) -> int:
         self.conn.execute(
-            """INSERT INTO instrument (asset, venue, market_type, symbol, quote_asset, precision, enabled)
-               VALUES (?,?,?,?,?,?,?)
+            """INSERT INTO instrument (asset, venue, market_type, symbol, quote_asset, precision, enabled, ltf_analyze)
+               VALUES (?,?,?,?,?,?,?,?)
                ON CONFLICT (venue, market_type, symbol)
                DO UPDATE SET asset=excluded.asset, quote_asset=excluded.quote_asset,
                              precision=excluded.precision, enabled=excluded.enabled""",
             (ins.asset, ins.venue, ins.market_type, ins.symbol, ins.quote_asset,
-             ins.precision, int(ins.enabled)),
+             ins.precision, int(ins.enabled), int(ins.ltf_analyze)),
         )
         self._commit()
         row = self.conn.execute(
@@ -1621,10 +1667,16 @@ class Database:
             """INSERT INTO ltf_scenario
                (observation_id, direction, "trigger", stage, state,
                 trigger_event_id, cancellation_reason, cancelled_at,
+                origin_break_event_id, origin_movement_id, structural_epoch_id,
+                reverse_break_level_price, reverse_break_pivot_id,
+                reverse_break_confirmed_at, last_processed_close,
                 created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (s.observation_id, s.direction.value, s.trigger, s.stage, s.state,
              s.trigger_event_id, s.cancellation_reason, s.cancelled_at,
+             s.origin_break_event_id, s.origin_movement_id, s.structural_epoch_id,
+             s.reverse_break_level_price, s.reverse_break_pivot_id,
+             s.reverse_break_confirmed_at, s.last_processed_close,
              s.created_at, s.updated_at),
         )
         self._commit()
@@ -1682,6 +1734,13 @@ class Database:
             trigger_event_id=r["trigger_event_id"],
             cancellation_reason=r["cancellation_reason"],
             cancelled_at=r["cancelled_at"],
+            origin_break_event_id=r["origin_break_event_id"],
+            origin_movement_id=r["origin_movement_id"],
+            structural_epoch_id=r["structural_epoch_id"],
+            reverse_break_level_price=r["reverse_break_level_price"],
+            reverse_break_pivot_id=r["reverse_break_pivot_id"],
+            reverse_break_confirmed_at=r["reverse_break_confirmed_at"],
+            last_processed_close=r["last_processed_close"],
             created_at=r["created_at"], updated_at=r["updated_at"],
         )
 
@@ -1978,11 +2037,13 @@ class Database:
         cur = self.conn.execute(
             """INSERT INTO ltf_range
                (scenario_id, version, lower, upper, mid, anchor_low_pivot_id,
-                anchor_high_pivot_id, available_at, prev_version_id)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
+                anchor_high_pivot_id, available_at, prev_version_id,
+                kind, anchor_policy, structural_epoch_id)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
             (rng.scenario_id, rng.version, rng.lower, rng.upper, rng.mid,
              rng.anchor_low_pivot_id, rng.anchor_high_pivot_id, rng.available_at,
-             rng.prev_version_id),
+             rng.prev_version_id, rng.kind, rng.anchor_policy,
+             rng.structural_epoch_id),
         )
         self._commit()
         self._bump_ltf_cache()
@@ -2102,6 +2163,8 @@ class Database:
             anchor_low_pivot_id=r["anchor_low_pivot_id"],
             anchor_high_pivot_id=r["anchor_high_pivot_id"],
             available_at=r["available_at"], prev_version_id=r["prev_version_id"],
+            kind=r["kind"], anchor_policy=r["anchor_policy"],
+            structural_epoch_id=r["structural_epoch_id"],
         )
 
     # ---------- LTF: entry zones (§8) ----------

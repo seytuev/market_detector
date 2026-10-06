@@ -73,9 +73,10 @@ def tradingview_url(ins: Optional[Instrument]) -> Optional[str]:
     return f"https://www.tradingview.com/chart/?symbol={ins.venue.upper()}:{ins.symbol}"
 
 
-def _render_event_block(view) -> str:
+def _render_event_block(view, group_members: Optional[list[Zone]] = None) -> str:
     """Один блок сообщения по §9: актив, тип/направление/ТФ, границы L–U,
-    середина M, цена, причина, источник, время с поясом, статус зоны."""
+    середина M, цена, причина, источник, время с поясом, статус зоны.
+    Для зоны из визуальной группы (§10) — состав объединения."""
     event: Event = view.event
     zone: Optional[Zone] = view.zone
     ins: Optional[Instrument] = view.instrument
@@ -108,6 +109,20 @@ def _render_event_block(view) -> str:
         status_ru = _STATUS_RU.get(zone.status.value, zone.status.value)
         lines.append(f"Статус зоны: {status_ru}.")
 
+    # §10: зона входит в визуальную группу — перечисляем остальных участников
+    if zone is not None and group_members:
+        parts = []
+        for z in sorted(group_members, key=lambda m: m.id or 0):
+            z_type = _TYPE_RU.get(z.type.value, z.type.value)
+            if z.is_level:
+                parts.append(f"{z_type} {z.timeframe} ({_fmt_price(z.lower)})")
+            else:
+                parts.append(
+                    f"{z_type} {z.timeframe} "
+                    f"({_fmt_price(z.lower)}–{_fmt_price(z.upper)})"
+                )
+        lines.append("Визуально объединена с: " + "; ".join(parts) + ".")
+
     # §11: восстановленное событие — пометка задержки с исходным временем
     if event.delayed:
         lines.append(
@@ -121,7 +136,10 @@ def _render_event_block(view) -> str:
 def render_text(payload: MessagePayload) -> str:
     """Текст сообщения. Пакет не скрывает второй актив (§9):
     каждое событие — отдельный блок со своим объектом и причиной."""
-    blocks = [_render_event_block(v) for v in payload.views]
+    blocks = [
+        _render_event_block(v, payload.group_members.get(v.event.zone_id))
+        for v in payload.views
+    ]
     if len(blocks) > 1:
         header = f"Несколько сигналов ({len(blocks)}):"
         return header + "\n\n" + "\n\n".join(blocks)

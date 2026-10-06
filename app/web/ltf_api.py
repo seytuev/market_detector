@@ -424,6 +424,8 @@ def register_ltf_routes(app, db: Database, settings, require_auth, ltf_engine=No
             raise HTTPException(status_code=404, detail="Сценарий не найден")
         return {
             "state_version": seq,
+            # §5/§12: причинная цепочка сценария (эпоха, уровень отмены)
+            "scenario": sc.to_dict(),
             "events": [
                 e.to_dict()
                 for e in sorted(merged.values(),
