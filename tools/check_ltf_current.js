@@ -57,7 +57,7 @@ async function main() {
   await new Promise((r) => setTimeout(r, 2000));
 
   // 01: одна строка на instrument
-  const apiAssets = await apiJson(page, '/api/ltf/instruments');
+  const apiAssets = (await apiJson(page, '/api/ltf/instruments')).instruments;
   const uiRows = await page.$$eval('#ltf-obs-list .ltf-asset', (els) =>
     els.map((e) => e.querySelector('.ltf-obs-head b').textContent));
   check(uiRows.length === apiAssets.length,

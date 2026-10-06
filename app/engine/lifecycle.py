@@ -276,13 +276,6 @@ def track_zone(
         phase = zone.evidence.get("phase")
         if phase is None:
             phase = "departed" if zone.confirmed_at is not None else "forming"
-        import os as _os
-        if _os.environ.get("HTF_DEBUG_ZONE") == str(zone.id):
-            print(f"DBG ts={ts} ev_phase={zone.evidence.get('phase')} phase={phase} "
-                  f"departed_at={zone.evidence.get('departed_at')} be={be} "
-                  f"confirmed={zone.confirmed_at} mv={zone.market_validity} "
-                  f"lo={lo} hi={hi} intersects={geom.interval_intersects(zone, lo, hi)}",
-                  flush=True)
         if phase != "departed":
             # ТЗ 06.10.2026 §3.1/§5: наблюдения до завершения базы не могут
             # быть её выходом — нижняя временная граница сканирования
@@ -324,10 +317,6 @@ def track_zone(
     existing_keys = set(keys)
     kind_thr = _kind_thresholds(cfg)
     visit = db.open_visit_for(zone.id, zone.cycle_id)
-    import os as _os2
-    if _os2.environ.get("HTF_DEBUG_ZONE") == str(zone.id):
-        print(f"DBG2 ts={ts} visit={None if visit is None else (visit.id, visit.entered_at, visit.exited_at, visit.max_depth)} "
-              f"intersects={geom.interval_intersects(zone, lo, hi)}", flush=True)
     thresholds = (
         _fvg_thresholds(cfg) if zone.type == ZoneType.FVG else _block_thresholds(cfg)
     )
@@ -378,10 +367,6 @@ def track_zone(
                 extreme=extreme0, d_raw=float(geom.exact_depth(zone, extreme0)),
             ))
             visit = db.open_visit_for(zone.id, zone.cycle_id)
-            import os as _os3
-            if _os3.environ.get("HTF_DEBUG_ZONE") == str(zone.id):
-                print(f"DBG3 ts={ts} opened vid={vid} reloaded={None if visit is None else visit.id}",
-                      flush=True)
         elif dmax > visit.max_depth:
             extreme = _visit_extreme(zone, visit, lo, hi)
             db.update_visit_depth(visit.id, dmax, extreme=extreme,

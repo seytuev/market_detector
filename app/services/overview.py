@@ -295,35 +295,73 @@ def _contexts_direction(observations: list[LtfObservation]) -> Optional[str]:
     return next(iter(dirs)) if len(dirs) == 1 else "mixed"
 
 
+def _scenario_counts(
+    db: Database, sc: LtfScenario
+) -> tuple[list[tuple[LtfScenarioEntry, LtfEntryZone]], dict[str, int]]:
+    """Допуск привязок сценария на текущей версии диапазона — единый цикл
+    (evaluate_final) для counts/eligible_entries снимка /current и для
+    eligible_count списка активов (§13: один снимок для всего интерфейса).
+    Возвращает (допущенные пары (entry, zone), counts как в /entries:
+    eligible/excluded по текущей версии, historical — строки прошлых
+    версий)."""
+    current = db.get_current_ltf_range(sc.id)
+    entries = [
+        e for e in db.list_ltf_scenario_entries(sc.id)
+        if e.state != "invalid"
+    ]
+    if current is not None:
+        ver = current.version
+    elif entries:
+        ver = max(e.range_version for e in entries)
+    else:
+        ver = 0
+    allow_outside = context_complete(_context_flags(db, sc.id))
+    eligible: list[tuple[LtfScenarioEntry, LtfEntryZone]] = []
+    counts = {"eligible": 0, "excluded": 0, "historical": 0}
+    for e in entries:
+        if e.range_version != ver:
+            counts["historical"] += 1
+            continue
+        z = db.get_ltf_entry_zone(e.entry_zone_id)
+        if z is None:
+            continue
+        fe = evaluate_final(e, z, allow_outside=allow_outside)
+        if fe.eligible_now:
+            eligible.append((e, z))
+        else:
+            counts["excluded"] += 1
+    counts["eligible"] = len(eligible)
+    return eligible, counts
+
+
 def _instrument_stage(
     db: Database,
-    instrument_id: int,
     observations: list[LtfObservation],
-    eligible_zones: list[dict[str, Any]],
+    selected: Optional[LtfObservation],
+    sc: Optional[LtfScenario],
+    zones: list[LtfEntryZone],
     price: Optional[float],
     fresh: bool,
     ds: dict[str, Any],
 ) -> tuple[str, Optional[str]]:
-    """Текущий этап инструмента (§4.2) — сервер вычисляет по согласованному
-    состоянию; при нехватке данных — data_pending, а не «нет сетапа» (§14).
+    """Текущий этап инструмента (§4.2) — из того же результата допуска
+    (zones — зоны, прошедшие evaluate_final), что counts/eligible_entries;
+    при нехватке данных — data_pending, а не «нет сетапа» (§14).
     Возвращает (stage, direction)."""
     if ds["state"] == "data_pending":
         return STAGE_DATA_PENDING, None
-    selected = _select_context(db, instrument_id, observations)
     if selected is None:
         return STAGE_WAIT_HTF, None
-    sc = db.get_active_ltf_scenario(selected.id)
     if sc is None:
         return STAGE_WAIT_BOS, _contexts_direction(observations)
     direction = sc.direction.value
     rng = db.get_current_ltf_range(sc.id)
     if rng is None:
         return STAGE_WAIT_RANGE, direction
-    zones = [z for z in eligible_zones if z["scenario_id"] == sc.id]
     if not zones:
         return STAGE_NO_ZONES, direction
     if fresh and price is not None and any(
-        z["lower"] <= price <= z["upper"] for z in zones
+        z.lower <= price <= z.upper for z in zones
     ):
         return STAGE_IN_ENTRY, direction
     half = "Premium" if direction == "bear" else "Discount"
@@ -502,7 +540,9 @@ def _attention_group(
 def instruments_overview(db: Database, settings) -> list[dict[str, Any]]:
     """Левая панель «Активы» (§4.2): одна строка на instrument_id
     (symbol/venue/market), сколько бы Observation ни было у инструмента.
-    Счётчики и последние события — агрегатными запросами, без N+1."""
+    eligible_count и stage — тем же циклом допуска (evaluate_final), что
+    снимок /current выбранного контекста (§13: один снимок); последние
+    события и счётчики кандидатов — агрегатными запросами."""
     now = now_ms()
     by_instrument: dict[int, list[LtfObservation]] = {}
     for o in db.list_ltf_observations():
@@ -513,12 +553,6 @@ def instruments_overview(db: Database, settings) -> list[dict[str, Any]]:
         if ins.enabled and ins.ltf_analyze:
             by_instrument.setdefault(ins.id, [])
     quotes = db.get_all_quotes()
-    eligible_rows = db.list_ltf_eligible_zones()
-    eligible_by_instrument: dict[int, list[dict[str, Any]]] = {}
-    for row in eligible_rows:
-        eligible_by_instrument.setdefault(
-            row["instrument_id"], []
-        ).append(row)
     last_event = db.get_ltf_last_event_at()
     # L06: зоны-кандидаты на проверку — одним агрегатным запросом (без N+1)
     candidate_counts = db.count_candidate_zones()
@@ -528,14 +562,21 @@ def instruments_overview(db: Database, settings) -> list[dict[str, Any]]:
         if ins is None:
             continue
         quote = quotes.get(iid)
+        price = quote[0] if quote else None
         ds = _data_state(db, settings, iid, quote, now)
         fresh = ds["state"] == "ok"
-        eligible = eligible_by_instrument.get(iid, [])
-        stage, direction = _instrument_stage(
-            db, iid, obs_list, eligible,
-            quote[0] if quote else None, fresh, ds,
+        selected = _select_context(db, iid, obs_list, price, fresh)
+        sc = (
+            db.get_active_ltf_scenario(selected.id)
+            if selected is not None else None
         )
-        selected = _select_context(db, iid, obs_list)
+        eligible: list[tuple[LtfScenarioEntry, LtfEntryZone]] = []
+        if sc is not None:
+            eligible, _counts = _scenario_counts(db, sc)
+        stage, direction = _instrument_stage(
+            db, obs_list, selected, sc,
+            [z for _, z in eligible], price, fresh, ds,
+        )
         htf_context = None
         if selected is not None:
             zone = db.get_zone(selected.zone_id)
@@ -545,7 +586,7 @@ def instruments_overview(db: Database, settings) -> list[dict[str, Any]]:
                 }
         attention = _attention_group(
             db, iid, obs_list, len(eligible), stage, ds,
-            quote[0] if quote else None, fresh,
+            price, fresh,
             candidate_counts.get(iid, 0) > 0,
         )
         out.append({
@@ -604,15 +645,10 @@ def instrument_current(
         db.get_active_ltf_scenario(selected.id)
         if selected is not None else None
     )
-    eligible_all = db.list_ltf_eligible_zones()
-    stage, direction = _instrument_stage(
-        db, instrument_id, observations,
-        [z for z in eligible_all if z["instrument_id"] == instrument_id],
-        price, fresh, ds,
-    )
     sc_block: Optional[dict[str, Any]] = None
     rng_block: Optional[dict[str, Any]] = None
     eligible_rows: list[dict[str, Any]] = []
+    eligible_zones: list[LtfEntryZone] = []
     counts = {"eligible": 0, "excluded": 0, "historical": 0}
     if sc is not None:
         sc_block = _scenario_block(db, sc)
@@ -620,37 +656,22 @@ def instrument_current(
             rng_block = {**sc_block["range"],
                          "anchors": sc_block["anchors"]}
         # counts — по тем же строкам, что в ответе (п.19): как
-        # /entries?view=eligible|excluded|history текущей версии
-        current = db.get_current_ltf_range(sc.id)
-        entries = [
-            e for e in db.list_ltf_scenario_entries(sc.id)
-            if e.state != "invalid"
+        # /entries?view=eligible|excluded|history текущей версии; тот же
+        # цикл допуска использует и список активов (§13)
+        eligible, counts = _scenario_counts(db, sc)
+        eligible_zones = [z for _, z in eligible]
+        eligible_rows = [
+            _entry_row(db, e, z, sc, price if fresh else None)
+            for e, z in eligible
         ]
-        if current is not None:
-            ver = current.version
-        elif entries:
-            ver = max(e.range_version for e in entries)
-        else:
-            ver = 0
-        allow_outside = context_complete(_context_flags(db, sc.id))
-        for e in entries:
-            if e.range_version != ver:
-                counts["historical"] += 1
-                continue
-            z = db.get_ltf_entry_zone(e.entry_zone_id)
-            if z is None:
-                continue
-            fe = evaluate_final(e, z, allow_outside=allow_outside)
-            if fe.eligible_now:
-                eligible_rows.append(
-                    _entry_row(db, e, z, sc, price if fresh else None)
-                )
-            else:
-                counts["excluded"] += 1
-        counts["eligible"] = len(eligible_rows)
         eligible_rows.sort(key=lambda r: (
             _ENTRY_ORDER.get(r["type"], 9), r["confirmed_at"] or 0
         ))
+    # этап — из того же результата допуска, что counts/eligible_entries
+    # (§13: карточка, счётчик и таблица не расходятся внутри снимка)
+    stage, direction = _instrument_stage(
+        db, observations, selected, sc, eligible_zones, price, fresh, ds,
+    )
     waiting: Optional[dict[str, Any]] = None
     if sc is None and selected is not None:
         waiting = {
@@ -660,8 +681,17 @@ def instrument_current(
         }
     last_closed = db.last_candle(instrument_id, "H1")
     last_processed = db.get_meta(f"ltf:h1:last_close:{instrument_id}")
+    movements = db.list_ltf_movements(sc.id) if sc is not None else []
     return {
         "instrument": _instrument_brief(db, instrument_id),
+        # §13: идентичность снимка — все панели интерфейса читают один
+        # instrument/context/scenario/range/state_version
+        "instrument_id": instrument_id,
+        "context_id": selected.id if selected else None,
+        "scenario_id": sc.id if sc is not None else None,
+        "movement_id": movements[-1].id if movements else None,
+        "range_version": rng_block["version"] if rng_block else None,
+        "as_of": now,
         "price": price,
         "quote_at": quote[1] if quote else None,
         # F03: last_closed_h1 — close_time последней закрытой H1, в тех же

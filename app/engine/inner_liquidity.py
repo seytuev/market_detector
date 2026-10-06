@@ -22,13 +22,17 @@ level_crossed §7) не отменяет родительский OB и друг
 """
 from __future__ import annotations
 
+import bisect
+from typing import Optional
+
 from ..config import DetectorConfig
 from ..db import Database
 from ..models import Candle, Direction, InnerLevel, Zone
 
 
 def sync_candidates(
-    db: Database, cfg: DetectorConfig, zone: Zone, candles: list[Candle], now: int
+    db: Database, cfg: DetectorConfig, zone: Zone, candles: list[Candle], now: int,
+    *, times: Optional[list[int]] = None,
 ) -> list[InnerLevel]:
     """Создаёт/пересчитывает кандидатов внутренних уровней по визитам зоны.
 
@@ -53,6 +57,10 @@ def sync_candidates(
     tf = candles[0].timeframe
     bull = zone.direction == Direction.BULL
     kind = "ssl" if bull else "bsl"
+    # open_time свечей для bisect-срезов окна визита (передаётся вызывающим —
+    # один раз на свечу, а не на зону); candles отсортированы по open_time
+    if times is None:
+        times = [c.open_time for c in candles]
     visits = sorted(db.get_visits(zone.id), key=lambda v: v.entered_at)
     levels = [
         lv for lv in db.list_inner_levels(parent_ob_id=zone.id)
@@ -63,6 +71,9 @@ def sync_candidates(
         for lv in levels for s in lv.evidence.get("superseded", [])
     }
     candidates = [lv for lv in levels if lv.status == "candidate"]
+    # дедуп по UNIQUE-ключу — по уже выбранным уровням зоны, без точечных
+    # get_inner_level_by_key на каждый визит (per-candle N+1)
+    keys = {(lv.price, lv.pivot_time) for lv in levels}
     out: list[InnerLevel] = []
     for v in visits:
         if v.extreme is None:
@@ -71,7 +82,9 @@ def sync_candidates(
         if not (zone.lower <= price <= zone.upper):
             continue  # ТЗ §5: экстремум вне диапазона OB — уровень не создаём
         end = v.exited_at if v.exited_at is not None else now
-        window = [c for c in candles if v.entered_at <= c.open_time <= end]
+        lo_i = bisect.bisect_left(times, v.entered_at)
+        hi_i = bisect.bisect_right(times, end)
+        window = candles[lo_i:hi_i]
         if not window:
             continue
         pivot = (
@@ -79,7 +92,7 @@ def sync_candidates(
             else max(window, key=lambda c: c.high)
         )
         pivot_time = pivot.open_time
-        if db.get_inner_level_by_key(zone.id, tf, kind, price, pivot_time) is not None:
+        if (price, pivot_time) in keys:
             continue  # дедуп по UNIQUE-ключу
         if (price, pivot_time) in superseded:
             continue  # экстремум пересчитан в более глубокий — не воскрешаем
@@ -100,7 +113,7 @@ def sync_candidates(
         if cand is not None:
             if cand.price == price and cand.pivot_time == pivot_time:
                 continue
-            if db.get_inner_level_by_key(zone.id, tf, kind, price, pivot_time) is not None:
+            if (price, pivot_time) in keys:
                 continue  # новый ключ занят другой записью
             ev = dict(cand.evidence)
             sup = list(ev.get("superseded", []))
@@ -114,6 +127,8 @@ def sync_candidates(
                 source_test_id=v.id, evidence=ev,
             )
             superseded.add((cand.price, cand.pivot_time))
+            keys.discard((cand.price, cand.pivot_time))
+            keys.add((price, pivot_time))
             cand.price, cand.pivot_time = price, pivot_time
             cand.source_test_id, cand.evidence = v.id, ev
             out.append(cand)
@@ -131,6 +146,7 @@ def sync_candidates(
         lid = db.insert_inner_level(lv)
         if lid is not None:
             lv.id = lid
+            keys.add((price, pivot_time))
             candidates.append(lv)
             out.append(lv)
     return out
@@ -144,6 +160,8 @@ def confirm_levels(
     tf_ms: int,
     boundary: int,
     now: int,
+    *,
+    index: Optional[dict[int, int]] = None,
 ) -> list[InnerLevel]:
     """Подтверждение кандидатов строгим правилом 3+3 по свечам того же ТФ.
 
@@ -157,7 +175,9 @@ def confirm_levels(
         return []
     tf = candles[0].timeframe
     left, right = cfg.inner_level_pivot_left, cfg.inner_level_pivot_right
-    index = {c.open_time: i for i, c in enumerate(candles)}
+    # open_time → позиция (передаётся вызывающим — один раз на свечу)
+    if index is None:
+        index = {c.open_time: i for i, c in enumerate(candles)}
     out: list[InnerLevel] = []
     for lv in db.list_inner_levels(parent_ob_id=zone.id, statuses=("candidate",)):
         if lv.timeframe != tf:

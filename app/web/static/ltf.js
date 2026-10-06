@@ -209,7 +209,11 @@ async function loadLabels() {
 }
 
 async function loadAssets() {
-  state.assets = await api('/api/ltf/instruments');
+  applyAssets(await api('/api/ltf/instruments'));
+}
+
+function applyAssets(payload) {
+  state.assets = payload.instruments;
   const sel = $('ltf-instrument');
   const prev = state.instrumentId;
   sel.innerHTML = '';
@@ -415,22 +419,25 @@ async function reloadCurrent({ keepRange }) {
   const stale = () => req !== state.currentReqSeq || id !== state.instrumentId;
   const keep = keepRange && state.chart ? state.chart.timeScale().getVisibleLogicalRange() : null;
   const keepFocus = keepRange ? state.priceFocus : null;
-  // F04: снимок /current и слои (chart/journal) связаны одной версией
-  // state_version (общий счётчик state_seq); расхождение версий означает,
-  // что запись вклинилась между запросами, — пакет перечитывается целиком
+  // F04/§13: снимок /current, слои (chart/journal) и список активов связаны
+  // одной версией state_version (общий счётчик state_seq); расхождение
+  // версий означает, что запись вклинилась между запросами, — пакет
+  // перечитывается целиком, левая карточка не рисует счётчик чужого состояния
   const loadBundle = async () => {
     const view = await api(`/api/ltf/instruments/${id}/current`);
     if (stale()) return null;
     const obsId = view.selected_context_id;
-    const [layers, candles, journal] = await Promise.all([
+    const [layers, candles, journal, assets] = await Promise.all([
       obsId ? api(`/api/ltf/observations/${obsId}/chart`) : Promise.resolve(null),
       api(`/api/candles?instrument_id=${id}&timeframe=H1&limit=2500`),
       obsId ? api(`/api/ltf/observations/${obsId}/journal`) : Promise.resolve(null),
+      api('/api/ltf/instruments'),
     ]);
     if (stale()) return null;
-    return { view, layers, candles, journal };
+    return { view, layers, candles, journal, assets };
   };
   const mismatch = (b) =>
+    b.assets.state_version !== b.view.state_version ||
     (b.layers && b.layers.state_version !== b.view.state_version) ||
     (b.journal && b.journal.state_version !== b.view.state_version);
   let bundle = await loadBundle();
@@ -443,6 +450,7 @@ async function reloadCurrent({ keepRange }) {
       // слои; следующее WS-сообщение поднимет версию ещё раз
       console.debug('ltf: state_version пакета расходятся после повтора',
         { current: bundle.view.state_version,
+          assets: bundle.assets.state_version,
           layers: bundle.layers && bundle.layers.state_version,
           journal: bundle.journal && bundle.journal.state_version });
     }
@@ -455,6 +463,7 @@ async function reloadCurrent({ keepRange }) {
   state.appliedSeq = bundle.view.state_version;
   state.historyRows = null;
   state.excludedRows = null;
+  applyAssets(bundle.assets);
   renderTopbar();
   syncProvisionalToggle();
   renderCard();

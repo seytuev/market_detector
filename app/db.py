@@ -2026,10 +2026,12 @@ class Database:
         один агрегирующий запрос для всех инструментов (eligible_count
         списка активов без N+1, §4.2/§14). reason='' — строки до миграции:
         пригодность выводится из state (fallback eligibility.entry_reason:
-        fresh+eligible → ok). §18 (L01): контекстно допущенные FVG вне
+        fresh/tested+eligible → ok). §18 (L01): контекстно допущенные FVG вне
         Premium входят, когда у сценария полный контекст — оба факта
         context_update (counter_sweep и htf_fvg50); правило зеркалит
-        eligibility.evaluate_final."""
+        eligibility.evaluate_final (допуск по обычному правилу — состояния
+        fresh и tested с reason ok, повторно допущенная tested-зона не
+        выпадает из счётчика)."""
         q = """
             SELECT o.instrument_id AS instrument_id,
                    se.scenario_id AS scenario_id,
@@ -2044,7 +2046,7 @@ class Database:
                   WHERE r.scenario_id = se.scenario_id
               ), 0)
               AND (
-                  (se.state = 'fresh' AND se.eligible = 1
+                  (se.state IN ('fresh', 'tested') AND se.eligible = 1
                    AND (se.reason = 'ok' OR se.reason = ''))
                   OR (se.state = 'out_of_range' AND se.reason = 'outside_pd'
                       AND z.type = 'FVG'

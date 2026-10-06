@@ -267,12 +267,17 @@ def register_ltf_routes(app, db: Database, settings, require_auth, ltf_engine=No
     # ------------------- read model «LTF Current Setup» (§14) -------------------
 
     @app.get("/api/ltf/instruments", dependencies=[Depends(require_auth)])
-    def ltf_instruments() -> list[dict[str, Any]]:
+    def ltf_instruments() -> dict[str, Any]:
         """Левая панель «Активы» (§4.2): одна строка на instrument_id
         (symbol/venue/market), сколько бы Observation ни было у инструмента.
-        Счётчики и последние события — агрегатными запросами, без N+1.
-        Вычисление — app/services/overview.py."""
-        return instruments_overview(db, settings)
+        eligible_count/stage — тем же циклом допуска, что /current (§13).
+        Вычисление — app/services/overview.py. Чтение — в одной
+        read-транзакции (D01): state_version — из того же счётчика
+        state_seq, что у /current (клиент сверяет версии пакета)."""
+        with db.read_tx():
+            rows = instruments_overview(db, settings)
+            seq = db.get_state_seq()
+        return {"state_version": seq, "instruments": rows}
 
     @app.get("/api/ltf/instruments/{instrument_id}/current",
              dependencies=[Depends(require_auth)])

@@ -118,7 +118,7 @@ def _current(client, instrument_id):
 
 
 def _overview_row(client, instrument_id):
-    rows = client.get("/api/ltf/instruments", headers=AUTH).json()
+    rows = client.get("/api/ltf/instruments", headers=AUTH).json()["instruments"]
     return next(r for r in rows if r["instrument"]["id"] == instrument_id)
 
 

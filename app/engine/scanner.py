@@ -468,7 +468,10 @@ class Scanner:
                         # качественный контекст авторской модели, без баллов (§7)
                         "part_taken": any_taken and m.status != ZoneStatus.TAKEN,
                     })
-                    self._update_evidence(m, ev)
+                    # без изменений не пишем: каждый update_zone инвалидирует
+                    # кэш get_zones, а эта свёртка идёт на каждой свече replay
+                    if ev != m.evidence:
+                        self._update_evidence(m, ev)
 
     def _check_level_crossings(
         self, iid: int, lo: float, hi: float, ts: int, detected_at: int

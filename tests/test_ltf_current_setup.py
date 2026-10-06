@@ -149,7 +149,7 @@ def test_instruments_one_row_per_instrument(client, db, seeded, instrument_id):
         ))
         _observation(db, instrument_id, z, Direction.BEAR,
                      "active" if i % 2 else "closed_stale", T0 + i)
-    rows = client.get("/api/ltf/instruments", headers=AUTH).json()
+    rows = client.get("/api/ltf/instruments", headers=AUTH).json()["instruments"]
     mine = [r for r in rows if r["instrument"]["id"] == instrument_id]
     assert len(mine) == 1
     row = mine[0]
@@ -168,7 +168,8 @@ def test_instruments_one_row_per_instrument(client, db, seeded, instrument_id):
     # со свежими данными — реальный этап и направление сценария
     _make_live(db, instrument_id, 96.0)  # вне зон входа
     row = next(
-        r for r in client.get("/api/ltf/instruments", headers=AUTH).json()
+        r for r in client.get("/api/ltf/instruments", headers=AUTH)
+        .json()["instruments"]
         if r["instrument"]["id"] == instrument_id
     )
     assert row["stage"] == "Возврат в Premium"
@@ -205,7 +206,8 @@ def test_instruments_counts_per_instrument(client, db, seeded, instrument_id):
     ))
     rows = {
         r["instrument"]["symbol"]: r
-        for r in client.get("/api/ltf/instruments", headers=AUTH).json()
+        for r in client.get("/api/ltf/instruments", headers=AUTH)
+        .json()["instruments"]
     }
     assert rows["BTCUSDT"]["eligible_count"] == 2
     assert rows["ETHUSDT"]["eligible_count"] == 1
