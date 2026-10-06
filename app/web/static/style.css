@@ -1047,6 +1047,11 @@ input[type="checkbox"] { min-height: auto; accent-color: var(--accent); }
   overflow: auto; padding: 12px;
 }
 
+/* кнопка выгрузки — в строке фильтров очереди, тянется на свободную ширину */
+.review-queue-filters { display: flex; }
+.review-queue-filters select { flex: 0 0 auto; }
+#btn-download-labels { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
 /* Режим проверки (U04): очередь → собственный график → инспектор */
 .review-chart-block { display: flex; flex-direction: column; min-height: 0; gap: 6px; }
 #review-chart-container {

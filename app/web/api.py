@@ -13,7 +13,7 @@ from dataclasses import asdict, fields, replace
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from fastapi import Body, Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import Body, Depends, FastAPI, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -1023,6 +1023,44 @@ def create_app(
                                 detail="Проверенных решений пока нет")
         return FileResponse(path, media_type="application/x-ndjson",
                             filename="labels.jsonl")
+
+    @app.get("/api/export/reviews", dependencies=[Depends(require_auth)])
+    def export_reviews() -> Response:
+        """Полная выгрузка данных проверок одним JSON: разметка labels.jsonl
+        (богатые снимки зон с OHLC, если файл существует) + все записи БД —
+        review, review_assessment, boundary_correction. Разметка живёт только
+        в labels.jsonl, а решения — в БД; выгружаем оба источника, чтобы
+        ничего не потерять. Пустые списки — валидный ответ (200)."""
+        labels: list[Any] = []
+        labels_path = Path(settings.db_path).parent / "labels.jsonl"
+        if labels_path.exists():
+            for line in labels_path.read_text(encoding="utf-8").splitlines():
+                if line.strip():
+                    labels.append(json.loads(line))
+        reviews = db.get_reviews()
+        zone_ids = {r.zone_id for r in reviews}
+        payload = {
+            "format": "htf-review-export",
+            "version": 1,
+            "exported_at": now_ms(),
+            "labels": labels,
+            "reviews": [review_to_dict(r) for r in reviews],
+            "review_assessments": [
+                assessment_to_dict(a)
+                for zid in sorted(zone_ids) for a in db.get_assessments(zid)
+            ],
+            "boundary_corrections": [
+                boundary_correction_to_dict(c)
+                for zid in sorted(zone_ids)
+                for c in db.get_boundary_corrections(zid)
+            ],
+        }
+        return Response(
+            content=json.dumps(payload, ensure_ascii=False, indent=2),
+            media_type="application/json",
+            headers={
+                "Content-Disposition": 'attachment; filename="reviews.json"'},
+        )
 
     # ------------------------- health (§11: для деплоя, открыт) -------------------------
 

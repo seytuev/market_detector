@@ -489,3 +489,40 @@ def test_export_labels_downloads_jsonl(zones, client, settings):
     assert resp.content == (
         Path(settings.db_path).parent / "labels.jsonl"
     ).read_bytes()
+
+
+# ---------------------------------------------------------------------------
+# Полная выгрузка проверок: GET /api/export/reviews
+# ---------------------------------------------------------------------------
+
+def test_export_reviews_requires_auth(client):
+    assert client.get("/api/export/reviews").status_code in (401, 403)
+
+
+def test_export_reviews_empty_is_200(client):
+    """Нет ни разметки, ни решений — валидный ответ с пустыми списками."""
+    resp = client.get("/api/export/reviews", headers=AUTH)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["format"] == "htf-review-export"
+    assert body["labels"] == []
+    assert body["reviews"] == []
+    assert body["review_assessments"] == []
+    assert body["boundary_corrections"] == []
+
+
+def test_export_reviews_includes_all_sources(zones, client):
+    """После ревью выгрузка содержит и разметку (labels), и записи БД."""
+    zid = zones["live_cand"]
+    client.post(f"/api/zones/{zid}/review", headers=AUTH,
+                json={"decision": "correct", "text": "проверено"})
+    resp = client.get("/api/export/reviews", headers=AUTH)
+    assert resp.status_code == 200
+    assert "reviews.json" in resp.headers["content-disposition"]
+    body = resp.json()
+    assert len(body["labels"]) == 1
+    assert body["labels"][0]["zone"]["id"] == zid
+    assert [r["zone_id"] for r in body["reviews"]] == [zid]
+    assert body["reviews"][0]["decision"] == "correct"
+    assert len(body["review_assessments"]) == 1
+    assert body["review_assessments"][0]["review_decision"] == "correct"

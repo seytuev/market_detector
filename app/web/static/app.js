@@ -943,7 +943,7 @@ async function loadCandidates() {
   renderReviewQueue();
 }
 
-// Выгрузка разметки проверки: /api/export/labels закрыт Bearer-токеном,
+// Выгрузка данных проверок: /api/export/reviews закрыт Bearer-токеном,
 // поэтому качаем fetch'ем в blob, а не ссылкой. Ошибку показываем текстом
 // на самой кнопке (отдельного статус-элемента в шапке очереди нет).
 async function downloadLabels() {
@@ -953,7 +953,7 @@ async function downloadLabels() {
     btn.textContent = msg;
     setTimeout(() => { btn.textContent = label; }, 3000);
   };
-  const doFetch = () => fetch('/api/export/labels', {
+  const doFetch = () => fetch('/api/export/reviews', {
     headers: { 'Authorization': 'Bearer ' + HTF.getToken() },
   });
   let resp = await doFetch();
@@ -972,7 +972,7 @@ async function downloadLabels() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = 'labels.jsonl';
+  a.download = 'reviews.json';
   a.click();
   URL.revokeObjectURL(url);
 }
