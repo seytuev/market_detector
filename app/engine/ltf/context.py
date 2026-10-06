@@ -34,6 +34,8 @@ def detect_counter_sweeps(
     pivots: list[PivotCandidate],
     candles: list[Candle],
     since_at: int,
+    *,
+    only_after: Optional[int] = None,
 ) -> list[dict[str, Any]]:
     """Снятия уровней противоположной стороны с момента триггера сценария.
 
@@ -42,20 +44,31 @@ def detect_counter_sweeps(
     экстремум, сформировавшийся в самом движении, прежней ликвидностью не
     является. Sweep — зеркальное применение resolve_sweep (§10): для SSL
     Low < K и Close > K на закрытой H1; берётся первое подтверждение.
+
+    only_after — инкрементальный курсор: рассматриваются только свечи с
+    close_time > only_after (уже просканированные закрытия новых фактов не
+    дают — sweep фиксируется на первом подтверждающем закрытии, а повторы
+    гасятся дедупом context:{scenario}:sweep:{pivot_ref}).
     """
     bear = direction == Direction.BEAR
     kind = "low" if bear else "high"
     zone_type = "SSL" if bear else "BSL"
+    # фильтр и сортировка — один раз на вызов, а не на каждый pivot:
+    # per-pivot sorted() по всей истории H1 делал replay квадратично-кубическим
+    ordered = sorted(
+        (c for c in candles
+         if c.closed and c.close_time >= since_at
+         and (only_after is None or c.close_time > only_after)),
+        key=lambda c: c.open_time,
+    )
     out: list[dict[str, Any]] = []
     for p in pivots:
         if p.kind != kind or p.state != "confirmed":
             continue
         if p.confirmed_at is None or p.confirmed_at > since_at:
             continue
-        for c in sorted(candles, key=lambda c: c.open_time):
-            if not c.closed or c.open_time <= p.pivot_at:
-                continue
-            if c.close_time < since_at:
+        for c in ordered:
+            if c.open_time <= p.pivot_at:
                 continue
             if resolve_sweep(zone_type, p.price, c) == "confirmed":
                 out.append({
@@ -124,13 +137,18 @@ def scenario_context(
     db, instrument_id: int, direction: Direction,
     pivots: list[PivotCandidate], candles: list[Candle],
     since_at: int, *, as_of: Optional[int] = None,
+    sweep_only_after: Optional[int] = None,
 ) -> dict[str, Any]:
     """Агрегатор §18: снятые контр-уровни и тест 50% D1 FVG экстремумом
     движения (минимум Low / максимум High закрытых H1 от триггера).
     as_of — момент решения: учитываются только факты, доступные к нему
-    (L02); момент теста для причинности — закрытие свечи-экстремума."""
+    (L02); момент теста для причинности — закрытие свечи-экстремума.
+    sweep_only_after — инкрементальный курсор сканирования снятий (см.
+    detect_counter_sweeps); на экстремум/тест FVG не влияет — хвост
+    считается полностью от триггера."""
     bear = direction == Direction.BEAR
-    swept = detect_counter_sweeps(direction, pivots, candles, since_at)
+    swept = detect_counter_sweeps(direction, pivots, candles, since_at,
+                                  only_after=sweep_only_after)
     tail = [c for c in candles if c.closed and c.close_time >= since_at]
     fvg50 = None
     if tail:

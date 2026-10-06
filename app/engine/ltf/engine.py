@@ -110,6 +110,14 @@ class LtfEngine:
         # False — полный пересчёт на свечу (поведение до оптимизации).
         self.scan_cursors = scan_cursors
         self._batch: Optional[StructureBatch] = None
+        # §18: курсор инкрементального сканирования контр-снятий по сценарию
+        # (scenario_id → close_time последней проверенной свечи). Кандидаты
+        # (pivots, подтверждённые к триггеру) и уже просканированные закрытия
+        # неизменны, поэтому пересканировать историю на каждой свече не нужно;
+        # после перезапуска процесса курсор пуст — один полный прогон, повторы
+        # гасятся дедупом событий. Без курсора replay всей H1-истории шёл
+        # десятки часов и голодал веб/API (GIL + замок БД).
+        self._ctx_sweep_cursor: dict[int, int] = {}
 
     # ------------------------------------------------------------------ #
     # Запуск наблюдения (§4)
@@ -599,6 +607,7 @@ class LtfEngine:
         — события context_update с дедупом по уровню/зоне; отдельно не
         доставляются, читаются агрегацией (_scenario_context)."""
         if sc.state in ("cancelled", "closed"):
+            self._ctx_sweep_cursor.pop(sc.id, None)
             return
         trig = next(
             (e for e in self.db.list_ltf_structure_events(sc.id)
@@ -609,7 +618,13 @@ class LtfEngine:
         ctx = scenario_context(
             self.db, self._scenario_instrument(sc), sc.direction,
             avail, up_to, since, as_of=now,
+            sweep_only_after=self._ctx_sweep_cursor.get(sc.id),
         )
+        head = up_to[-1] if up_to else None
+        if head is not None and head.closed:
+            self._ctx_sweep_cursor[sc.id] = max(
+                head.close_time, self._ctx_sweep_cursor.get(sc.id, 0)
+            )
         for s in ctx["counter_swept"]:
             self._emit(obs.id, sc.id, "context_update", {
                 "fact": "counter_sweep", "scenario_id": sc.id, **s,
