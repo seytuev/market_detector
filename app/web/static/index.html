@@ -26,6 +26,7 @@
       <a href="#review" data-view="review" class="app-tab">Проверка</a>
       <a href="#journal" data-view="journal" class="app-tab">Журнал</a>
       <a href="#settings" data-view="settings" class="app-tab settings-link">Настройки</a>
+      <a href="/ltf.html" id="lnk-ltf-nav" class="app-tab">Структура H1</a>
       <a href="/alt.html" class="app-tab">Альткоины</a>
     </nav>
     <div class="app-nav-right">
@@ -229,25 +230,71 @@
     </div>
   </section>
 
-  <section id="view-events" class="view">
-    <div class="page-pad">
-      <h2>События</h2>
-      <p class="muted">Рыночные события</p>
-      <ul id="events-full" class="events events-full"></ul>
+  <section id="view-journal" class="view">
+    <div class="journal-page">
+      <header class="journal-head">
+        <div>
+          <div class="review-over">Рынок · решения · уведомления</div>
+          <h1 class="review-title">Журнал</h1>
+          <p class="review-sub" id="journal-sub">время MSK</p>
+        </div>
+        <div class="now-filters" id="journal-filters" role="group" aria-label="Тип записи">
+          <button type="button" class="now-filter active" data-kind="all" aria-pressed="true">Все</button>
+          <button type="button" class="now-filter" data-kind="market" aria-pressed="false">Рынок</button>
+          <button type="button" class="now-filter" data-kind="decisions" aria-pressed="false">Решения</button>
+          <button type="button" class="now-filter" data-kind="delivery" aria-pressed="false">Доставка</button>
+        </div>
+      </header>
+      <div id="journal-list" class="journal-list" aria-live="polite"></div>
     </div>
   </section>
 
   <section id="view-settings" class="view">
-    <div class="settings-layout">
-      <aside class="settings-nav" id="settings-nav"></aside>
-      <div class="settings-main">
-        <h2>Настройки</h2>
-        <div id="settings-form" class="settings-form"></div>
-        <div class="settings-sticky">
-          <span id="settings-status" class="settings-status"></span>
-          <button type="button" id="settings-cancel" class="btn">Отменить</button>
-          <button type="button" id="settings-save" class="btn primary">Сохранить</button>
+    <div class="settings-page">
+      <header class="review-head">
+        <div>
+          <div class="review-over">Ваше рабочее место</div>
+          <h1 class="review-title">Настройки</h1>
+          <p class="review-sub">Наблюдение, правила анализа и отображение.</p>
         </div>
+      </header>
+      <div class="settings-grid">
+        <section class="lf-panel" aria-labelledby="set-notify-title">
+          <div class="lf-panel-head">
+            <h2 id="set-notify-title">Уведомления</h2>
+            <span id="settings-tg" class="settings-tg hidden"></span>
+          </div>
+          <div id="settings-notify" class="settings-form"></div>
+          <div class="settings-tz">
+            <div class="field-title">Часовой пояс</div>
+            <div class="settings-tz-value">Москва · UTC+3</div>
+            <p class="field-desc">Время в интерфейсе и журнале — московское.</p>
+          </div>
+        </section>
+        <div class="settings-col">
+          <section class="lf-panel" aria-labelledby="set-look-title">
+            <h2 id="set-look-title">Оформление</h2>
+            <div class="theme-choices" role="radiogroup" aria-label="Тема оформления">
+              <button type="button" class="theme-choice" data-theme-choice="system" aria-pressed="false"><span class="theme-dot" aria-hidden="true"></span>Как в системе</button>
+              <button type="button" class="theme-choice" data-theme-choice="dark" aria-pressed="false"><span class="theme-dot" aria-hidden="true"></span>Тёмная тема</button>
+              <button type="button" class="theme-choice" data-theme-choice="light" aria-pressed="false"><span class="theme-dot" aria-hidden="true"></span>Светлая тема</button>
+            </div>
+            <p class="field-desc">Тема хранится в этом браузере и не запускает пересчёт.</p>
+          </section>
+          <section class="lf-panel" aria-labelledby="set-rules-title">
+            <div class="lf-panel-head">
+              <h2 id="set-rules-title">Правила анализа</h2>
+              <span id="settings-rule-ver" class="muted"></span>
+            </div>
+            <div id="settings-rules" class="settings-form"></div>
+            <p id="settings-recalc" class="field-desc"></p>
+          </section>
+        </div>
+      </div>
+      <div class="settings-sticky">
+        <span id="settings-status" class="settings-status"></span>
+        <button type="button" id="settings-cancel" class="btn">Отменить</button>
+        <button type="button" id="settings-save" class="btn primary">Сохранить</button>
       </div>
     </div>
   </section>
@@ -256,6 +303,7 @@
     <a href="#now" data-view="now">Сейчас</a>
     <a href="#review" data-view="review">Проверка</a>
     <a href="#journal" data-view="journal">Журнал</a>
+    <a href="/ltf.html" id="lnk-ltf-mobile" title="Структура H1">Структура H1</a>
     <a href="#settings" data-view="settings">Настройки</a>
   </nav>
 
@@ -308,6 +356,7 @@
 
   <script src="/common.js"></script>
   <script src="/app.js"></script>
+  <script src="/journal.js"></script>
   <script src="/now.js"></script>
 </body>
 </html>

@@ -1234,6 +1234,64 @@ async function enterReviewMode() {
   }
 }
 
+// Журнал → решение HTF: открыть задачу в очереди, если она ещё там.
+async function openReviewForZone(zoneId) {
+  showView('review');
+  await enterReviewMode();
+  const cand = reviewState.all.find(
+    (c) => c.id === zoneId && !reviewState.doneMap.has(c.id));
+  if (!cand) return false;
+  await openReviewCandidate(cand);
+  return true;
+}
+window.LFReview = { openZone: openReviewForZone };
+
+function syncThemeChoices() {
+  const cur = HTF.theme.get();
+  document.querySelectorAll('[data-theme-choice]').forEach((btn) => {
+    const on = btn.dataset.themeChoice === cur;
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+}
+
+function initAppearance() {
+  document.querySelectorAll('[data-theme-choice]').forEach((btn) => {
+    btn.onclick = () => {
+      HTF.theme.set(btn.dataset.themeChoice);
+      syncThemeChoices();
+    };
+  });
+  syncThemeChoices();
+}
+
+function paintCharts() {
+  const theme = HTF.chartTheme();
+  const opts = {
+    layout: { background: { color: theme.background }, textColor: theme.text },
+    grid: {
+      vertLines: { color: theme.grid },
+      horzLines: { color: theme.grid },
+    },
+    rightPriceScale: { borderColor: theme.border },
+  };
+  const candle = {
+    upColor: theme.up, downColor: theme.down,
+    wickUpColor: theme.up, wickDownColor: theme.down,
+  };
+  if (state.chart) {
+    state.chart.applyOptions(opts);
+    if (state.candleSeries) state.candleSeries.applyOptions(candle);
+    requestAnimationFrame(drawZones);
+  }
+  if (reviewState.chart) {
+    reviewState.chart.applyOptions(opts);
+    if (reviewState.candleSeries) reviewState.candleSeries.applyOptions(candle);
+    requestAnimationFrame(drawReviewZone);
+  }
+}
+window.addEventListener('lf-theme', paintCharts);
+
 // Клик по кандидату: НЕ переключаем вкладку — грузим его инструмент/ТФ,
 // свечи вокруг формирования зоны и открываем инспектор здесь же.
 async function openReviewCandidate(c) {
@@ -1620,6 +1678,12 @@ const SETTINGS_META = {
           'в списке кандидатов (§10).',
     group: 'Уведомления',
   },
+  ltf_notify_kinds: {
+    title: 'События структуры H1',
+    desc: 'Какие события H1 уходят в уведомления: слом, готовые зоны, касание, исход снятия, отмена. ' +
+          'Список через запятую.',
+    group: 'Уведомления',
+  },
   uncalibrated_cluster_denominator: {
     title: 'Знаменатель допуска кластера экстремумов',
     desc: 'Формула объединения: (p_max − p_min) / X ≤ допуск. X = p_min — рабочее значение; ' +
@@ -1692,80 +1756,76 @@ function settingsFieldHtml(key, value, uncal) {
   return head + `<input data-key="${key}" value="${esc(value)}">`;
 }
 
+function appendSettingsFields(container, pairs, uncal) {
+  for (const [key, value] of pairs) {
+    const wrap = document.createElement('div');
+    wrap.className = 'settings-field';
+    wrap.innerHTML = settingsFieldHtml(key, value, uncal.has(key));
+    container.appendChild(wrap);
+  }
+}
+
+function recalcNote(recalc) {
+  const st = recalc && recalc.status;
+  if (st === 'running') return 'Новые правила применяются. Показана предыдущая версия.';
+  if (st === 'ready') return 'Пересчёт завершён. Новая версия опубликована.';
+  if (st === 'failed') {
+    return 'Пересчёт не выполнен. Действуют прежние значения.' +
+      (recalc.error ? ' ' + recalc.error : '');
+  }
+  return 'Изменение правил требует пересчёта. Действующая версия остаётся доступной до публикации новой.';
+}
+
 async function openSettings() {
   const data = await api('/api/settings');
-  const form = $('settings-form');
-  form.innerHTML = '';
+  const notify = $('settings-notify');
+  const rules = $('settings-rules');
+  if (!notify || !rules) return;
+  notify.innerHTML = '';
+  rules.innerHTML = '';
   const uncal = new Set(data.uncalibrated || []);
   const deprecated = new Set(data.deprecated || []);
   const groupOf = data.groups || {};
   const entries = Object.entries(data.detector);
   settingsOriginal = data.detector || {};
-  const navGroups = [];
-  for (const group of ['analysis', 'delivery', 'experimental']) {
-    const inGroup = entries.filter(
-      ([k]) => !deprecated.has(k) && (groupOf[k] || 'analysis') === group);
-    if (!inGroup.length) continue;
-    navGroups.push(group);
-    if (group === 'experimental') {
-      // сворачиваемый раздел внизу формы с явной пометкой о влиянии на расчёты
-      const det = document.createElement('details');
-      det.className = 'settings-exp';
-      det.innerHTML =
-        `<summary class="settings-group" data-group="${group}">${SETTINGS_GROUP_TITLES[group]}</summary>` +
-        '<div class="field-desc settings-exp-note">Значения не калиброваны и ' +
-        'могут влиять на расчёты: найденные зоны, экстремумы и допуски.</div>';
-      for (const [key, value] of inGroup) {
-        const wrap = document.createElement('div');
-        wrap.className = 'settings-field';
-        wrap.innerHTML = settingsFieldHtml(key, value, uncal.has(key));
-        det.appendChild(wrap);
-      }
-      form.appendChild(det);
-    } else {
-      const header = document.createElement('div');
-      header.className = 'settings-group';
-      header.dataset.group = group;
-      header.textContent = SETTINGS_GROUP_TITLES[group];
-      form.appendChild(header);
-      for (const [key, value] of inGroup) {
-        const wrap = document.createElement('div');
-        wrap.className = 'settings-field';
-        wrap.innerHTML = settingsFieldHtml(key, value, uncal.has(key));
-        form.appendChild(wrap);
-      }
-    }
+  const inGroup = (group) => entries.filter(
+    ([k]) => !deprecated.has(k) && (groupOf[k] || 'analysis') === group);
+  appendSettingsFields(notify, inGroup('delivery'), uncal);
+  appendSettingsFields(rules, inGroup('analysis'), uncal);
+  const experimental = inGroup('experimental');
+  if (experimental.length) {
+    const det = document.createElement('details');
+    det.className = 'settings-exp';
+    det.innerHTML =
+      `<summary class="settings-group" data-group="experimental">${SETTINGS_GROUP_TITLES.experimental}</summary>` +
+      '<div class="field-desc settings-exp-note">Значения не калиброваны и ' +
+      'могут влиять на расчёты: найденные зоны, экстремумы и допуски.</div>';
+    appendSettingsFields(det, experimental, uncal);
+    rules.appendChild(det);
   }
-  // устаревшие поля (L04): не редактируются — только строка-примечание
   const depEntries = entries.filter(([k]) => deprecated.has(k));
   if (depEntries.length) {
     const note = document.createElement('div');
     note.className = 'settings-deprecated';
     note.innerHTML = depEntries.map(([k]) =>
       `<div>Поле <code>${esc(k)}</code> устарело и не редактируется.</div>`).join('');
-    form.appendChild(note);
+    rules.appendChild(note);
   }
-  // сайдбар-навигация по группам: переход к разделу без перезагрузки
-  const nav = $('settings-nav');
-  if (nav) {
-    nav.innerHTML = '';
-    for (const group of navGroups) {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.textContent = SETTINGS_GROUP_TITLES[group];
-      btn.onclick = () => {
-        nav.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b === btn));
-        const target = form.querySelector(`.settings-group[data-group="${group}"]`);
-        if (target) {
-          const det = target.closest('details');
-          if (det) det.open = true;
-          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
-      };
-      nav.appendChild(btn);
-    }
-    if (nav.firstChild) nav.firstChild.classList.add('active');
+  const tg = $('settings-tg');
+  if (tg) {
+    tg.classList.remove('hidden');
+    tg.innerHTML = data.telegram_configured
+      ? '<span class="state-dot dot-positive"></span>Telegram подключён'
+      : '<span class="state-dot dot-muted"></span>Telegram не подключён';
   }
+  const ver = $('settings-rule-ver');
+  if (ver) {
+    const v = data.detector && data.detector.rule_version;
+    ver.textContent = v != null && v !== '' ? `Версия ${v}` : '';
+  }
+  const recalc = $('settings-recalc');
+  if (recalc) recalc.textContent = recalcNote(data.recalc);
+  syncThemeChoices();
   $('settings-status').textContent = '';
 }
 
@@ -1794,7 +1854,7 @@ let settingsOriginal = {};
 
 async function saveSettings() {
   const payload = {};
-  document.querySelectorAll('#settings-form [data-key]').forEach((inp) => {
+  document.querySelectorAll('#view-settings [data-key]').forEach((inp) => {
     const key = inp.dataset.key;
     const orig = settingsOriginal[key];
     if (inp.type === 'checkbox') {
@@ -1805,7 +1865,7 @@ async function saveSettings() {
     }
   });
   const status = $('settings-status');
-  const form = $('settings-form');
+  const form = $('view-settings');
   form.querySelectorAll('.field-error').forEach((e) => e.remove());
   form.querySelectorAll('.settings-field.invalid').forEach((e) => e.classList.remove('invalid'));
   status.textContent = '';
@@ -1813,7 +1873,7 @@ async function saveSettings() {
   try {
     resp = await postSettings(payload);
   } catch (err) {
-    status.textContent = 'Не удалось сохранить: ' + err.message;
+    status.textContent = 'Изменения не сохранены. Действуют прежние значения. ' + err.message;
     return;
   }
   if (resp.status === 422) {
@@ -1833,15 +1893,14 @@ async function saveSettings() {
         wrap.appendChild(err);
       }
     }
-    status.textContent = names.length
-      ? 'Не сохранено: ' + names.join('; ')
-      : 'Не сохранено: настройки отклонены сервером.';
+    status.textContent = 'Изменения не сохранены. Действуют прежние значения.' +
+      (names.length ? ' ' + names.join('; ') : ' Настройки отклонены сервером.');
     return;
   }
   if (!resp.ok) {
     let detail = resp.statusText;
     try { detail = (await resp.json()).detail || detail; } catch (e) { /* не JSON */ }
-    status.textContent = 'Не сохранено: ' +
+    status.textContent = 'Изменения не сохранены. Действуют прежние значения. ' +
       (typeof detail === 'string' ? detail : 'ошибка сервера');
     return;
   }
@@ -1855,7 +1914,7 @@ const VIEW_IDS = {
   now: 'view-now',
   desk: 'view-overview',
   review: 'view-review',
-  journal: 'view-events',
+  journal: 'view-journal',
   settings: 'view-settings',
 };
 const VIEW_ALIASES = { overview: 'desk', events: 'journal' };
@@ -1874,6 +1933,7 @@ function showView(name) {
     scheduleDeskRefresh(); // снимок /current мог устареть, пока desk был скрыт
   }
   if (name === 'review') enterReviewMode().catch((e) => console.warn('review mode:', e));
+  if (name === 'journal' && window.LFJournal) window.LFJournal.show();
   if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
 }
 
@@ -1965,6 +2025,7 @@ function updateLtfLinks() {
   if (state.instrumentId) url.searchParams.set('instrument', String(state.instrumentId));
   const href = url.pathname + url.search;
   if ($('lnk-ltf')) $('lnk-ltf').href = href;
+  if ($('lnk-ltf-nav')) $('lnk-ltf-nav').href = href;
   if ($('lnk-ltf-mobile')) $('lnk-ltf-mobile').href = href;
 }
 
@@ -2503,6 +2564,7 @@ async function main() {
     else if (e.key === 'ArrowRight' || e.key === 'Enter') { e.preventDefault(); nextReviewCandidate(); }
   });
 
+  initAppearance();
   await loadInstruments();
   syncInstrumentContext();
   await loadLabels();

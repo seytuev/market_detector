@@ -371,6 +371,7 @@ def test_settings_roundtrip(seeded, client, settings, tmp_path):
     # секреты не отдаются (§11 п.8)
     assert "telegram_token" not in json.dumps(data)
     assert "auth_token" not in json.dumps(data)
+    assert isinstance(data["telegram_configured"], bool)
 
     resp = client.post("/api/settings", headers=AUTH, json={
         "approach_pct": 0.03, "notify_only_reviewed": True,

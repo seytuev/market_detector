@@ -26,6 +26,7 @@ window.HTF = (() => {
       ? (lightMq && lightMq.matches ? 'light' : 'dark')
       : mode;
     document.documentElement.dataset.theme = resolved;
+    window.dispatchEvent(new CustomEvent('lf-theme', { detail: { mode, resolved } }));
     return resolved;
   }
 

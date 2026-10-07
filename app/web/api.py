@@ -1154,6 +1154,9 @@ def create_app(
             "deprecated": sorted(DETECTOR_DEPRECATED_FIELDS),
             # A05: статус последнего задания пересчёта (или null, если не было)
             "recalc": _get_recalc_status(db),
+            # Признак без секрета: токен и chat id в ответ не попадают (§11 п.8)
+            "telegram_configured": bool(
+                settings.telegram_token and settings.telegram_chat_id),
         }
 
     @app.post("/api/settings", dependencies=[Depends(require_auth)])

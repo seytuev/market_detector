@@ -119,6 +119,12 @@ def _decision_items(db: Database, limit: int) -> list[dict[str, Any]]:
         ref = {"review_id": r["id"], "entry_zone_id": r["entry_zone_id"]}
         if r["scenario_id"] is not None:
             ref["scenario_id"] = r["scenario_id"]
+            sc = db.conn.execute(
+                "SELECT observation_id FROM ltf_scenario WHERE id=?",
+                (r["scenario_id"],),
+            ).fetchone()
+            if sc is not None and sc["observation_id"] is not None:
+                ref["observation_id"] = sc["observation_id"]
         items.append({
             "at": r["created_at"],
             "category": "decisions",
