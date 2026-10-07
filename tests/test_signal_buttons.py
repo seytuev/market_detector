@@ -153,8 +153,9 @@ async def test_ltf_keyboard_per_kind(db, instrument_id):
         assert markup is not None, kind
         cbs = _callbacks(markup)
         iid = instrument_id
-        # единый набор: График/Подробнее/Обновить/Заглушить (по зоне контекста)
-        assert f"nav:chart:{iid}:H1" in cbs
+        # единый набор: График (контекст ЭТОГО сообщения, §8)/Подробнее/
+        # Обновить/Заглушить (по зоне контекста)
+        assert f"nav:charto:{iid}:{obs.id}" in cbs
         assert f"nav:asset:{iid}" in cbs
         assert f"nav:refresh:{iid}" in cbs
         assert f"nav:zm:{zone.id}" in cbs

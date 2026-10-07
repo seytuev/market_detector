@@ -32,6 +32,7 @@ class RecSender:
     def __init__(self):
         self.texts: list[str] = []
         self.markups: list = []
+        self.photos: list[tuple[str, str, object]] = []
         self.fail = False
 
     async def send_text(self, text: str) -> None:
@@ -44,6 +45,12 @@ class RecSender:
             raise RuntimeError("telegram недоступен (тест)")
         self.texts.append(text)
         self.markups.append(reply_markup)
+
+    async def send_ltf_photo(self, image_path: str, caption: str,
+                             reply_markup=None) -> None:
+        if self.fail:
+            raise RuntimeError("telegram недоступен (тест)")
+        self.photos.append((image_path, caption, reply_markup))
 
     async def send(self, payload) -> None:  # Protocol Sender
         raise NotImplementedError
@@ -110,17 +117,19 @@ def test_render_bos_full_message(db: Database, instrument_id: int):
     assert len(texts) == 1
     t = texts[0]
     assert "BTCUSDT · H1" in t
-    assert "Bearish BOS (первичный) после касания HTF Orderblock D1 (медвежий)" in t
+    assert "Подтверждён Bearish BOS (первичный)" in t
+    assert "HTF-контекст: Orderblock D1 · медвежий" in t
     # §3.3: без ложного «внутри», если признак не передан
     assert "внутри" not in t
-    assert "Уровень слома: 110.00" in t
-    assert "Возможности входа:" in t
-    assert "FVG H1: 98–102.00 (середина 100.00) — частично" in t
-    assert "Orderblock H1: 105.00–108.00 (середина 106.50)" in t
-    assert "BSL H1: 115.00" in t
-    assert "Premium/Discount: 90–110.00, 50%: 100.00" in t
-    assert "Источник: binance spot / BTCUSDT" in t
-    assert "Время:" in t and "TradingView:" in t
+    assert "Уровень слома: 110,00" in t
+    assert "Зоны входа:" in t
+    assert "FVG H1: 98–102,00 (середина 100,00) — частично" in t
+    assert "Orderblock H1: 105,00–108,00 (середина 106,50)" in t
+    assert "BSL H1: 115,00" in t
+    assert "Диапазон: 90–110,00" in t and "Середина: 100,00" in t
+    # ТЗ 07.10.2026 §5.1: без «Источник»/TradingView-ссылки в тексте
+    assert "Источник" not in t and "TradingView" not in t
+    assert "Время события:" in t
 
 
 def test_render_bos_range_pending_and_no_entries(db: Database, instrument_id: int):
@@ -132,7 +141,7 @@ def test_render_bos_range_pending_and_no_entries(db: Database, instrument_id: in
     }, "bos:1:2")
     t = render_ltf_messages(ev, _ctx(db, obs, sc))[0]
     assert "Ожидаем подтверждения LL/HH тремя свечами" in t
-    assert "Возможности входа" not in t
+    assert "Зоны входа" not in t
     # диапазон готов, но свежих зон нет
     ev2 = _event(db, obs, sc, "sms", {
         "direction": "bear", "kind": "SMS", "stage": "primary",
@@ -142,7 +151,7 @@ def test_render_bos_range_pending_and_no_entries(db: Database, instrument_id: in
     }, "sms:1:3")
     t2 = render_ltf_messages(ev2, _ctx(db, obs, sc))[0]
     assert "Bearish SMS" in t2
-    assert "Подходящих свежих Entry Zones пока нет" in t2
+    assert "Подтверждение есть; подходящих зон входа сейчас нет" in t2
 
 
 def test_render_bos_movement_line(db: Database, instrument_id: int):
@@ -159,7 +168,7 @@ def test_render_bos_movement_line(db: Database, instrument_id: int):
     }
     ev = _event(db, obs, sc, "bos", payload, "bos:1:mv")
     t = render_ltf_messages(ev, _ctx(db, obs, sc))[0]
-    assert "Движение к слому: 120.00 → 108.00 (-10.00% · 26 свечей H1" in t
+    assert "Движение к слому: 120,00 → 108,00 (-10,00% · 26 свечей H1" in t
     assert "Происхождение неоднозначно" not in t
     # ambiguous-происхождение — явная пометка
     ev2 = _event(db, obs, sc, "bos", {
@@ -199,7 +208,8 @@ def test_render_fvg_parent_context(db: Database, instrument_id: int):
     }, "bos:fvg:1")
     texts = render_ltf_messages(ev, _ctx(db, obs, sc))
     assert len(texts) == 1
-    assert "Bullish BOS (первичный) внутри HTF FVG D1 (бычий)" in texts[0]
+    assert "Подтверждён Bullish BOS (первичный)" in texts[0]
+    assert "HTF-контекст: FVG D1 · бычий" in texts[0]
 
 
 def test_render_entries_ready_and_touch(db: Database, instrument_id: int):
@@ -210,8 +220,8 @@ def test_render_entries_ready_and_touch(db: Database, instrument_id: int):
                      "upper": 115.0, "mid": 115.0, "overlap": "full"}],
     }, "entries_ready:1:3")
     t = render_ltf_messages(ev, _ctx(db, obs, sc))[0]
-    assert "Новые Entry Zones по сценарию Bearish BOS" in t
-    assert "BSL H1: 115.00" in t
+    assert "Новые Entry Zones по сценарию медвежий BOS" in t
+    assert "BSL H1: 115,00" in t
 
     # §11.3: касание уровня — ожидание закрытия H1, без подтверждения входа
     touch = _event(db, obs, sc, "touch", {
@@ -219,9 +229,10 @@ def test_render_entries_ready_and_touch(db: Database, instrument_id: int):
         "mid": 115.0, "candle_open_time": T0,
     }, "touch:3:1")
     tt = render_ltf_messages(touch, _ctx(db, obs, sc))[0]
-    assert "цена пришла к Entry Zone — BSL LTF H1" in tt
-    assert "Зона (уровень): 115.00" in tt
-    assert "Сценарий: Bearish BOS, HTF Orderblock D1 (медвежий)" in tt
+    assert "Цена коснулась Entry Zone: BSL H1" in tt
+    assert "Уровень: 115,00" in tt
+    assert "Основание: BOS" in tt
+    assert "HTF-контекст: Orderblock D1 · медвежий" in tt
     assert "Ожидаем закрытия текущей H1 для проверки снятия без закрепления" in tt
     assert "Цена события" not in tt  # цены в payload нет — не выдумываем (§11)
 
@@ -233,16 +244,17 @@ def test_render_sweep_outcomes(db: Database, instrument_id: int):
     ok = _event(db, obs, sc, "sweep_confirmed", dict(base, outcome="confirmed"),
                 "sweep:3:a")
     t = render_ltf_messages(ok, _ctx(db, obs, sc))[0]
-    assert "BSL снят, H1 закрылась обратно (уровень 115.00, закрытие 114.50)" in t
-    assert "не сообщение о сделке" in t
+    assert "Ликвидность BSL снята." in t
+    assert "Уровень: 115,00" in t and "Закрытие H1: 114,50" in t
+    assert "повторные входы по этому уровню отключены" in t
     fail = _event(db, obs, sc, "sweep_failed", dict(base, outcome="failed"),
                   "sweep:3:b")
     t = render_ltf_messages(fail, _ctx(db, obs, sc))[0]
-    assert "пройден без возврата" in t
+    assert "Ликвидность BSL снята с закреплением." in t
     eq = _event(db, obs, sc, "sweep_failed", dict(base, outcome="equal_close"),
                 "sweep:3:c")
     t = render_ltf_messages(eq, _ctx(db, obs, sc))[0]
-    assert "закрытие ровно на уровне" in t and "исход не подтверждён" in t
+    assert "ровно на уровне" in t and "подтверждения снятия нет" in t
 
 
 def test_render_cancellation(db: Database, instrument_id: int):
@@ -250,7 +262,7 @@ def test_render_cancellation(db: Database, instrument_id: int):
     ev = _event(db, obs, sc, "cancellation", {"reason": "reverse_bos"},
                 "cancellation:1:x")
     t = render_ltf_messages(ev, _ctx(db, obs, sc))[0]
-    assert "Bearish LTF-сценарий отменён" in t
+    assert "медвежий LTF-сценарий отменён" in t
     assert "Причина: обратный BOS H1" in t
     # HTF ещё валиден — ожидание нового подтверждения (§11.4)
     assert "ожидаем новое подтверждение" in t
@@ -284,8 +296,8 @@ def test_render_splits_long_entry_list(db: Database, instrument_id: int):
                 delivered_ids.append(line)
     assert len(delivered_ids) == 200  # все зоны доставлены, без пропусков
     assert len(set(delivered_ids)) == 200
-    assert "Возможности входа:" in texts[0]
-    assert "Источник:" in texts[-1]  # время/источник — в завершении списка
+    assert "Зоны входа:" in texts[0]
+    assert "Время события:" in texts[-1]  # время — в завершении списка
 
 
 # ---------- диспетчер: фильтры, дедуп, ретрай ----------
@@ -379,7 +391,7 @@ async def test_dispatcher_touch_not_resent_after_range_recalc(db: Database, inst
     await disp.retry_pending()
     assert len(sender.texts) == 1
     t = sender.texts[0]
-    assert "цена пришла к Entry Zone — FVG LTF H1" in t
+    assert "Цена коснулась Entry Zone: FVG H1" in t
     assert "Ожидаем закрытия" not in t  # OB/FVG — без строки ожидания (§11.3)
 
 

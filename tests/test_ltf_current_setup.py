@@ -172,7 +172,7 @@ def test_instruments_one_row_per_instrument(client, db, seeded, instrument_id):
         .json()["instruments"]
         if r["instrument"]["id"] == instrument_id
     )
-    assert row["stage"] == "Возврат в Premium"
+    assert row["stage"] == "Ожидаем возврат в Premium"
     assert row["direction"] == "bear"
     assert row["data_state"]["state"] == "ok"
 
@@ -231,8 +231,8 @@ def test_current_price_above_zone_is_not_inside(client, db, seeded, instrument_i
     assert ctx["parent_validity"] == "active"
     # историческое касание — отдельным полем, inside=true не удерживает
     assert ctx["last_touch_at"] == T0
-    # цена внутри FVG 98–102? 110 выше — этап «Возврат в Premium», не «в зоне»
-    assert cur["stage"] == "Возврат в Premium"
+    # цена внутри FVG 98–102? 110 выше — этап «Ожидаем возврат в Premium», не «в зоне»
+    assert cur["stage"] == "Ожидаем возврат в Premium"
     # котировка внутри подходящей зоны → «Цена в Entry Zone»
     _make_live(db, instrument_id, 100.0)
     cur2 = client.get(

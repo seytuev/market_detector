@@ -175,7 +175,7 @@ def test_single_snapshot_counts_and_version(client, db, seeded, instrument_id):
     }
     assert sql_ids == ids
     # этап — из того же результата допуска: зон две, цена вне них
-    assert row["stage"] == cur["stage"] == "Возврат в Premium"
+    assert row["stage"] == cur["stage"] == "Ожидаем возврат в Premium"
     # идентичность снимка (§13): панели читают один контекст/сценарий/диапазон
     assert cur["instrument_id"] == instrument_id
     assert cur["context_id"] == cur["selected_context_id"] == seeded["obs1"].id
@@ -203,7 +203,7 @@ def test_tested_readmitted_zone_not_lost(client, db, instrument_id):
     assert row["eligible_count"] == 1
     assert cur["counts"]["eligible"] == len(cur["eligible_entries"]) == 1
     assert body["state_version"] == cur["state_version"]
-    assert row["stage"] == cur["stage"] == "Возврат в Premium"
+    assert row["stage"] == cur["stage"] == "Ожидаем возврат в Premium"
 
 
 def test_overview_counts_selected_context_only(client, db, seeded,

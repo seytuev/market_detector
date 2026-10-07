@@ -298,7 +298,7 @@ async def test_notification_marks_visually_merged_zone():
     assert len(sender.sent) == 1
     text = render_text(sender.sent[0])
     assert "Визуально объединена с" in text
-    assert "Orderblock D1" in text and "65,500" in text  # тип/ТФ и граница участника
+    assert "Orderblock D1" in text and "65 500,00" in text  # тип/ТФ и граница участника (ru-формат)
 
 
 async def test_notification_without_group_has_no_merge_mark():

@@ -230,6 +230,38 @@ def test_reopen_after_cancellation(db: Database, cfg, instrument_id: int):
     assert [e.kind for e in _events(db, obs.id)].count("bos") == 2
 
 
+def test_replay_does_not_attach_previous_epochs_to_new_scenario(
+    db: Database, cfg, instrument_id: int
+):
+    """§13: после переоткрытия replay не поглощает в новый сценарий сломы,
+    диапазоны и касания прошлых эпох (эталон Этап 7: replay_observation после
+    открытия sc2 записывал в него primary/secondary BOS sc1 с фантомными
+    диапазонами, зонами и liquidity-тестами)."""
+    engine = LtfEngine(db, cfg)
+    candles = _series(SERIES_H_HL + SERIES_H2_HL, SERIES_H2_CLOSES, instrument_id)
+    zid = _setup(db, instrument_id)
+    obs = engine.on_htf_zone_touched(instrument_id, db.get_zone(zid), T0)
+    _feed(db, engine, instrument_id, candles, 34)
+    sc1, sc2 = db.list_ltf_scenarios(observation_id=obs.id)
+
+    def counts():
+        return (
+            len(db.list_ltf_structure_events(sc2.id)),
+            len(db.list_ltf_ranges(sc2.id)),
+            len(db.list_ltf_scenario_entries(sc2.id)),
+            len(db.list_ltf_liquidity_tests(scenario_id=sc2.id)),
+            len(db.list_ltf_events(observation_id=obs.id, limit=1000)),
+        )
+
+    before = counts()
+    engine.replay_observation(obs.id)
+    assert counts() == before
+    trig2 = [e for e in db.list_ltf_structure_events(sc2.id)
+             if e.id == sc2.trigger_event_id][0]
+    for e in db.list_ltf_structure_events(sc2.id):
+        assert e.occurred_at >= trig2.occurred_at
+
+
 def test_cancellation_only_from_post_trigger_reverse_break(db: Database, cfg,
                                                            instrument_id: int):
     """§6.5: обратный слом, случившийся ДО открытия сценария (bull BOS 13.2

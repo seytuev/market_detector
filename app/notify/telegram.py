@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 from typing import Optional
 
 from ..config import Settings
@@ -24,11 +23,11 @@ from ..models import (
 # Единый источник формулировок — app/texts_ru.py (веб-UI берёт их же
 # через /api/labels, чтобы тексты не расходились)
 from ..texts_ru import (
-    DIRECTION_RU as _DIRECTION_RU,
     KIND_RU as _KIND_RU,
-    STATUS_RU as _STATUS_RU,
     TYPE_RU as _TYPE_RU,
 )
+from .formatting import fmt_pct_ru, fmt_price_ru, fmt_time_msk
+from .presenter import NormalizedKind, htf_snapshot
 from .queue import MessagePayload
 
 log = logging.getLogger("htf.notify")
@@ -43,20 +42,14 @@ MUTE_FOREVER_MS = 4_102_444_800_000  # 2100-01-01 00:00:00 UTC
 
 
 def _fmt_price(p: float) -> str:
-    """Цена с точностью инструмента: без лишних нулей, но без потери знаков."""
-    if p != p:  # NaN
-        return "?"
-    if abs(p) >= 100:
-        return f"{p:,.2f}"
-    if abs(p) >= 1:
-        return f"{p:.4f}".rstrip("0").rstrip(".")
-    return f"{p:.8f}".rstrip("0").rstrip(".")
+    """Цена в едином ru-формате (ТЗ 07.10.2026 §5.1): пробелы-тысячи,
+    запятая-десятичная, точность по инструменту."""
+    return fmt_price_ru(p)
 
 
 def _fmt_time(ms: int) -> str:
-    """Время события с явным часовым поясом (§9)."""
-    dt = datetime.fromtimestamp(ms / 1000, tz=timezone.utc)
-    return dt.strftime("%Y-%m-%d %H:%M UTC")
+    """Время события — Europe/Moscow (ТЗ 07.10.2026 §6)."""
+    return fmt_time_msk(ms)
 
 
 def _fmt_source(ins: Optional[Instrument]) -> str:
@@ -73,41 +66,119 @@ def tradingview_url(ins: Optional[Instrument]) -> Optional[str]:
     return f"https://www.tradingview.com/chart/?symbol={ins.venue.upper()}:{ins.symbol}"
 
 
-def _render_event_block(view, group_members: Optional[list[Zone]] = None) -> str:
-    """Один блок сообщения по §9: актив, тип/направление/ТФ, границы L–U,
-    середина M, цена, причина, источник, время с поясом, статус зоны.
+def _headline(snap, event: Event) -> str:
+    """Строка-утверждение из нормализованного вида события (ТЗ 07.10.2026
+    §4–§5): противоречия исключены самим типом — APPROACH только вне зоны,
+    LIQUIDITY_TAKEN никогда не «зона входа»."""
+    kind, raw = snap.kind, event.kind
+    if kind == NormalizedKind.APPROACH:
+        return "Цена приближается к зоне."
+    if raw == EventKind.TOUCH:
+        return "Цена коснулась зоны."
+    if raw == EventKind.ALREADY_IN_ZONE:
+        return "Цена уже в зоне."
+    if raw == EventKind.JUMP_THROUGH:
+        return "Зафиксирован проход зоны насквозь."
+    if kind == NormalizedKind.DEPTH_50:
+        return "Цена достигла середины зоны."
+    if kind == NormalizedKind.DEPTH_90:
+        return "Цена достигла 90% глубины зоны."
+    if kind == NormalizedKind.ZONE_INVALIDATED:
+        return {
+            EventKind.FVG_FILLED: "FVG полностью заполнен — зона неактуальна.",
+            EventKind.OB_INVALIDATED:
+                "Зона инвалидирована закрытием за границей.",
+            EventKind.BREAKER_ARCHIVED: "Breaker пробит и архивирован.",
+            EventKind.PRB_ARCHIVED: "PRB пробит и архивирован.",
+        }.get(raw, "Зона больше не актуальна.")
+    if kind == NormalizedKind.LIQUIDITY_TAKEN:
+        return f"Ликвидность {snap.type_ru} снята."
+    return _KIND_RU.get(raw, raw.value) + "."
+
+
+def _reason(snap, event: Event, approach_pct: float) -> str:
+    """Строка «Событие: …» из того же снимка (§5.2/§5.3)."""
+    kind, raw = snap.kind, event.kind
+    if kind == NormalizedKind.APPROACH:
+        return f"приближение; порог {fmt_pct_ru(approach_pct * 100, decimals=0)}"
+    if raw == EventKind.TOUCH:
+        return "касание ближайшей границы"
+    if kind == NormalizedKind.DEPTH_50:
+        return "достижение середины (50%)"
+    if kind == NormalizedKind.DEPTH_90:
+        return "достижение 90% глубины"
+    if kind == NormalizedKind.LIQUIDITY_TAKEN:
+        return "первое пересечение уровня"
+    return _KIND_RU.get(raw, raw.value)
+
+
+def _render_event_block(view, group_members: Optional[list[Zone]] = None,
+                        approach_pct: float = 0.02) -> str:
+    """Один блок сообщения (ТЗ 07.10.2026 §5): строка бренда «LevelFrame ·
+    символ · площадка рынок» (ребрендинг §8), заголовок «символ · тип ТФ ·
+    направление», отдельные строки «Диапазон/Середина/Цена события/Событие/
+    Статус/Время события». Без «Обратите внимание», без строки «Источник» —
+    метаданные источника остаются внутри снимка и в карточке «Подробнее».
     Для зоны из визуальной группы (§10) — состав объединения."""
     event: Event = view.event
     zone: Optional[Zone] = view.zone
-    ins: Optional[Instrument] = view.instrument
+    snap = htf_snapshot(view)
 
-    asset = ins.asset if ins else f"зона #{event.zone_id}"
-    if zone is not None:
-        type_ru = _TYPE_RU.get(zone.type.value, zone.type.value)
-        dir_ru = _DIRECTION_RU.get(zone.direction.value, zone.direction.value)
-        head = f"Цена на {asset} пришла в {type_ru} {zone.timeframe} ({dir_ru})."
+    lines: list[str] = []
+    # Ребрендинг (LevelFrame_Rebrand §8): первая строка — бренд и источник
+    if snap.venue and snap.market_type:
+        lines.append(
+            f"LevelFrame · {snap.symbol} · {snap.venue} {snap.market_type}"
+        )
     else:
-        head = f"Событие по {asset}."
-    lines = [head + " Обратите внимание."]
+        lines.append(f"LevelFrame · {snap.symbol}")
+    if zone is not None:
+        head = f"{snap.symbol} · {snap.type_ru} {snap.timeframe}"
+        if not snap.is_level:
+            head += f" · {snap.direction_ru}"
+    else:
+        head = f"Событие по {snap.symbol}"
+    lines.append(head)
+    lines.append(_headline(snap, event))
 
     if zone is not None:
-        if zone.is_level:
-            lines.append(f"Уровень: {_fmt_price(zone.lower)}.")
+        if snap.is_level:
+            # SSL/BSL: уровень, без выдуманной ширины и середины (§5.1)
+            lines.append(f"Уровень: {_fmt_price(snap.lower)}")
         else:
             lines.append(
-                f"Диапазон: {_fmt_price(zone.lower)}–{_fmt_price(zone.upper)}. "
-                f"Середина: {_fmt_price(zone.mid)}."
+                f"Диапазон: {_fmt_price(snap.lower)}–{_fmt_price(snap.upper)}"
             )
+            lines.append(f"Середина: {_fmt_price(snap.mid)}")
 
-    reason = _KIND_RU.get(event.kind, event.kind.value)
-    if event.depth > 0:
-        reason += f" (глубина {event.depth:.0%})"
-    lines.append(f"Цена: {_fmt_price(event.price)}. Событие: {reason}.")
-    lines.append(f"Источник: {_fmt_source(ins)}. Время: {_fmt_time(event.occurred_at)}.")
+    if snap.event_price is not None:
+        lines.append(f"Цена события: {_fmt_price(snap.event_price)}")
+    if snap.kind == NormalizedKind.APPROACH and snap.distance_pct is not None:
+        lines.append(f"До границы: {fmt_pct_ru(snap.distance_pct * 100)}")
+
+    reason = _reason(snap, event, approach_pct)
+    if event.depth > 0 and snap.kind in (
+        NormalizedKind.DEPTH_50, NormalizedKind.DEPTH_90,
+    ):
+        reason += f" (фактическая глубина {fmt_pct_ru(event.depth * 100, decimals=0)})"
+    lines.append(f"Событие: {reason}")
+
+    if event.kind == EventKind.FVG_WEAKENED:
+        # согласованная модель: 50% FVG — сила снижена на 80%; это не
+        # торговая вероятность (HTF-спека §3)
+        lines.append(
+            "FVG ослаблен: сила снижена на 80% (параметр модели, "
+            "не вероятность сделки)."
+        )
 
     if zone is not None:
-        status_ru = _STATUS_RU.get(zone.status.value, zone.status.value)
-        lines.append(f"Статус зоны: {status_ru}.")
+        if snap.status_ru == "снята" or event.kind == EventKind.LEVEL_TAKEN:
+            lines.append(
+                "Статус: снята; повторные входы по этому уровню отключены"
+            )
+        else:
+            lines.append(f"Статус: {snap.status_ru}")
+    lines.append(f"Время события: {_fmt_time(event.occurred_at)}")
 
     # §10: зона входит в визуальную группу — перечисляем остальных участников
     if zone is not None and group_members:
@@ -137,7 +208,8 @@ def render_text(payload: MessagePayload) -> str:
     """Текст сообщения. Пакет не скрывает второй актив (§9):
     каждое событие — отдельный блок со своим объектом и причиной."""
     blocks = [
-        _render_event_block(v, payload.group_members.get(v.event.zone_id))
+        _render_event_block(v, payload.group_members.get(v.event.zone_id),
+                            approach_pct=payload.approach_pct)
         for v in payload.views
     ]
     if len(blocks) > 1:
@@ -168,7 +240,7 @@ class TelegramSender:
 
     def build_keyboard(self, payload: MessagePayload):
         """Inline-кнопки §9 + единый набор ТЗ бота п.10: «График» (рендер
-        в чате), «Подробнее» (карточка зоны), «Открыть приложение» (URL),
+        в чате), «Подробнее» (карточка зоны), «Открыть рабочее место» (URL),
         «Заглушить» (= «Отключить», htf:mute), «🔄 Обновить» (новым
         сообщением); под касанием — «Показать LTF».
         Действия привязаны к зоне первого события пакета."""
@@ -181,14 +253,22 @@ class TelegramSender:
         cycle_id = view.event.cycle_id
         kind = view.event.kind.value
 
-        chart_url = f"{self.site_base_url}/?zone={zone_id}"
         buttons = [
             [
                 InlineKeyboardButton("📊 График", callback_data=f"nav:chartz:{zone_id}"),
                 InlineKeyboardButton("Подробнее", callback_data=f"nav:zone:{zone_id}"),
             ],
-            [InlineKeyboardButton("Открыть приложение", url=chart_url)],
         ]
+        # §12 ТЗ 07.10.2026: localhost/127.0.0.1 в кнопках не отправляем —
+        # URL «Открыть рабочее место» только при публичном адресе сервиса
+        from urllib.parse import urlparse
+
+        host = urlparse(self.site_base_url).hostname or ""
+        if host not in {"127.0.0.1", "localhost", "0.0.0.0", "::1"}:
+            chart_url = f"{self.site_base_url}/?zone={zone_id}"
+            buttons.append(
+                [InlineKeyboardButton("Открыть рабочее место", url=chart_url)]
+            )
         if kind == "touch" and view.zone is not None:
             buttons.append([
                 InlineKeyboardButton(
@@ -252,9 +332,28 @@ class TelegramSender:
         await self._bot.send_message(chat_id=self.chat_id, text=text)
 
     async def send_ltf(self, text: str, reply_markup=None) -> None:
-        """LTF-сигнал с inline-кнопками навигации (ТЗ бота п.10)."""
+        """LTF-сигнал с inline-кнопками навигации (ТЗ бота п.10).
+        Превью ссылки отключено: собственный график важнее превью
+        TradingView (ТЗ 07.10.2026 §7)."""
         await self._bot.send_message(
             chat_id=self.chat_id, text=text, reply_markup=reply_markup,
+            disable_web_page_preview=True,
+        )
+
+    async def send_ltf_photo(self, image_path: str, caption: str,
+                             reply_markup=None) -> None:
+        """LTF-событие с собственным графиком H1 (§7 ТЗ 07.10.2026)."""
+        with open(image_path, "rb") as fh:
+            await self._bot.send_photo(
+                chat_id=self.chat_id, photo=fh, caption=caption,
+                reply_markup=reply_markup,
+            )
+
+    async def send_alt(self, text: str) -> None:
+        """Событие «Altcoins D1 accumulation» (§18 ТЗ 07.10.2026): текст со
+        ссылкой на график сетапа; превью ссылки отключено, как у LTF."""
+        await self._bot.send_message(
+            chat_id=self.chat_id, text=text, disable_web_page_preview=True,
         )
 
 
@@ -267,6 +366,8 @@ class LogSender:
         self._log = logger or log
         self.sent: list[MessagePayload] = []
         self.sent_ltf: list[tuple[str, object]] = []
+        self.sent_ltf_photos: list[tuple[str, str, object]] = []
+        self.sent_alt: list[str] = []
 
     async def send(self, payload: MessagePayload) -> None:
         text = render_text(payload)
@@ -279,6 +380,15 @@ class LogSender:
     async def send_ltf(self, text: str, reply_markup=None) -> None:
         self.sent_ltf.append((text, reply_markup))
         self._log.info("LTF NOTIFY (log-delivery):\n%s", text)
+
+    async def send_ltf_photo(self, image_path: str, caption: str,
+                             reply_markup=None) -> None:
+        self.sent_ltf_photos.append((image_path, caption, reply_markup))
+        self._log.info("LTF PHOTO (log-delivery): %s\n%s", image_path, caption)
+
+    async def send_alt(self, text: str) -> None:
+        self.sent_alt.append(text)
+        self._log.info("ALT NOTIFY (log-delivery):\n%s", text)
 
 
 # ---------- приложение бота и обработчики кнопок ----------

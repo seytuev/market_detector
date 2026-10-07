@@ -25,6 +25,10 @@ H1_MS = TIMEFRAME_MINUTES["H1"] * 60_000
 # сколько последних закрытых H1 сканируем на разрывы истории
 _CONTINUITY_SCAN = 50
 
+# открытые состояния наблюдений — зеркало LTF_OPEN_STATES из app.worker
+# (импорт оттуда сюда тянул бы воркер в сервисный слой)
+_LTF_OPEN_STATES = ("waiting_structure", "active", "paused_data")
+
 
 def _channel(
     status: str,
@@ -118,6 +122,14 @@ def _processing_channel(db: Database, instrument_id: int) -> dict[str, Any]:
     last = db.last_candle(instrument_id, "H1")
     if last is None:
         return _channel("ok")  # нет свечей — отставать не от чего
+    # без открытых наблюдений process_h1_close не вызывается и курсор не
+    # двигается по определению — это не отставание (свежая БД до первого
+    # касания HTF-зоны), ложный processing_lag не показываем
+    if not any(
+        o.state in _LTF_OPEN_STATES
+        for o in db.list_ltf_observations(instrument_id=instrument_id)
+    ):
+        return _channel("ok", last_at=last.close_time)
     raw = db.get_meta(f"ltf:h1:last_close:{instrument_id}")
     cursor = int(raw) if raw else None
     if cursor is None or cursor < last.close_time:

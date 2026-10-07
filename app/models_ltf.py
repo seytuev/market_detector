@@ -13,7 +13,10 @@ from typing import Any, Optional
 
 from .models import Direction
 
-RULE_VERSION_LTF = "ltf-0.2"
+# ltf-0.3: коррекционный пересчёт (Этап 8, §15) — причинная цепочка, эпохи,
+# origin_reversal-диапазоны, терминальные исходы уровней (level_broken),
+# перекрытие FVG (fvg_filled); старые расчёты сохранены в *_bak_ltfv2
+RULE_VERSION_LTF = "ltf-0.3"
 
 
 @dataclass
@@ -352,6 +355,9 @@ class LtfLiquidityTest:
     """Двухэтапное событие BSL/SSL: снятие и закрытие той же H1-свечи (§10).
 
     Равное закрытие уровню (Close=K) — неподтверждённый исход: equal_close.
+    §9 (Этап 5): failed — строгое закрытие за уровнем без возврата
+    (broken_without_reclaim): терминальный исход, уровень исключается из
+    выбора навсегда (reason level_broken), как swept_level у confirmed.
     """
     id: Optional[int]
     entry_zone_id: int
@@ -639,6 +645,10 @@ class LtfEvent:
     delayed: bool = False
     processing_mode: str = "unknown"
     detection_lag_ms: int = 0
+    # ТЗ 07.10.2026 §7: доставка графика контролируется отдельно от
+    # доставки текста: none | sent | failed (+число попыток)
+    chart_state: str = "none"
+    chart_attempts: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {

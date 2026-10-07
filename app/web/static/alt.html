@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LevelFrame · Альткоины D1</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <script>(function(){try{var c=localStorage.getItem('lf:theme');var l=window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches;document.documentElement.dataset.theme=(c==='dark'||c==='light')?c:(l?'light':'dark');}catch(e){document.documentElement.dataset.theme='dark';}})();</script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="/style.css">
+  <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+  <header class="app-nav" aria-label="Основная навигация">
+    <a class="brand" href="/">
+      <svg class="brand-mark" width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M15 3.5H5v17h10" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+        <line x1="9" y1="9" x2="19" y2="9" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+        <line x1="9" y1="15" x2="19" y2="15" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+      </svg>
+      <span>LevelFrame</span>
+    </a>
+    <nav class="app-tabs">
+      <a href="/#overview" class="app-tab">Сейчас</a>
+      <a href="/#review" class="app-tab">Проверка</a>
+      <a href="/#events" class="app-tab">Журнал</a>
+      <a href="/#settings" class="app-tab settings-link">Настройки</a>
+      <a href="/ltf.html" class="app-tab">Структура H1</a>
+      <span class="app-tab current" aria-current="page">Альткоины</span>
+    </nav>
+    <div class="app-nav-right">
+      <span class="conn-status">
+        <span id="ws-indicator" class="ws-dot offline" title="Нет соединения"></span>
+        <span id="connection-label" class="connection-label">Нет соединения</span>
+      </span>
+    </div>
+  </header>
+
+  <!-- §18: последний run, as_of, следующий запуск МСК, обработано/ошибок,
+       universe stale — сбой источника ≠ «сетапов нет» -->
+  <section class="alt-run" id="alt-run">
+    <span class="alt-run-item" id="alt-run-last">Последний run: —</span>
+    <span class="alt-run-item" id="alt-run-asof">as_of: —</span>
+    <span class="alt-run-item" id="alt-run-next">Следующий запуск: —</span>
+    <span class="alt-run-item" id="alt-run-counts"></span>
+    <span class="badge dq-stale hidden" id="alt-universe-stale"
+          title="Снимок CMC устарел: используется последний успешный. Сбой источника не означает «сетапов нет».">вселенная устарела</span>
+    <span class="badge hidden" id="alt-running">идёт прогон…</span>
+    <button id="alt-recalc" class="btn small" title="Ручной пересчёт: тот же дневной прогон вне расписания (без исторического спама)">Пересчитать</button>
+  </section>
+
+  <!-- §16: фильтры стадий + вторичные -->
+  <section class="alt-filters">
+    <select id="flt-bucket" title="Стадия">
+      <option value="eligible">Подходящие</option>
+      <option value="new_entries">Новые входы</option>
+      <option value="awaiting_retest">Ожидание ретеста</option>
+      <option value="mature">Зрелые</option>
+      <option value="forming">Формирующиеся</option>
+      <option value="review">Требуют проверки</option>
+      <option value="history">История</option>
+      <option value="all">Все</option>
+    </select>
+    <select id="flt-venue" title="Биржа"><option value="">Биржа: все</option></select>
+    <input id="flt-rank-min" type="number" min="1" placeholder="Ранг от" title="CMC-rank от">
+    <input id="flt-rank-max" type="number" min="1" placeholder="Ранг до" title="CMC-rank до">
+    <input id="flt-age-min" type="number" min="0" placeholder="Возраст от, дн" title="Возраст аккумуляции от, дней">
+    <input id="flt-dd-min" type="number" min="0" max="100" step="1" placeholder="Падение от, %" title="Историческое падение от, %">
+    <select id="flt-structure" title="Структурные события">
+      <option value="">События: любые</option>
+      <option value="bos_sms">BOS/SMS</option>
+      <option value="manipulation">Манипуляция</option>
+      <option value="breakout">Выход</option>
+    </select>
+    <button id="flt-apply" class="btn small">Применить</button>
+    <button id="flt-reset" class="btn small">Сбросить</button>
+  </section>
+
+  <main class="alt-layout">
+    <section class="alt-table-wrap table-wrap">
+      <table id="alt-table">
+        <thead>
+          <tr>
+            <th title="Монета · пара · биржа">Монета / пара / биржа</th>
+            <th title="CMC-rank (не оценка надёжности)">Ранг</th>
+            <th title="Биржевой ATH по теням и дата">ATH</th>
+            <th title="Минимум после ATH по теням и дата">Мин. после ATH</th>
+            <th title="Историческое падение">Падение</th>
+            <th title="Close последней закрытой D1">Close</th>
+            <th>L</th><th>U</th><th>M</th><th>W</th>
+            <th title="Ширина вверх (U/L−1)×100% / снижение (1−L/U)×100%">Ширина</th>
+            <th title="Возраст аккумуляции, дней">Возраст</th>
+            <th>Стадия</th>
+            <th title="BOS/SMS · манипуляция · выход">Флаги</th>
+            <th title="Возможность входа A/B">Вход</th>
+            <th title="Цели TP1–TP4">TP</th>
+            <th title="K и режим отмены (проектная настройка)">K · режим</th>
+            <th title="Достижимость K">K дост.</th>
+            <th title="Deadline ретеста (МСК)">Deadline</th>
+            <th title="Расстояние до входа, %">До входа</th>
+            <th title="Причины пропуска/ошибки последнего run">Причины</th>
+          </tr>
+        </thead>
+        <tbody id="alt-tbody"></tbody>
+      </table>
+      <div id="alt-table-empty" class="ltf-empty hidden"></div>
+    </section>
+
+    <section class="chart-block">
+      <div class="chart-toolbar">
+        <span class="section-label" id="alt-chart-title">График · D1</span>
+        <button id="alt-why-btn" class="btn small" disabled>Почему найдено</button>
+      </div>
+      <div id="chart-container">
+        <div id="chart"></div>
+        <div id="alt-overlay"></div>
+      </div>
+      <div id="alt-k-note" class="alt-k-note hidden"></div>
+      <div id="alt-chart-empty" class="ltf-empty hidden">Выберите строку таблицы — график и карточка обновятся.</div>
+    </section>
+  </main>
+
+  <!-- «Почему найдено»: опоры, свечи подтверждения, формулы, метрики,
+       пороги, источник, as_of, версии -->
+  <div id="alt-why-modal" class="modal hidden">
+    <div class="modal-card wide alt-why-card" role="dialog" aria-modal="true" aria-labelledby="alt-why-title">
+      <button class="drawer-close" id="alt-why-close" title="Закрыть">×</button>
+      <h3 id="alt-why-title">Почему найдено</h3>
+      <div id="alt-why"></div>
+    </div>
+  </div>
+
+  <footer class="app-footer">
+    <span>LevelFrame · Рынок в контексте.</span>
+    <span>Веб-интерфейс · v0.1</span>
+  </footer>
+
+  <script src="/common.js"></script>
+  <script src="/alt.js"></script>
+</body>
+</html>

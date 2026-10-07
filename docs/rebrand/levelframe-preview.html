@@ -1,0 +1,2606 @@
+<!doctype html>
+<html lang="en" data-visualize-standalone>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src 'unsafe-inline' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Levelframe Rebrand</title>
+<style>:root{color-scheme:light dark;background:light-dark(rgb(255 255 255), rgb(24 24 24))}html,body{margin:0}body{box-sizing:border-box;padding:1rem;background:inherit}iframe{display:block;width:100%;height:calc(100vh - 2rem);margin:0 auto;border:0}</style>
+</head>
+<body>
+<iframe id="codex-visualization" sandbox="allow-scripts" referrerpolicy="no-referrer" title="Levelframe Rebrand" data-srcdoc="&lt;!doctype html&gt;
+&lt;html lang=&quot;en&quot; data-visualize-standalone&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1&quot;&gt;
+&lt;meta name=&quot;referrer&quot; content=&quot;no-referrer&quot;&gt;
+&lt;meta http-equiv=&quot;Content-Security-Policy&quot; content=&quot;default-src &#x27;none&#x27;; script-src &#x27;unsafe-inline&#x27; &#x27;unsafe-eval&#x27; &#x27;wasm-unsafe-eval&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src &#x27;unsafe-inline&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src &#x27;none&#x27;; object-src &#x27;none&#x27;; base-uri &#x27;none&#x27;; form-action &#x27;none&#x27;&quot;&gt;
+&lt;title&gt;Levelframe Rebrand&lt;/title&gt;
+&lt;style&gt;:root {
+  color-scheme: light dark;
+  background-color: var(
+    --background,
+    var(--color-background-primary, light-dark(rgb(255 255 255), rgb(24 24 24)))
+  ) !important;
+
+  /* Agent-facing contract; keep in sync with SKILL.md. */
+  --background: var(
+    --color-background-primary,
+    light-dark(rgb(255 255 255), rgb(24 24 24))
+  );
+  --foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --card: color-mix(in oklab, var(--foreground) 5%, var(--background));
+  --card-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --popover: var(
+    --color-background-secondary,
+    light-dark(rgb(255 255 255), rgb(45 45 45))
+  );
+  --popover-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --primary: var(
+    --color-text-info,
+    light-dark(rgb(51 156 255), rgb(131 195 255))
+  );
+  --primary-foreground: var(
+    --color-text-inverse,
+    light-dark(rgb(255 255 255), rgb(13 13 13))
+  );
+  --secondary: var(
+    --color-background-secondary,
+    light-dark(rgb(255 255 255 / 96%), rgb(54 54 54 / 96%))
+  );
+  --secondary-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --muted: color-mix(in srgb, var(--foreground) 10%, transparent);
+  --muted-foreground: var(
+    --color-text-secondary,
+    light-dark(rgb(26 28 31 / 49.4%), rgb(255 255 255 / 49.8%))
+  );
+  --accent: var(
+    --color-background-info,
+    light-dark(rgb(229 242 255), rgb(13 39 63))
+  );
+  --accent-foreground: var(
+    --color-text-info,
+    light-dark(rgb(51 156 255), rgb(131 195 255))
+  );
+  --destructive: var(
+    --color-text-warning,
+    light-dark(rgb(226 85 7), rgb(255 133 73))
+  );
+  --border: var(
+    --color-border-secondary,
+    light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%))
+  );
+  --input: var(
+    --color-border-primary,
+    light-dark(
+      rgb(26 28 31 / 11.8%),
+      color-mix(in oklab, rgb(0 0 0) 10%, transparent)
+    )
+  );
+  --ring: var(
+    --color-ring-primary,
+    light-dark(rgb(51 156 255), rgb(131 195 255 / 76%))
+  );
+  --font-size-base: var(--font-text-md-size, 14px);
+  --blue: light-dark(rgb(51 156 255), rgb(51 156 255));
+  --orange: light-dark(rgb(226 85 7), rgb(251 106 34));
+  --green: light-dark(rgb(0 162 64), rgb(64 201 119));
+  --red: light-dark(rgb(224 46 42), rgb(255 103 100));
+  --purple: light-dark(rgb(146 79 247), rgb(173 123 249));
+  --yellow: light-dark(rgb(255 195 0), rgb(255 210 64));
+  --viz-series-1: var(--primary);
+  --viz-series-2: light-dark(rgb(243 136 59), rgb(245 154 86));
+  --viz-series-3: light-dark(rgb(93 201 119), rgb(116 213 139));
+  --viz-series-4: light-dark(rgb(235 119 177), rgb(240 143 192));
+  --viz-series-5: light-dark(rgb(155 121 236), rgb(170 145 239));
+  --viz-series-6: light-dark(rgb(58 185 177), rgb(90 203 194));
+
+  /* Internal implementation variables; not part of the agent contract. */
+  --font-sans: -apple-system, system-ui, &quot;Segoe UI&quot;, sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, &quot;SF Mono&quot;, Menlo, Consolas, &quot;Liberation Mono&quot;,
+    monospace;
+  --font-size-normal: max(11px, var(--font-size-base));
+  --font-size-tooltip: calc(var(--font-size-base) - 1px);
+  --font-size-small: max(11px, calc(var(--font-size-base) - 2px));
+  --font-size-h1: calc(var(--font-size-normal) * 1.7142857143);
+  --font-size-h2: calc(var(--font-size-normal) * 1.4285714286);
+  --font-size-h3: calc(var(--font-size-normal) * 1.2857142857);
+  --font-weight-normal: 430;
+  --font-weight-medium: 500;
+  --icon-size: 16px;
+  --line-height-normal: calc(var(--font-size-normal) * 1.5);
+  --line-height-tooltip: calc(var(--font-size-tooltip) * 1.4285714286);
+  --line-height-small: calc(var(--font-size-small) + 4px);
+  --corner-shape: round;
+  --radius: var(--border-radius-lg, 10px);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-2xl: calc(var(--radius) * 1.6);
+  --radius-full: 9999px;
+  --shadow-sm: 0 1px 2px -1px rgb(0 0 0 / 8%);
+  --checkmark-image: url(&quot;data:image/svg+xml,%3Csvg xmlns=&#x27;http://www.w3.org/2000/svg&#x27; viewBox=&#x27;0 0 17 17&#x27;%3E%3Cpath d=&#x27;M12.8961 3.64101C13.1297 3.41418 13.4984 3.37523 13.7779 3.56581C14.0571 3.75635 14.1554 4.11331 14.0299 4.41347L13.9615 4.53847L7.71151 13.7045C7.59411 13.8767 7.4063 13.9877 7.19881 14.0072C6.99136 14.0267 6.78564 13.9533 6.63826 13.806L2.88826 10.056L2.79842 9.9457C2.6192 9.67407 2.64927 9.30496 2.88826 9.06581C3.12738 8.82669 3.49647 8.79676 3.76815 8.97597L3.8785 9.06581L7.03084 12.2182L12.8053 3.74941L12.8961 3.64101Z&#x27;/%3E%3C/svg%3E&quot;);
+
+  /* Legacy aliases; not part of the current agent contract. */
+  --viz-bg: transparent;
+  --viz-panel: var(--card);
+  --viz-border: var(--border);
+  --viz-text: var(--foreground);
+  --viz-muted: var(--muted-foreground);
+  --viz-accent: var(--primary);
+  --viz-accent-text: var(--primary-foreground);
+  --viz-accent-bg: var(--accent);
+  --viz-font-size: var(--font-size-base);
+  --viz-warning: var(--destructive);
+}
+
+:root[data-theme=&quot;light&quot;] {
+  color-scheme: light;
+}
+
+:root[data-theme=&quot;dark&quot;] {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html &gt; body {
+  /* Preserve MCP aliases for older inline renderers without creating :root cycles. */
+  --color-background-primary: var(
+    --background,
+    light-dark(rgb(255 255 255), rgb(24 24 24))
+  );
+  --color-text-primary: var(
+    --foreground,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --color-border-secondary: var(
+    --border,
+    light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%))
+  );
+
+  margin: 0;
+  padding: var(--visualize-paint-gutter, 0px);
+  color: var(--foreground);
+  background: transparent !important;
+  font-family: var(--font-sans) !important;
+  font-size: var(--font-size-normal);
+  font-weight: var(--font-weight-normal);
+  line-height: var(--line-height-normal);
+}
+
+.cursor-interaction {
+  cursor: var(--cursor-interaction, pointer);
+}
+
+a {
+  color: color-mix(in srgb, var(--viz-accent) 80%, var(--viz-text) 20%);
+  cursor: var(--cursor-interaction, pointer);
+  font-weight: var(--font-weight-medium, 500);
+  text-decoration: none;
+  text-underline-offset: 2px;
+}
+
+a:is(:hover, :focus-visible) {
+  text-decoration-line: underline;
+  text-decoration-style: dashed;
+  text-decoration-thickness: 0.5px;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p {
+  margin-block: 0;
+}
+
+h1 {
+  font-size: var(--font-size-h1);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+h2 {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+h3,
+h4,
+h5,
+h6 {
+  font-size: var(--font-size-h3);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.3;
+}
+
+b,
+strong,
+th {
+  font-weight: var(--font-weight-medium);
+}
+
+code:not(pre code) {
+  display: inline;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  corner-shape: var(--corner-shape);
+  background: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  overflow-wrap: anywhere;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  word-break: break-word;
+}
+
+.table-responsive {
+  width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--foreground);
+  font: inherit;
+  text-align: start;
+}
+
+.table :is(th, td) {
+  padding-block: 10px;
+  padding-inline: 0 24px;
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid var(--border);
+  text-align: start;
+  vertical-align: top;
+}
+
+.table-responsive &gt; .table :is(th, td) {
+  overflow-wrap: break-word;
+}
+
+.table :is(th, td):last-child {
+  padding-inline-end: 0;
+}
+
+.table :is(caption, thead th) {
+  font-weight: 600;
+}
+
+.table thead th {
+  padding-block: 8px;
+  border-bottom-color: color-mix(in srgb, var(--foreground) 16%, transparent);
+}
+
+.table tbody tr:last-child :is(th, td) {
+  border-bottom: 0;
+}
+
+.table.table-sm :is(th, td) {
+  padding-block: 6px;
+}
+
+.table.table-sm :is(th, td):not(:last-child) {
+  padding-inline-end: 16px;
+}
+
+.table :is(.text-end, [align=&quot;right&quot;]) {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.table :is(.text-center, [align=&quot;center&quot;]) {
+  text-align: center;
+}
+
+.table .text-nowrap {
+  white-space: nowrap;
+}
+
+#widget {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  padding: 0;
+  background: transparent !important;
+}
+
+.card {
+  min-width: 0;
+  padding: 12px;
+  overflow: hidden;
+  overflow-wrap: break-word;
+  border-radius: var(--radius-2xl);
+  corner-shape: var(--corner-shape);
+  color: var(--card-foreground);
+  background: var(--card);
+}
+
+.widget {
+  min-width: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--radius-lg);
+  corner-shape: var(--corner-shape);
+  box-shadow: 0 0 0 0.5px var(--border-strong, var(--border));
+  color: var(--foreground);
+  background: var(--background);
+}
+
+#widget &gt; :not(.card, .widget, .progress) {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.tooltip {
+  position: fixed;
+  z-index: 50;
+  top: 0;
+  left: 0;
+  width: max-content;
+  max-width: min(
+    20rem,
+    var(--tooltip-available-width, calc(100vw - 10px)),
+    calc(100vw - 10px)
+  );
+  max-height: min(
+    var(--tooltip-available-height, calc(100vh - 10px)),
+    calc(100vh - 10px)
+  );
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  corner-shape: var(--corner-shape);
+  color: var(--popover-foreground);
+  background: var(--popover);
+  box-shadow: none;
+  font-size: var(--font-size-tooltip);
+  line-height: var(--line-height-tooltip);
+  overflow-wrap: break-word;
+  white-space: normal;
+  pointer-events: none;
+  user-select: none;
+}
+
+.viz-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(max(180px, 24%), 1fr));
+  gap: 10px;
+}
+
+.viz-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.viz-stat-value {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+.viz-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+hr {
+  width: 100%;
+  height: 1px;
+  margin-block: 6px;
+  border: 0;
+  background: var(--border);
+}
+
+.nav {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+}
+
+.progress {
+  display: flex;
+  height: 8px;
+  margin-block: calc((var(--line-height-normal, 1.5em) - 8px) / 2);
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+}
+
+.progress-bar:only-child {
+  border-radius: var(--radius-full);
+}
+
+.progress-bar {
+  height: 100%;
+  flex-shrink: 0;
+  border: 0;
+  background: var(--viz-series-1);
+}
+
+.viz-badge {
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  color: var(--accent-foreground);
+  background: var(--accent);
+  font-weight: var(--font-weight-medium);
+}
+
+small,
+.text-small,
+.viz-badge {
+  font-size: var(--font-size-small);
+  line-height: var(--line-height-small);
+}
+
+.text-muted {
+  color: var(--muted-foreground);
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.viz-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.viz-controls &gt; .form-label {
+  display: grid;
+  min-width: min(100%, 260px);
+  flex: 1 1 280px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 2px 12px;
+  margin-bottom: 0;
+}
+
+.viz-controls &gt; .form-label &gt; :is(.form-control, .form-range, .form-select) {
+  grid-column: 1 / -1;
+}
+
+.btn,
+.nav-link,
+.form-check-input,
+.form-control,
+.form-range,
+.form-select {
+  font: inherit;
+}
+
+.btn,
+.nav-link {
+  appearance: button;
+  display: inline-flex;
+  inline-size: fit-content;
+  max-inline-size: 100%;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0 8px;
+  -webkit-app-region: no-drag;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: var(--corner-shape);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: var(--cursor-interaction, pointer);
+  text-align: center;
+  text-decoration: none;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+.btn:is(.btn-block, .viz-tile) {
+  inline-size: 100%;
+}
+
+.btn.viz-tile {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+a.btn {
+  cursor: var(--cursor-interaction, pointer);
+  text-decoration: none;
+}
+
+.btn:not(:disabled):hover,
+.nav-link:not(:disabled):not([aria-disabled=&quot;true&quot;]):hover {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.btn-primary {
+  border-color: transparent;
+  color: var(--primary-foreground);
+  background: var(--foreground);
+  background-clip: padding-box;
+}
+
+.btn-primary .text-muted {
+  color: color-mix(in srgb, var(--primary-foreground) 50%, transparent);
+}
+
+.btn-primary:not(:disabled):hover {
+  background: color-mix(in srgb, var(--foreground) 80%, transparent);
+  background-clip: padding-box;
+}
+
+.btn-ghost {
+  border-color: transparent;
+  color: var(--muted-foreground);
+  background: transparent;
+}
+
+.btn-ghost:not(:disabled):hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.nav-pills .nav-link {
+  min-width: 0;
+  border-color: transparent;
+  color: var(--muted-foreground);
+  background: transparent;
+}
+
+.nav-justified .nav-link {
+  flex: 1 1 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.nav-pills .nav-link.active {
+  color: var(--foreground);
+  background: var(--muted);
+}
+
+/* Shared preview chrome; product styles stay inside each variant. */
+.viz-dotted-background {
+  background-image: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--foreground) 14%, transparent) 0.8px,
+    transparent 0.8px
+  );
+  background-position: center;
+  background-size: 16px 16px;
+}
+
+.viz-carousel {
+  position: relative;
+  min-width: 0;
+}
+
+.viz-carousel:has(&gt; .viz-carousel-controls) {
+  min-height: calc(60px + var(--viz-carousel-picker-height, 0px));
+  padding-bottom: 60px;
+}
+
+.viz-carousel &gt; [data-variant][hidden] {
+  display: none !important;
+}
+
+.viz-carousel &gt; [data-variant] {
+  isolation: isolate;
+}
+
+.viz-carousel-controls {
+  --viz-carousel-hover: light-dark(
+    color-mix(in srgb, var(--foreground) 5.4%, transparent),
+    color-mix(in srgb, var(--foreground) 7.8%, transparent)
+  );
+  position: absolute;
+  z-index: 2;
+  bottom: 8px;
+  left: 50%;
+  display: flex;
+  width: max-content;
+  /* Leave room for the host&#x27;s design-controls launcher at the trailing edge. */
+  max-width: calc(100% - 96px);
+  align-items: center;
+  gap: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  color: var(--foreground);
+  background: var(--background);
+  font-family: var(--font-sans);
+  /* Match the settings dropdown chrome independently of the content font size. */
+  font-size: 13px;
+  font-weight: var(--font-weight-normal);
+  line-height: 18px;
+  transform: translateX(-50%);
+  user-select: none;
+}
+
+/* Keep authored mockup button styles out of the shared carousel chrome. */
+.viz-carousel-controls button,
+.viz-carousel-picker &gt; summary {
+  display: flex !important;
+  height: auto !important;
+  min-height: 30px;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 4px;
+  padding: 0 6px !important;
+  -webkit-app-region: no-drag;
+  border: 0 !important;
+  border-radius: 14px !important;
+  color: inherit !important;
+  background: transparent !important;
+  font: inherit !important;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.viz-carousel-controls &gt; button,
+.viz-carousel-picker &gt; summary {
+  position: relative;
+  isolation: isolate;
+}
+
+.viz-carousel-controls &gt; button {
+  --icon-size: 16px;
+  width: 30px !important;
+  padding: 0 !important;
+}
+
+.viz-carousel-picker &gt; summary {
+  padding-inline: 12px !important;
+}
+
+.viz-carousel-controls .viz-carousel-caret {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  margin: 0;
+  color: inherit;
+  transform: rotate(180deg);
+}
+
+.viz-carousel-controls &gt; button &gt; svg,
+.viz-carousel-controls .viz-carousel-caret,
+.viz-carousel-count {
+  opacity: 0.5;
+}
+
+.viz-carousel-controls &gt; button::before,
+.viz-carousel-picker &gt; summary::before {
+  position: absolute;
+  z-index: -1;
+  inset: 3px;
+  border-radius: 12px;
+  content: &quot;&quot;;
+  pointer-events: none;
+}
+
+.viz-carousel-controls &gt; button:hover::before,
+.viz-carousel-picker &gt; summary:hover::before {
+  background: var(--viz-carousel-hover);
+}
+
+.viz-carousel-controls &gt; button,
+.viz-carousel-controls [data-lucide],
+.viz-carousel-controls .lucide {
+  flex-shrink: 0;
+}
+
+.viz-carousel-picker {
+  min-width: 0;
+}
+
+.viz-carousel-picker &gt; summary {
+  min-width: 0;
+  list-style: none;
+}
+
+.viz-carousel-picker &gt; summary::-webkit-details-marker {
+  display: none;
+}
+
+.viz-carousel-count {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.viz-carousel-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.viz-carousel-options {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 4px);
+  left: 0;
+  display: flex;
+  max-height: 240px;
+  flex-direction: column;
+  gap: 2px;
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--background);
+  box-shadow: 0 4px 12px light-dark(rgb(0 0 0 / 6%), rgb(0 0 0 / 25%));
+}
+
+.viz-carousel-options &gt; button {
+  border-radius: max(0px, calc(var(--radius-lg) - 5px)) !important;
+  width: 100% !important;
+  min-height: 28px;
+  justify-content: flex-start !important;
+  padding: 4px 8px !important;
+  font-size: var(--font-size-small) !important;
+  text-align: start;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.viz-carousel-options &gt; [aria-current=&quot;true&quot;],
+.viz-carousel-options &gt; button:hover {
+  background: var(--viz-carousel-hover) !important;
+}
+
+.btn:disabled,
+.nav-link:disabled,
+.nav-link[aria-disabled=&quot;true&quot;] {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+[data-lucide] {
+  stroke-width: 1.6;
+}
+
+.form-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--foreground);
+}
+
+.form-control {
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  padding: 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: var(--corner-shape);
+  color: var(--foreground);
+  background: var(--secondary);
+}
+
+.form-control::placeholder {
+  color: var(--muted-foreground);
+}
+
+.form-control[type=&quot;file&quot;] {
+  padding: 0;
+  overflow: hidden;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control[type=&quot;file&quot;]::file-selector-button {
+  min-height: 26px;
+  margin-right: 8px;
+  padding: 0 8px;
+  border: 0;
+  border-right: 1px solid var(--input);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: inherit;
+  font: inherit;
+}
+
+.form-control[type=&quot;file&quot;]:not(:disabled):hover::file-selector-button {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-control-color[type=&quot;color&quot;] {
+  width: 40px;
+  height: 28px;
+  padding: 3px;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch {
+  border: 0;
+  border-radius: calc(var(--radius-lg) - 4px);
+  corner-shape: var(--corner-shape);
+}
+
+textarea.form-control {
+  height: auto;
+  min-height: 72px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+
+.form-control:focus-visible {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-control:disabled,
+.form-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.form-select {
+  appearance: none;
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  margin: 0;
+  padding: 0 32px 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: var(--corner-shape);
+  color: var(--foreground);
+  background-color: var(--secondary);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted-foreground) 50%),
+    linear-gradient(135deg, var(--muted-foreground) 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) 50%,
+    calc(100% - 10px) 50%;
+  background-repeat: no-repeat;
+  background-size: 4px 4px;
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-select:not(:disabled):hover {
+  background-color: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-select:focus-visible {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-check {
+  display: flex;
+  min-height: 20px;
+  align-items: center;
+  gap: 6px;
+}
+
+.form-check-input {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  margin: 0;
+  border: 1px solid var(--input);
+  color: var(--primary-foreground);
+  background-color: transparent;
+  cursor: var(--cursor-interaction, default);
+  transition:
+    background-color 150ms,
+    border-color 150ms,
+    box-shadow 150ms;
+}
+
+.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;] {
+  border-color: var(--input);
+  border-radius: var(--radius-sm);
+  corner-shape: var(--corner-shape);
+  background-color: var(--secondary);
+  box-shadow: var(--shadow-sm);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input:not(:disabled):not(:checked):hover {
+  background-color: var(--card);
+}
+
+.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;]:checked {
+  border-color: var(--primary);
+  background-color: var(--primary);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input[type=&quot;checkbox&quot;]:checked::before {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--primary-foreground);
+  content: &quot;&quot;;
+  mask: var(--checkmark-image) center / 12px 12px no-repeat;
+}
+
+.form-check-input[type=&quot;radio&quot;] {
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-full);
+}
+
+.form-check-input[type=&quot;radio&quot;]:checked {
+  border: 2px solid var(--primary);
+  background:
+    radial-gradient(circle, var(--primary-foreground) 0 2.5px, transparent 3px),
+    var(--primary);
+}
+
+.form-check:not(.form-switch) .form-check-input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled {
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+}
+
+.form-switch .form-check-input:disabled,
+.form-switch .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.form-check-label {
+  color: var(--foreground);
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-switch .form-check-input {
+  position: relative;
+  width: 32px;
+  height: 20px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+  box-shadow: none;
+  transition: background-color 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input::before {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border: 1px solid light-dark(var(--primary-foreground), var(--foreground));
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+  box-shadow: var(--shadow-sm);
+  content: &quot;&quot;;
+  transform: translate(2px, -50%);
+  transition: transform 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input:checked {
+  background: var(--primary);
+}
+
+.form-switch .form-check-input:checked::before {
+  transform: translate(14px, -50%);
+}
+
+.form-switch .form-check-input:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.form-range {
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 28px;
+  flex: 1;
+  margin: 0;
+  padding: 0;
+  outline: none;
+  border: 0;
+  accent-color: var(--primary);
+  background: linear-gradient(
+      color-mix(in srgb, var(--foreground) 7%, transparent),
+      color-mix(in srgb, var(--foreground) 7%, transparent)
+    )
+    center / 100% 2px no-repeat;
+}
+
+.form-range::-webkit-slider-runnable-track {
+  height: 28px;
+  background: transparent;
+}
+
+.form-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+}
+
+.form-range:focus-visible::-webkit-slider-thumb {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-range::-moz-range-track {
+  height: 28px;
+  background: transparent;
+}
+
+.form-range::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+}
+
+.form-range:focus-visible::-moz-range-thumb {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-range:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.btn:not(.btn-primary, .viz-tile):is(
+  [aria-pressed=&quot;true&quot;],
+  [aria-selected=&quot;true&quot;],
+  .is-selected
+) {
+  border-color: var(--primary);
+  color: var(--primary-foreground);
+  background: var(--primary);
+}
+
+.btn.viz-tile:is([aria-pressed=&quot;true&quot;], [aria-selected=&quot;true&quot;], .is-selected) {
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.btn:focus-visible,
+.nav-link:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.viz-carousel-controls :is(button, summary):focus-visible {
+  outline: 2px solid var(--ring) !important;
+  outline-offset: 2px !important;
+}
+
+@media (pointer: coarse) {
+  .viz-carousel:has(&gt; .viz-carousel-controls) {
+    min-height: calc(76px + var(--viz-carousel-picker-height, 0px));
+    padding-bottom: 76px;
+  }
+
+  .btn,
+  .nav-link,
+  .viz-carousel-controls button,
+  .viz-carousel-picker &gt; summary,
+  .form-control,
+  .form-select {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  /* Keep small-screen WebKit from zooming when a text field receives focus. */
+  .form-control,
+  .form-select {
+    font-size: max(16px, var(--font-size-normal));
+  }
+
+  .form-control[type=&quot;file&quot;]::file-selector-button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .form-control-color[type=&quot;color&quot;] {
+    width: 44px;
+    height: 44px;
+  }
+
+  .form-control:is(
+    [type=&quot;date&quot;],
+    [type=&quot;datetime-local&quot;],
+    [type=&quot;month&quot;],
+    [type=&quot;time&quot;],
+    [type=&quot;week&quot;]
+  ) {
+    min-width: 0;
+    max-width: 100%;
+    padding-block: 8px;
+  }
+
+  .form-check {
+    min-height: 44px;
+    padding-inline: 15px;
+  }
+
+  .form-check-input {
+    position: relative;
+  }
+
+  .form-check-input::after {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 44px;
+    height: 44px;
+    content: &quot;&quot;;
+    transform: translate(-50%, -50%);
+  }
+
+  .form-check-label {
+    display: inline-flex;
+    min-width: 44px;
+    min-height: 44px;
+    align-items: center;
+  }
+
+  .form-range {
+    height: 44px;
+    touch-action: pan-y;
+  }
+
+  .form-range::-webkit-slider-runnable-track {
+    height: 44px;
+  }
+
+  .form-range::-moz-range-track {
+    height: 44px;
+  }
+
+  .form-range::-webkit-slider-thumb {
+    margin-top: 12px;
+  }
+}
+
+svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+#widget &gt; svg {
+  width: 100%;
+}
+
+/* Model-authored chart rules can otherwise stretch icons after these styles load. */
+svg.lucide {
+  display: block;
+  width: var(--icon-size) !important;
+  height: var(--icon-size) !important;
+  flex: none;
+  margin: 0 !important;
+  stroke-width: 1.6;
+}
+
+.text-warning,
+.text-destructive {
+  color: var(--destructive);
+}
+
+html&gt;body{padding:0}&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;script type=&quot;application/json&quot; id=&quot;codex-visualization-widget-state&quot;&gt;__CODEX_VISUALIZATION_WIDGET_STATE__&lt;/script&gt;
+&lt;script&gt;(() =&gt; {
+  const root = document.documentElement;
+  const mediaQuery = globalThis.matchMedia(&quot;(prefers-color-scheme: dark)&quot;);
+  const apply = Reflect.apply;
+  const isArray = Array.isArray;
+  const hasOwn = Object.hasOwn;
+  const parentWindow = globalThis.parent;
+  const stringify = JSON.stringify;
+  const parse = JSON.parse;
+  const encode = TextEncoder.prototype.encode.bind(new TextEncoder());
+  const initialStateElement = document.getElementById(
+    &quot;codex-visualization-widget-state&quot;,
+  );
+  const initialGlobals = parse(initialStateElement?.textContent ?? &quot;{}&quot;);
+  initialStateElement?.remove();
+  /** @type {Record&lt;string, unknown&gt; | null} */
+  let state = initialGlobals.widgetState ?? null;
+  const statePersistence = initialGlobals.statePersistence ?? &quot;none&quot;;
+  let nextStateRequestId = 0;
+  /** @type {Map&lt;number, { resolve: () =&gt; void; reject: (error: Error) =&gt; void; timeout: ReturnType&lt;typeof globalThis.setTimeout&gt;; serializedState: string }&gt;} */
+  const pendingStateWrites = new Map();
+  const persistenceError = () =&gt;
+    Object.assign(
+      new Error(&quot;The host could not persist the widget state update&quot;),
+      {
+        code: -32000,
+        data: { code: &quot;widget_state_persistence_failed&quot;, retryable: false },
+      },
+    );
+  /**
+   * @param {object} prototype
+   * @param {string} property
+   */
+  const getPrototypeGetter = (prototype, property) =&gt; {
+    // oxlint-disable-next-line typescript/unbound-method -- invoked through captured Reflect.apply
+    const getter = Object.getOwnPropertyDescriptor(prototype, property)?.get;
+    if (getter == null) {
+      throw new Error(`Missing ${property} getter`);
+    }
+    return getter;
+  };
+  const getMessageData = getPrototypeGetter(MessageEvent.prototype, &quot;data&quot;);
+  const getMessagePorts = getPrototypeGetter(MessageEvent.prototype, &quot;ports&quot;);
+  const getMessageSource = getPrototypeGetter(MessageEvent.prototype, &quot;source&quot;);
+  // oxlint-disable-next-line typescript/unbound-method -- captured before the untrusted fragment runs
+  const addHostMessageListener = MessagePort.prototype.addEventListener;
+  // oxlint-disable-next-line typescript/unbound-method -- captured before the untrusted fragment runs
+  const postHostMessage = MessagePort.prototype.postMessage;
+  // oxlint-disable-next-line typescript/unbound-method -- captured before the untrusted fragment runs
+  const startHostPort = MessagePort.prototype.start;
+  // oxlint-disable-next-line typescript/unbound-method -- captured before the untrusted fragment runs
+  const stopMessagePropagation = Event.prototype.stopImmediatePropagation;
+  /** @type {MessagePort | null} */
+  let hostPort = null;
+  const postToHost = (type, payload) =&gt; {
+    if (hostPort != null) {
+      apply(postHostMessage, hostPort, [{ type, ...payload }]);
+    }
+  };
+  const openExternal = ({ href }) =&gt; {
+    if (globalThis.navigator.userActivation?.isActive === true) {
+      postToHost(&quot;open-external&quot;, { href });
+    }
+  };
+  const sendFollowUpMessage = ({ context, prompt, title }) =&gt; {
+    if (globalThis.navigator.userActivation?.isActive === true) {
+      postToHost(&quot;follow-up&quot;, { context, prompt, title });
+    }
+    return Promise.resolve();
+  };
+  /**
+   * @param {Record&lt;string, unknown&gt; | ((previous: Record&lt;string, unknown&gt; | null) =&gt; Record&lt;string, unknown&gt;)} next
+   * @returns {Promise&lt;void&gt;}
+   */
+  const setWidgetState = async (next) =&gt; {
+    const nextState = typeof next === &quot;function&quot; ? next(state) : next;
+    if (
+      nextState == null ||
+      typeof nextState !== &quot;object&quot; ||
+      isArray(nextState)
+    ) {
+      throw new TypeError(&quot;Widget state must be a JSON object&quot;);
+    }
+    const inputState = stringify(
+      nextState,
+      (_key, /** @type {unknown} */ value) =&gt; {
+        if (
+          typeof value === &quot;undefined&quot; ||
+          typeof value === &quot;function&quot; ||
+          typeof value === &quot;symbol&quot; ||
+          (typeof value === &quot;number&quot; &amp;&amp; !Number.isFinite(value))
+        ) {
+          throw new TypeError(&quot;Widget state must be a JSON object&quot;);
+        }
+        return value;
+      },
+    );
+    const parsedState = parse(inputState);
+    if (
+      parsedState == null ||
+      typeof parsedState !== &quot;object&quot; ||
+      isArray(parsedState)
+    ) {
+      throw new TypeError(&quot;Widget state must be a JSON object&quot;);
+    }
+    const storedState = {
+      modelContent: null,
+      privateContent: null,
+      ...parsedState,
+    };
+    const serializedState = stringify(storedState);
+    if (encode(serializedState).length &gt; 16 * 1024) {
+      throw new TypeError(
+        &quot;Widget state must be a JSON object of at most 16 KiB&quot;,
+      );
+    }
+    if (
+      hasOwn(storedState, &quot;imageIds&quot;) &amp;&amp;
+      (!isArray(storedState.imageIds) ||
+        storedState.imageIds.some(
+          (/** @type {unknown} */ id) =&gt; typeof id !== &quot;string&quot;,
+        ))
+    ) {
+      throw new TypeError(&quot;Widget state imageIds must be an array of strings&quot;);
+    }
+    if (storedState.imageIds?.length &gt; 0) {
+      throw Object.assign(
+        new TypeError(&quot;Visualization state does not support image attachments&quot;),
+        { code: -32602, data: { code: &quot;images_unsupported&quot; } },
+      );
+    }
+    state = storedState;
+    globalThis.openai.widgetState = state;
+    globalThis.dispatchEvent(
+      new CustomEvent(&quot;openai:set_globals&quot;, {
+        detail: { globals: { widgetState: state } },
+      }),
+    );
+    if (statePersistence === &quot;none&quot;) {
+      throw persistenceError();
+    }
+    const id = ++nextStateRequestId;
+    return new Promise((resolve, reject) =&gt; {
+      const timeout = globalThis.setTimeout(() =&gt; {
+        pendingStateWrites.delete(id);
+        reject(persistenceError());
+      }, 30_000);
+      pendingStateWrites.set(id, { resolve, reject, timeout, serializedState });
+      postToHost(&quot;widget-state-write&quot;, { id, state: serializedState });
+    });
+  };
+  const syncTheme = () =&gt; {
+    const theme = mediaQuery.matches ? &quot;dark&quot; : &quot;light&quot;;
+    root.dataset.theme = theme;
+    globalThis.openai = {
+      ...globalThis.openai,
+      openExternal,
+      sendFollowUpMessage,
+      setWidgetState,
+      theme,
+      visualizationStyleVariables: {},
+      visualizationTheme: theme,
+      widgetState: state,
+      statePersistence,
+      stateModelContext: &quot;none&quot;,
+    };
+    globalThis.dispatchEvent(
+      new CustomEvent(&quot;openai:set_globals&quot;, {
+        detail: { globals: globalThis.openai },
+      }),
+    );
+  };
+  const sendHeight = () =&gt; {
+    postToHost(&quot;height&quot;, {
+      height: Math.ceil(
+        Math.max(
+          document.body.scrollHeight,
+          document.body.getBoundingClientRect().height,
+        ),
+      ),
+    });
+  };
+
+  globalThis.addEventListener(
+    &quot;message&quot;,
+    (event) =&gt; {
+      const data = apply(getMessageData, event, []);
+      const ports = apply(getMessagePorts, event, []);
+      const source = apply(getMessageSource, event, []);
+      if (
+        hostPort != null ||
+        source !== parentWindow ||
+        typeof data !== &quot;object&quot; ||
+        data?.type !== &quot;codex-visualization-initialize&quot; ||
+        !isArray(ports) ||
+        ports.length !== 1
+      ) {
+        return;
+      }
+      apply(stopMessagePropagation, event, []);
+      const nextHostPort = ports[0];
+      try {
+        apply(addHostMessageListener, nextHostPort, [
+          &quot;message&quot;,
+          (event) =&gt; {
+            const data = apply(getMessageData, event, []);
+            if (typeof data === &quot;object&quot; &amp;&amp; data?.type === &quot;measure&quot;) {
+              sendHeight();
+            } else if (
+              typeof data === &quot;object&quot; &amp;&amp;
+              data?.type === &quot;widget-state-result&quot;
+            ) {
+              /** @type {unknown} */
+              const id = data.id;
+              if (typeof id !== &quot;number&quot;) {
+                return;
+              }
+              const pending = pendingStateWrites.get(id);
+              if (pending != null) {
+                pendingStateWrites.delete(id);
+                globalThis.clearTimeout(pending.timeout);
+                if (data.ok === true) {
+                  pending.resolve();
+                } else {
+                  pending.reject(persistenceError());
+                }
+              }
+            }
+          },
+        ]);
+        apply(startHostPort, nextHostPort, []);
+      } catch {
+        return;
+      }
+      hostPort = nextHostPort;
+      for (const [id, { serializedState }] of pendingStateWrites) {
+        postToHost(&quot;widget-state-write&quot;, { id, state: serializedState });
+      }
+      sendHeight();
+    },
+    { capture: true },
+  );
+  document.currentScript?.remove();
+  mediaQuery.addEventListener(&quot;change&quot;, syncTheme);
+  globalThis.addEventListener(&quot;click&quot;, (event) =&gt; {
+    if (event.defaultPrevented) {
+      return;
+    }
+    let element = null;
+    if (event.target instanceof globalThis.Element) {
+      element = event.target;
+    } else if (event.target instanceof globalThis.Node) {
+      element = event.target.parentElement;
+    }
+    const link = element?.closest(&quot;a[href]&quot;);
+    const href = link?.getAttribute(&quot;href&quot;);
+    if (href == null) {
+      return;
+    }
+    if (href.startsWith(&quot;#&quot;)) {
+      let id;
+      try {
+        id = decodeURIComponent(href.slice(1));
+      } catch {
+        return;
+      }
+      const target = id.length === 0 ? root : document.getElementById(id);
+      if (
+        target == null ||
+        globalThis.navigator.userActivation?.isActive !== true
+      ) {
+        return;
+      }
+      event.preventDefault();
+      postToHost(&quot;scroll-to&quot;, {
+        top: target.getBoundingClientRect().top + globalThis.scrollY,
+      });
+      return;
+    }
+    event.preventDefault();
+    openExternal({ href });
+  });
+  new ResizeObserver(sendHeight).observe(document.body);
+  syncTheme();
+})();
+&lt;/script&gt;
+&lt;div id=&quot;levelframe-concept&quot; lang=&quot;ru&quot; aria-label=&quot;LevelFrame — макеты ребрендинга&quot;&gt;
+  &lt;style&gt;
+    #levelframe-concept { --lf-bg:light-dark(#f3f5f9,#0c111b); --lf-surface:light-dark(#fff,#131b28); --lf-raised:light-dark(#ebeff6,#1a2535); --lf-text:light-dark(#152238,#edf2fa); --lf-muted:light-dark(#53637a,#a2b0c5); --lf-line:light-dark(#d5dde8,#2c3a4e); --lf-brand:#4268dd; --lf-onbrand:#fff; --lf-up:light-dark(#176957,#62c9b0); --lf-down:light-dark(#aa3448,#f08d98); --lf-warn:light-dark(#82510a,#e9bc72); --lf-pad:22px; color:var(--lf-text); font:14px/1.5 &quot;Inter&quot;,&quot;Segoe UI&quot;,system-ui,sans-serif; background:var(--lf-bg); border-radius:12px; width:100%; color-scheme:light dark; }
+    #levelframe-concept * { box-sizing:border-box; }
+    #levelframe-concept [hidden] { display:none!important; }
+    #levelframe-concept button, #levelframe-concept select, #levelframe-concept input { font:inherit; }
+    #levelframe-concept button { color:inherit; }
+    #levelframe-concept button:focus-visible, #levelframe-concept select:focus-visible, #levelframe-concept input:focus-visible, #levelframe-concept summary:focus-visible { outline:3px solid var(--lf-brand); outline-offset:3px; }
+    #levelframe-concept .lf-head { display:flex; flex-wrap:wrap; align-items:center; gap:20px; padding:18px var(--lf-pad); padding-right:98px; border-bottom:1px solid var(--lf-line); background:var(--lf-surface); border-radius:12px 12px 0 0; }
+    #levelframe-concept .lf-brand { display:flex; align-items:center; gap:10px; white-space:nowrap; }
+    #levelframe-concept .lf-wordmark { font-size:19px; font-weight:650; letter-spacing:-.7px; }
+    #levelframe-concept .lf-logo { position:relative; width:28px; height:28px; border:2px solid var(--lf-brand); border-right-color:transparent; border-radius:3px; }
+    #levelframe-concept .lf-logo:before, #levelframe-concept .lf-logo:after { content:&quot;&quot;; position:absolute; height:2px; background:var(--lf-brand); left:6px; }
+    #levelframe-concept .lf-logo:before { top:8px; width:20px; }
+    #levelframe-concept .lf-logo:after { top:16px; width:14px; }
+    #levelframe-concept .lf-nav { display:flex; flex-wrap:wrap; gap:3px; }
+    #levelframe-concept .lf-nav button { border:0; background:transparent; color:var(--lf-muted); padding:7px 12px; border-radius:6px; font-size:13px; }
+    #levelframe-concept .lf-nav button[aria-current=&quot;page&quot;] { background:var(--lf-raised); color:var(--lf-text); }
+    #levelframe-concept .lf-demo { font-size:11px; color:var(--lf-muted); margin-left:auto; white-space:nowrap; }
+    #levelframe-concept .lf-content { padding:var(--lf-pad); }
+    #levelframe-concept h1 { font:650 28px/1.2 &quot;Inter&quot;,&quot;Segoe UI&quot;,sans-serif; letter-spacing:-.8px; margin:5px 0 8px; color:var(--lf-text); }
+    #levelframe-concept h2 { font:600 16px/1.4 &quot;Inter&quot;,&quot;Segoe UI&quot;,sans-serif; margin:0; color:var(--lf-text); }
+    #levelframe-concept h3 { font:600 14px/1.4 &quot;Inter&quot;,&quot;Segoe UI&quot;,sans-serif; margin:0; color:var(--lf-text); }
+    #levelframe-concept p { margin:0; }
+    #levelframe-concept .lf-muted { color:var(--lf-muted); }
+    #levelframe-concept .lf-small { font-size:12px; }
+    #levelframe-concept .lf-kicker { text-transform:uppercase; font-size:11px; letter-spacing:1.4px; color:var(--lf-muted); }
+    #levelframe-concept .lf-num { font-variant-numeric:tabular-nums; }
+    #levelframe-concept .lf-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+    #levelframe-concept .lf-between { justify-content:space-between; }
+    #levelframe-concept .lf-title { display:flex; justify-content:space-between; align-items:flex-start; gap:20px; flex-wrap:wrap; margin-bottom:24px; }
+    #levelframe-concept .lf-btn { display:inline-flex; align-items:center; justify-content:center; gap:7px; background:var(--lf-raised); border:1px solid var(--lf-line); border-radius:6px; padding:8px 12px; font-weight:500; font-size:12px; min-height:36px; }
+    #levelframe-concept .lf-btn svg { width:15px; height:15px; }
+    #levelframe-concept .lf-btn-primary { background:var(--lf-brand); border-color:var(--lf-brand); color:var(--lf-onbrand); }
+    #levelframe-concept .lf-btn-quiet { background:transparent; }
+    #levelframe-concept .lf-btn-danger { color:var(--lf-down); }
+    #levelframe-concept .lf-btn:hover { filter:brightness(1.08); }
+    #levelframe-concept .lf-btn[aria-pressed=&quot;true&quot;] { border-color:var(--lf-brand); }
+    #levelframe-concept .lf-panel { background:var(--lf-surface); border:1px solid var(--lf-line); border-radius:10px; min-width:0; }
+    #levelframe-concept .lf-panel-head { padding:16px 18px; border-bottom:1px solid var(--lf-line); display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+    #levelframe-concept .lf-status { display:inline-flex; align-items:center; gap:6px; font-size:11px; color:var(--lf-muted); }
+    #levelframe-concept .lf-status:before { content:&quot;&quot;; height:6px; width:6px; border-radius:50%; background:currentColor; flex:none; }
+    #levelframe-concept .lf-up { color:var(--lf-up); }
+    #levelframe-concept .lf-down { color:var(--lf-down); }
+    #levelframe-concept .lf-warning { color:var(--lf-warn); }
+    #levelframe-concept .lf-metrics { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin-bottom:22px; }
+    #levelframe-concept .lf-metric { padding:16px 18px; background:var(--lf-surface); border:1px solid var(--lf-line); border-radius:10px; }
+    #levelframe-concept .lf-metric-number { font-size:29px; font-weight:550; line-height:1.3; margin:5px 0; }
+    #levelframe-concept .lf-overview { display:grid; grid-template-columns:minmax(0,1.7fr) minmax(250px,.9fr); gap:16px; }
+    #levelframe-concept .lf-filters { display:flex; gap:3px; flex-wrap:wrap; }
+    #levelframe-concept .lf-filter { background:transparent; border:0; padding:6px 9px; border-radius:5px; color:var(--lf-muted); font-size:11px; }
+    #levelframe-concept .lf-filter[aria-pressed=&quot;true&quot;] { background:var(--lf-raised); color:var(--lf-text); }
+    #levelframe-concept .lf-market-labels, #levelframe-concept .lf-market-row { display:grid; grid-template-columns:minmax(110px,1fr) minmax(120px,1.15fr) minmax(72px,.7fr); gap:12px; align-items:center; }
+    #levelframe-concept .lf-market-labels { padding:11px 18px; color:var(--lf-muted); font-size:11px; }
+    #levelframe-concept .lf-market-row { padding:15px 18px; width:100%; text-align:left; background:transparent; border:0; border-top:1px solid var(--lf-line); font-size:12px; }
+    #levelframe-concept .lf-market-row:hover, #levelframe-concept .lf-market-row.is-selected { background:var(--lf-raised); }
+    #levelframe-concept .lf-symbol { font-weight:600; font-size:14px; }
+    #levelframe-concept .lf-venue { display:block; margin-top:2px; color:var(--lf-muted); font-size:11px; }
+    #levelframe-concept .lf-market-price { text-align:right; }
+    #levelframe-concept .lf-insight { padding:20px; }
+    #levelframe-concept .lf-insight-title { font-size:22px; font-weight:600; letter-spacing:-.5px; margin:14px 0 10px; line-height:1.3; }
+    #levelframe-concept .lf-definition { margin-top:20px; display:grid; gap:16px; }
+    #levelframe-concept .lf-definition dt { font-size:11px; color:var(--lf-muted); margin-bottom:4px; }
+    #levelframe-concept .lf-definition dd { margin:0; font-size:12px; }
+    #levelframe-concept .lf-wide { width:100%; margin-top:20px; }
+    #levelframe-concept .lf-note { font-size:11px; color:var(--lf-muted); padding:14px 0 0; }
+    #levelframe-concept .lf-asset-top { display:flex; flex-wrap:wrap; justify-content:space-between; gap:16px; margin-bottom:20px; }
+    #levelframe-concept .lf-price { font-size:28px; font-weight:550; line-height:1.2; letter-spacing:-.8px; }
+    #levelframe-concept .lf-asset-name { font-size:22px; font-weight:600; letter-spacing:-.6px; }
+    #levelframe-concept .lf-back { border:0; background:transparent; color:var(--lf-muted); padding:0; font-size:12px; margin-bottom:13px; display:flex; align-items:center; gap:6px; }
+    #levelframe-concept .lf-desk { display:grid; grid-template-columns:138px minmax(0,1fr) 250px; align-items:start; gap:12px; }
+    #levelframe-concept .lf-watchlist { padding:12px 0; }
+    #levelframe-concept .lf-watchlist h3 { padding:0 12px 12px; font-size:12px; }
+    #levelframe-concept .lf-watch-asset { width:100%; text-align:left; border:0; background:transparent; padding:13px 12px; font-size:12px; border-left:2px solid transparent; }
+    #levelframe-concept .lf-watch-asset.is-selected { border-left-color:var(--lf-brand); background:var(--lf-raised); }
+    #levelframe-concept .lf-watch-asset .lf-symbol { font-size:12px; }
+    #levelframe-concept .lf-watch-asset .lf-status { margin-top:5px; }
+    #levelframe-concept .lf-graph { overflow:visible; }
+    #levelframe-concept .lf-graph-toolbar { padding:12px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; border-bottom:1px solid var(--lf-line); }
+    #levelframe-concept .lf-switch { display:flex; gap:3px; flex-wrap:wrap; }
+    #levelframe-concept .lf-switch button { border:0; background:transparent; color:var(--lf-muted); font-size:11px; border-radius:5px; padding:6px 9px; }
+    #levelframe-concept .lf-switch button[aria-pressed=&quot;true&quot;] { background:var(--lf-raised); color:var(--lf-text); }
+    #levelframe-concept .lf-chart-surface { padding:10px; }
+    #levelframe-concept .lf-chart-surface &gt; svg { display:block; width:100%; height:320px; }
+    #levelframe-concept .lf-chart-meta { display:flex; gap:12px; flex-wrap:wrap; padding:8px 12px 12px; font-size:11px; color:var(--lf-muted); }
+    #levelframe-concept .lf-chart-meta span { display:flex; align-items:center; gap:5px; }
+    #levelframe-concept .lf-swatch { width:10px; height:8px; border-radius:1px; background:var(--lf-brand); display:inline-block; }
+    #levelframe-concept .lf-swatch-zone { background:var(--lf-up); }
+    #levelframe-concept .lf-inspector { padding:16px; }
+    #levelframe-concept .lf-inspector .lf-insight-title { font-size:20px; }
+    #levelframe-concept .lf-inspector .lf-definition { gap:13px; margin-top:16px; }
+    #levelframe-concept .lf-inspector details { border-top:1px solid var(--lf-line); padding-top:14px; margin-top:16px; font-size:12px; }
+    #levelframe-concept .lf-inspector summary { color:var(--lf-muted); }
+    #levelframe-concept .lf-evidence { margin:12px 0 0; padding-left:16px; display:grid; gap:8px; font-size:12px; }
+    #levelframe-concept .lf-bottom { margin-top:12px; }
+    #levelframe-concept .lf-zone { padding:13px 16px; border-top:1px solid var(--lf-line); display:flex; gap:10px; justify-content:space-between; flex-wrap:wrap; font-size:12px; }
+    #levelframe-concept .lf-zone:first-of-type { border-top:0; }
+    #levelframe-concept .lf-review { display:grid; grid-template-columns:170px minmax(0,1fr) 230px; gap:12px; align-items:start; }
+    #levelframe-concept .lf-task { padding:14px 12px; border-top:1px solid var(--lf-line); background:var(--lf-raised); }
+    #levelframe-concept .lf-task strong { display:block; font-size:13px; margin-bottom:4px; }
+    #levelframe-concept .lf-review-rule { margin:14px 0; font-size:12px; }
+    #levelframe-concept .lf-review-actions { display:grid; gap:8px; margin-top:20px; }
+    #levelframe-concept .lf-done { padding:38px 20px; text-align:center; }
+    #levelframe-concept .lf-done h2 { margin:8px 0; }
+    #levelframe-concept .lf-log-row { display:grid; grid-template-columns:76px minmax(0,1fr) 138px; align-items:start; gap:16px; padding:20px 18px; border-top:1px solid var(--lf-line); }
+    #levelframe-concept .lf-log-row:first-child { border-top:0; }
+    #levelframe-concept .lf-log-row h3 { margin-bottom:5px; }
+    #levelframe-concept .lf-log-row p { font-size:12px; color:var(--lf-muted); }
+    #levelframe-concept .lf-log-end { text-align:right; font-size:12px; }
+    #levelframe-concept .lf-settings { display:grid; grid-template-columns:minmax(0,1.2fr) minmax(0,1fr); gap:16px; align-items:start; }
+    #levelframe-concept .lf-settings-body { padding:18px; }
+    #levelframe-concept .lf-setting { padding:15px 0; display:flex; align-items:center; gap:14px; justify-content:space-between; border-bottom:1px solid var(--lf-line); }
+    #levelframe-concept .lf-setting:first-child { padding-top:0; }
+    #levelframe-concept .lf-setting input { accent-color:var(--lf-brand); width:18px; height:18px; flex:none; }
+    #levelframe-concept .lf-setting p { font-size:12px; color:var(--lf-muted); margin-top:4px; }
+    #levelframe-concept .lf-field { display:grid; gap:6px; font-size:12px; color:var(--lf-muted); margin-top:16px; }
+    #levelframe-concept .lf-field select { border:1px solid var(--lf-line); border-radius:6px; background:var(--lf-raised); color:var(--lf-text); padding:9px; width:100%; }
+    #levelframe-concept .lf-appearance { display:grid; gap:10px; }
+    #levelframe-concept .lf-appearance button { width:100%; justify-content:flex-start; }
+    #levelframe-concept .lf-theme-dot { width:16px; height:16px; border-radius:50%; background:var(--lf-raised); border:1px solid var(--lf-muted); }
+    #levelframe-concept .lf-footer { padding:12px var(--lf-pad); border-top:1px solid var(--lf-line); display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px; font-size:11px; color:var(--lf-muted); }
+    #levelframe-concept .lf-notice { padding:12px var(--lf-pad); background:var(--lf-raised); border-top:1px solid var(--lf-line); font-size:12px; }
+    @media(max-width:900px) { #levelframe-concept .lf-desk { grid-template-columns:minmax(0,1fr) 240px; } #levelframe-concept .lf-watchlist { grid-column:1/-1; display:flex; align-items:center; flex-wrap:wrap; padding:8px; } #levelframe-concept .lf-watchlist h3 { padding:5px 10px; } #levelframe-concept .lf-watch-asset { width:auto; padding:8px 12px; border-left:0; border-bottom:2px solid transparent; } #levelframe-concept .lf-watch-asset.is-selected { border-bottom-color:var(--lf-brand); } #levelframe-concept .lf-watch-asset .lf-status { display:none; } #levelframe-concept .lf-review { grid-template-columns:minmax(0,1fr) 230px; } #levelframe-concept .lf-review-queue { grid-column:1/-1; } #levelframe-concept .lf-task { display:flex; gap:12px; flex-wrap:wrap; } }
+    @media(max-width:740px) { #levelframe-concept .lf-overview { grid-template-columns:1fr; } #levelframe-concept .lf-insight { order:-1; } #levelframe-concept .lf-overview .lf-definition { grid-template-columns:repeat(3,minmax(0,1fr)); } #levelframe-concept .lf-head { gap:12px; } #levelframe-concept .lf-demo { margin-left:0; } #levelframe-concept .lf-settings { grid-template-columns:1fr; } }
+    @media(max-width:599px) { #levelframe-concept { --lf-pad:14px; border-radius:8px; } #levelframe-concept .lf-head { padding:16px 14px; padding-right:14px; border-radius:8px 8px 0 0; } #levelframe-concept .lf-brand { margin-right:90px; } #levelframe-concept .lf-nav { order:3; flex-basis:100%; } #levelframe-concept .lf-demo { font-size:11px; } #levelframe-concept .lf-nav button { padding:10px 8px; min-height:44px; } #levelframe-concept h1 { font-size:24px; } #levelframe-concept .lf-title { margin-bottom:18px; } #levelframe-concept .lf-title&gt;.lf-row { display:none; } #levelframe-concept .lf-metrics { gap:8px; } #levelframe-concept .lf-metric { padding:12px 10px; } #levelframe-concept .lf-metric-number { font-size:26px; } #levelframe-concept .lf-metric .lf-small { font-size:11px; } #levelframe-concept .lf-metric .lf-metric-context { display:none; } #levelframe-concept .lf-desk, #levelframe-concept .lf-review { grid-template-columns:1fr; } #levelframe-concept .lf-desk .lf-inspector { grid-row:1; } #levelframe-concept .lf-desk .lf-watchlist { grid-row:2; } #levelframe-concept .lf-graph { grid-row:3; } #levelframe-concept .lf-inspector .lf-definition { grid-template-columns:1fr 1fr; gap:12px; } #levelframe-concept .lf-inspector .lf-definition&gt;div:first-child { grid-column:1/-1; } #levelframe-concept .lf-watchlist { gap:4px; } #levelframe-concept .lf-watchlist h3 { display:none; } #levelframe-concept .lf-watch-asset { min-height:44px; } #levelframe-concept .lf-market-labels, #levelframe-concept .lf-market-row { grid-template-columns:minmax(88px,.8fr) minmax(110px,1fr); gap:8px; padding-left:12px; padding-right:12px; } #levelframe-concept .lf-market-price { display:none; } #levelframe-concept .lf-panel-head { padding:13px 12px; } #levelframe-concept .lf-overview .lf-definition { grid-template-columns:1fr; gap:12px; } #levelframe-concept .lf-insight { padding:16px; } #levelframe-concept .lf-btn { min-height:44px; } #levelframe-concept .lf-filter { min-height:44px; } #levelframe-concept .lf-graph-toolbar { padding:10px; } #levelframe-concept .lf-switch button { min-height:40px; padding:6px 10px; } #levelframe-concept .lf-review .lf-inspector { grid-row:2; } #levelframe-concept .lf-log-row { grid-template-columns:52px minmax(0,1fr); padding:16px 12px; gap:12px; } #levelframe-concept .lf-log-end { grid-column:2; text-align:left; } #levelframe-concept .lf-asset-top { gap:12px; } #levelframe-concept .lf-asset-top&gt;div:last-child { flex-basis:100%; } #levelframe-concept .lf-chart-surface&gt;svg { height:270px; } #levelframe-concept .lf-field select { font-size:16px; } #levelframe-concept .lf-footer span:last-child { display:none; } }
+    @media(prefers-reduced-motion:reduce) { #levelframe-concept * { transition:none!important; } }
+  &lt;/style&gt;
+  &lt;header class=&quot;lf-head&quot;&gt;
+    &lt;div class=&quot;lf-brand&quot;&gt;&lt;span class=&quot;lf-logo&quot; aria-hidden=&quot;true&quot;&gt;&lt;/span&gt;&lt;span class=&quot;lf-wordmark&quot;&gt;LevelFrame&lt;/span&gt;&lt;/div&gt;
+    &lt;nav class=&quot;lf-nav&quot; aria-label=&quot;Основная навигация&quot;&gt;
+      &lt;button type=&quot;button&quot; data-screen=&quot;overview&quot; aria-current=&quot;page&quot; class=&quot;cursor-interaction&quot;&gt;Сейчас&lt;/button&gt;
+      &lt;button type=&quot;button&quot; data-screen=&quot;review&quot; class=&quot;cursor-interaction&quot;&gt;Проверка&lt;/button&gt;
+      &lt;button type=&quot;button&quot; data-screen=&quot;journal&quot; class=&quot;cursor-interaction&quot;&gt;Журнал&lt;/button&gt;
+      &lt;button type=&quot;button&quot; data-screen=&quot;settings&quot; class=&quot;cursor-interaction&quot;&gt;Настройки&lt;/button&gt;
+    &lt;/nav&gt;
+    &lt;span class=&quot;lf-demo&quot;&gt;Демонстрационные данные&lt;/span&gt;
+  &lt;/header&gt;
+  &lt;main class=&quot;lf-content&quot;&gt;
+    &lt;section data-page=&quot;overview&quot; aria-label=&quot;Обзор рынка&quot;&gt;
+      &lt;div class=&quot;lf-title&quot;&gt;
+        &lt;div&gt;&lt;div class=&quot;lf-kicker&quot;&gt;Рабочее место анализа рынка&lt;/div&gt;&lt;h1&gt;Рынок в контексте.&lt;/h1&gt;&lt;p class=&quot;lf-muted lf-small&quot;&gt;7 октября · 12:04 MSK · ваш список наблюдения&lt;/p&gt;&lt;/div&gt;
+        &lt;div class=&quot;lf-row&quot;&gt;&lt;span class=&quot;lf-status lf-up&quot;&gt;Соединение установлено&lt;/span&gt;&lt;/div&gt;
+      &lt;/div&gt;
+      &lt;div class=&quot;lf-metrics&quot;&gt;
+        &lt;div class=&quot;lf-metric&quot;&gt;&lt;p class=&quot;lf-small lf-muted&quot;&gt;На проверку&lt;/p&gt;&lt;p class=&quot;lf-metric-number lf-num&quot; data-review-count&gt;1&lt;/p&gt;&lt;p class=&quot;lf-small lf-muted lf-metric-context&quot;&gt;Границы старшей зоны&lt;/p&gt;&lt;/div&gt;
+        &lt;div class=&quot;lf-metric&quot;&gt;&lt;p class=&quot;lf-small lf-muted&quot;&gt;Цена в зоне&lt;/p&gt;&lt;p class=&quot;lf-metric-number lf-num&quot;&gt;1&lt;/p&gt;&lt;p class=&quot;lf-small lf-muted lf-metric-context&quot;&gt;Ожидается подтверждение H1&lt;/p&gt;&lt;/div&gt;
+        &lt;div class=&quot;lf-metric&quot;&gt;&lt;p class=&quot;lf-small lf-muted&quot;&gt;Сценарий подтверждён&lt;/p&gt;&lt;p class=&quot;lf-metric-number lf-num&quot;&gt;1&lt;/p&gt;&lt;p class=&quot;lf-small lf-muted lf-metric-context&quot;&gt;Ожидается возврат к зоне&lt;/p&gt;&lt;/div&gt;
+      &lt;/div&gt;
+      &lt;div class=&quot;lf-overview&quot;&gt;
+        &lt;section class=&quot;lf-panel&quot; aria-label=&quot;Активы&quot;&gt;
+          &lt;div class=&quot;lf-panel-head&quot;&gt;&lt;h2&gt;Активы &lt;span class=&quot;lf-muted lf-small&quot;&gt;/ 6&lt;/span&gt;&lt;/h2&gt;&lt;div class=&quot;lf-filters&quot; role=&quot;group&quot; aria-label=&quot;Фильтр активов&quot;&gt;&lt;button class=&quot;lf-filter cursor-interaction&quot; data-filter=&quot;all&quot; aria-pressed=&quot;true&quot;&gt;Все&lt;/button&gt;&lt;button class=&quot;lf-filter cursor-interaction&quot; data-filter=&quot;attention&quot; aria-pressed=&quot;false&quot;&gt;Нужно внимание&lt;/button&gt;&lt;button class=&quot;lf-filter cursor-interaction&quot; data-filter=&quot;watch&quot; aria-pressed=&quot;false&quot;&gt;Наблюдаю&lt;/button&gt;&lt;/div&gt;&lt;/div&gt;
+          &lt;div class=&quot;lf-market-labels&quot; aria-hidden=&quot;true&quot;&gt;&lt;span&gt;Актив / площадка&lt;/span&gt;&lt;span&gt;Состояние&lt;/span&gt;&lt;span class=&quot;lf-market-price&quot;&gt;Цена, USDT&lt;/span&gt;&lt;/div&gt;
+          &lt;div data-market-list&gt;&lt;/div&gt;
+        &lt;/section&gt;
+        &lt;aside class=&quot;lf-panel lf-insight&quot; aria-label=&quot;Выбранный сценарий&quot; data-overview-insight&gt;&lt;/aside&gt;
+      &lt;/div&gt;
+      &lt;p class=&quot;lf-note&quot;&gt;Приоритет означает необходимость внимания. Свежесть данных показана отдельно от рыночного состояния.&lt;/p&gt;
+    &lt;/section&gt;
+    &lt;section data-page=&quot;desk&quot; aria-label=&quot;Рабочее место актива&quot; hidden&gt;
+      &lt;button type=&quot;button&quot; class=&quot;lf-back cursor-interaction&quot; data-back&gt;&lt;i data-lucide=&quot;arrow-left&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt; Все активы&lt;/button&gt;
+      &lt;div class=&quot;lf-asset-top&quot; data-asset-header&gt;&lt;/div&gt;
+      &lt;div class=&quot;lf-desk&quot;&gt;
+        &lt;aside class=&quot;lf-panel lf-watchlist&quot; aria-label=&quot;Выбор актива&quot;&gt;&lt;h3&gt;Активы&lt;/h3&gt;&lt;div data-watchlist style=&quot;display:contents&quot;&gt;&lt;/div&gt;&lt;/aside&gt;
+        &lt;div class=&quot;lf-graph lf-panel&quot;&gt;
+          &lt;div class=&quot;lf-graph-toolbar&quot;&gt;&lt;div class=&quot;lf-switch&quot; role=&quot;group&quot; aria-label=&quot;Режим анализа&quot;&gt;&lt;button type=&quot;button&quot; data-analysis=&quot;context&quot; aria-pressed=&quot;false&quot; class=&quot;cursor-interaction&quot;&gt;Контекст&lt;/button&gt;&lt;button type=&quot;button&quot; data-analysis=&quot;structure&quot; aria-pressed=&quot;true&quot; class=&quot;cursor-interaction&quot;&gt;Структура H1&lt;/button&gt;&lt;/div&gt;&lt;button type=&quot;button&quot; class=&quot;lf-btn lf-btn-quiet cursor-interaction&quot; data-layer-button aria-pressed=&quot;true&quot;&gt;&lt;i data-lucide=&quot;layers&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt; Зоны&lt;/button&gt;&lt;/div&gt;
+          &lt;div class=&quot;lf-chart-surface&quot; data-chart=&quot;desk&quot;&gt;&lt;/div&gt;
+          &lt;div class=&quot;lf-chart-meta&quot;&gt;&lt;span&gt;&lt;b class=&quot;lf-swatch&quot;&gt;&lt;/b&gt;Контекст D1&lt;/span&gt;&lt;span&gt;&lt;b class=&quot;lf-swatch lf-swatch-zone&quot;&gt;&lt;/b&gt;Подходящая зона&lt;/span&gt;&lt;span data-chart-frame&gt;Свечи H1 · время MSK&lt;/span&gt;&lt;/div&gt;
+        &lt;/div&gt;
+        &lt;aside class=&quot;lf-panel lf-inspector&quot; aria-label=&quot;Вывод сценария&quot; data-desk-insight&gt;&lt;/aside&gt;
+      &lt;/div&gt;
+      &lt;section class=&quot;lf-panel lf-bottom&quot; aria-label=&quot;Подходящие зоны&quot;&gt;&lt;div class=&quot;lf-panel-head&quot;&gt;&lt;h2 data-zone-title&gt;Подходящие зоны&lt;/h2&gt;&lt;span class=&quot;lf-muted lf-small&quot;&gt;Тот же актив и контекст&lt;/span&gt;&lt;/div&gt;&lt;div data-zone-list&gt;&lt;/div&gt;&lt;/section&gt;
+    &lt;/section&gt;
+    &lt;section data-page=&quot;review&quot; aria-label=&quot;Проверка разметки&quot; hidden&gt;
+      &lt;div class=&quot;lf-title&quot;&gt;&lt;div&gt;&lt;div class=&quot;lf-kicker&quot;&gt;Контроль разметки&lt;/div&gt;&lt;h1&gt;Проверка&lt;/h1&gt;&lt;p class=&quot;lf-muted lf-small&quot;&gt;Объект, правило и решение в одном рабочем контексте.&lt;/p&gt;&lt;/div&gt;&lt;span class=&quot;lf-status lf-warning&quot; data-queue-status&gt;1 задача&lt;/span&gt;&lt;/div&gt;
+      &lt;div class=&quot;lf-review&quot; data-review-workspace&gt;
+        &lt;aside class=&quot;lf-panel lf-review-queue&quot;&gt;&lt;div class=&quot;lf-panel-head&quot;&gt;&lt;h3&gt;Очередь&lt;/h3&gt;&lt;span class=&quot;lf-small lf-muted&quot;&gt;1&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;lf-task&quot;&gt;&lt;strong&gt;BNBUSDT · D1&lt;/strong&gt;&lt;span class=&quot;lf-muted lf-small&quot;&gt;Order block&lt;br&gt;Нужна проверка границ&lt;/span&gt;&lt;/div&gt;&lt;/aside&gt;
+        &lt;section class=&quot;lf-panel lf-graph&quot; aria-label=&quot;График проверяемого объекта&quot;&gt;&lt;div class=&quot;lf-panel-head&quot;&gt;&lt;h2&gt;BNBUSDT &lt;span class=&quot;lf-muted lf-small&quot;&gt;· Binance spot&lt;/span&gt;&lt;/h2&gt;&lt;span class=&quot;lf-small lf-muted&quot;&gt;Свечи D1&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;lf-chart-surface&quot; data-chart=&quot;review&quot;&gt;&lt;/div&gt;&lt;div class=&quot;lf-chart-meta&quot;&gt;&lt;span&gt;&lt;b class=&quot;lf-swatch&quot;&gt;&lt;/b&gt;Проверяемый OB&lt;/span&gt;&lt;span&gt;История формирования · время MSK&lt;/span&gt;&lt;/div&gt;&lt;/section&gt;
+        &lt;aside class=&quot;lf-panel lf-inspector&quot;&gt;&lt;p class=&quot;lf-kicker&quot;&gt;Задача #018&lt;/p&gt;&lt;h2 style=&quot;margin-top:12px&quot;&gt;Проверьте границы зоны&lt;/h2&gt;&lt;p class=&quot;lf-review-rule lf-muted&quot;&gt;Граница должна совпадать с экстремумом свечи основания. Сравните выделенную область со свечами формирования.&lt;/p&gt;&lt;dl class=&quot;lf-definition&quot;&gt;&lt;div&gt;&lt;dt&gt;Объект&lt;/dt&gt;&lt;dd&gt;Order block · D1&lt;/dd&gt;&lt;/div&gt;&lt;div&gt;&lt;dt&gt;Текущие границы, USDT&lt;/dt&gt;&lt;dd class=&quot;lf-num&quot;&gt;563,00 — 569,00&lt;/dd&gt;&lt;/div&gt;&lt;div&gt;&lt;dt&gt;Рыночное состояние&lt;/dt&gt;&lt;dd&gt;Зона актуальна · вне цены&lt;/dd&gt;&lt;/div&gt;&lt;/dl&gt;&lt;div class=&quot;lf-review-actions&quot;&gt;&lt;button type=&quot;button&quot; class=&quot;lf-btn lf-btn-primary cursor-interaction&quot; data-decision=&quot;confirmed&quot;&gt;Подтвердить&lt;/button&gt;&lt;button type=&quot;button&quot; class=&quot;lf-btn lf-btn-danger cursor-interaction&quot; data-decision=&quot;rejected&quot;&gt;Отклонить&lt;/button&gt;&lt;button type=&quot;button&quot; class=&quot;lf-btn lf-btn-quiet cursor-interaction&quot; data-open-review-asset&gt;Открыть актив&lt;/button&gt;&lt;/div&gt;&lt;/aside&gt;
+      &lt;/div&gt;
+      &lt;div class=&quot;lf-panel lf-done&quot; data-review-done hidden&gt;&lt;span class=&quot;lf-status lf-up&quot;&gt;Решение сохранено&lt;/span&gt;&lt;h2&gt;Очередь проверена&lt;/h2&gt;&lt;p class=&quot;lf-muted lf-small&quot; data-review-result&gt;&lt;/p&gt;&lt;button class=&quot;lf-btn cursor-interaction&quot; type=&quot;button&quot; data-undo style=&quot;margin-top:20px&quot;&gt;Отменить решение&lt;/button&gt;&lt;/div&gt;
+    &lt;/section&gt;
+    &lt;section data-page=&quot;journal&quot; aria-label=&quot;Журнал событий&quot; hidden&gt;
+      &lt;div class=&quot;lf-title&quot;&gt;&lt;div&gt;&lt;div class=&quot;lf-kicker&quot;&gt;Рынок · решения · уведомления&lt;/div&gt;&lt;h1&gt;Журнал&lt;/h1&gt;&lt;p class=&quot;lf-muted lf-small&quot;&gt;7 октября 2026 · время MSK&lt;/p&gt;&lt;/div&gt;&lt;div class=&quot;lf-filters&quot; role=&quot;group&quot; aria-label=&quot;Тип записи&quot;&gt;&lt;button class=&quot;lf-filter cursor-interaction&quot; data-log-filter=&quot;all&quot; aria-pressed=&quot;true&quot;&gt;Все&lt;/button&gt;&lt;button class=&quot;lf-filter cursor-interaction&quot; data-log-filter=&quot;market&quot; aria-pressed=&quot;false&quot;&gt;Рынок&lt;/button&gt;&lt;button class=&quot;lf-filter cursor-interaction&quot; data-log-filter=&quot;decision&quot; aria-pressed=&quot;false&quot;&gt;Решения&lt;/button&gt;&lt;button class=&quot;lf-filter cursor-interaction&quot; data-log-filter=&quot;delivery&quot; aria-pressed=&quot;false&quot;&gt;Доставка&lt;/button&gt;&lt;/div&gt;&lt;/div&gt;
+      &lt;div class=&quot;lf-panel&quot; data-log-list&gt;&lt;/div&gt;
+    &lt;/section&gt;
+    &lt;section data-page=&quot;settings&quot; aria-label=&quot;Настройки&quot; hidden&gt;
+      &lt;div class=&quot;lf-title&quot;&gt;&lt;div&gt;&lt;div class=&quot;lf-kicker&quot;&gt;Ваше рабочее место&lt;/div&gt;&lt;h1&gt;Настройки&lt;/h1&gt;&lt;p class=&quot;lf-muted lf-small&quot;&gt;Наблюдение, правила анализа и отображение.&lt;/p&gt;&lt;/div&gt;&lt;/div&gt;
+      &lt;div class=&quot;lf-settings&quot;&gt;
+        &lt;section class=&quot;lf-panel&quot;&gt;&lt;div class=&quot;lf-panel-head&quot;&gt;&lt;h2&gt;Уведомления&lt;/h2&gt;&lt;span class=&quot;lf-status lf-up&quot;&gt;Telegram подключён&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;lf-settings-body&quot;&gt;&lt;label class=&quot;lf-setting&quot;&gt;&lt;span&gt;&lt;strong&gt;Касание старшей зоны&lt;/strong&gt;&lt;p&gt;Цена вошла в выбранный контекст.&lt;/p&gt;&lt;/span&gt;&lt;input type=&quot;checkbox&quot; name=&quot;touch&quot; checked aria-label=&quot;Уведомлять о касании старшей зоны&quot;&gt;&lt;/label&gt;&lt;label class=&quot;lf-setting&quot;&gt;&lt;span&gt;&lt;strong&gt;Подтверждение структуры H1&lt;/strong&gt;&lt;p&gt;Закрытие свечи подтвердило условие.&lt;/p&gt;&lt;/span&gt;&lt;input type=&quot;checkbox&quot; name=&quot;structure&quot; checked aria-label=&quot;Уведомлять о подтверждении H1&quot;&gt;&lt;/label&gt;&lt;label class=&quot;lf-setting&quot;&gt;&lt;span&gt;&lt;strong&gt;Отмена сценария&lt;/strong&gt;&lt;p&gt;Условие актуальности больше не выполнено.&lt;/p&gt;&lt;/span&gt;&lt;input type=&quot;checkbox&quot; name=&quot;cancel&quot; checked aria-label=&quot;Уведомлять об отмене сценария&quot;&gt;&lt;/label&gt;&lt;label class=&quot;lf-field&quot;&gt;Часовой пояс&lt;select name=&quot;timezone&quot;&gt;&lt;option&gt;Москва · UTC+3&lt;/option&gt;&lt;option&gt;UTC · UTC+0&lt;/option&gt;&lt;/select&gt;&lt;/label&gt;&lt;button type=&quot;button&quot; class=&quot;lf-btn lf-btn-primary cursor-interaction&quot; data-save-settings style=&quot;margin-top:20px&quot;&gt;Сохранить наблюдение&lt;/button&gt;&lt;/div&gt;&lt;/section&gt;
+        &lt;div style=&quot;display:grid;gap:16px&quot;&gt;&lt;section class=&quot;lf-panel&quot;&gt;&lt;div class=&quot;lf-panel-head&quot;&gt;&lt;h2&gt;Оформление&lt;/h2&gt;&lt;/div&gt;&lt;div class=&quot;lf-settings-body lf-appearance&quot;&gt;&lt;button type=&quot;button&quot; class=&quot;lf-btn cursor-interaction&quot; data-theme=&quot;system&quot; aria-pressed=&quot;true&quot;&gt;&lt;span class=&quot;lf-theme-dot&quot;&gt;&lt;/span&gt; Как в системе&lt;/button&gt;&lt;button type=&quot;button&quot; class=&quot;lf-btn cursor-interaction&quot; data-theme=&quot;dark&quot; aria-pressed=&quot;false&quot;&gt;&lt;span class=&quot;lf-theme-dot&quot;&gt;&lt;/span&gt; Тёмная тема&lt;/button&gt;&lt;button type=&quot;button&quot; class=&quot;lf-btn cursor-interaction&quot; data-theme=&quot;light&quot; aria-pressed=&quot;false&quot;&gt;&lt;span class=&quot;lf-theme-dot&quot;&gt;&lt;/span&gt; Светлая тема&lt;/button&gt;&lt;/div&gt;&lt;/section&gt;&lt;section class=&quot;lf-panel&quot;&gt;&lt;div class=&quot;lf-panel-head&quot;&gt;&lt;h2&gt;Правила анализа&lt;/h2&gt;&lt;span class=&quot;lf-muted lf-small&quot;&gt;Версия 1&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;lf-settings-body&quot;&gt;&lt;div class=&quot;lf-row lf-between lf-small&quot;&gt;&lt;span class=&quot;lf-muted&quot;&gt;Контекст&lt;/span&gt;&lt;span&gt;D1 / W1&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;lf-row lf-between lf-small&quot; style=&quot;margin-top:12px&quot;&gt;&lt;span class=&quot;lf-muted&quot;&gt;Структура&lt;/span&gt;&lt;span&gt;H1&lt;/span&gt;&lt;/div&gt;&lt;p class=&quot;lf-muted lf-small&quot; style=&quot;margin-top:16px&quot;&gt;Изменение правил требует пересчёта. Действующая версия остаётся доступной до публикации новой.&lt;/p&gt;&lt;/div&gt;&lt;/section&gt;&lt;/div&gt;
+      &lt;/div&gt;
+    &lt;/section&gt;
+  &lt;/main&gt;
+  &lt;div class=&quot;lf-notice&quot; data-notice role=&quot;status&quot; aria-live=&quot;polite&quot; hidden&gt;&lt;/div&gt;
+  &lt;footer class=&quot;lf-footer&quot;&gt;&lt;span&gt;LevelFrame · Рынок в контексте.&lt;/span&gt;&lt;span&gt;Макет интерфейса / 07.10.2026&lt;/span&gt;&lt;/footer&gt;
+  &lt;script&gt;
+  (() =&gt; {
+    const root=document.getElementById(&#x27;levelframe-concept&#x27;);
+    const q=s=&gt;root.querySelector(s), qa=s=&gt;Array.from(root.querySelectorAll(s));
+    const assets=[
+      {id:&#x27;BTC&#x27;,price:62480,precision:2,status:&#x27;Структура подтверждена&#x27;,detail:&#x27;Ждём возврат к зоне&#x27;,kind:&#x27;up&#x27;,attention:true,fresh:&#x27;Котировка · 8 с назад&#x27;,title:&#x27;Контекст роста подтверждён&#x27;,cause:&#x27;H1 закрылся выше 62 340. Старший контекст D1 остаётся активным.&#x27;,wait:&#x27;Возврат к 62 200–62 320&#x27;,cancel:&#x27;Закрытие H1 ниже 61 800&#x27;,low:61800,high:62200,entry:[62200,62320],threshold:62340},
+      {id:&#x27;ETH&#x27;,price:2604.40,precision:2,status:&#x27;Конфликт контекстов&#x27;,detail:&#x27;Сравните D1 и W1&#x27;,kind:&#x27;warning&#x27;,attention:true,fresh:&#x27;Котировка · 8 с назад&#x27;,title:&#x27;Нужен выбор контекста&#x27;,cause:&#x27;Зона D1 задаёт рост, зона W1 — снижение. Единого сценария сейчас нет.&#x27;,wait:&#x27;Выбор старшего контекста&#x27;,cancel:&#x27;Зависит от выбранного сценария&#x27;,low:2570,high:2590,entry:null,threshold:2615},
+      {id:&#x27;SOL&#x27;,price:146.82,precision:2,status:&#x27;Цена в старшей зоне&#x27;,detail:&#x27;Ждём структуру H1&#x27;,kind:&#x27;up&#x27;,attention:true,fresh:&#x27;Котировка · 8 с назад&#x27;,title:&#x27;Цена вошла в контекст D1&#x27;,cause:&#x27;Цена внутри старшей зоны. Подтверждение структуры H1 ещё не произошло.&#x27;,wait:&#x27;Закрытие H1 выше 148,40&#x27;,cancel:&#x27;Закрытие H1 ниже 144,20&#x27;,low:144.20,high:147.20,entry:null,threshold:148.40},
+      {id:&#x27;BNB&#x27;,price:574.20,precision:2,status:&#x27;Нужна проверка&#x27;,detail:&#x27;Границы OB · D1&#x27;,kind:&#x27;warning&#x27;,attention:true,fresh:&#x27;Котировка · 8 с назад&#x27;,title:&#x27;Проверьте старшую зону&#x27;,cause:&#x27;Для зоны OB создана задача проверки границ свечи основания.&#x27;,wait:&#x27;Решение по разметке&#x27;,cancel:&#x27;После проверки сценария&#x27;,low:563,high:569,entry:null,threshold:578},
+      {id:&#x27;DOGE&#x27;,price:0.11234,precision:5,status:&#x27;Данные задерживаются&#x27;,detail:&#x27;Котировка · 4 мин назад&#x27;,kind:&#x27;warning&#x27;,attention:true,fresh:&#x27;Котировка · 4 мин назад&#x27;,title:&#x27;Нужны свежие данные&#x27;,cause:&#x27;Соединение установлено, но котировка отстаёт. Текущее состояние требует обновления.&#x27;,wait:&#x27;Обновление котировки&#x27;,cancel:&#x27;Вывод временно недоступен&#x27;,low:.1095,high:.111,entry:null,threshold:.1135},
+      {id:&#x27;XRP&#x27;,price:.5321,precision:4,status:&#x27;Ожидание&#x27;,detail:&#x27;Цена вне контекста&#x27;,kind:&#x27;muted&#x27;,attention:false,fresh:&#x27;Котировка · 8 с назад&#x27;,title:&#x27;Наблюдаем за контекстом&#x27;,cause:&#x27;Цена находится вне выбранной старшей зоны. Условие активации не выполнено.&#x27;,wait:&#x27;Подход к 0,5100–0,5200&#x27;,cancel:&#x27;Нет активного сценария&#x27;,low:.51,high:.52,entry:null,threshold:.536}
+    ];
+    const saved=window.openai?.widgetState?.modelContent||{};
+    const state={page:[&#x27;overview&#x27;,&#x27;desk&#x27;,&#x27;review&#x27;,&#x27;journal&#x27;,&#x27;settings&#x27;].includes(saved.page)?saved.page:&#x27;overview&#x27;,selected:assets.some(a=&gt;a.id===saved.asset)?saved.asset:&#x27;BTC&#x27;,analysis:&#x27;structure&#x27;,zones:true,filter:&#x27;all&#x27;,logFilter:&#x27;all&#x27;,watch:new Set(saved.watch||[&#x27;BTC&#x27;,&#x27;SOL&#x27;]),decision:null,theme:&#x27;system&#x27;};
+    const design={accent:&#x27;#4268dd&#x27;,density:&#x27;Обычная&#x27;};
+    const fmt=a=&gt;a.price.toLocaleString(&#x27;ru-RU&#x27;,{minimumFractionDigits:a.precision,maximumFractionDigits:a.precision});
+    const selected=()=&gt;assets.find(a=&gt;a.id===state.selected);
+    const price=(n,a)=&gt;n.toLocaleString(&#x27;ru-RU&#x27;,{minimumFractionDigits:a.precision,maximumFractionDigits:a.precision});
+    function persist(){window.openai?.setWidgetState?.({modelContent:{page:state.page,asset:state.selected,watch:[...state.watch]},privateContent:null})?.catch(()=&gt;{});}
+    function icons(){if(globalThis.lucide) lucide.createIcons({attrs:{width:16,height:16}});}
+    function notice(text){q(&#x27;[data-notice]&#x27;).hidden=false;q(&#x27;[data-notice]&#x27;).textContent=text;}
+    function open(page,asset){state.page=page;if(asset)state.selected=asset;q(&#x27;[data-notice]&#x27;).hidden=true;render();persist();}
+    function statusClass(a){return a.kind===&#x27;muted&#x27;?&#x27;lf-muted&#x27;:&#x27;lf-&#x27;+a.kind;}
+    function insight(a,compact){return `&lt;div class=&quot;lf-row lf-between&quot;&gt;&lt;span class=&quot;lf-kicker&quot;&gt;${a.id}USDT · D1&lt;/span&gt;&lt;span class=&quot;lf-status ${statusClass(a)}&quot;&gt;${a.id===&#x27;BTC&#x27;?&#x27;↑ Рост&#x27;:a.id===&#x27;ETH&#x27;?&#x27;Конфликт&#x27;:&#x27;Наблюдение&#x27;}&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;lf-insight-title&quot;&gt;${a.title}&lt;/div&gt;&lt;p class=&quot;lf-muted lf-small&quot;&gt;${a.cause}&lt;/p&gt;&lt;dl class=&quot;lf-definition&quot;&gt;&lt;div&gt;&lt;dt&gt;Что происходит&lt;/dt&gt;&lt;dd&gt;${a.status}&lt;/dd&gt;&lt;/div&gt;&lt;div&gt;&lt;dt&gt;Чего ждём&lt;/dt&gt;&lt;dd&gt;${a.wait}&lt;/dd&gt;&lt;/div&gt;&lt;div&gt;&lt;dt&gt;Условие отмены&lt;/dt&gt;&lt;dd&gt;${a.cancel}&lt;/dd&gt;&lt;/div&gt;&lt;/dl&gt;${compact?`&lt;button type=&quot;button&quot; class=&quot;lf-btn lf-btn-primary lf-wide cursor-interaction&quot; data-watch&gt;${state.watch.has(a.id)?&#x27;✓ Наблюдение включено&#x27;:&#x27;Наблюдать сценарий&#x27;}&lt;/button&gt;&lt;details&gt;&lt;summary class=&quot;cursor-interaction&quot;&gt;Основания и качество данных&lt;/summary&gt;&lt;ul class=&quot;lf-evidence&quot;&gt;&lt;li&gt;Контекст D1: ${price(a.low,a)}–${price(a.high,a)} USDT.&lt;/li&gt;&lt;li&gt;${a.id===&#x27;BTC&#x27;?&#x27;Причинное событие: BOS H1 в 12:00 MSK.&#x27;:a.detail+&#x27;.&#x27;}&lt;/li&gt;&lt;li&gt;${a.fresh}. ${a.id===&#x27;DOGE&#x27;?&#x27;Вывод требует обновления.&#x27;:&#x27;Обработка H1 актуальна.&#x27;}&lt;/li&gt;&lt;/ul&gt;&lt;/details&gt;`:`&lt;button type=&quot;button&quot; class=&quot;lf-btn lf-btn-primary lf-wide cursor-interaction&quot; data-open-desk&gt;Открыть рабочее место &lt;i data-lucide=&quot;arrow-up-right&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;&lt;p class=&quot;lf-muted lf-small&quot; style=&quot;margin-top:12px&quot;&gt;${a.fresh}&lt;/p&gt;`}`;}
+    function drawChart(container,a,review=false){
+      const w=Math.max(240,Math.round(container.getBoundingClientRect().width)),h=w&lt;390?270:320,right=a.precision&gt;2?73:65,left=10,top=28,bottom=32,pw=w-left-right,ph=h-top-bottom;
+      const low=Math.min(a.low,a.price*.977),high=Math.max(a.threshold,a.price*1.014),toY=p=&gt;top+(high-p)/(high-low)*ph;
+      const count=review||state.analysis===&#x27;context&#x27;?(w&lt;380?20:30):(w&lt;380?26:42),values=[];
+      for(let i=0;i&lt;count;i++){const t=i/(count-1),trend=.982+.018*t,osc=.0045*Math.sin(i*.9)+.003*Math.sin(i*1.7);let close=a.price*(trend+osc);if(i===count-1)close=a.price;const open=i?values[i-1].close:a.price*.982;values.push({open,close,hi:Math.max(open,close)+a.price*.0017,lo:Math.min(open,close)-a.price*.0018});}
+      let svg=`&lt;svg viewBox=&quot;0 0 ${w} ${h}&quot; role=&quot;img&quot; aria-label=&quot;${a.id}USDT, демонстрационный свечной график, зоны и текущая цена в USDT&quot;&gt;&lt;title&gt;${a.id}USDT — синтетические свечи, не рыночные данные&lt;/title&gt;&lt;defs&gt;&lt;clipPath id=&quot;lf-clip-${review?&#x27;review&#x27;:&#x27;desk&#x27;}&quot;&gt;&lt;rect x=&quot;${left}&quot; y=&quot;${top}&quot; width=&quot;${pw}&quot; height=&quot;${ph}&quot;/&gt;&lt;/clipPath&gt;&lt;/defs&gt;&lt;g fill=&quot;var(--lf-muted)&quot; font-family=&quot;Segoe UI, sans-serif&quot; font-size=&quot;11&quot;&gt;`;
+      for(let i=0;i&lt;5;i++){const v=high-(high-low)*i/4,y=toY(v);svg+=`&lt;path d=&quot;M${left},${y}H${w-right}&quot; stroke=&quot;var(--lf-line)&quot; stroke-width=&quot;.6&quot;/&gt;&lt;text x=&quot;${w-right+6}&quot; y=&quot;${y+4}&quot;&gt;${price(v,a)}&lt;/text&gt;`;}
+      const ticks=w&lt;380?[&#x27;06 окт&#x27;,&#x27;12:00&#x27;,&#x27;07 окт&#x27;]:[&#x27;05 окт&#x27;,&#x27;12:00&#x27;,&#x27;06 окт&#x27;,&#x27;12:00&#x27;,&#x27;07 окт&#x27;];ticks.forEach((t,i)=&gt;{const x=left+pw*i/(ticks.length-1);svg+=`&lt;text x=&quot;${x}&quot; y=&quot;${h-9}&quot; text-anchor=&quot;${i===0?&#x27;start&#x27;:i===ticks.length-1?&#x27;end&#x27;:&#x27;middle&#x27;}&quot;&gt;${t}&lt;/text&gt;`;});
+      svg+=`&lt;text x=&quot;${w-right+6}&quot; y=&quot;15&quot;&gt;USDT&lt;/text&gt;&lt;/g&gt;&lt;g clip-path=&quot;url(#lf-clip-${review?&#x27;review&#x27;:&#x27;desk&#x27;})&quot;&gt;`;
+      if(state.zones||review){svg+=`&lt;rect x=&quot;${left}&quot; y=&quot;${toY(a.high)}&quot; width=&quot;${pw}&quot; height=&quot;${toY(a.low)-toY(a.high)}&quot; fill=&quot;var(--lf-brand)&quot; opacity=&quot;.13&quot;/&gt;&lt;path d=&quot;M${left},${toY(a.high)}H${w-right}M${left},${toY(a.low)}H${w-right}&quot; stroke=&quot;var(--lf-brand)&quot; stroke-width=&quot;1&quot; opacity=&quot;.8&quot;/&gt;`;if(a.entry)svg+=`&lt;rect x=&quot;${left+pw*.52}&quot; y=&quot;${toY(a.entry[1])}&quot; width=&quot;${pw*.48}&quot; height=&quot;${Math.max(4,toY(a.entry[0])-toY(a.entry[1]))}&quot; fill=&quot;var(--lf-up)&quot; opacity=&quot;.25&quot;/&gt;`;}
+      const step=pw/count,bw=Math.max(3,step*.48);values.forEach((v,i)=&gt;{const x=left+step*(i+.5),col=v.close&gt;=v.open?&#x27;var(--lf-up)&#x27;:&#x27;var(--lf-down)&#x27;;svg+=`&lt;path d=&quot;M${x},${toY(v.hi)}V${toY(v.lo)}&quot; stroke=&quot;${col}&quot; stroke-width=&quot;1&quot;/&gt;&lt;rect x=&quot;${x-bw/2}&quot; y=&quot;${toY(Math.max(v.open,v.close))}&quot; width=&quot;${bw}&quot; height=&quot;${Math.max(1.3,Math.abs(toY(v.open)-toY(v.close)))}&quot; fill=&quot;${col}&quot;/&gt;`;});
+      if(a.id===&#x27;BTC&#x27;&amp;&amp;!review&amp;&amp;state.analysis===&#x27;structure&#x27;) { const eventIndex=values.findIndex(v=&gt;v.close&gt;a.threshold); const eventX=left+step*(eventIndex+.5),eventY=toY(a.threshold);svg+=`&lt;path d=&quot;M${eventX-18},${eventY}H${Math.min(w-right,eventX+70)}&quot; stroke=&quot;var(--lf-brand)&quot; stroke-width=&quot;1.2&quot;/&gt;&lt;text x=&quot;${Math.min(w-right-48,eventX+8)}&quot; y=&quot;${eventY-8}&quot; fill=&quot;var(--lf-text)&quot; font-family=&quot;Segoe UI,sans-serif&quot; font-size=&quot;11&quot;&gt;BOS H1&lt;/text&gt;`;}
+      svg+=`&lt;path d=&quot;M${left},${toY(a.price)}H${w-right}&quot; stroke=&quot;var(--lf-muted)&quot; stroke-width=&quot;1&quot; stroke-dasharray=&quot;3 4&quot;/&gt;&lt;/g&gt;`;
+      if(state.zones||review)svg+=`&lt;text x=&quot;${left+7}&quot; y=&quot;${toY(a.low)-7}&quot; fill=&quot;var(--lf-text)&quot; font-family=&quot;Segoe UI,sans-serif&quot; font-size=&quot;11&quot;&gt;${review?&#x27;OB · проверка&#x27;:&#x27;Контекст D1&#x27;}&lt;/text&gt;`;
+      svg+=`&lt;rect x=&quot;${w-right+2}&quot; y=&quot;${toY(a.price)-10}&quot; width=&quot;${right-3}&quot; height=&quot;20&quot; rx=&quot;3&quot; fill=&quot;var(--lf-raised)&quot;/&gt;&lt;text x=&quot;${w-right+6}&quot; y=&quot;${toY(a.price)+4}&quot; fill=&quot;var(--lf-text)&quot; font-size=&quot;11&quot; font-family=&quot;Segoe UI,sans-serif&quot;&gt;${fmt(a)}&lt;/text&gt;&lt;/svg&gt;`;container.innerHTML=svg;
+    }
+    function renderMarket(){
+      const rows=assets.filter(a=&gt;state.filter===&#x27;all&#x27;||state.filter===&#x27;attention&#x27;&amp;&amp;a.attention||state.filter===&#x27;watch&#x27;&amp;&amp;state.watch.has(a.id));
+      q(&#x27;[data-market-list]&#x27;).innerHTML=rows.map(a=&gt;`&lt;button type=&quot;button&quot; class=&quot;lf-market-row cursor-interaction ${state.selected===a.id?&#x27;is-selected&#x27;:&#x27;&#x27;}&quot; data-select=&quot;${a.id}&quot; aria-pressed=&quot;${state.selected===a.id}&quot;&gt;&lt;span&gt;&lt;span class=&quot;lf-symbol&quot;&gt;${a.id}&lt;span class=&quot;lf-muted lf-small&quot;&gt; / USDT&lt;/span&gt;&lt;/span&gt;&lt;span class=&quot;lf-venue&quot;&gt;Binance · spot&lt;/span&gt;&lt;/span&gt;&lt;span&gt;&lt;span class=&quot;lf-status ${statusClass(a)}&quot;&gt;${a.status}&lt;/span&gt;&lt;span class=&quot;lf-venue&quot;&gt;${a.detail}&lt;/span&gt;&lt;/span&gt;&lt;span class=&quot;lf-market-price lf-num&quot;&gt;${fmt(a)}&lt;span class=&quot;lf-venue&quot;&gt;${a.id===&#x27;DOGE&#x27;?&#x27;4 мин назад&#x27;:&#x27;8 с назад&#x27;}&lt;/span&gt;&lt;/span&gt;&lt;/button&gt;`).join(&#x27;&#x27;)||&#x27;&lt;p class=&quot;lf-muted lf-small&quot; style=&quot;padding:20px&quot;&gt;Нет активов для этого фильтра.&lt;/p&gt;&#x27;;
+      qa(&#x27;[data-filter]&#x27;).forEach(b=&gt;b.setAttribute(&#x27;aria-pressed&#x27;,b.dataset.filter===state.filter));q(&#x27;[data-overview-insight]&#x27;).innerHTML=insight(selected(),false);
+    }
+    function renderDesk(){const a=selected();q(&#x27;[data-asset-header]&#x27;).innerHTML=`&lt;div&gt;&lt;div class=&quot;lf-row&quot;&gt;&lt;span class=&quot;lf-asset-name&quot;&gt;${a.id}USDT&lt;/span&gt;&lt;span class=&quot;lf-small lf-muted&quot;&gt;Binance · spot&lt;/span&gt;&lt;/div&gt;&lt;span class=&quot;lf-status ${a.id===&#x27;DOGE&#x27;?&#x27;lf-warning&#x27;:&#x27;lf-up&#x27;}&quot; style=&quot;margin-top:7px&quot;&gt;${a.id===&#x27;DOGE&#x27;?&#x27;Котировка задерживается&#x27;:&#x27;Данные актуальны&#x27;}&lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;div class=&quot;lf-price lf-num&quot;&gt;${fmt(a)} &lt;span class=&quot;lf-small lf-muted&quot;&gt;USDT&lt;/span&gt;&lt;/div&gt;&lt;p class=&quot;lf-small lf-muted&quot; style=&quot;margin-top:7px&quot;&gt;${a.fresh}&lt;/p&gt;&lt;/div&gt;`;
+      q(&#x27;[data-watchlist]&#x27;).innerHTML=assets.slice(0,4).map(x=&gt;`&lt;button type=&quot;button&quot; class=&quot;lf-watch-asset cursor-interaction ${x.id===a.id?&#x27;is-selected&#x27;:&#x27;&#x27;}&quot; data-desk-select=&quot;${x.id}&quot; aria-pressed=&quot;${x.id===a.id}&quot;&gt;&lt;span class=&quot;lf-symbol&quot;&gt;${x.id}USDT&lt;/span&gt;&lt;br&gt;&lt;span class=&quot;lf-num lf-muted lf-small&quot;&gt;${fmt(x)}&lt;/span&gt;&lt;br&gt;&lt;span class=&quot;lf-status ${statusClass(x)}&quot;&gt;${x.id===&#x27;BTC&#x27;?&#x27;Сценарий&#x27;:x.id===&#x27;ETH&#x27;?&#x27;Конфликт&#x27;:x.id===&#x27;SOL&#x27;?&#x27;В зоне&#x27;:&#x27;Проверка&#x27;}&lt;/span&gt;&lt;/button&gt;`).join(&#x27;&#x27;);
+      q(&#x27;[data-desk-insight]&#x27;).innerHTML=insight(a,true);qa(&#x27;[data-analysis]&#x27;).forEach(b=&gt;b.setAttribute(&#x27;aria-pressed&#x27;,b.dataset.analysis===state.analysis));q(&#x27;[data-layer-button]&#x27;).setAttribute(&#x27;aria-pressed&#x27;,state.zones);q(&#x27;[data-chart-frame]&#x27;).textContent=state.analysis===&#x27;context&#x27;?&#x27;Свечи D1 · время MSK&#x27;:&#x27;Свечи H1 · время MSK&#x27;;
+      q(&#x27;[data-zone-title]&#x27;).textContent=a.entry?&#x27;Зоны сценария / 2&#x27;:&#x27;Зоны контекста / 1&#x27;;q(&#x27;[data-zone-list]&#x27;).innerHTML=a.entry?`&lt;div class=&quot;lf-zone&quot;&gt;&lt;span&gt;&lt;strong&gt;OB · H1&lt;/strong&gt;&lt;span class=&quot;lf-muted lf-small&quot;&gt; / текущий сценарий&lt;/span&gt;&lt;/span&gt;&lt;span class=&quot;lf-num&quot;&gt;62 200 — 62 320 USDT&lt;/span&gt;&lt;span class=&quot;lf-status lf-up&quot;&gt;Подходит по правилам&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;lf-zone&quot;&gt;&lt;span&gt;&lt;strong&gt;OB · D1&lt;/strong&gt;&lt;span class=&quot;lf-muted lf-small&quot;&gt; / старший контекст&lt;/span&gt;&lt;/span&gt;&lt;span class=&quot;lf-num&quot;&gt;61 800 — 62 200 USDT&lt;/span&gt;&lt;span class=&quot;lf-status&quot;&gt;Контекст активен&lt;/span&gt;&lt;/div&gt;`:`&lt;div class=&quot;lf-zone&quot;&gt;&lt;span&gt;&lt;strong&gt;OB · D1&lt;/strong&gt;&lt;/span&gt;&lt;span class=&quot;lf-num&quot;&gt;${price(a.low,a)} — ${price(a.high,a)} USDT&lt;/span&gt;&lt;span class=&quot;lf-status ${statusClass(a)}&quot;&gt;${a.id===&#x27;ETH&#x27;?&#x27;Контекст требует выбора&#x27;:a.id===&#x27;SOL&#x27;?&#x27;Цена в зоне&#x27;:&#x27;Контекст активен&#x27;}&lt;/span&gt;&lt;/div&gt;`;
+      drawChart(q(&#x27;[data-chart=&quot;desk&quot;]&#x27;),a);
+    }
+    function renderJournal(){const entries=[{type:&#x27;market&#x27;,time:&#x27;12:00&#x27;,asset:&#x27;BTC&#x27;,title:&#x27;Структура H1 подтверждена&#x27;,text:&#x27;Закрытие выше 62 340. Сценарий роста ждёт возврат к зоне.&#x27;,status:&#x27;Открыть событие&#x27;},{type:&#x27;delivery&#x27;,time:&#x27;12:00&#x27;,asset:&#x27;BTC&#x27;,title:&#x27;Уведомление доставлено&#x27;,text:&#x27;Подтверждение H1 → Telegram. Доставлено с первой попытки.&#x27;,status:&#x27;Доставлено&#x27;},{type:&#x27;market&#x27;,time:&#x27;11:58&#x27;,asset:&#x27;SOL&#x27;,title:&#x27;Цена вошла в старшую зону&#x27;,text:&#x27;Контекст D1: 144,20–147,20 USDT. Подтверждение H1 ожидается.&#x27;,status:&#x27;Открыть событие&#x27;},{type:&#x27;delivery&#x27;,time:&#x27;11:58&#x27;,asset:&#x27;SOL&#x27;,title:&#x27;Уведомление доставлено&#x27;,text:&#x27;Касание контекста D1 → Telegram.&#x27;,status:&#x27;Доставлено&#x27;}];if(state.decision)entries.unshift({type:&#x27;decision&#x27;,time:&#x27;12:04&#x27;,asset:&#x27;BNB&#x27;,title:state.decision===&#x27;confirmed&#x27;?&#x27;Разметка подтверждена&#x27;:&#x27;Разметка отклонена&#x27;,text:&#x27;Задача #018 · Order block D1 · решение пользователя.&#x27;,status:&#x27;Решение сохранено&#x27;});
+      const list=entries.filter(e=&gt;state.logFilter===&#x27;all&#x27;||e.type===state.logFilter);q(&#x27;[data-log-list]&#x27;).innerHTML=list.map(e=&gt;`&lt;article class=&quot;lf-log-row&quot;&gt;&lt;div class=&quot;lf-num lf-muted lf-small&quot;&gt;${e.time}&lt;br&gt;MSK&lt;/div&gt;&lt;div&gt;&lt;h3&gt;${e.asset}USDT · ${e.title}&lt;/h3&gt;&lt;p&gt;${e.text}&lt;/p&gt;&lt;/div&gt;&lt;div class=&quot;lf-log-end&quot;&gt;${e.type===&#x27;market&#x27;?`&lt;button type=&quot;button&quot; class=&quot;lf-btn lf-btn-quiet cursor-interaction&quot; data-log-open=&quot;${e.asset}&quot;&gt;Открыть событие&lt;/button&gt;`:`&lt;span class=&quot;lf-status lf-up&quot;&gt;${e.status}&lt;/span&gt;`}&lt;/div&gt;&lt;/article&gt;`).join(&#x27;&#x27;)||&#x27;&lt;div class=&quot;lf-done&quot;&gt;&lt;h2&gt;Решений пока нет&lt;/h2&gt;&lt;p class=&quot;lf-muted lf-small&quot;&gt;Результаты проверки появятся здесь.&lt;/p&gt;&lt;/div&gt;&#x27;;qa(&#x27;[data-log-filter]&#x27;).forEach(b=&gt;b.setAttribute(&#x27;aria-pressed&#x27;,b.dataset.logFilter===state.logFilter));
+    }
+    function render(){qa(&#x27;[data-page]&#x27;).forEach(p=&gt;p.hidden=p.dataset.page!==state.page);qa(&#x27;[data-screen]&#x27;).forEach(b=&gt;{if(b.dataset.screen===state.page||b.dataset.screen===&#x27;overview&#x27;&amp;&amp;state.page===&#x27;desk&#x27;)b.setAttribute(&#x27;aria-current&#x27;,&#x27;page&#x27;);else b.removeAttribute(&#x27;aria-current&#x27;);});renderMarket();if(state.page===&#x27;desk&#x27;)renderDesk();if(state.page===&#x27;review&#x27;){q(&#x27;[data-review-workspace]&#x27;).hidden=!!state.decision;q(&#x27;[data-review-done]&#x27;).hidden=!state.decision;q(&#x27;[data-queue-status]&#x27;).textContent=state.decision?&#x27;Очередь пуста&#x27;:&#x27;1 задача&#x27;;if(!state.decision)drawChart(q(&#x27;[data-chart=&quot;review&quot;]&#x27;),assets.find(a=&gt;a.id===&#x27;BNB&#x27;),true);q(&#x27;[data-review-result]&#x27;).textContent=state.decision===&#x27;confirmed&#x27;?&#x27;Границы OB D1 подтверждены. Рыночный статус зоны показан отдельно.&#x27;:&#x27;Разметка OB D1 отклонена. Решение добавлено в журнал.&#x27;;}
+      qa(&#x27;[data-review-count]&#x27;).forEach(n=&gt;n.textContent=state.decision?&#x27;0&#x27;:&#x27;1&#x27;);if(state.page===&#x27;journal&#x27;)renderJournal();icons();}
+    root.addEventListener(&#x27;click&#x27;,event=&gt;{const b=event.target.closest(&#x27;button&#x27;);if(!b)return;
+      if(b.dataset.screen)open(b.dataset.screen);
+      else if(b.hasAttribute(&#x27;data-back&#x27;))open(&#x27;overview&#x27;);
+      else if(b.dataset.select){state.selected=b.dataset.select;renderMarket();icons();persist();}
+      else if(b.hasAttribute(&#x27;data-open-desk&#x27;))open(&#x27;desk&#x27;);
+      else if(b.dataset.deskSelect)open(&#x27;desk&#x27;,b.dataset.deskSelect);
+      else if(b.dataset.filter){state.filter=b.dataset.filter;renderMarket();icons();}
+      else if(b.dataset.analysis){state.analysis=b.dataset.analysis;renderDesk();icons();persist();}
+      else if(b.hasAttribute(&#x27;data-layer-button&#x27;)){state.zones=!state.zones;renderDesk();icons();}
+      else if(b.hasAttribute(&#x27;data-watch&#x27;)){const a=selected();if(state.watch.has(a.id))state.watch.delete(a.id);else state.watch.add(a.id);renderDesk();icons();notice(`${a.id}USDT: ${state.watch.has(a.id)?&#x27;наблюдение включено&#x27;:&#x27;наблюдение выключено&#x27;}.`);persist();}
+      else if(b.dataset.decision){state.decision=b.dataset.decision;render();notice(&#x27;Решение добавлено в журнал. Доступна отмена.&#x27;);}
+      else if(b.hasAttribute(&#x27;data-undo&#x27;)){state.decision=null;render();notice(&#x27;Решение отменено. Задача возвращена в очередь.&#x27;);}
+      else if(b.hasAttribute(&#x27;data-open-review-asset&#x27;))open(&#x27;desk&#x27;,&#x27;BNB&#x27;);
+      else if(b.dataset.logFilter){state.logFilter=b.dataset.logFilter;renderJournal();icons();}
+      else if(b.dataset.logOpen){open(&#x27;desk&#x27;,b.dataset.logOpen);notice(`Открыто событие 7 октября: ${b.dataset.logOpen===&#x27;BTC&#x27;?&#x27;подтверждение структуры H1 · 12:00 MSK&#x27;:&#x27;касание зоны D1 · 11:58 MSK&#x27;}.`);}
+      else if(b.dataset.theme){state.theme=b.dataset.theme;root.style.colorScheme=state.theme===&#x27;system&#x27;?&#x27;light dark&#x27;:state.theme;qa(&#x27;[data-theme]&#x27;).forEach(x=&gt;x.setAttribute(&#x27;aria-pressed&#x27;,x.dataset.theme===state.theme));}
+      else if(b.hasAttribute(&#x27;data-save-settings&#x27;)){notice(&#x27;Настройки наблюдения сохранены для текущего макета.&#x27;);}
+    });
+    function renderDesign(){root.style.setProperty(&#x27;--lf-brand&#x27;,design.accent);root.style.setProperty(&#x27;--lf-pad&#x27;,design.density===&#x27;Компактная&#x27;?&#x27;14px&#x27;:&#x27;22px&#x27;);if(state.page===&#x27;desk&#x27;)renderDesk();if(state.page===&#x27;review&#x27;&amp;&amp;!state.decision)drawChart(q(&#x27;[data-chart=&quot;review&quot;]&#x27;),assets.find(a=&gt;a.id===&#x27;BNB&#x27;),true);}
+    render();
+    const observer=new ResizeObserver(()=&gt;{if(state.page===&#x27;desk&#x27;)drawChart(q(&#x27;[data-chart=&quot;desk&quot;]&#x27;),selected());if(state.page===&#x27;review&#x27;&amp;&amp;!state.decision)drawChart(q(&#x27;[data-chart=&quot;review&quot;]&#x27;),assets.find(a=&gt;a.id===&#x27;BNB&#x27;),true);});observer.observe(root);
+    if(globalThis.Tweak){const tweak=new Tweak({container:root,onChange:renderDesign});tweak.addColorPicker(design,&#x27;accent&#x27;,{label:&#x27;Акцент бренда&#x27;,reference:&#x27;--lf-brand&#x27;});tweak.addSelect(design,&#x27;density&#x27;,{label:&#x27;Плотность&#x27;,options:[&#x27;Обычная&#x27;,&#x27;Компактная&#x27;]});}
+  })();
+  &lt;/script&gt;
+&lt;/div&gt;
+
+
+&lt;script src=&quot;https://unpkg.com/@floating-ui/core@1.7.3/dist/floating-ui.core.umd.min.js&quot;&gt;&lt;/script&gt;
+&lt;script src=&quot;https://unpkg.com/@floating-ui/dom@1.7.4/dist/floating-ui.dom.umd.min.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+(() =&gt; {
+  if (window.FloatingUIDOM == null) {
+    return;
+  }
+  const { autoUpdate, computePosition, flip, offset, shift, size } =
+    window.FloatingUIDOM;
+  const tooltipPlacements = new Set([&quot;top&quot;, &quot;right&quot;, &quot;bottom&quot;, &quot;left&quot;]);
+  const tooltipId = `codex-visualization-tooltip-${
+    window.crypto?.randomUUID?.() ?? Date.now().toString(36)
+  }`;
+  const tooltipGap = 5;
+  const hoverDelay = 700;
+  const skipDelay = 300;
+  let activeTrigger = null;
+  let pendingTrigger = null;
+  let tooltip = null;
+  let openTimeout = null;
+  let autoUpdateCleanup = null;
+  let positionRequest = 0;
+  let skipDelayUntil = 0;
+  let lastPointerWasTouch = false;
+  let pinnedByTouch = false;
+
+  const getTrigger = (event) =&gt; {
+    for (const target of event.composedPath()) {
+      if (target?.nodeType === Node.ELEMENT_NODE) {
+        const trigger = target.closest(&quot;[data-tooltip]&quot;);
+        if (trigger) return trigger;
+      }
+    }
+    return null;
+  };
+  const containsTarget = (trigger, target) =&gt;
+    target?.nodeType != null &amp;&amp; trigger.contains(target);
+  const getContent = (trigger) =&gt;
+    trigger.getAttribute(&quot;data-tooltip&quot;)?.trim() ?? &quot;&quot;;
+  const getPlacement = (trigger) =&gt; {
+    const placement = trigger.getAttribute(&quot;data-tooltip-placement&quot;);
+    return tooltipPlacements.has(placement) ? placement : &quot;top&quot;;
+  };
+  const getTooltip = () =&gt; {
+    if (tooltip == null) {
+      tooltip = document.createElement(&quot;div&quot;);
+      tooltip.id = tooltipId;
+      tooltip.className = &quot;tooltip&quot;;
+      tooltip.setAttribute(&quot;role&quot;, &quot;tooltip&quot;);
+    }
+    return tooltip;
+  };
+  const setDescribedBy = (trigger, described) =&gt; {
+    const ids = new Set(
+      (trigger.getAttribute(&quot;aria-describedby&quot;) ?? &quot;&quot;)
+        .split(/\s+/)
+        .filter(Boolean),
+    );
+    if (described) {
+      ids.add(tooltipId);
+    } else {
+      ids.delete(tooltipId);
+    }
+    if (ids.size === 0) {
+      trigger.removeAttribute(&quot;aria-describedby&quot;);
+    } else {
+      trigger.setAttribute(&quot;aria-describedby&quot;, [...ids].join(&quot; &quot;));
+    }
+  };
+  const clearOpenTimeout = () =&gt; {
+    if (openTimeout != null) {
+      window.clearTimeout(openTimeout);
+      openTimeout = null;
+    }
+    pendingTrigger = null;
+  };
+  const closeTooltip = (activateSkipDelay = true) =&gt; {
+    clearOpenTimeout();
+    pinnedByTouch = false;
+    positionRequest += 1;
+    autoUpdateCleanup?.();
+    autoUpdateCleanup = null;
+    if (activeTrigger == null) {
+      return;
+    }
+    setDescribedBy(activeTrigger, false);
+    activeTrigger = null;
+    tooltip?.remove();
+    if (activateSkipDelay) {
+      skipDelayUntil = Date.now() + skipDelay;
+    }
+  };
+  const updatePosition = (trigger, floating) =&gt; {
+    const request = ++positionRequest;
+    void computePosition(trigger, floating, {
+      middleware: [
+        offset(tooltipGap),
+        flip({ padding: tooltipGap }),
+        shift({ padding: tooltipGap }),
+        size({
+          padding: tooltipGap,
+          apply({ availableHeight, availableWidth, elements }) {
+            elements.floating.style.setProperty(
+              &quot;--tooltip-available-width&quot;,
+              `${Math.max(0, availableWidth)}px`,
+            );
+            elements.floating.style.setProperty(
+              &quot;--tooltip-available-height&quot;,
+              `${Math.max(0, availableHeight)}px`,
+            );
+          },
+        }),
+      ],
+      placement: getPlacement(trigger),
+      strategy: &quot;fixed&quot;,
+    })
+      .then(({ x, y }) =&gt; {
+        if (activeTrigger !== trigger || request !== positionRequest) {
+          return;
+        }
+        const scale = window.devicePixelRatio || 1;
+        floating.style.transform = `translate(${Math.round(x * scale) / scale}px, ${Math.round(y * scale) / scale}px)`;
+        floating.style.visibility = &quot;visible&quot;;
+      })
+      .catch(() =&gt; {
+        if (activeTrigger === trigger &amp;&amp; request === positionRequest) {
+          closeTooltip(false);
+        }
+      });
+  };
+  const openTooltip = (trigger) =&gt; {
+    const content = getContent(trigger);
+    if (!trigger.isConnected || content.length === 0) {
+      return;
+    }
+    clearOpenTimeout();
+    if (activeTrigger === trigger) {
+      return;
+    }
+    closeTooltip();
+    const floating = getTooltip();
+    floating.textContent = content;
+    floating.style.visibility = &quot;hidden&quot;;
+    floating.style.transform = &quot;translate(0, 0)&quot;;
+    document.body.appendChild(floating);
+    activeTrigger = trigger;
+    setDescribedBy(trigger, true);
+    autoUpdateCleanup = autoUpdate(trigger, floating, () =&gt; {
+      updatePosition(trigger, floating);
+    });
+  };
+  const requestOpen = (trigger, immediate = false) =&gt; {
+    if (
+      getContent(trigger).length === 0 ||
+      activeTrigger === trigger ||
+      pendingTrigger === trigger
+    ) {
+      return;
+    }
+    clearOpenTimeout();
+    pendingTrigger = trigger;
+    const delay =
+      immediate || activeTrigger != null || Date.now() &lt; skipDelayUntil
+        ? 0
+        : hoverDelay;
+    if (delay === 0) {
+      openTooltip(trigger);
+      return;
+    }
+    openTimeout = window.setTimeout(() =&gt; {
+      openTimeout = null;
+      pendingTrigger = null;
+      openTooltip(trigger);
+    }, delay);
+  };
+  const handlePointerOpen = (event) =&gt; {
+    if (event.pointerType === &quot;touch&quot;) {
+      return;
+    }
+    const trigger = getTrigger(event);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    requestOpen(trigger);
+  };
+  const handlePointer = (event) =&gt; {
+    lastPointerWasTouch =
+      event.type === &quot;pointerdown&quot; &amp;&amp; event.pointerType === &quot;touch&quot;;
+  };
+  const handleTouchClick = (event) =&gt; {
+    const isTouch = event.pointerType === &quot;touch&quot; || lastPointerWasTouch;
+    lastPointerWasTouch = false;
+    if (!isTouch || event.detail === 0) {
+      return;
+    }
+    const trigger = getTrigger(event);
+    if (
+      trigger == null ||
+      !trigger.isConnected ||
+      getContent(trigger).length === 0 ||
+      (pinnedByTouch &amp;&amp; activeTrigger === trigger)
+    ) {
+      if (pinnedByTouch) {
+        closeTooltip();
+      }
+      return;
+    }
+    openTooltip(trigger);
+    pinnedByTouch = activeTrigger === trigger;
+    window.setTimeout(() =&gt; {
+      if (activeTrigger === trigger &amp;&amp; !trigger.isConnected) {
+        closeTooltip(false);
+      }
+    }, 0);
+  };
+  const handleLeave = (event) =&gt; {
+    if (pinnedByTouch) {
+      return;
+    }
+    const trigger = getTrigger(event);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const handleFocusIn = (event) =&gt; {
+    const trigger = getTrigger(event);
+    if (trigger?.matches(&quot;:focus-visible&quot;)) {
+      requestOpen(trigger, true);
+    }
+  };
+  const handleKeyDown = (event) =&gt; {
+    if (event.key === &quot;Escape&quot;) {
+      closeTooltip();
+    }
+  };
+  const handleContextMenu = (event) =&gt; {
+    lastPointerWasTouch = false;
+    const trigger = getTrigger(event);
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const handlers = {
+    pointerover: handlePointerOpen,
+    pointerdown: handlePointer,
+    pointercancel: handlePointer,
+    click: handleTouchClick,
+    pointerout: handleLeave,
+    focusin: handleFocusIn,
+    focusout: handleLeave,
+    keydown: handleKeyDown,
+    contextmenu: handleContextMenu,
+  };
+  const roots = new Map();
+  const handledEvents = new WeakSet();
+  const handleEvent = (event) =&gt; {
+    if (handledEvents.has(event)) return;
+    handledEvents.add(event);
+    handlers[event.type](event);
+  };
+  const discoverRoots = (node) =&gt; {
+    if (node.shadowRoot) listen(node.shadowRoot);
+    for (const element of node.querySelectorAll(&quot;*&quot;)) {
+      if (element.shadowRoot) listen(element.shadowRoot);
+    }
+  };
+  const listen = (root) =&gt; {
+    if (roots.has(root)) return;
+    for (const type of Object.keys(handlers)) root.addEventListener(type, handleEvent);
+    const observer = new window.MutationObserver((records) =&gt; {
+      for (const { addedNodes } of records) {
+        for (const node of addedNodes) {
+          if (node.nodeType === Node.ELEMENT_NODE) discoverRoots(node);
+        }
+      }
+      for (const [root, cleanup] of roots) {
+        if (root.host &amp;&amp; !root.host.isConnected) {
+          cleanup();
+          roots.delete(root);
+        }
+      }
+      if (activeTrigger &amp;&amp; !activeTrigger.isConnected) closeTooltip(false);
+    });
+    observer.observe(root, { childList: true, subtree: true });
+    roots.set(root, () =&gt; {
+      observer.disconnect();
+      for (const type of Object.keys(handlers)) root.removeEventListener(type, handleEvent);
+    });
+    discoverRoots(root);
+  };
+  const destroy = () =&gt; {
+    closeTooltip(false);
+    lastPointerWasTouch = false;
+    for (const cleanup of roots.values()) cleanup();
+    roots.clear();
+    tooltip = null;
+  };
+
+  // Events between children of one shadow root never reach the document.
+  listen(document);
+  window.addEventListener(&quot;pagehide&quot;, destroy, { once: true });
+})();
+&lt;/script&gt;
+&lt;script id=&quot;codex-visualization-tabs&quot;&gt;
+(() =&gt; {
+  const selector = &#x27;.nav[role=&quot;tablist&quot;] [role=&quot;tab&quot;]&#x27;;
+  const disabled = &#x27;:disabled,[aria-disabled=&quot;true&quot;]&#x27;;
+  const selectTab = (selected) =&gt; {
+    const panelId = selected.getAttribute(&quot;aria-controls&quot;);
+    for (const tab of selected.closest(&#x27;[role=&quot;tablist&quot;]&#x27;).querySelectorAll(&#x27;[role=&quot;tab&quot;]&#x27;)) {
+      const active = tab === selected;
+      tab.classList.toggle(&quot;active&quot;, active);
+      tab.setAttribute(&quot;aria-selected&quot;, String(active));
+      const id = tab.getAttribute(&quot;aria-controls&quot;);
+      const panel = id &amp;&amp; document.getElementById(id);
+      if (panel != null) {
+        panel.hidden = id !== panelId;
+        if (!panel.hidden &amp;&amp; selected.id) {
+          panel.setAttribute(&quot;aria-labelledby&quot;, selected.id);
+        }
+      }
+    }
+  };
+  const interact = (event) =&gt; {
+    const tab = event.target?.closest?.(selector);
+    if (event.defaultPrevented || tab == null || tab.matches(disabled)) {
+      return;
+    }
+    if (event.type === &quot;click&quot;) {
+      selectTab(tab);
+      return;
+    }
+    const tabs = Array.from(
+      tab.closest(&#x27;[role=&quot;tablist&quot;]&#x27;).querySelectorAll(&#x27;[role=&quot;tab&quot;]&#x27;),
+    ).filter((candidate) =&gt; !candidate.matches(disabled));
+    const current = tabs.indexOf(tab);
+    let next;
+    if (event.key === &quot;ArrowRight&quot; || event.key === &quot;ArrowDown&quot;) {
+      next = (current + 1) % tabs.length;
+    } else if (event.key === &quot;ArrowLeft&quot; || event.key === &quot;ArrowUp&quot;) {
+      next = (current + tabs.length - 1) % tabs.length;
+    } else if (event.key === &quot;Home&quot;) {
+      next = 0;
+    } else if (event.key === &quot;End&quot;) {
+      next = tabs.length - 1;
+    } else {
+      return;
+    }
+    event.preventDefault();
+    tabs[next].focus();
+    selectTab(tabs[next]);
+  };
+
+  for (const list of document.querySelectorAll(&#x27;.nav[role=&quot;tablist&quot;]&#x27;)) {
+    const selected =
+      list.querySelector(&#x27;[role=&quot;tab&quot;][aria-selected=&quot;true&quot;]&#x27;) ??
+      list.querySelector(&#x27;[role=&quot;tab&quot;].active&#x27;) ??
+      list.querySelector(&#x27;[role=&quot;tab&quot;]&#x27;);
+    if (selected != null) {
+      selectTab(selected);
+    }
+  }
+  document.addEventListener(&quot;click&quot;, interact);
+  document.addEventListener(&quot;keydown&quot;, interact);
+  window.addEventListener(&quot;pagehide&quot;, () =&gt; {
+    document.removeEventListener(&quot;click&quot;, interact);
+    document.removeEventListener(&quot;keydown&quot;, interact);
+  }, { once: true });
+})();
+&lt;/script&gt;
+&lt;script id=&quot;codex-visualization-carousel&quot;&gt;
+  (() =&gt; {
+    for (const root of document.querySelectorAll(&quot;.viz-carousel&quot;)) {
+      const panels = Array.from(
+        root.querySelectorAll(&quot;:scope &gt; [data-variant]&quot;),
+      );
+      if (panels.length === 0) {
+        continue;
+      }
+      root.setAttribute(&quot;role&quot;, &quot;group&quot;);
+      panels.forEach((panel, index) =&gt; {
+        panel.hidden = index !== 0;
+        panel.setAttribute(&quot;role&quot;, &quot;group&quot;);
+        if (!panel.hasAttribute(&quot;aria-label&quot;)) {
+          panel.setAttribute(&quot;aria-label&quot;, panel.dataset.variant);
+        }
+      });
+      root.dataset.activeVariant = panels[0].dataset.variant;
+      if (panels.length === 1) {
+        continue;
+      }
+
+      const controls = document.createElement(&quot;div&quot;);
+      controls.className = &quot;viz-carousel-controls&quot;;
+      // Portable copy of the settings dropdown&#x27;s legacy glyph; no 14px icon-package preset matches it.
+      // https://github.com/openai/openai/blob/master/codex/codex-apps/webview/src/icons/chevron.svg
+      controls.innerHTML = `
+      &lt;button type=&quot;button&quot; class=&quot;viz-carousel-previous cursor-interaction&quot;&gt;&lt;i data-lucide=&quot;chevron-left&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
+      &lt;details class=&quot;viz-carousel-picker&quot;&gt;
+        &lt;summary class=&quot;cursor-interaction&quot;&gt;
+          &lt;span class=&quot;viz-carousel-count tabular-nums&quot;&gt;&lt;/span&gt;
+          &lt;span class=&quot;viz-carousel-name&quot;&gt;&lt;/span&gt;
+          &lt;svg class=&quot;viz-carousel-caret&quot; width=&quot;14&quot; height=&quot;14&quot; viewBox=&quot;0 0 20 21&quot; fill=&quot;none&quot; aria-hidden=&quot;true&quot; focusable=&quot;false&quot;&gt;
+            &lt;path d=&quot;M15.2793 7.71101C15.539 7.45131 15.961 7.45131 16.2207 7.71101C16.4804 7.97071 16.4804 8.39272 16.2207 8.65242L10.4707 14.4024C10.211 14.6621 9.78902 14.6621 9.52932 14.4024L3.77932 8.65242L3.69436 8.54792C3.52385 8.28979 3.55205 7.93828 3.77932 7.71101C4.00659 7.48374 4.3581 7.45554 4.61623 7.62605L4.72073 7.71101L10 12.9903L15.2793 7.71101Z&quot; fill=&quot;currentColor&quot; stroke=&quot;currentColor&quot; stroke-width=&quot;0.6&quot; /&gt;
+          &lt;/svg&gt;
+        &lt;/summary&gt;
+        &lt;div class=&quot;viz-carousel-options&quot;&gt;&lt;/div&gt;
+      &lt;/details&gt;
+      &lt;button type=&quot;button&quot; class=&quot;viz-carousel-next cursor-interaction&quot;&gt;&lt;i data-lucide=&quot;chevron-right&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;`;
+      const previous = controls.querySelector(&quot;.viz-carousel-previous&quot;);
+      const next = controls.querySelector(&quot;.viz-carousel-next&quot;);
+      const picker = controls.querySelector(&quot;.viz-carousel-picker&quot;);
+      const summary = picker.querySelector(&quot;summary&quot;);
+      const count = controls.querySelector(&quot;.viz-carousel-count&quot;);
+      const name = controls.querySelector(&quot;.viz-carousel-name&quot;);
+      const options = controls.querySelector(&quot;.viz-carousel-options&quot;);
+      const status = document.createElement(&quot;span&quot;);
+      status.className = &quot;sr-only&quot;;
+      status.setAttribute(&quot;role&quot;, &quot;status&quot;);
+      status.setAttribute(&quot;aria-live&quot;, &quot;polite&quot;);
+      status.setAttribute(&quot;aria-atomic&quot;, &quot;true&quot;);
+      previous.setAttribute(
+        &quot;aria-label&quot;,
+        root.dataset.previousLabel ?? &quot;Previous variant&quot;,
+      );
+      next.setAttribute(&quot;aria-label&quot;, root.dataset.nextLabel ?? &quot;Next variant&quot;);
+
+      let active = 0;
+      let mousePointerId = null;
+      let summaryPointerHandled = false;
+      summary.addEventListener(&quot;pointerdown&quot;, (event) =&gt; {
+        summaryPointerHandled =
+          event.pointerType === &quot;mouse&quot; &amp;&amp; event.button === 0 &amp;&amp; !event.ctrlKey;
+        if (!summaryPointerHandled) {
+          return;
+        }
+        event.preventDefault();
+        summary.focus({ preventScroll: true });
+        picker.open = !picker.open;
+        mousePointerId = picker.open ? event.pointerId : null;
+      });
+      summary.addEventListener(&quot;click&quot;, (event) =&gt; {
+        if (summaryPointerHandled &amp;&amp; event.detail &gt; 0) {
+          event.preventDefault();
+        }
+      });
+      const choices = panels.map((panel, index) =&gt; {
+        const choice = document.createElement(&quot;button&quot;);
+        choice.type = &quot;button&quot;;
+        choice.className = &quot;cursor-interaction&quot;;
+        choice.textContent = panel.dataset.variant;
+        choice.addEventListener(&quot;click&quot;, () =&gt; {
+          select(index);
+          summary.focus();
+        });
+        choice.addEventListener(&quot;pointerup&quot;, (event) =&gt; {
+          if (
+            picker.open &amp;&amp;
+            event.pointerType === &quot;mouse&quot; &amp;&amp;
+            event.button === 0 &amp;&amp;
+            event.pointerId === mousePointerId
+          ) {
+            choice.click();
+          }
+        });
+        options.appendChild(choice);
+        return choice;
+      });
+      const select = (index) =&gt; {
+        const changed = active !== index;
+        active = index;
+        panels.forEach((panel, position) =&gt; {
+          panel.hidden = position !== active;
+          choices[position].setAttribute(
+            &quot;aria-current&quot;,
+            String(position === active),
+          );
+        });
+        root.dataset.activeVariant = panels[active].dataset.variant;
+        count.textContent = `${active + 1} / ${panels.length}`;
+        name.textContent = panels[active].dataset.variant;
+        picker.open = false;
+        mousePointerId = null;
+        if (changed) {
+          status.textContent = `${count.textContent}: ${name.textContent}`;
+        }
+      };
+      previous.addEventListener(&quot;click&quot;, () =&gt;
+        select((active + panels.length - 1) % panels.length),
+      );
+      next.addEventListener(&quot;click&quot;, () =&gt;
+        select((active + 1) % panels.length),
+      );
+      picker.addEventListener(&quot;keydown&quot;, (event) =&gt; {
+        if (event.key === &quot;Escape&quot; &amp;&amp; picker.open) {
+          event.preventDefault();
+          picker.open = false;
+          mousePointerId = null;
+          summary.focus();
+          return;
+        }
+        if (event.altKey || event.ctrlKey || event.metaKey) {
+          return;
+        }
+        const index = choices.indexOf(document.activeElement);
+        let nextIndex;
+        if (event.key === &quot;ArrowDown&quot;) {
+          nextIndex = index &lt; 0 ? active : (index + 1) % choices.length;
+        } else if (event.key === &quot;ArrowUp&quot;) {
+          nextIndex = index &lt; 0 ? active : (index + choices.length - 1) % choices.length;
+        } else if (picker.open &amp;&amp; event.key === &quot;Home&quot;) {
+          nextIndex = 0;
+        } else if (picker.open &amp;&amp; event.key === &quot;End&quot;) {
+          nextIndex = choices.length - 1;
+        } else {
+          return;
+        }
+        event.preventDefault();
+        picker.open = true;
+        choices[nextIndex].focus();
+      });
+      picker.addEventListener(&quot;focusout&quot;, (event) =&gt; {
+        if (!picker.contains(event.relatedTarget)) {
+          picker.open = false;
+          mousePointerId = null;
+        }
+      });
+      const dismiss = (event) =&gt; {
+        if (!summary.contains(event.target)) {
+          mousePointerId = null;
+        }
+        if (!picker.contains(event.target)) {
+          picker.open = false;
+        }
+      };
+      const endPointerSelection = () =&gt; {
+        mousePointerId = null;
+      };
+      const sizePicker = () =&gt; {
+        root.style.setProperty(
+          &quot;--viz-carousel-picker-height&quot;,
+          `${picker.open ? options.offsetHeight : 0}px`,
+        );
+      };
+      picker.addEventListener(&quot;toggle&quot;, sizePicker);
+      window.addEventListener(&quot;resize&quot;, sizePicker);
+      document.addEventListener(&quot;pointerdown&quot;, dismiss);
+      document.addEventListener(&quot;pointerup&quot;, endPointerSelection);
+      document.addEventListener(&quot;pointercancel&quot;, endPointerSelection);
+      window.addEventListener(&quot;blur&quot;, endPointerSelection);
+      window.addEventListener(
+        &quot;pagehide&quot;,
+        () =&gt; {
+          document.removeEventListener(&quot;pointerdown&quot;, dismiss);
+          document.removeEventListener(&quot;pointerup&quot;, endPointerSelection);
+          document.removeEventListener(&quot;pointercancel&quot;, endPointerSelection);
+          window.removeEventListener(&quot;blur&quot;, endPointerSelection);
+          window.removeEventListener(&quot;resize&quot;, sizePicker);
+        },
+        { once: true },
+      );
+      root.append(controls, status);
+      select(0);
+    }
+  })();
+&lt;/script&gt;
+&lt;script id=&quot;codex-visualization-lucide&quot; async src=&quot;https://unpkg.com/lucide@1.17.0/dist/umd/lucide.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+(() =&gt; {
+  const initialize = () =&gt; {
+    globalThis.lucide?.createIcons({ attrs: { width: 16, height: 16 } });
+  };
+  if (globalThis.lucide != null) {
+    initialize();
+    return;
+  }
+  document
+    .getElementById(&quot;codex-visualization-lucide&quot;)
+    ?.addEventListener(&quot;load&quot;, initialize, { once: true });
+})();
+&lt;/script&gt;
+
+&lt;/body&gt;
+&lt;/html&gt;
+"></iframe>
+<script>(() => {
+  const frame = document.getElementById("codex-visualization");
+  if (!(frame instanceof HTMLIFrameElement)) {
+    return;
+  }
+  let viewportHeight = globalThis.innerHeight;
+  const storageKey = `codex:visualization-widget-state-v2:${JSON.stringify([
+    globalThis.location.pathname,
+    globalThis.location.search,
+  ])}`;
+  const parseState = (serializedState) => {
+    if (
+      typeof serializedState !== "string" ||
+      new TextEncoder().encode(serializedState).length > 16 * 1024
+    ) {
+      throw new TypeError(
+        "Widget state must be a JSON object of at most 16 KiB",
+      );
+    }
+    /** @type {unknown} */
+    const state = JSON.parse(serializedState);
+    if (
+      state == null ||
+      typeof state !== "object" ||
+      Array.isArray(state) ||
+      ("imageIds" in state &&
+        (!Array.isArray(state.imageIds) || state.imageIds.length > 0))
+    ) {
+      throw new TypeError("Widget state must be a JSON object");
+    }
+    const storedState = { modelContent: null, privateContent: null, ...state };
+    const canonicalState = JSON.stringify(
+      storedState,
+      (_key, /** @type {unknown} */ value) => {
+        if (typeof value === "number" && !Number.isFinite(value)) {
+          throw new TypeError("Widget state must contain finite numbers");
+        }
+        return value;
+      },
+    );
+    if (new TextEncoder().encode(canonicalState).length > 16 * 1024) {
+      throw new TypeError(
+        "Widget state must be a JSON object of at most 16 KiB",
+      );
+    }
+    return storedState;
+  };
+  let storage = null;
+  let state = null;
+  try {
+    const localStorage = globalThis.localStorage;
+    const probeKey = `${storageKey}:probe`;
+    localStorage.setItem(probeKey, "1");
+    localStorage.removeItem(probeKey);
+    storage = localStorage;
+    const savedState = storage.getItem(storageKey);
+    if (savedState != null) {
+      try {
+        state = parseState(savedState);
+      } catch {
+        // Invalid saved state does not disable future writes.
+      }
+    }
+  } catch {
+    storage = null;
+  }
+  const initialGlobals = {
+    widgetState: state,
+    statePersistence: storage == null ? "none" : "local",
+  };
+
+  const channel = new MessageChannel();
+  channel.port1.addEventListener("message", (event) => {
+    const data = event.data;
+    if (typeof data !== "object" || data == null) {
+      return;
+    }
+    if (data.type === "widget-state-write") {
+      if (!Number.isSafeInteger(data.id) || data.id <= 0) {
+        return;
+      }
+      let ok = false;
+      try {
+        if (storage != null) {
+          const state = parseState(data.state);
+          storage.setItem(storageKey, JSON.stringify(state));
+          ok = true;
+        }
+      } catch {
+        // Storage denial, quota limits, and invalid state return a failed receipt.
+      }
+      channel.port1.postMessage({
+        type: "widget-state-result",
+        id: data.id,
+        ok,
+      });
+      return;
+    }
+    if (data.type === "height") {
+      const height = data.height;
+      if (
+        typeof height === "number" &&
+        Number.isFinite(height) &&
+        height >= 0 &&
+        height <= 10_000
+      ) {
+        frame.style.height = Math.ceil(height) + "px";
+      }
+      return;
+    }
+    if (data.type === "scroll-to") {
+      const top = data.top;
+      if (
+        typeof top === "number" &&
+        Number.isFinite(top) &&
+        top >= 0 &&
+        globalThis.navigator.userActivation?.isActive === true
+      ) {
+        globalThis.scrollTo({
+          top: Math.ceil(
+            globalThis.scrollY + frame.getBoundingClientRect().top + top,
+          ),
+        });
+      }
+      return;
+    }
+    if (data.type === "open-external") {
+      const rawHref = data.href;
+      if (typeof rawHref !== "string") {
+        return;
+      }
+      let href;
+      try {
+        const url = new URL(rawHref, document.baseURI);
+        if (url.protocol !== "https:") {
+          return;
+        }
+        href = url.href;
+      } catch {
+        return;
+      }
+      if (globalThis.navigator.userActivation?.isActive === true) {
+        const anchor = document.createElement("a");
+        anchor.href = href;
+        anchor.rel = "noopener noreferrer";
+        anchor.target = "_blank";
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+      }
+      return;
+    }
+    if (data.type === "follow-up") {
+      const prompt = data.prompt;
+      if (
+        typeof prompt !== "string" ||
+        globalThis.navigator.userActivation?.isActive !== true
+      ) {
+        return;
+      }
+      const title = data.title;
+      globalThis.prompt(typeof title === "string" ? title : prompt, prompt);
+    }
+  });
+  channel.port1.start();
+  const srcdoc = frame.dataset.srcdoc;
+  if (srcdoc == null) {
+    return;
+  }
+  globalThis.addEventListener("resize", () => {
+    const height = Number.parseFloat(frame.style.height);
+    if (!Number.isFinite(height) || height <= viewportHeight) {
+      frame.style.removeProperty("height");
+    }
+    viewportHeight = globalThis.innerHeight;
+    channel.port1.postMessage({ type: "measure" });
+  });
+  frame.addEventListener(
+    "load",
+    () => {
+      frame.contentWindow?.postMessage(
+        { type: "codex-visualization-initialize" },
+        "*",
+        [channel.port2],
+      );
+    },
+    { once: true },
+  );
+  // Match the trusted bootstrap element, not the same text in an authored title.
+  frame.srcdoc = srcdoc.replace(
+    '<script type="application/json" id="codex-visualization-widget-state">__CODEX_VISUALIZATION_WIDGET_STATE__<\/script>',
+    () =>
+      '<script type="application/json" id="codex-visualization-widget-state">' +
+      JSON.stringify(initialGlobals).replaceAll("<", "\\u003c") +
+      "<\/script>",
+  );
+  delete frame.dataset.srcdoc;
+})();
+</script>
+</body>
+</html>

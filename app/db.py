@@ -8,7 +8,7 @@ import json
 import sqlite3
 import threading
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Optional, Sequence
 
 from .models import (
     AlertState,
@@ -42,6 +42,19 @@ from .models_ltf import (
     LtfScenario,
     LtfScenarioEntry,
     LtfStructureEvent,
+)
+from .models_alt import (
+    AltAsset,
+    AltCandle,
+    AltEntryOpportunity,
+    AltEvent,
+    AltFrozenRange,
+    AltInstrumentSource,
+    AltManipulationEpisode,
+    AltRangeCandidate,
+    AltRun,
+    AltSetup,
+    AltStructureEvent,
 )
 
 SCHEMA_VERSION = 1
@@ -393,6 +406,10 @@ class Database:
             for col, ddl in (
                 ("processing_mode", "TEXT NOT NULL DEFAULT 'unknown'"),
                 ("detection_lag_ms", "INTEGER NOT NULL DEFAULT 0"),
+                # ТЗ 07.10.2026 §7: состояние графика события отдельно от
+                # состояния события (текст ≠ успешная доставка картинки)
+                ("chart_state", "TEXT NOT NULL DEFAULT 'none'"),
+                ("chart_attempts", "INTEGER NOT NULL DEFAULT 0"),
             ):
                 if col not in ltf_ev_cols:
                     self.conn.execute(
@@ -2458,6 +2475,37 @@ class Database:
         self._commit()
         self._bump_ltf_cache()
 
+    def update_ltf_event_chart(self, event_id: int, state: str,
+                               bump_attempts: bool = False) -> None:
+        """Состояние графика события (ТЗ 07.10.2026 §7): отдельно от
+        состояния самого события — ошибка картинки не меняет BOS/зону."""
+        if bump_attempts:
+            self.conn.execute(
+                "UPDATE ltf_event SET chart_state=?, "
+                "chart_attempts=chart_attempts+1 WHERE id=?",
+                (state, event_id),
+            )
+        else:
+            self.conn.execute(
+                "UPDATE ltf_event SET chart_state=? WHERE id=?",
+                (state, event_id),
+            )
+        self._commit()
+        self._bump_ltf_cache()
+
+    def pending_ltf_charts(self, limit: int = 50) -> list[LtfEvent]:
+        """События с доставленным текстом, но недоставленным графиком —
+        повторная генерация без повторного рыночного уведомления (§7)."""
+        return [
+            self._to_ltf_event(r)
+            for r in self.conn.execute(
+                "SELECT * FROM ltf_event WHERE delivered=1 "
+                "AND chart_state='failed' AND chart_attempts<5 "
+                "ORDER BY occurred_at, id LIMIT ?",
+                (limit,),
+            ).fetchall()
+        ]
+
     def pending_ltf_events(self, limit: int = 200) -> list[LtfEvent]:
         """Недоставленные текущие (не delayed) события — ретрай доставки (§11).
 
@@ -2483,6 +2531,10 @@ class Database:
             delayed=bool(r["delayed"]),
             processing_mode=r["processing_mode"],
             detection_lag_ms=r["detection_lag_ms"],
+            chart_state=r["chart_state"] if "chart_state" in r.keys() else "none",
+            chart_attempts=(
+                r["chart_attempts"] if "chart_attempts" in r.keys() else 0
+            ),
         )
 
     # ---------- LTF: reviews / assessments (разметка Entry Zones) ----------
@@ -2546,3 +2598,630 @@ class Database:
                 (entry_zone_id,),
             ).fetchall()
         ]
+
+    # ---------- ALT: вселенная и источники («Altcoins D1 accumulation») ----------
+
+    def upsert_alt_asset(self, a: AltAsset) -> AltAsset:
+        """Идемпотентно по UNIQUE(cmc_id): повторная загрузка снапшота
+        вселенной обновляет ранг/маппинг, не создавая вторую строку."""
+        cur = self.conn.execute(
+            """INSERT INTO alt_asset
+               (cmc_id, canonical_asset_id, symbol, name, cmc_rank,
+                exclusion_category, mapping_status, mapping_reason, enabled,
+                created_ms, updated_ms)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT (cmc_id) DO UPDATE SET
+                 canonical_asset_id=excluded.canonical_asset_id,
+                 symbol=excluded.symbol, name=excluded.name,
+                 cmc_rank=excluded.cmc_rank,
+                 exclusion_category=excluded.exclusion_category,
+                 mapping_status=excluded.mapping_status,
+                 mapping_reason=excluded.mapping_reason,
+                 enabled=excluded.enabled, updated_ms=excluded.updated_ms""",
+            (a.cmc_id, a.canonical_asset_id, a.symbol, a.name, a.cmc_rank,
+             a.exclusion_category, a.mapping_status, a.mapping_reason,
+             int(a.enabled), a.created_ms, a.updated_ms),
+        )
+        self._commit()
+        if a.id is None:
+            r = self.conn.execute(
+                "SELECT id FROM alt_asset WHERE cmc_id=?", (a.cmc_id,)
+            ).fetchone()
+            a.id = int(r["id"])
+        return a
+
+    def get_alt_asset(self, asset_id: int) -> Optional[AltAsset]:
+        r = self.conn.execute(
+            "SELECT * FROM alt_asset WHERE id=?", (asset_id,)
+        ).fetchone()
+        return self._to_alt_asset(r) if r else None
+
+    def get_alt_asset_by_cmc_id(self, cmc_id: int) -> Optional[AltAsset]:
+        r = self.conn.execute(
+            "SELECT * FROM alt_asset WHERE cmc_id=?", (cmc_id,)
+        ).fetchone()
+        return self._to_alt_asset(r) if r else None
+
+    def list_alt_assets(self, enabled_only: bool = False) -> list[AltAsset]:
+        """Все известные активы модуля (в т.ч. выпавшие из текущей выборки —
+        политика непрерывности наблюдения разруливается вызывающим, §3 ТЗ)."""
+        q = "SELECT * FROM alt_asset"
+        if enabled_only:
+            q += " WHERE enabled=1"
+        q += " ORDER BY cmc_rank, id"
+        return [self._to_alt_asset(r) for r in self.conn.execute(q).fetchall()]
+
+    @staticmethod
+    def _to_alt_asset(r: sqlite3.Row) -> AltAsset:
+        return AltAsset(
+            id=r["id"], cmc_id=r["cmc_id"],
+            canonical_asset_id=r["canonical_asset_id"], symbol=r["symbol"],
+            name=r["name"], cmc_rank=r["cmc_rank"],
+            exclusion_category=r["exclusion_category"],
+            mapping_status=r["mapping_status"], mapping_reason=r["mapping_reason"],
+            enabled=bool(r["enabled"]),
+            created_ms=r["created_ms"], updated_ms=r["updated_ms"],
+        )
+
+    def insert_alt_universe_snapshot(
+        self, taken_ms: int, payload_json: str, source: str = "cmc", stale: bool = False
+    ) -> int:
+        cur = self.conn.execute(
+            """INSERT INTO alt_universe_snapshot (taken_ms, payload_json, source, stale)
+               VALUES (?,?,?,?)""",
+            (taken_ms, payload_json, source, int(stale)),
+        )
+        self._commit()
+        return int(cur.lastrowid)
+
+    def get_latest_alt_universe_snapshot(self) -> Optional[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT * FROM alt_universe_snapshot ORDER BY taken_ms DESC, id DESC LIMIT 1"
+        ).fetchone()
+
+    def upsert_alt_instrument_source(self, s: AltInstrumentSource) -> AltInstrumentSource:
+        """Идемпотентно по UNIQUE(asset_id, venue, symbol, quote, source_version)."""
+        self.conn.execute(
+            """INSERT INTO alt_instrument_source
+               (asset_id, venue, symbol, quote, earliest_available_ms,
+                last_closed_ms, history_scope, source_version)
+               VALUES (?,?,?,?,?,?,?,?)
+               ON CONFLICT (asset_id, venue, symbol, quote, source_version)
+               DO UPDATE SET
+                 earliest_available_ms=excluded.earliest_available_ms,
+                 last_closed_ms=excluded.last_closed_ms,
+                 history_scope=excluded.history_scope""",
+            (s.asset_id, s.venue, s.symbol, s.quote, s.earliest_available_ms,
+             s.last_closed_ms, s.history_scope, s.source_version),
+        )
+        self._commit()
+        if s.id is None:
+            r = self.conn.execute(
+                """SELECT id FROM alt_instrument_source
+                   WHERE asset_id=? AND venue=? AND symbol=? AND quote=?
+                     AND source_version=?""",
+                (s.asset_id, s.venue, s.symbol, s.quote, s.source_version),
+            ).fetchone()
+            s.id = int(r["id"])
+        return s
+
+    def get_alt_instrument_source(self, asset_id: int) -> Optional[AltInstrumentSource]:
+        r = self.conn.execute(
+            "SELECT * FROM alt_instrument_source WHERE asset_id=? "
+            "ORDER BY source_version DESC, id DESC LIMIT 1",
+            (asset_id,),
+        ).fetchone()
+        if not r:
+            return None
+        return AltInstrumentSource(
+            id=r["id"], asset_id=r["asset_id"], venue=r["venue"],
+            symbol=r["symbol"], quote=r["quote"],
+            earliest_available_ms=r["earliest_available_ms"],
+            last_closed_ms=r["last_closed_ms"],
+            history_scope=r["history_scope"], source_version=r["source_version"],
+        )
+
+    # ---------- ALT: свечи D1 ----------
+
+    def insert_alt_candles(self, candles: Iterable[AltCandle]) -> int:
+        """INSERT OR IGNORE: повторная загрузка истории не переписывает свечи."""
+        rows = [
+            (c.source_id, c.open_time, c.open, c.high, c.low, c.close, c.volume)
+            for c in candles
+        ]
+        cur = self.conn.executemany(
+            """INSERT OR IGNORE INTO alt_candle
+               (source_id, open_time, open, high, low, close, volume)
+               VALUES (?,?,?,?,?,?,?)""",
+            rows,
+        )
+        self._commit()
+        return cur.rowcount
+
+    def get_alt_candles(
+        self,
+        source_id: int,
+        start_ms: Optional[int] = None,
+        end_ms: Optional[int] = None,
+    ) -> list[AltCandle]:
+        q = "SELECT * FROM alt_candle WHERE source_id=?"
+        args: list[Any] = [source_id]
+        if start_ms is not None:
+            q += " AND open_time>=?"
+            args.append(start_ms)
+        if end_ms is not None:
+            q += " AND open_time<=?"
+            args.append(end_ms)
+        q += " ORDER BY open_time"
+        return [
+            AltCandle(
+                source_id=r["source_id"], open_time=r["open_time"], open=r["open"],
+                high=r["high"], low=r["low"], close=r["close"], volume=r["volume"],
+            )
+            for r in self.conn.execute(q, args).fetchall()
+        ]
+
+    # ---------- ALT: диапазоны ----------
+
+    def insert_alt_range_candidate(self, c: AltRangeCandidate) -> AltRangeCandidate:
+        cur = self.conn.execute(
+            """INSERT INTO alt_range_candidate
+               (asset_id, origin_key, start_anchor_open_time,
+                rebound_anchor_open_time, lower, upper, width, mid, n_days,
+                version, state, metrics_json, first_seen_ms, updated_ms)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (c.asset_id, c.origin_key, c.start_anchor_open_time,
+             c.rebound_anchor_open_time, c.lower, c.upper, c.width, c.mid,
+             c.n_days, c.version, c.state, c.metrics_json,
+             c.first_seen_ms, c.updated_ms),
+        )
+        self._commit()
+        c.id = int(cur.lastrowid)
+        return c
+
+    def get_alt_range_candidate(self, candidate_id: int) -> Optional[AltRangeCandidate]:
+        r = self.conn.execute(
+            "SELECT * FROM alt_range_candidate WHERE id=?", (candidate_id,)
+        ).fetchone()
+        return self._to_alt_range_candidate(r) if r else None
+
+    def find_alt_range_candidate_by_origin(
+        self, asset_id: int, origin_key: str
+    ) -> Optional[AltRangeCandidate]:
+        """Идемпотентность replay: одна пара якорей = один диапазон (§15 ТЗ)."""
+        r = self.conn.execute(
+            "SELECT * FROM alt_range_candidate WHERE asset_id=? AND origin_key=? "
+            "ORDER BY id LIMIT 1",
+            (asset_id, origin_key),
+        ).fetchone()
+        return self._to_alt_range_candidate(r) if r else None
+
+    def update_alt_range_candidate(self, candidate_id: int, **fields: Any) -> None:
+        """Обновление живого кандидата (версии/границы/возраст до freeze)."""
+        if not fields:
+            return
+        cols = ", ".join(f"{k}=?" for k in fields)
+        self.conn.execute(
+            f"UPDATE alt_range_candidate SET {cols} WHERE id=?",
+            (*fields.values(), candidate_id),
+        )
+        self._commit()
+
+    def list_alt_range_candidates(self, asset_id: int) -> list[AltRangeCandidate]:
+        """Все кандидаты диапазонов актива (для read model окна, §16 ТЗ)."""
+        return [
+            self._to_alt_range_candidate(r)
+            for r in self.conn.execute(
+                "SELECT * FROM alt_range_candidate WHERE asset_id=? ORDER BY id",
+                (asset_id,),
+            ).fetchall()
+        ]
+
+    @staticmethod
+    def _to_alt_range_candidate(r: sqlite3.Row) -> AltRangeCandidate:
+        return AltRangeCandidate(
+            id=r["id"], asset_id=r["asset_id"], origin_key=r["origin_key"],
+            start_anchor_open_time=r["start_anchor_open_time"],
+            rebound_anchor_open_time=r["rebound_anchor_open_time"],
+            lower=r["lower"], upper=r["upper"], width=r["width"], mid=r["mid"],
+            n_days=r["n_days"], version=r["version"], state=r["state"],
+            metrics_json=r["metrics_json"], first_seen_ms=r["first_seen_ms"],
+            updated_ms=r["updated_ms"],
+        )
+
+    def insert_alt_frozen_range(self, f: AltFrozenRange) -> AltFrozenRange:
+        cur = self.conn.execute(
+            """INSERT INTO alt_frozen_range
+               (range_id, lower, upper, width, mid, start_anchor_open_time,
+                rebound_anchor_open_time, included_candles, mature_at_ms,
+                classifier_version, range_version)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (f.range_id, f.lower, f.upper, f.width, f.mid,
+             f.start_anchor_open_time, f.rebound_anchor_open_time,
+             f.included_candles, f.mature_at_ms, f.classifier_version,
+             f.range_version),
+        )
+        self._commit()
+        f.id = int(cur.lastrowid)
+        return f
+
+    def get_alt_frozen_range(self, frozen_id: int) -> Optional[AltFrozenRange]:
+        r = self.conn.execute(
+            "SELECT * FROM alt_frozen_range WHERE id=?", (frozen_id,)
+        ).fetchone()
+        return self._to_alt_frozen_range(r) if r else None
+
+    def get_alt_frozen_range_by_range(
+        self, range_id: int
+    ) -> Optional[AltFrozenRange]:
+        """Заморозка конкретного кандидата — идемпотентность freeze при replay."""
+        r = self.conn.execute(
+            "SELECT * FROM alt_frozen_range WHERE range_id=? ORDER BY id LIMIT 1",
+            (range_id,),
+        ).fetchone()
+        return self._to_alt_frozen_range(r) if r else None
+
+    @staticmethod
+    def _to_alt_frozen_range(r: sqlite3.Row) -> AltFrozenRange:
+        return AltFrozenRange(
+            id=r["id"], range_id=r["range_id"], lower=r["lower"],
+            upper=r["upper"], width=r["width"], mid=r["mid"],
+            start_anchor_open_time=r["start_anchor_open_time"],
+            rebound_anchor_open_time=r["rebound_anchor_open_time"],
+            included_candles=r["included_candles"], mature_at_ms=r["mature_at_ms"],
+            classifier_version=r["classifier_version"],
+            range_version=r["range_version"],
+        )
+
+    # ---------- ALT: сетапы ----------
+
+    def insert_alt_setup(self, s: AltSetup) -> tuple[AltSetup, bool]:
+        """Идемпотентно по UNIQUE(asset_id, range_id): повторная заморозка
+        диапазона не создаёт второй сетап. Возвращает (setup, created)."""
+        cur = self.conn.execute(
+            """INSERT OR IGNORE INTO alt_setup
+               (asset_id, source_id, range_id, state, flags_json,
+                confirmation_event_id, targets_json, cancel_price, cancel_mode,
+                cancel_reachable, breakout_close, breakout_closed_at,
+                retest_deadline_ms, entry_a_id, entry_b_id, universe_eligible,
+                created_ms, updated_ms, terminated_ms)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (s.asset_id, s.source_id, s.range_id, s.state, s.flags_json,
+             s.confirmation_event_id, s.targets_json, s.cancel_price,
+             s.cancel_mode, int(s.cancel_reachable), s.breakout_close,
+             s.breakout_closed_at, s.retest_deadline_ms, s.entry_a_id,
+             s.entry_b_id, int(s.universe_eligible), s.created_ms,
+             s.updated_ms, s.terminated_ms),
+        )
+        self._commit()
+        if cur.rowcount == 1:
+            s.id = int(cur.lastrowid)
+            return s, True
+        r = self.conn.execute(
+            "SELECT * FROM alt_setup WHERE asset_id=? AND range_id=?",
+            (s.asset_id, s.range_id),
+        ).fetchone()
+        if r is None:  # pragma: no cover — защита от несогласованности схемы
+            raise RuntimeError("alt_setup: вставка проигнорирована, строка не найдена")
+        return self._to_alt_setup(r), False
+
+    def get_alt_setup(self, setup_id: int) -> Optional[AltSetup]:
+        r = self.conn.execute(
+            "SELECT * FROM alt_setup WHERE id=?", (setup_id,)
+        ).fetchone()
+        return self._to_alt_setup(r) if r else None
+
+    def list_alt_setups(self, asset_id: int) -> list[AltSetup]:
+        """Все сетапы актива (история + активный) — для проверки terminal-
+        состояний при replay (завершённый сетап не воскресает, §15 ТЗ)."""
+        return [
+            self._to_alt_setup(r)
+            for r in self.conn.execute(
+                "SELECT * FROM alt_setup WHERE asset_id=? ORDER BY id",
+                (asset_id,),
+            ).fetchall()
+        ]
+
+    def update_alt_setup(self, setup_id: int, **fields: Any) -> None:
+        if not fields:
+            return
+        cols = ", ".join(f"{k}=?" for k in fields)
+        args = [
+            int(v) if isinstance(v, bool) else v for v in fields.values()
+        ]
+        self.conn.execute(
+            f"UPDATE alt_setup SET {cols} WHERE id=?", (*args, setup_id)
+        )
+        self._commit()
+
+    @staticmethod
+    def _to_alt_setup(r: sqlite3.Row) -> AltSetup:
+        return AltSetup(
+            id=r["id"], asset_id=r["asset_id"], source_id=r["source_id"],
+            range_id=r["range_id"], state=r["state"], flags_json=r["flags_json"],
+            confirmation_event_id=r["confirmation_event_id"],
+            targets_json=r["targets_json"], cancel_price=r["cancel_price"],
+            cancel_mode=r["cancel_mode"],
+            cancel_reachable=bool(r["cancel_reachable"]),
+            breakout_close=r["breakout_close"],
+            breakout_closed_at=r["breakout_closed_at"],
+            retest_deadline_ms=r["retest_deadline_ms"],
+            entry_a_id=r["entry_a_id"], entry_b_id=r["entry_b_id"],
+            universe_eligible=bool(r["universe_eligible"]),
+            created_ms=r["created_ms"], updated_ms=r["updated_ms"],
+            terminated_ms=r["terminated_ms"],
+        )
+
+    # ---------- ALT: структура, манипуляции, входы ----------
+
+    def insert_alt_structure_event(self, e: AltStructureEvent) -> int:
+        cur = self.conn.execute(
+            """INSERT INTO alt_structure_event
+               (setup_id, kind, level_price, close_price, candle_open_time,
+                anchors_json)
+               VALUES (?,?,?,?,?,?)""",
+            (e.setup_id, e.kind, e.level_price, e.close_price,
+             e.candle_open_time, e.anchors_json),
+        )
+        self._commit()
+        return int(cur.lastrowid)
+
+    def find_alt_structure_event(
+        self, setup_id: int, kind: str, candle_open_time: int
+    ) -> Optional[int]:
+        """Дедупликация при replay: та же свеча + тип = то же событие (§15)."""
+        r = self.conn.execute(
+            "SELECT id FROM alt_structure_event "
+            "WHERE setup_id=? AND kind=? AND candle_open_time=?",
+            (setup_id, kind, candle_open_time),
+        ).fetchone()
+        return int(r["id"]) if r else None
+
+    def list_alt_structure_events(self, setup_id: int) -> list[AltStructureEvent]:
+        return [
+            AltStructureEvent(
+                id=r["id"], setup_id=r["setup_id"], kind=r["kind"],
+                level_price=r["level_price"], close_price=r["close_price"],
+                candle_open_time=r["candle_open_time"],
+                anchors_json=r["anchors_json"],
+            )
+            for r in self.conn.execute(
+                "SELECT * FROM alt_structure_event WHERE setup_id=? "
+                "ORDER BY candle_open_time, id",
+                (setup_id,),
+            ).fetchall()
+        ]
+
+    def insert_alt_manipulation_episode(self, m: AltManipulationEpisode) -> int:
+        cur = self.conn.execute(
+            """INSERT INTO alt_manipulation_episode
+               (setup_id, started_candle_open_time, min_price,
+                ended_candle_open_time, days_below)
+               VALUES (?,?,?,?,?)""",
+            (m.setup_id, m.started_candle_open_time, m.min_price,
+             m.ended_candle_open_time, m.days_below),
+        )
+        self._commit()
+        return int(cur.lastrowid)
+
+    def find_alt_manipulation_episode(
+        self, setup_id: int, started_candle_open_time: int
+    ) -> Optional[AltManipulationEpisode]:
+        """Дедупликация при replay: эпизод определяется свечой начала (§9)."""
+        r = self.conn.execute(
+            "SELECT * FROM alt_manipulation_episode "
+            "WHERE setup_id=? AND started_candle_open_time=?",
+            (setup_id, started_candle_open_time),
+        ).fetchone()
+        if not r:
+            return None
+        return AltManipulationEpisode(
+            id=r["id"], setup_id=r["setup_id"],
+            started_candle_open_time=r["started_candle_open_time"],
+            min_price=r["min_price"],
+            ended_candle_open_time=r["ended_candle_open_time"],
+            days_below=r["days_below"],
+        )
+
+    def update_alt_manipulation_episode(self, episode_id: int, **fields: Any) -> None:
+        """Ход эпизода: min_price/days_below/ended_candle_open_time (§9)."""
+        if not fields:
+            return
+        cols = ", ".join(f"{k}=?" for k in fields)
+        self.conn.execute(
+            f"UPDATE alt_manipulation_episode SET {cols} WHERE id=?",
+            (*fields.values(), episode_id),
+        )
+        self._commit()
+
+    def list_alt_manipulation_episodes(self, setup_id: int) -> list[AltManipulationEpisode]:
+        return [
+            AltManipulationEpisode(
+                id=r["id"], setup_id=r["setup_id"],
+                started_candle_open_time=r["started_candle_open_time"],
+                min_price=r["min_price"],
+                ended_candle_open_time=r["ended_candle_open_time"],
+                days_below=r["days_below"],
+            )
+            for r in self.conn.execute(
+                "SELECT * FROM alt_manipulation_episode WHERE setup_id=? "
+                "ORDER BY started_candle_open_time, id",
+                (setup_id,),
+            ).fetchall()
+        ]
+
+    def insert_alt_entry_opportunity(self, o: AltEntryOpportunity) -> AltEntryOpportunity:
+        cur = self.conn.execute(
+            """INSERT INTO alt_entry_opportunity
+               (setup_id, kind, event_time_ms, price, zone_json, bases_json)
+               VALUES (?,?,?,?,?,?)""",
+            (o.setup_id, o.kind, o.event_time_ms, o.price, o.zone_json,
+             o.bases_json),
+        )
+        self._commit()
+        o.id = int(cur.lastrowid)
+        return o
+
+    def find_alt_entry_opportunity(
+        self, setup_id: int, kind: str
+    ) -> Optional[AltEntryOpportunity]:
+        """Антиспам v1 (§11): один первый вход A и один первый B на сетап."""
+        r = self.conn.execute(
+            "SELECT * FROM alt_entry_opportunity WHERE setup_id=? AND kind=? "
+            "ORDER BY id LIMIT 1",
+            (setup_id, kind),
+        ).fetchone()
+        if not r:
+            return None
+        return AltEntryOpportunity(
+            id=r["id"], setup_id=r["setup_id"], kind=r["kind"],
+            event_time_ms=r["event_time_ms"], price=r["price"],
+            zone_json=r["zone_json"], bases_json=r["bases_json"],
+        )
+
+    def list_alt_entry_opportunities(self, setup_id: int) -> list[AltEntryOpportunity]:
+        return [
+            AltEntryOpportunity(
+                id=r["id"], setup_id=r["setup_id"], kind=r["kind"],
+                event_time_ms=r["event_time_ms"], price=r["price"],
+                zone_json=r["zone_json"], bases_json=r["bases_json"],
+            )
+            for r in self.conn.execute(
+                "SELECT * FROM alt_entry_opportunity WHERE setup_id=? "
+                "ORDER BY event_time_ms, id",
+                (setup_id,),
+            ).fetchall()
+        ]
+
+    # ---------- ALT: прогоны джобы ----------
+
+    def insert_alt_run(self, run: AltRun) -> AltRun:
+        cur = self.conn.execute(
+            """INSERT INTO alt_run
+               (started_ms, finished_ms, as_of_ms, status, processed, errors,
+                universe_snapshot_id, summary_json)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (run.started_ms, run.finished_ms, run.as_of_ms, run.status,
+             run.processed, run.errors, run.universe_snapshot_id,
+             run.summary_json),
+        )
+        self._commit()
+        run.id = int(cur.lastrowid)
+        return run
+
+    def update_alt_run(self, run_id: int, **fields: Any) -> None:
+        if not fields:
+            return
+        cols = ", ".join(f"{k}=?" for k in fields)
+        self.conn.execute(
+            f"UPDATE alt_run SET {cols} WHERE id=?", (*fields.values(), run_id)
+        )
+        self._commit()
+
+    def get_alt_run(self, run_id: int) -> Optional[AltRun]:
+        r = self.conn.execute(
+            "SELECT * FROM alt_run WHERE id=?", (run_id,)
+        ).fetchone()
+        return self._to_alt_run(r) if r else None
+
+    def get_running_alt_run(self) -> Optional[AltRun]:
+        """Активный прогон джобы — блокировка повторного запуска (§4 ТЗ)."""
+        r = self.conn.execute(
+            "SELECT * FROM alt_run WHERE status='running' "
+            "ORDER BY started_ms DESC, id DESC LIMIT 1"
+        ).fetchone()
+        return self._to_alt_run(r) if r else None
+
+    def get_latest_alt_run(
+        self, statuses: Optional[Sequence[str]] = None
+    ) -> Optional[AltRun]:
+        """Последний прогон (опционально — фильтр статусов) для расписания
+        и отображения «последний run» на экране (§16 ТЗ)."""
+        q = "SELECT * FROM alt_run"
+        args: list[Any] = []
+        if statuses:
+            q += f" WHERE status IN ({','.join('?' for _ in statuses)})"
+            args.extend(statuses)
+        q += " ORDER BY started_ms DESC, id DESC LIMIT 1"
+        r = self.conn.execute(q, args).fetchone()
+        return self._to_alt_run(r) if r else None
+
+    @staticmethod
+    def _to_alt_run(r: sqlite3.Row) -> AltRun:
+        return AltRun(
+            id=r["id"], started_ms=r["started_ms"], finished_ms=r["finished_ms"],
+            as_of_ms=r["as_of_ms"], status=r["status"], processed=r["processed"],
+            errors=r["errors"], universe_snapshot_id=r["universe_snapshot_id"],
+            summary_json=r["summary_json"],
+        )
+
+    # ---------- ALT: outbox событий ----------
+
+    def insert_alt_event(self, e: AltEvent) -> tuple[AltEvent, bool]:
+        """Идемпотентно по UNIQUE(setup_id, event_type, source_event_id).
+        Возвращает (event, created): created=False — дубликат, повтор не создан."""
+        cur = self.conn.execute(
+            """INSERT OR IGNORE INTO alt_event
+               (setup_id, event_type, source_event_id, payload_json,
+                event_time_ms, detected_at_ms, run_id, delivered, created_ms)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (e.setup_id, e.event_type, e.source_event_id, e.payload_json,
+             e.event_time_ms, e.detected_at_ms, e.run_id, int(e.delivered),
+             e.created_ms),
+        )
+        self._commit()
+        if cur.rowcount == 1:
+            e.id = int(cur.lastrowid)
+            return e, True
+        r = self.conn.execute(
+            """SELECT * FROM alt_event
+               WHERE setup_id=? AND event_type=? AND source_event_id=?""",
+            (e.setup_id, e.event_type, e.source_event_id),
+        ).fetchone()
+        if r is None:  # pragma: no cover
+            raise RuntimeError("alt_event: вставка проигнорирована, строка не найдена")
+        return self._to_alt_event(r), False
+
+    def pending_alt_events(self, limit: int = 200) -> list[AltEvent]:
+        """Недоставленные события — ретрай доставки (аналог pending_ltf_events)."""
+        return [
+            self._to_alt_event(r)
+            for r in self.conn.execute(
+                "SELECT * FROM alt_event WHERE delivered=0 "
+                "ORDER BY event_time_ms, id LIMIT ?",
+                (limit,),
+            ).fetchall()
+        ]
+
+    def mark_alt_event_delivered(self, event_id: int) -> None:
+        self.conn.execute(
+            "UPDATE alt_event SET delivered=1 WHERE id=?", (event_id,)
+        )
+        self._commit()
+
+    def get_alt_event(self, event_id: int) -> Optional[AltEvent]:
+        r = self.conn.execute(
+            "SELECT * FROM alt_event WHERE id=?", (event_id,)
+        ).fetchone()
+        return self._to_alt_event(r) if r else None
+
+    def list_alt_events(self, setup_id: int) -> list[AltEvent]:
+        """Все события сетапа (read model «Почему найдено», §16 ТЗ)."""
+        return [
+            self._to_alt_event(r)
+            for r in self.conn.execute(
+                "SELECT * FROM alt_event WHERE setup_id=? "
+                "ORDER BY event_time_ms, id",
+                (setup_id,),
+            ).fetchall()
+        ]
+
+    @staticmethod
+    def _to_alt_event(r: sqlite3.Row) -> AltEvent:
+        return AltEvent(
+            id=r["id"], setup_id=r["setup_id"], event_type=r["event_type"],
+            source_event_id=r["source_event_id"], payload_json=r["payload_json"],
+            event_time_ms=r["event_time_ms"], detected_at_ms=r["detected_at_ms"],
+            run_id=r["run_id"], delivered=bool(r["delivered"]),
+            created_ms=r["created_ms"],
+        )

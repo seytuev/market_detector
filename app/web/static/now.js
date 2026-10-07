@@ -1,0 +1,396 @@
+/* Экран «Сейчас» (LevelFrame, этап 3 ребрендинга; макет §6.A плана).
+   Обзор активов поверх read model /api/ltf/instruments + /current и очереди
+   /api/candidates. Подключается после app.js: интеграция — через
+   window.LFNow.show() из showView(), мост window.LFDesk.openInstrument() и
+   подписку registerWsHandler() (оба объявлены в app.js). */
+
+'use strict';
+
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const api = (path) => HTF.api(path);
+  const esc = HTF.esc;
+  const fmtPrice = HTF.fmtPrice;
+
+  const INSTRUMENT_KEY = 'htf:instrument';
+  // счётчик «На проверку» — та же выборка, что у очереди «Проверка» (app.js)
+  const HTF_TFS = new Set(['D1', 'W1']);
+
+  // Зеркалит серверный ATTENTION_ORDER (app/services/overview.py, L06)
+  const ATTENTION_ORDER = ['review', 'price_in_zone', 'eligible', 'awaiting', 'data_problem', 'none'];
+  const DATA_STATE_REASON_RU = {
+    no_quote: 'нет котировки',
+    no_h1_candles: 'нет свечей H1',
+    quote_stale: 'котировка устарела',
+    h1_stale: 'свечи H1 устарели',
+    source_stale: 'источник недоступен',
+    replay_in_progress: 'идёт догрузка и пересчёт',
+    processing_lag: 'расчёт отстаёт',
+    history_gap: 'разрыв истории',
+  };
+  // Флага «наблюдение включено» в /api/ltf/instruments нет (список и так
+  // содержит только наблюдаемые активы), поэтому «Наблюдаю» — активы под
+  // наблюдением без требуемого действия, «Нужно внимание» — с действием или
+  // проблемой данных
+  const FILTERS = {
+    all: () => true,
+    attention: (r) => ['review', 'price_in_zone', 'data_problem'].includes(r.attention),
+    watch: (r) => ['awaiting', 'eligible', 'price_in_zone'].includes(r.attention),
+  };
+
+  const st = {
+    rows: [],            // строки /api/ltf/instruments
+    candidates: 0,       // HTF-кандидаты на проверку
+    currents: new Map(), // instrument_id -> снимок /current
+    prices: new Map(),   // instrument_id -> {price, at} из WS (новее снимка)
+    filter: 'all',
+    selectedId: null,
+    reqSeq: 0,           // поздний ответ старого запроса экран не перезаписывает
+    refreshTimer: null,
+    ageTimer: null,
+  };
+
+  function isActive() {
+    const v = $('view-now');
+    return v && v.classList.contains('active');
+  }
+
+  function rank(r) {
+    const i = ATTENTION_ORDER.indexOf(r.attention || 'none');
+    return i === -1 ? ATTENTION_ORDER.length : i;
+  }
+
+  function ageText(ms) {
+    if (!ms) return '—';
+    const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+    if (s < 60) return `${s} с назад`;
+    const m = Math.round(s / 60);
+    if (m < 60) return `${m} мин назад`;
+    const h = Math.round(m / 60);
+    if (h < 24) return `${h} ч назад`;
+    return `${Math.round(h / 24)} дн назад`;
+  }
+
+  function priceOf(iid) {
+    const ws = st.prices.get(iid);
+    if (ws && ws.price) return ws;
+    const cur = st.currents.get(iid);
+    if (cur && cur.price != null) return { price: cur.price, at: cur.quote_at };
+    return null;
+  }
+
+  function baseQuote(symbol) {
+    return symbol.endsWith('USDT')
+      ? [symbol.slice(0, -4), 'USDT']
+      : [symbol, ''];
+  }
+
+  // ------------------------------------------------------------------ render
+
+  function renderSubline() {
+    const now = new Date();
+    const date = now.toLocaleDateString('ru-RU',
+      { day: 'numeric', month: 'long', timeZone: 'Europe/Moscow' });
+    const time = now.toLocaleTimeString('ru-RU',
+      { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Moscow' });
+    $('now-subline').textContent = `${date} · ${time} МСК · ваш список наблюдения`;
+  }
+
+  function renderStats() {
+    const inZone = st.rows.filter((r) => r.attention === 'price_in_zone').length;
+    const eligible = st.rows.filter((r) => r.attention === 'eligible').length;
+    $('now-stat-review').textContent = st.candidates;
+    $('now-stat-review-note').textContent =
+      st.candidates > 0 ? 'Границы старшей зоны' : 'Очередь пуста';
+    $('now-stat-zone').textContent = inZone;
+    $('now-stat-eligible').textContent = eligible;
+    $('now-assets-count').textContent = st.rows.length;
+  }
+
+  function rowStateHtml(r) {
+    const ds = r.data_state || {};
+    if (ds.state && ds.state !== 'ok') {
+      return `<span class="state-dot dot-warning"></span>Данные задерживаются` +
+        `<div class="state-sub">${esc(DATA_STATE_REASON_RU[ds.reason] || ds.reason || '—')}</div>`;
+    }
+    const dot =
+      r.attention === 'review' || r.attention === 'price_in_zone' ? 'dot-brand'
+      : r.attention === 'eligible' ? 'dot-positive'
+      : r.attention === 'data_problem' ? 'dot-warning'
+      : 'dot-muted';
+    const main = (r.attention_reason && r.attention_reason !== '—')
+      ? r.attention_reason
+      : (r.stage || '—');
+    const sub = (r.stage && r.stage !== main) ? r.stage : '';
+    return `<span class="state-dot ${dot}"></span>${esc(main)}` +
+      (sub ? `<div class="state-sub">${esc(sub)}</div>` : '');
+  }
+
+  function rowHtml(r) {
+    const ins = r.instrument;
+    const [base, quote] = baseQuote(ins.symbol || '');
+    const p = priceOf(ins.id);
+    return `<tr data-iid="${ins.id}" tabindex="0"` +
+      `${ins.id === st.selectedId ? ' class="selected"' : ''}>` +
+      `<td data-label="Актив / площадка"><span class="asset-sym">${esc(base)}${quote ? ' / ' + esc(quote) : ''}</span>` +
+      `<div class="asset-sub">${esc(ins.venue)} · ${esc(ins.market_type)}</div></td>` +
+      `<td data-label="Состояние">${rowStateHtml(r)}</td>` +
+      `<td data-label="Цена, USDT" class="num">` +
+      `<span class="price-val">${p ? esc(fmtPrice(p.price)) : '—'}</span>` +
+      `<div class="price-age">${p ? esc(ageText(p.at)) : ''}</div></td></tr>`;
+  }
+
+  function visibleRows() {
+    const fn = FILTERS[st.filter] || FILTERS.all;
+    return st.rows.filter(fn).sort((a, b) => rank(a) - rank(b));
+  }
+
+  function renderTable() {
+    const rows = visibleRows();
+    $('now-tbody').innerHTML = rows.map(rowHtml).join('');
+    $('now-empty').classList.toggle('hidden', rows.length > 0);
+  }
+
+  // ------------------------------------------------------------- карточка
+
+  function headline(v, r) {
+    const ds = v.data_state || {};
+    if (ds.state && ds.state !== 'ok') return 'Данные задерживаются';
+    if (r && r.attention === 'review') return 'Нужна проверка';
+    const sc = v.current_scenario;
+    if (sc) return `Контекст ${sc.direction === 'bear' ? 'снижения' : 'роста'} подтверждён`;
+    if (v.scenario_waiting) return 'Ждём нового сценария';
+    if (v.contexts && v.contexts.length) return 'Контекст активен — ждём слома H1';
+    return v.stage || 'Активного контекста нет';
+  }
+
+  function leadText(v, r, tf) {
+    const ds = v.data_state || {};
+    if (ds.state && ds.state !== 'ok') {
+      return (DATA_STATE_REASON_RU[ds.reason] || 'Источник данных недоступен') +
+        '. Показаны последние известные значения.';
+    }
+    const sc = v.current_scenario;
+    if (sc && sc.break_level != null) {
+      const side = sc.direction === 'bear' ? 'ниже' : 'выше';
+      return `H1 закрылся ${side} ${fmtPrice(sc.break_level)}. Старший контекст ${tf} остаётся активным.`;
+    }
+    if (r && r.attention_reason && r.attention_reason !== '—') return r.attention_reason + '.';
+    return v.stage ? v.stage + '.' : '';
+  }
+
+  function waitText(v) {
+    const sc = v.current_scenario;
+    if (!sc) {
+      if (v.scenario_waiting) {
+        return 'Ждём подтверждённого слома структуры H1 — сценарий откроется после BOS/SMS.';
+      }
+      return 'Активного сценария нет';
+    }
+    if (!v.range) return 'Ждём подтверждения опор диапазона.';
+    const n = (v.counts && v.counts.eligible) || 0;
+    if (n > 0) {
+      if (v.stage === 'Цена в Entry Zone') {
+        return 'Цена уже в подходящей зоне — сценарий в точке входа.';
+      }
+      const e0 = (v.eligible_entries || [])[0];
+      const rangeTxt = e0 ? ` к ${fmtPrice(e0.lower)}–${fmtPrice(e0.upper)}` : '';
+      return `Ждём возврат цены${rangeTxt}.`;
+    }
+    return 'Подходящих зон сейчас нет — сценарий активен.';
+  }
+
+  function cancelText(v) {
+    // Условие отмены показываем только из данных снимка (§7: UI не придумывает
+    // условие). У живого сценария reverse_break — null, тогда строку не выводим
+    const sc = v.current_scenario;
+    if (sc && sc.reverse_break && sc.reverse_break.price != null) {
+      const side = sc.direction === 'bear' ? 'выше' : 'ниже';
+      return `Закрытие H1 ${side} ${fmtPrice(sc.reverse_break.price)}`;
+    }
+    return null;
+  }
+
+  function dirBadge(d) {
+    if (d === 'bull') return '<span class="dir-badge bull">↑ Рост</span>';
+    if (d === 'bear') return '<span class="dir-badge bear">↓ Снижение</span>';
+    if (d === 'mixed') return '<span class="dir-badge">▲▼ Разные контексты</span>';
+    return '';
+  }
+
+  function renderCard() {
+    const el = $('now-card');
+    const r = st.rows.find((row) => row.instrument.id === st.selectedId);
+    if (!r) {
+      el.innerHTML = '<p class="now-empty">Выберите актив в таблице.</p>';
+      return;
+    }
+    const ins = r.instrument;
+    const v = st.currents.get(ins.id);
+    const tf = (r.htf_context && r.htf_context.timeframe) || '—';
+    if (!v) {
+      el.innerHTML = `<div class="now-card-head"><span>${esc(ins.symbol)} · ${esc(tf)}</span></div>` +
+        '<p class="now-empty">Нет данных снимка.</p>';
+      return;
+    }
+    const cancel = cancelText(v);
+    const p = priceOf(ins.id);
+    el.innerHTML = `
+      <div class="now-card-head">
+        <span>${esc(ins.symbol)} · ${esc(tf)}</span>
+        ${dirBadge(v.direction)}
+      </div>
+      <h3>${esc(headline(v, r))}</h3>
+      <p class="now-card-lead">${esc(leadText(v, r, tf))}</p>
+      <dl class="now-qa">
+        <dt class="qa-q">Что происходит</dt>
+        <dd class="qa-a">${esc(v.stage || r.stage || '—')}</dd>
+        <dt class="qa-q">Чего ждём</dt>
+        <dd class="qa-a">${esc(waitText(v))}</dd>
+        ${cancel ? `<dt class="qa-q">Условие отмены</dt><dd class="qa-a">${esc(cancel)}</dd>` : ''}
+      </dl>
+      <button type="button" class="btn primary now-open-desk" data-iid="${ins.id}">Открыть рабочее место</button>
+      <div class="now-card-foot">Котировка · <span class="price-age">${esc(p ? ageText(p.at) : '—')}</span></div>`;
+  }
+
+  function render() {
+    if (!isActive()) return;
+    renderSubline();
+    renderStats();
+    renderTable();
+    renderCard();
+  }
+
+  // Точечное обновление возраста котировок без перерисовки (фокус/скролл
+  // таблицы не сбрасываются)
+  function refreshAges() {
+    document.querySelectorAll('#now-tbody tr[data-iid]').forEach((tr) => {
+      const p = priceOf(Number(tr.dataset.iid));
+      const age = tr.querySelector('.price-age');
+      const val = tr.querySelector('.price-val');
+      if (age) age.textContent = p ? ageText(p.at) : '';
+      if (val && p) val.textContent = fmtPrice(p.price);
+    });
+    const foot = $('now-card') && $('now-card').querySelector('.now-card-foot .price-age');
+    if (foot && st.selectedId) {
+      const p = priceOf(st.selectedId);
+      foot.textContent = p ? ageText(p.at) : '—';
+    }
+    renderSubline();
+  }
+
+  // ------------------------------------------------------------------- data
+
+  function pickSelected() {
+    if (!st.rows.length) { st.selectedId = null; return; }
+    if (st.selectedId && st.rows.some((r) => r.instrument.id === st.selectedId)) return;
+    const saved = Number(localStorage.getItem(INSTRUMENT_KEY));
+    if (saved && st.rows.some((r) => r.instrument.id === saved)) {
+      st.selectedId = saved;
+      return;
+    }
+    const rows = visibleRows();
+    st.selectedId = rows.length ? rows[0].instrument.id : st.rows[0].instrument.id;
+  }
+
+  async function refresh() {
+    if (!isActive()) return;
+    const seq = ++st.reqSeq;
+    try {
+      const [ov, cands] = await Promise.all([
+        api('/api/ltf/instruments'),
+        api('/api/candidates'),
+      ]);
+      if (seq !== st.reqSeq) return;
+      st.rows = (ov && ov.instruments) || [];
+      st.candidates = ((cands || []).filter((z) => HTF_TFS.has(z.timeframe))).length;
+      // снимки /current — цена, возраст котировки и данные карточки;
+      // список наблюдения мал, запрашиваем для всех строк параллельно
+      const currents = await Promise.all(st.rows.map((r) =>
+        api(`/api/ltf/instruments/${r.instrument.id}/current`).catch(() => null)));
+      if (seq !== st.reqSeq) return;
+      st.currents = new Map();
+      st.rows.forEach((r, i) => {
+        if (currents[i]) st.currents.set(r.instrument.id, currents[i]);
+      });
+      pickSelected();
+      render();
+    } catch (e) {
+      console.warn('now refresh:', e);
+    }
+  }
+
+  function scheduleRefresh() {
+    if (st.refreshTimer) return;
+    st.refreshTimer = setTimeout(() => {
+      st.refreshTimer = null;
+      refresh();
+    }, 800);
+  }
+
+  function onWs(data) {
+    if (!isActive()) return;
+    if (data.type === 'price' && data.instrument_id != null && data.price) {
+      st.prices.set(data.instrument_id, { price: data.price, at: data.time || Date.now() });
+      const cur = st.currents.get(data.instrument_id);
+      if (cur) { cur.price = data.price; cur.quote_at = data.time || Date.now(); }
+      refreshAges();
+    } else if (data.type === 'event' || data.type === 'zone' || data.type === 'ltf') {
+      scheduleRefresh();
+    }
+  }
+
+  function show() {
+    renderSubline();
+    refresh();
+    if (!st.ageTimer) {
+      st.ageTimer = setInterval(() => {
+        if (!isActive()) {
+          clearInterval(st.ageTimer);
+          st.ageTimer = null;
+          return;
+        }
+        refreshAges();
+      }, 15000);
+    }
+  }
+
+  // ------------------------------------------------------------------ events
+
+  document.querySelectorAll('.now-filter').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.now-filter').forEach((b) => b.classList.toggle('active', b === btn));
+      st.filter = btn.dataset.filter || 'all';
+      renderTable();
+    });
+  });
+
+  function selectRow(tr) {
+    if (!tr) return;
+    st.selectedId = Number(tr.dataset.iid);
+    document.querySelectorAll('#now-tbody tr').forEach((el) =>
+      el.classList.toggle('selected', el === tr));
+    renderCard();
+  }
+
+  $('now-tbody').addEventListener('click', (e) => selectRow(e.target.closest('tr')));
+  $('now-tbody').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const tr = e.target.closest('tr');
+    if (tr) { e.preventDefault(); selectRow(tr); }
+  });
+
+  $('now-card').addEventListener('click', (e) => {
+    const btn = e.target.closest('.now-open-desk');
+    if (btn && window.LFDesk) window.LFDesk.openInstrument(Number(btn.dataset.iid));
+  });
+
+  if (typeof registerWsHandler === 'function') registerWsHandler(onWs);
+
+  // Гонка инициализации: main() в app.js продолжается после await ensureToken
+  // микрозадачей и может вызвать showView('now') до выполнения этого скрипта
+  // (окно тогда активно, но рендер не вызван) — покрываем самостоятельно
+  if (isActive()) show();
+
+  window.LFNow = { show, refresh };
+})();

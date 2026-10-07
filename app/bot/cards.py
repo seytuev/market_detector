@@ -6,6 +6,7 @@ from typing import Any, Optional
 
 from ..db import Database
 from ..models import Zone, ZoneStatus, now_ms
+from ..notify.formatting import fmt_pct_ru
 from ..notify.telegram import _fmt_price, _fmt_time
 from ..services.overview import (
     STAGE_DATA_PENDING,
@@ -31,14 +32,14 @@ from ..texts_ru import (
 from ..web.ltf_api import _expected_levels
 
 # Порядок этапов в /now: самые «горячие» сверху. Этап возврата в ответе
-# динамический («Возврат в Premium/Discount») — распознаётся по префиксу.
+# динамический («Ожидаем возврат в Premium/Discount») — распознаётся по префиксу.
 STAGE_RANK = {
     STAGE_IN_ENTRY: 0,
     STAGE_RETRACEMENT: 1,
     STAGE_WAIT_BOS: 2,
     STAGE_WAIT_RANGE: 3,
 }
-_RETRACEMENT_PREFIX = STAGE_RETRACEMENT.split("/")[0]  # «Возврат в »
+_RETRACEMENT_PREFIX = STAGE_RETRACEMENT.split("/")[0]  # «Ожидаем возврат в »
 _RANK_OTHER = 4
 
 # Лимит текста Telegram — 4096; держим запас (как TELEGRAM_TEXT_LIMIT
@@ -480,7 +481,7 @@ def render_entries(db: Database, settings, instrument_id: int) -> str:
         if e.get("half"):
             row += f"; половина: {e['half']}"
         if e.get("dist_abs") is not None:
-            row += f"; дистанция {_fmt_price(e['dist_abs'])} ({e['dist_pct']:.2f}%)"
+            row += f"; дистанция {_fmt_price(e['dist_abs'])} ({fmt_pct_ru(e['dist_pct'])})"
         lines.append(row)
     return "\n".join(lines)
 
@@ -560,10 +561,12 @@ def render_chart_caption(
     cur: dict[str, Any], now: int, tf: str, days: int
 ) -> str:
     """Подпись к графику из УЖЕ взятого снимка instrument_current (один
-    снимок на пару «картинка + подпись»): символ·биржа, цена, этап,
-    «BOS подтверждён» vs «ожидаемый BOS», время расчёта = время снимка."""
+    снимок на пару «картинка + подпись»): символ, цена, этап,
+    «BOS подтверждён» vs «ожидаемый BOS», время расчёта = время снимка.
+    ТЗ 07.10.2026 §5.1: без биржи/типа рынка; режим «Текущая ситуация»
+    отличает current_view от графика события (§11.2)."""
     ins = cur["instrument"]
-    head = f"{ins['symbol']} · {ins['venue']} · {ins['market_type']} — {tf}"
+    head = f"{ins['symbol']} · {tf}"
     if tf == "H1":
         head += f", {days} дн."
     lines = [head]
@@ -577,7 +580,8 @@ def render_chart_caption(
         )
     elif cur["selected_context_id"] is not None:
         lines.append("BOS/SMS ещё не подтверждён (ожидаемый — пунктиром)")
-    lines.append(f"Расчёт: {_fmt_time(now)}")
+    lines.append(f"Текущая ситуация: {_fmt_time(now)}")
+    lines.append("LevelFrame · Рынок в контексте.")
     return "\n".join(lines)
 
 

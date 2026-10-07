@@ -167,7 +167,7 @@ async def test_start_sends_greeting_and_menu(db):
     assert "HTF" in text
     assert isinstance(markup, ReplyKeyboardMarkup)
     labels = [b.text for row in markup.keyboard for b in row]
-    assert "Сейчас" in labels and "Открыть приложение" in labels
+    assert "Сейчас" in labels and "Открыть рабочее место" in labels
 
 
 async def test_help_lists_all_commands(db):
@@ -245,9 +245,9 @@ async def test_menu_button_now(db, seeded):
 
 async def test_menu_open_app_sends_url(db):
     app = build_application(_settings(), db)
-    update, replies = _msg_update("Открыть приложение")
+    update, replies = _msg_update("Открыть рабочее место")
     await _text_handler(app)(update, SimpleNamespace(user_data={}))
-    assert replies == [(f"Приложение: {_settings().effective_base_url()}", None)]
+    assert replies == [(f"Рабочее место: {_settings().effective_base_url()}", None)]
 
 
 async def test_pending_note_wins_over_menu_button(db, seeded):

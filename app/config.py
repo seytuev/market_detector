@@ -307,6 +307,56 @@ def validate_detector_config(cfg: DetectorConfig) -> dict[str, str]:
 
 
 @dataclass
+class AltConfig:
+    """Параметры модуля «Altcoins D1 accumulation» (изолирован, таблицы alt_*).
+
+    Пороги торговой логики и классификатора — рабочие значения по умолчанию
+    (проектные, не калиброваны). Всё переопределяется через ENV вида
+    HTF_ALT_<FIELD>.
+    """
+
+    # Торговые пороги
+    drawdown_threshold: float = 0.80     # просадка от хая для входа в поиск
+    forming_min_days: int = 50           # СТРОГО больше → forming с 51 дня
+    mature_min_days: int = 100           # СТРОГО больше → mature со 101 дня
+    retest_window_days: int = 14         # дедлайн ретеста после пробоя
+    target_count: int = 4                # число целей TP1..TP4
+    pivot_left: int = 3                  # структурные pivots 3+3
+    pivot_right: int = 3
+
+    # Классификатор диапазона — ДЕРЖИМ ОТДЕЛЬНО от торговых порогов:
+    # это проектные пороги отбора формы, не параметры входа/выхода
+    classifier_block_days: int = 10      # размер блока для оценки сдвига центра
+    classifier_slope_max: float = 0.50   # макс. наклон (доля ширины за блок)
+    classifier_center_shift_max: float = 0.50  # макс. сдвиг центра (доля ширины)
+    classifier_version: str = "v1"
+    main_time_fraction: float = 0.80     # только диагностика: доля времени в теле
+
+    # Режим отмены — ПРОЕКТНЫЙ ВЫБОР (не согласован как калибровка):
+    # wick_on_closed_d1 — фитиль закрытой D1-свечи за K отменяет сетап;
+    # close_on_closed_d1 — только закрытие за K
+    cancel_mode: str = "wick_on_closed_d1"   # wick_on_closed_d1 | close_on_closed_d1
+
+    # Расписание джобы (время МСК)
+    job_hour_msk: int = 3
+    job_minute_msk: int = 15
+    job_enabled: bool = True
+    poll_interval_seconds: int = 60      # как часто цикл проверяет «пора ли запускать»
+
+    # Вселенная альткоинов (CoinMarketCap)
+    cmc_rank_min: int = 11
+    cmc_rank_max: int = 300
+    cmc_listing_limit: int = 300
+
+    # Источники свечей D1 (§4): предпочтение площадки и валюты котировки
+    # при выборе единственной пары актива (csv, порядок = приоритет)
+    venue_preference: str = "binance,bybit"
+    quote_preference: str = "USDT,USDC"
+    # Блокировка дневного job: "running" старше N часов — interrupted (§4)
+    run_lock_stale_hours: int = 6
+
+
+@dataclass
 class Settings:
     """Настройки процесса. Секреты — только ENV, в браузер не попадают (§11 п.8)."""
 
@@ -331,6 +381,15 @@ class Settings:
     # нужен, когда сервис за прокси или HTF_HOST=0.0.0.0
     public_base_url: str = field(default_factory=lambda: _env("HTF_PUBLIC_BASE_URL", ""))
     detector: DetectorConfig = field(default_factory=DetectorConfig)
+    # Модуль «Altcoins D1 accumulation»: ключи/базовые URL внешних API
+    cmc_api_key: str = field(default_factory=lambda: _env("CMC_API_KEY", ""))
+    bybit_base_url: str = field(
+        default_factory=lambda: _env("BYBIT_BASE_URL", "https://api.bybit.com")
+    )
+    cmc_base_url: str = field(
+        default_factory=lambda: _env("CMC_BASE_URL", "https://pro-api.coinmarketcap.com")
+    )
+    alt_config: AltConfig = field(default_factory=AltConfig)
 
     def effective_base_url(self) -> str:
         """URL для внешних ссылок. Без HTF_PUBLIC_BASE_URL — локальный;
@@ -362,6 +421,27 @@ def load_detector_config() -> DetectorConfig:
             # предупреждение с полем, значением и причиной
             logger.warning(
                 "HTF_DET_%s: значение %r отклонено (%s), используется %r",
+                f.name.upper(), raw, exc, getattr(cfg, f.name),
+            )
+    return cfg
+
+
+def load_alt_config() -> AltConfig:
+    """AltConfig с возможностью переопределения через ENV вида HTF_ALT_<FIELD>."""
+    cfg = AltConfig()
+    for f in fields(cfg):
+        raw = os.environ.get(f"HTF_ALT_{f.name.upper()}")
+        if raw is None:
+            continue
+        try:
+            if isinstance(f.default, bool):
+                setattr(cfg, f.name, parse_bool(raw))
+            else:
+                setattr(cfg, f.name, type(f.default)(raw))
+        except (ValueError, TypeError) as exc:
+            # как A05 у детектора: некорректный ENV не роняет старт
+            logger.warning(
+                "HTF_ALT_%s: значение %r отклонено (%s), используется %r",
                 f.name.upper(), raw, exc, getattr(cfg, f.name),
             )
     return cfg

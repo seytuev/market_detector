@@ -196,11 +196,20 @@ def test_quality_cursor_fresh_state_ok(db: Database, instrument_id: int):
 def test_quality_processing_lag_and_recovery(db: Database,
                                              instrument_id: int):
     """Курсор позади последней закрытой H1 (или отсутствует) →
-    stale/processing_lag; курсор на close_time последней — ok."""
+    stale/processing_lag — но только при открытых наблюдениях: без них
+    process_h1_close не вызывается и курсор не двигается по определению
+    (свежая БД до первого касания HTF-зоны). Курсор на close_time
+    последней — ok."""
     settings = _settings()
     _seed(db, instrument_id)
     last_close = db.last_candle(instrument_id, "H1").close_time
-    # курсор на час позади (единицы те же — close_time)
+    # без открытых наблюдений отсутствие курсора — не отставание
+    db.set_meta(f"ltf:h1:last_close:{instrument_id}", "")
+    q = data_quality(db, settings, instrument_id, NOW)
+    assert q["channels"]["processing"]["status"] == "ok"
+    assert q["state"] == "ok"
+    # открытое наблюдение: курсор на час позади (единицы те же — close_time)
+    _notify_setup(db, instrument_id)
     db.set_meta(f"ltf:h1:last_close:{instrument_id}",
                 str(last_close - H1_MS))
     q = data_quality(db, settings, instrument_id, NOW)

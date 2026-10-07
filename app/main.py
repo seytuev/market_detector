@@ -14,10 +14,14 @@ from pathlib import Path
 import uvicorn
 
 from .adapters.binance import BinanceSpotAdapter
+from .adapters.bybit import BybitSpotAdapter
+from .adapters.coinmarketcap import CoinMarketCapAdapter
 from .adapters.hyperliquid import HyperliquidSpotAdapter
-from .config import load_detector_config, load_settings
+from .alt.runner import AltRunner
+from .config import load_alt_config, load_detector_config, load_settings
 from .db import Database
 from .engine.ltf import LtfEngine
+from .notify.alt_queue import AltDispatcher
 from .notify.ltf_queue import LtfDispatcher
 from .notify.queue import EventDispatcher
 from .notify.telegram import LogSender, TelegramSender, build_application
@@ -89,11 +93,13 @@ async def async_main() -> None:
     # переопределения из data/settings.json (файл приоритетнее), и воркер
     # получит тот же итоговый конфиг, что виден в веб-настройках
     settings.detector = load_detector_config()
+    settings.alt_config = load_alt_config()
     db = Database(settings.db_path)
 
     adapters = {
         "binance": BinanceSpotAdapter(settings.binance_base_url),
         "hyperliquid": HyperliquidSpotAdapter(settings.hyperliquid_base_url),
+        "bybit": BybitSpotAdapter(settings.bybit_base_url),
     }
     if settings.telegram_token:
         sender = TelegramSender(
@@ -115,11 +121,23 @@ async def async_main() -> None:
     app = create_app(db, settings, ltf_engine=ltf_engine)
     # доставка LTF-уведомлений тем же транспортом, что у HTF (§11)
     ltf_dispatcher = LtfDispatcher(db, settings.detector, sender, settings=settings)
+    # «Altcoins D1 accumulation»: без CMC_API_KEY runner конструируется,
+    # но run_daily завершается no_universe (DATA_PENDING, §3 ТЗ)
+    cmc_adapter = CoinMarketCapAdapter(settings.cmc_base_url, settings.cmc_api_key)
+    alt_runner = AltRunner(
+        db, settings, adapters, cmc_adapter,
+        broadcast=app.state.ws_hub.broadcast,
+    )
+    app.state.alt_runner = alt_runner  # маршрут /api/alt/recalc берёт его здесь
+    # доставка alt_event в Telegram тем же транспортом (§18 ТЗ 07.10.2026)
+    alt_dispatcher = AltDispatcher(db, settings, sender)
     worker = Worker(
         db, settings, settings.detector, adapters, dispatcher,
         broadcast=app.state.ws_hub.broadcast,
         ltf_engine=ltf_engine,
         ltf_dispatcher=ltf_dispatcher,
+        alt_runner=alt_runner,
+        alt_dispatcher=alt_dispatcher,
     )
 
     server = uvicorn.Server(

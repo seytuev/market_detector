@@ -240,6 +240,22 @@ def register_bot_handlers(app, settings, db: Database):
         # снимки — рядом с БД, как у EventDispatcher (§11 п.7)
         return str(Path(settings.db_path).parent / "charts" / name)
 
+    def _auto_days(observation_id: int | None, now: int) -> tuple[int, bool]:
+        """Период по умолчанию (ТЗ 07.10.2026 §8): 3 дня; если HTF-касание
+        (activated_at наблюдения) лежит раньше — автоматически 7/14 дней.
+        (days, outside): outside=True — начало движения всё равно вне окна."""
+        if observation_id is None:
+            return 3, False
+        obs = db.get_ltf_observation(observation_id)
+        if obs is None or not obs.activated_at:
+            return 3, False
+        elapsed_days = (now - obs.activated_at) / 86_400_000
+        if elapsed_days <= 3:
+            return 3, False
+        if elapsed_days <= 7:
+            return 7, False
+        return 14, elapsed_days > 14
+
     async def _send_chart(
         message, instrument_id: int, tf: str, days: int, mask: int,
         observation_id: int | None = None,
@@ -271,10 +287,26 @@ def register_bot_handlers(app, settings, db: Database):
             await message.reply_text("Недостаточно данных для графика.")
             return
         caption = render_chart_caption(cur, now, tf, days)
+        if observation_id is not None:
+            # контекст конкретного сообщения (§8): отменённый сценарий не
+            # воскрешается — показываем факт отмены (§11.2)
+            obs = db.get_ltf_observation(observation_id)
+            if obs is not None and obs.state not in _ACTIVE_STATES:
+                caption += (
+                    "\n⚠ Контекст этого сообщения уже неактивен — график "
+                    "показан по состоянию на текущий снимок; актуальный "
+                    "сценарий — кнопкой «Зоны входа»."
+                )
+        _, outside = _auto_days(obs_id, now)
+        if tf == "H1" and outside:
+            caption += "\nНачало движения вне окна — полное движение доступно в приложении."
         with open(path, "rb") as fh:
             await message.reply_photo(
                 photo=fh, caption=caption,
-                reply_markup=chart_result_inline(instrument_id, tf, days, mask),
+                reply_markup=chart_result_inline(
+                    instrument_id, tf, days, mask,
+                    settings=settings, instrument=ins,
+                ),
             )
 
     async def _send_zone_snapshot(message, zone) -> None:
@@ -792,20 +824,29 @@ def register_bot_handlers(app, settings, db: Database):
                 iid = int(parts[2])
                 if len(parts) == 3:
                     await edit("Таймфрейм:", chart_tf_inline(iid))
-                elif len(parts) == 4:
-                    tf = parts[3]
-                    if tf == "H1":
-                        await edit("Период H1:", chart_period_inline(iid, tf))
-                    else:
-                        # старшие ТФ — без шага периода (120/52 свечей)
-                        await edit(
-                            "Слои:", chart_layers_inline(iid, tf, 0, DEFAULT_MASK)
-                        )
                 else:
-                    tf, days = parts[3], int(parts[4])
-                    await edit(
-                        "Слои:", chart_layers_inline(iid, tf, days, DEFAULT_MASK)
+                    # ТЗ 07.10.2026 §8: открытие графика за одно нажатие —
+                    # сразу рендер с периодом/слоями по умолчанию; период и
+                    # слои меняются кнопками ПОСЛЕ выдачи графика
+                    tf = parts[3]
+                    days, _ = (
+                        _auto_days(None, now_ms()) if tf == "H1" else (0, False)
                     )
+                    await _send_chart(query.message, iid, tf, days, DEFAULT_MASK)
+                await query.answer()
+            elif kind == "charto":
+                # «График» из конкретного LTF-сообщения: контекст ЭТОГО
+                # события (observation), а не «первый активный сценарий» (§8)
+                iid, obs_id = int(parts[2]), int(parts[3])
+                obs = db.get_ltf_observation(obs_id)
+                if obs is None or obs.instrument_id != iid:
+                    await query.answer("Контекст недоступен.")
+                    return
+                days, _ = _auto_days(obs_id, now_ms())
+                await _send_chart(
+                    query.message, iid, "H1", days, DEFAULT_MASK,
+                    observation_id=obs_id,
+                )
                 await query.answer()
             elif kind == "chartlay":
                 # из фото-сообщения текст не редактируется — слои новым сообщением
@@ -908,7 +949,7 @@ def register_bot_handlers(app, settings, db: Database):
             )
         elif text == MENU_OPEN_APP:
             await update.message.reply_text(
-                f"Приложение: {settings.effective_base_url()}"
+                f"Рабочее место: {settings.effective_base_url()}"
             )
         elif text == MENU_ALERTS:
             await update.message.reply_text(

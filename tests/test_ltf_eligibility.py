@@ -74,7 +74,8 @@ def _test(entry_zone_id: int, state: str) -> LtfLiquidityTest:
 def test_reason_codes_stable():
     assert ELIGIBILITY_REASONS == (
         "ok", "outside_pd", "tested_too_deep", "type_disabled", "invalid",
-        "swept_level", "level_broken", "origin_unresolved", "range_pending",
+        "swept_level", "level_broken", "fvg_filled", "origin_unresolved",
+        "range_pending",
     )
 
 

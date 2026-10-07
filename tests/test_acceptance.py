@@ -268,8 +268,8 @@ def test_n13_render_text_marks_delayed_event(db, instrument_id):
     text = render_text(MessagePayload(events=[view.event], zones=[view.zone], views=[view]))
     assert "задержкой" in text
     assert "исходное время" in text and "обнаружено" in text
-    # исходное время события, а не подмена текущим (§11)
-    assert "2026-" in text
+    # исходное время события, а не подмена текущим (§11); формат МСК (§6 ТЗ 07.10.2026)
+    assert "МСК" in text and "UTC" not in text
 
 
 # ------------------------------------------------------------------
@@ -279,16 +279,19 @@ def test_n13_render_text_marks_delayed_event(db, instrument_id):
 def test_n14_render_text_message_content(db, instrument_id):
     view = _sample_view(db, instrument_id, delayed=False)
     text = render_text(MessagePayload(events=[view.event], zones=[view.zone], views=[view]))
-    assert "BTC" in text                                  # актив
-    assert "binance spot / BTCUSDT" in text               # источник/рынок, не TradingView
-    assert "TradingView" not in text.split("Источник:")[1].split("\n")[0]
+    assert "BTCUSDT" in text                              # точный символ (§5.1 ТЗ 07.10.2026)
+    # §5.1: строки «Источник» нет; площадка/рынок — только в строке бренда
+    # первой строкой (ребрендинг LevelFrame §8)
+    assert "Источник" not in text
+    assert text.splitlines()[0] == "LevelFrame · BTCUSDT · binance spot"
+    assert "TradingView" not in text
     assert "W1" in text                                   # таймфрейм
     assert "Orderblock" in text and "бычий" in text       # тип и направление
-    assert "65,000.00" in text and "66,000.00" in text    # границы
-    assert "65,500.00" in text                            # середина
-    assert "65,900.00" in text                            # текущая цена
-    assert "первое касание" in text                       # причина
-    assert "UTC" in text                                  # время с часовым поясом
+    assert "65 000,00" in text and "66 000,00" in text    # границы (ru-формат)
+    assert "65 500,00" in text                            # середина
+    assert "65 900,00" in text                            # цена события
+    assert "касание ближайшей границы" in text            # причина
+    assert "МСК" in text and "UTC" not in text            # время МСК (§6)
     assert "активна" in text                              # статус
 
 

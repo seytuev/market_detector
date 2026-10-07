@@ -18,6 +18,7 @@ from ..db import Database
 from ..models import (
     Delivery,
     Event,
+    EventKind,
     Instrument,
     Zone,
     ZoneStatus,
@@ -37,6 +38,27 @@ log = logging.getLogger(__name__)
 # §11 п.7: сколько последних свечей ТФ зоны попадает на снимок для Telegram
 CHART_CANDLES = 75  # ~2,5 месяца D1: ближе к текущим свечам, зона читается
 
+# ТЗ 07.10.2026 §13.6: «входовые» виды событий — для них доставка проверяет
+# актуальность зоны на момент отправки. События-факты об инвалидации
+# (LEVEL_TAKEN, BREAKER_ARCHIVED, FVG_FILLED и сервисные) не входят сюда и
+# доставляются всегда.
+_ENTRY_KINDS = {
+    EventKind.APPROACH,
+    EventKind.TOUCH,
+    EventKind.DEPTH_50,
+    EventKind.DEPTH_90,
+    EventKind.FVG_WEAKENED,
+}
+
+# Статусы, при которых зона не может быть текущей возможностью входа.
+_STALE_STATUSES = {
+    ZoneStatus.TAKEN,
+    ZoneStatus.ARCHIVED,
+    ZoneStatus.REJECTED,
+    ZoneStatus.CONVERTED,
+    ZoneStatus.WORKED,
+}
+
 
 @dataclass
 class EventView:
@@ -54,6 +76,8 @@ class MessagePayload:
     views: list[EventView]
     user: str = "owner"
     image_path: Optional[str] = None  # PNG из chartimg (§11 п.7), если сгенерирован
+    # ТЗ 07.10.2026 §4.1: порог приближения — настройка, показываем её в тексте
+    approach_pct: float = 0.02
     # §10: zone_id -> прочие зоны той же визуальной группы (для пометки
     # в тексте, что зона визуально объединена с соседними)
     group_members: dict[int, list[Zone]] = field(default_factory=dict)
@@ -71,6 +95,18 @@ class Sender(Protocol):
     async def send_ltf(self, text: str, reply_markup=None) -> None:
         """LTF-сигнал с inline-кнопками навигации (ТЗ бота п.10);
         reply_markup=None — часть длинного сообщения без кнопок."""
+        ...
+
+    async def send_ltf_photo(self, image_path: str, caption: str,
+                             reply_markup=None) -> None:
+        """LTF-событие с собственным графиком H1 (ТЗ 07.10.2026 §7):
+        фото с подписью; reply_markup=None — сопроводительное фото без
+        кнопок (кнопки уезжают на текстовой части)."""
+        ...
+
+    async def send_alt(self, text: str) -> None:
+        """Событие модуля «Altcoins D1 accumulation» (ТЗ 07.10.2026 §18):
+        текст со ссылкой на график сетапа, без кнопок."""
         ...
 
 
@@ -123,6 +159,18 @@ class EventDispatcher:
             instrument_id=zone.instrument_id if zone is not None else None,
             zone_id=view.event.zone_id,
         )
+
+    def _entry_stale(self, view: EventView) -> bool:
+        """ТЗ 07.10.2026 §13.6: зона могла стать невалидной между постановкой
+        уведомления и отправкой — просроченный текущий вход не отправляем.
+        Просроченным считается входовое событие по зоне, которая к моменту
+        отправки снята/архивна/невалидна или потеряла допуск к входу."""
+        if view.event.kind not in _ENTRY_KINDS or view.zone is None:
+            return False
+        zone = view.zone
+        if zone.status in _STALE_STATUSES or zone.market_validity != "active":
+            return True
+        return not zone.entry_eligible
 
     def _group_members(self, views: list[EventView]) -> dict[int, list[Zone]]:
         """§10: состав визуальных групп для зон пакета (только пометка в
@@ -205,6 +253,7 @@ class EventDispatcher:
         views: list[EventView] = []
         delivery_ids: list[int] = []
         blocked: list[tuple[EventView, int]] = []
+        stale: list[tuple[EventView, int]] = []
         for event in events:
             view = self._load_view(event)
             if not self._passes_filters(view):
@@ -212,6 +261,9 @@ class EventDispatcher:
             delivery_id = self._record_pending(event)
             if delivery_id is None:
                 continue  # идемпотентность: такая доставка уже есть
+            if self._entry_stale(view):
+                stale.append((view, delivery_id))
+                continue
             if self._bot_blocked(view):
                 blocked.append((view, delivery_id))
                 continue
@@ -219,6 +271,12 @@ class EventDispatcher:
             delivery_ids.append(delivery_id)
 
         delivered_at = now_ms()
+        if stale:
+            # §13.6: просроченный вход не отправляется и не ретраится —
+            # доставка закрывается статусом stale, рыночный факт события
+            # остаётся в журнале event
+            for _, delivery_id in stale:
+                self.db.update_delivery(delivery_id, "stale", delivered_at=delivered_at)
         if blocked:
             # мьют/выключение останавливает ТОЛЬКО доставку: событие
             # помечается доставленным, чтобы после unmute старые события
@@ -229,7 +287,7 @@ class EventDispatcher:
 
         if not views:
             return self._deliveries_by_ids(
-                delivery_ids + [d for _, d in blocked]
+                delivery_ids + [d for _, d in blocked] + [d for _, d in stale]
             )
 
         payload = MessagePayload(
@@ -238,6 +296,7 @@ class EventDispatcher:
             views=views,
             user=self.user,
             group_members=self._group_members(views),
+            approach_pct=self.cfg.approach_pct,
         )
         await self._attach_image(payload)
         try:
@@ -247,14 +306,14 @@ class EventDispatcher:
             for delivery_id in delivery_ids:
                 self.db.update_delivery(delivery_id, "failed", error=error)
             return self._deliveries_by_ids(
-                delivery_ids + [d for _, d in blocked]
+                delivery_ids + [d for _, d in blocked] + [d for _, d in stale]
             )
 
         for view, delivery_id in zip(views, delivery_ids):
             self.db.update_delivery(delivery_id, "sent", delivered_at=delivered_at)
             mark_delivered(self.db, view.event, delivered_at, self.user)
         return self._deliveries_by_ids(
-            delivery_ids + [d for _, d in blocked]
+            delivery_ids + [d for _, d in blocked] + [d for _, d in stale]
         )
 
     async def notify_service(self, text: str) -> None:
@@ -318,12 +377,21 @@ class EventDispatcher:
                 done.append(delivery)
                 continue
             views = [self._load_view(e) for e in events]
+            # §13.6: входовое событие могло просрочиться, пока ждало ретрая
+            stale_views = [v for v in views if self._entry_stale(v)]
+            if stale_views:
+                self.db.update_delivery(
+                    delivery.id, "stale", delivered_at=now_ms()
+                )
+                done.append(delivery)
+                continue
             payload = MessagePayload(
                 events=events,
                 zones=[v.zone for v in views if v.zone is not None],
                 views=views,
                 user=self.user,
                 group_members=self._group_members(views),
+                approach_pct=self.cfg.approach_pct,
             )
             await self._attach_image(payload)
             try:

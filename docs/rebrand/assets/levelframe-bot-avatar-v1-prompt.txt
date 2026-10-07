@@ -1,0 +1,11 @@
+LevelFrame Telegram bot avatar v1
+Generator: built-in image_gen.imagegen (not CLI)
+transparent_background: false
+Reference: levelframe-logo-v1.png
+Output: levelframe-bot-avatar-v1.png
+
+Use case: logo-brand, adaptation of existing logo.
+Input image: reference and identity source. Preserve the established symbol from the LEFT of the supplied LevelFrame logo: an almost-square open frame with a vertical left edge, top and bottom bars that turn slightly inward at the right, a long horizontal upper level and a short horizontal lower level inside. Do not include the wordmark.
+Primary request: create a polished square Telegram bot avatar for LevelFrame using this same recognizable geometric symbol, enlarged and optically centered on a solid dark navy #0C111B full-bleed background. Keep the symbol cobalt blue #4268DD, use clean solid flat color with crisp smooth edges and consistent thick strokes. No gradient, no shadow, no glow, no bevel, no texture. Simplify away any raster artifacts from the reference while preserving its silhouette, ratios and rounded ends.
+Composition: square 1:1 image, single centered symbol only. Symbol width and height approximately 56 percent of the canvas. Keep all important geometry comfortably within a central circular safe area so the avatar remains complete under Telegram's circular crop. Background covers the entire square, opaque, no outer circular border or badge outline. High contrast, calm professional market analysis branding, clear even as a tiny avatar.
+Constraints: exact original visual identity, no letters or words, no tagline, no bots or faces, no charts or candlesticks, no currency symbols, no additional elements, no watermark. Return one final avatar, not a presentation or a sheet of options.

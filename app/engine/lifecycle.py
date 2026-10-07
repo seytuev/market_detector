@@ -461,10 +461,27 @@ def track_zone(
         return created
 
     # приближение на 2% с правильной стороны (§9)
+    # ТЗ 07.10.2026 §4.1/§4.2: APPROACH — только до первого достижения зоны.
+    # Если в этом цикле уже было касание/глубина/проход, повторное приближение
+    # после выхода не порождает событие (иначе пара «коснулась» + «приближается»
+    # противоречит факту достижения зоны).
+    zone_reached = bool(
+        existing
+        & {
+            EventKind.TOUCH,
+            EventKind.DEPTH_50,
+            EventKind.DEPTH_90,
+            EventKind.FVG_WEAKENED,
+            EventKind.FVG_FILLED,
+            EventKind.JUMP_THROUGH,
+            EventKind.ALREADY_IN_ZONE,
+        }
+    )
     dist = geom.approach_distance(zone, lo, hi)
     if (
         dist is not None
         and 0 < dist <= cfg.approach_pct
+        and not zone_reached
         and not geom.was_near(zone, prev_price, cfg.approach_pct)
     ):
         price = lo if zone.direction == Direction.BULL else hi

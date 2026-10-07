@@ -1,0 +1,11 @@
+LevelFrame logo v1
+Generator: built-in image_gen.imagegen (not CLI)
+transparent_background: true
+Output: levelframe-logo-v1.png
+
+Use case: logo-brand.
+Asset type: final standalone horizontal logo for LevelFrame, a professional market analysis workspace.
+Primary request: create one exceptionally clean, polished flat geometric logo on a genuinely transparent background. Build on the established concept of an open analysis frame and horizontal price levels. Place a compact symbol on the left and the wordmark LevelFrame on the right. Symbol: a square frame open on its right edge, with two distinct horizontal level lines inside, one long upper line that extends slightly into the opening and one shorter lower line. Precise consistent stroke thickness, restrained subtly rounded corners, balanced negative space; legible as a small application icon. The symbol must look intentional, modern, architectural, and calm.
+Typography: carefully kerned premium geometric sans-serif, medium-semibold weight, exact text "LevelFrame" with capital L and capital F, remaining letters lowercase. Single word, no spacing between Level and Frame. Baseline and optical alignment balanced with the symbol. Use a single solid cobalt blue #4268DD for BOTH the symbol and the lettering so the whole logo is usable on light and dark surfaces.
+Composition: one horizontal lockup only, generous but not excessive transparent margins, wide landscape composition about 3:1, logo fills most of the canvas. Crisp vector-like edges, high resolution.
+Constraints: actual alpha transparency, no background plate, no checkerboard drawn into pixels, no tagline, no small explanatory text, no mockup, no brand board, no duplicate variants, no watermark, no shadows, no gradients, no glow, no metallic or 3D effects, no candlesticks, no arrows, no coins, no decorative chart. Spell LevelFrame exactly.

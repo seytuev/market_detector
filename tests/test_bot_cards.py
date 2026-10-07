@@ -190,7 +190,9 @@ def seeded(db):
 # ------------------------------ резолв символа ------------------------------
 
 async def test_asset_exact_match(db, seeded):
-    app = build_application(_settings(), db)
+    s = _settings()
+    s.public_base_url = "https://htf.example.com"  # §12: URL-кнопка — только при публичном адресе
+    app = build_application(s, db)
     update, replies = _msg_update("/asset ETH")
     await _command(app, "asset")(update, _context(["ETH"]))
     assert len(replies) == 1
@@ -202,6 +204,17 @@ async def test_asset_exact_match(db, seeded):
     assert f"nav:htf:{seeded['eth']}:all" in callbacks
     urls = [b.url for row in markup.inline_keyboard for b in row if b.url]
     assert urls and "ltf.html" in urls[0] and "token=" in urls[0]
+    assert "htf.example.com" in urls[0]
+
+
+async def test_asset_localhost_hides_app_url(db, seeded):
+    """§12 ТЗ 07.10.2026: без публичного адреса localhost в кнопках не шлём."""
+    app = build_application(_settings(), db)  # base → http://127.0.0.1:8000
+    update, replies = _msg_update("/asset ETH")
+    await _command(app, "asset")(update, _context(["ETH"]))
+    _, markup = replies[0]
+    urls = [b.url for row in markup.inline_keyboard for b in row if b.url]
+    assert not any("127.0.0.1" in u or "localhost" in u for u in urls)
 
 
 async def test_asset_ambiguous_shows_picker(db, seeded):
@@ -249,8 +262,8 @@ def test_render_asset_has_both_direction_contexts(db, seeded):
 def test_render_htf_order_inside_above_below(db, seeded):
     settings = _settings()
     text = render_htf(db, settings, seeded["eth"])
-    i_inside = text.index("95–105.00")
-    i_above = text.index("110.00–115.00")
+    i_inside = text.index("95–105,00")
+    i_above = text.index("110,00–115,00")
     i_below = text.index("50–60,")
     assert i_inside < i_above < i_below
 
@@ -265,8 +278,8 @@ def test_render_htf_filter_d1_excludes_w1(db, seeded):
 def test_render_htf_filter_inside_only(db, seeded):
     settings = _settings()
     text = render_htf(db, settings, seeded["eth"], "inside")
-    assert "95–105.00" in text
-    assert "110.00–115.00" not in text
+    assert "95–105,00" in text
+    assert "110,00–115,00" not in text
     assert "50–60," not in text
 
 
@@ -283,7 +296,7 @@ def test_render_ltf_confirmed_bos(db, seeded):
     """Выбран контекст со сценарием: подпись «подтверждён», без «ожидаемый»."""
     settings = _settings()
     text = render_ltf(db, settings, seeded["eth"])
-    assert "BOS подтверждён: уровень 110.00" in text
+    assert "BOS подтверждён: уровень 110,00" in text
     assert "Ожидаемый" not in text
     # диапазона нет — причина отсутствия зон входа
     assert "Подходящих зон входа нет: диапазон Premium/Discount ещё не готов" in text
@@ -296,7 +309,7 @@ def test_render_ltf_expected_bos(db, seeded):
     db.set_meta(f"ltf:selected_context:{seeded['eth']}",
                 str(seeded["obs_bull"].id))
     text = render_ltf(db, settings, seeded["eth"])
-    assert "Ожидаемый BOS: закрытие H1 выше 110.00" in text
+    assert "Ожидаемый BOS: закрытие H1 выше 110,00" in text
     assert "BOS подтверждён:" not in text
 
 

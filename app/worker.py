@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 
 from .adapters.base import AdapterError, MarketDataAdapter, TIMEFRAME_MS
 from .config import DetectorConfig, Settings
@@ -73,6 +74,8 @@ class Worker:
         broadcast=None,  # callable(dict) — WebSocket-рассылка сайта
         ltf_engine=None,      # LtfEngine (этап B2); None — LTF выключен
         ltf_dispatcher=None,  # async callable(list[LtfEvent]) — доставка LTF (этап D)
+        alt_runner=None,      # AltRunner (Altcoins D1); None — модуль выключен
+        alt_dispatcher=None,  # AltDispatcher — доставка alt_event в Telegram
     ):
         self.db = db
         self.settings = settings
@@ -82,6 +85,8 @@ class Worker:
         self.broadcast = broadcast
         self.ltf_engine = ltf_engine
         self.ltf_dispatcher = ltf_dispatcher
+        self.alt_runner = alt_runner
+        self.alt_dispatcher = alt_dispatcher
         self.scanner = Scanner(db, cfg)
         # включённые таймфреймы поиска — настройка scan_timeframes (§1)
         self.scan_tfs = tuple(
@@ -619,12 +624,10 @@ class Worker:
             if ins.ltf_analyze:
                 # «Анализировать»: наблюдения открываются без касания HTF-зоны
                 await self._ltf_open_marked_zones(ins)
-            observations = [
-                o for o in self.db.list_ltf_observations(instrument_id=ins.id)
-                if o.state in LTF_OPEN_STATES
-            ]
-            if not observations:
-                continue
+            # H1 грузим независимо от наличия наблюдений: график LTF и
+            # data_quality читают таблицу candle — на свежей БД (деплой, давно
+            # без касаний HTF-зон) наблюдений ещё нет, и без этой загрузки
+            # график остаётся пустым до первого случайного касания зоны
             adapter = self.adapters[ins.venue]
             try:
                 last = self.db.last_candle(ins.id, "H1")
@@ -648,6 +651,17 @@ class Worker:
                     incoming.append(c)
             if incoming:
                 self.db.insert_candles(incoming)
+                if self.broadcast:
+                    self.broadcast({
+                        "type": "candle", "instrument_id": ins.id,
+                        "timeframe": "H1",
+                    })
+            observations = [
+                o for o in self.db.list_ltf_observations(instrument_id=ins.id)
+                if o.state in LTF_OPEN_STATES
+            ]
+            if not observations:
+                continue
             result = await asyncio.to_thread(
                 self.ltf_engine.process_h1_close, ins.id
             )
@@ -674,6 +688,10 @@ class Worker:
         retry = getattr(self.ltf_dispatcher, "retry_pending", None)
         if self._ltf_active and retry is not None:
             await retry()
+        # досылка графиков к доставленным событиям (§7 ТЗ 07.10.2026)
+        retry_charts = getattr(self.ltf_dispatcher, "retry_charts", None)
+        if self._ltf_active and retry_charts is not None:
+            await retry_charts()
 
     async def ltf_loop(self) -> None:
         """Фоновый цикл LTF: закрытая страница анализ не останавливает (§12)."""
@@ -699,6 +717,15 @@ class Worker:
                 if o.state in LTF_OPEN_STATES
             ]
             if not observations:
+                # без наблюдений replay не нужен, но H1-окно для графика LTF
+                # догружаем один раз — иначе на свежей БД график пуст до
+                # первого касания HTF-зоны
+                if self.db.last_candle(ins.id, "H1") is None:
+                    try:
+                        await self._ltf_load_h1_history(ins, now_ms())
+                    except AdapterError as exc:
+                        log.warning(
+                            "LTF %s: догрузка H1 пропущена: %s", ins.symbol, exc)
                 continue
             self._set_replaying(ins.id, True)
             try:
@@ -734,6 +761,54 @@ class Worker:
                 log.exception("LTF: ошибка восстановления %s", ins.symbol)
             finally:
                 self._set_replaying(ins.id, False)
+
+    # ---------- Altcoins D1 accumulation (ТЗ 07.10.2026 §4, §18) ----------
+
+    async def alt_loop(self) -> None:
+        """Фоновый цикл дневного job альткоинов: раз в poll_interval_seconds
+        проверяет расписание (should_run — штатный слот МСК + разовый
+        catch-up пропущенных суток). После успешного прогона: доставка
+        новых событий в Telegram (§18), разовая сводка первичной загрузки
+        и WS-обновление страницы без ручной перезагрузки."""
+        while not self._stop.is_set():
+            cfg = self.settings.alt_config
+            if self.alt_runner is not None and cfg.job_enabled:
+                try:
+                    if self.alt_runner.should_run(datetime.now(timezone.utc)):
+                        result = await self.alt_runner.run_daily("schedule")
+                        if result.get("status") == "ok":
+                            if self.broadcast:
+                                self.broadcast({
+                                    "type": "alt",
+                                    "run_id": result.get("run_id"),
+                                    "processed": result.get("processed", 0),
+                                    "errors": result.get("errors", 0),
+                                })
+                            if self.alt_dispatcher is not None:
+                                # §18: live/catchup события прогона — в Telegram;
+                                # первичная загрузка — одна сводка, не спам
+                                await self.alt_dispatcher.dispatch_pending()
+                                summary = result.get("summary") or {}
+                                if summary.get("backfill_event_ids"):
+                                    await (
+                                        self.alt_dispatcher
+                                        .notify_backfill_summary(summary)
+                                    )
+                except Exception:
+                    log.exception("ошибка ALT-цикла")
+                if self.alt_dispatcher is not None:
+                    # ретрай недоставленных (отказ Telegram не отменяет факт
+                    # события — повторяется только доставка, как у LTF)
+                    try:
+                        await self.alt_dispatcher.retry_pending()
+                    except Exception:
+                        log.exception("ALT: ошибка ретрая доставки")
+            try:
+                await asyncio.wait_for(
+                    self._stop.wait(), cfg.poll_interval_seconds
+                )
+            except asyncio.TimeoutError:
+                pass
 
     async def _check_freshness(self, ins: Instrument, tf: str) -> None:
         """Устаревшие данные — показать и уведомить (§11).
@@ -792,6 +867,19 @@ class Worker:
         await self.dispatcher.notify_service(text)
 
     async def run(self) -> None:
+        # ТЗ 07.10.2026 §13: миграция снятых/зеркальных уровней SSL/BSL —
+        # идемпотентна (флаг в meta), с бэкапом; выполняется один раз до
+        # прогрева кэшей чтения, чтобы снятые уровни не попали в выборки
+        try:
+            from .services.taken_levels_migration import run as _migrate_taken
+
+            rep = _migrate_taken(self.settings.db_path)
+            if any(rep["counters"].values()):
+                log.info("миграция taken_levels: %s", rep["counters"])
+                self.db.invalidate_zone_cache()
+                self.db._bump_ltf_cache()
+        except Exception:
+            log.exception("миграция taken_levels не удалась (не критично для старта)")
         await self.seed_instruments()
         # текущий незакрытый D1/W1 — на график сразу, не ждать backfill/migrate
         await self._load_forming_candles()
@@ -812,6 +900,9 @@ class Worker:
         await self._ltf_restore_all()
         log.info("воркер запущен, опрос каждые %s с", self.settings.poll_seconds)
         loops = [self._main_loop(), self.ltf_loop()]
+        if self.alt_runner is not None:
+            # дневной job «Altcoins D1 accumulation» — независимый цикл (§4)
+            loops.append(self.alt_loop())
         if self.settings.quote_poll_seconds > 0:
             # F02: котировки — отдельным быстрым циклом
             loops.append(self.quote_loop())

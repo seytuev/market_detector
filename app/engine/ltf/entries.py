@@ -165,6 +165,32 @@ def entry_reusable(zone: LtfEntryZone, cfg: DetectorConfig) -> bool:
     return zone.max_test_depth < cfg.entry_reuse_max_depth
 
 
+def fvg_filled(zone: LtfEntryZone) -> bool:
+    """§10 (Этап 6): FVG перекрыт полностью — цена дошла до дальней границы
+    (глубина 100% в точном сравнении по сохранённому экстремуму, как ТЗ §4).
+
+    Терминальное состояние самого FVG (как fresh-void / новая Entry Zone он
+    больше не используется) и только его: связанный OB — самостоятельный
+    объект и оценивается своим правилом 90% (entry_reusable)."""
+    if zone.type != "FVG" or zone.is_level:
+        return False
+    if zone.test_extreme is not None:
+        return reaches_depth(zone, zone.test_extreme, 1.0)
+    return zone.max_test_depth >= 1.0
+
+
+def fvg_fill_status(zone: LtfEntryZone) -> Optional[str]:
+    """open | partially_filled | filled; None — не FVG (производный статус,
+    отдельной колонки не требует)."""
+    if zone.type != "FVG":
+        return None
+    if fvg_filled(zone):
+        return "filled"
+    if zone.first_test_at is not None or zone.max_test_depth > 0:
+        return "partially_filled"
+    return "open"
+
+
 def _range_test_stats(
     candles: list[Candle], lower: float, upper: float, direction: Direction,
     after_open: int,

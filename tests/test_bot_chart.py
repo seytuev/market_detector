@@ -157,9 +157,10 @@ async def test_chart_caption_matches_snapshot(db, chart_seeded, tmp_path,
     await _command(app, "chart")(update, _context(["ETH", "H1"]))
     assert replies == [] and len(photos) == 1
     caption = photos[0]["caption"]
-    assert "ETHUSDT · binance · spot" in caption
+    assert "ETHUSDT · H1" in caption
+    assert "binance" not in caption  # §5.1: биржа/рынок не выводятся
     assert "BOS подтверждён" in caption  # у seeded сценарий с BOS
-    assert "Расчёт:" in caption
+    assert "Текущая ситуация:" in caption
     assert _fmt_time(captured["now"]) in caption
     assert captured["layers"] == layers_from_mask(DEFAULT_MASK)
     assert captured["observation_id"] == chart_seeded["obs_bear"].id
@@ -192,30 +193,54 @@ async def test_chart_without_args_shows_picker(db, seeded, tmp_path):
 
 # ------------------------------ роутинг ------------------------------
 
-async def test_nav_chart_dialog_steps(db, chart_seeded, tmp_path):
-    app = build_application(_settings(tmp_path), db)
+async def test_nav_chart_one_click_and_layers(db, chart_seeded, tmp_path,
+                                              monkeypatch):
+    """ТЗ 07.10.2026 §8: «График» открывается за одно нажатие — сразу фото
+    с дефолтами; выбор периода/слоёв — действия ПОСЛЕ выдачи графика."""
+    settings = _settings(tmp_path)
+    captured: dict = {}
+    monkeypatch.setattr("app.bot.handlers.render_ltf_chart",
+                        _fake_render(tmp_path, captured))
+    app = build_application(settings, db)
     eth = chart_seeded["eth"]
-    # ТФ
+    # ТФ-меню сохраняется для выбора D1/W1
     update, _, edits, _, _ = _cb_photo_update(f"nav:chart:{eth}")
     await _nav_callback(app)(update, _context())
     assert "Таймфрейм" in edits[0][0]
-    # H1 → период
-    update, _, edits, _, _ = _cb_photo_update(f"nav:chart:{eth}:H1")
+    # H1 — одно нажатие: сразу фото, без мастера период→слои
+    update, _, _, _, photos = _cb_photo_update(f"nav:chart:{eth}:H1")
     await _nav_callback(app)(update, _context())
-    assert "Период" in edits[0][0]
-    # период → слои (дефолт — все включены)
-    update, _, edits, _, _ = _cb_photo_update(f"nav:chart:{eth}:H1:7")
-    await _nav_callback(app)(update, _context())
-    assert "Слои" in edits[0][0]
-    callbacks = [b.callback_data for row in edits[0][1].inline_keyboard
-                 for b in row]
+    assert len(photos) == 1
+    assert captured["layers"] == layers_from_mask(DEFAULT_MASK)
+    assert captured["tf"] == "H1"
+    # на сообщении с графиком — периоды, слои, обновление (§8)
+    callbacks = [b.callback_data for row in photos[0]["reply_markup"].inline_keyboard
+                 for b in row if b.callback_data]
+    assert f"nav:chartgo:{eth}:H1:3:{DEFAULT_MASK}" in callbacks
     assert f"nav:chartgo:{eth}:H1:7:{DEFAULT_MASK}" in callbacks
+    assert f"nav:chartlay:{eth}:H1:3:{DEFAULT_MASK}" in callbacks
     # переключатель слоя: mask 15 ^ 2 (bos) = 13
     update, _, edits, _, _ = _cb_photo_update(f"nav:charttg:{eth}:H1:7:15:2")
     await _nav_callback(app)(update, _context())
     callbacks = [b.callback_data for row in edits[0][1].inline_keyboard
                  for b in row]
     assert f"nav:chartgo:{eth}:H1:7:13" in callbacks
+
+
+async def test_nav_charto_uses_message_context(db, chart_seeded, tmp_path,
+                                               monkeypatch):
+    """§8: «График» из LTF-сообщения — контекст ЭТОГО события (observation),
+    а не «первый активный сценарий»."""
+    settings = _settings(tmp_path)
+    captured: dict = {}
+    monkeypatch.setattr("app.bot.handlers.render_ltf_chart",
+                        _fake_render(tmp_path, captured))
+    app = build_application(settings, db)
+    eth, obs = chart_seeded["eth"], chart_seeded["obs_bull"]
+    update, _, _, _, photos = _cb_photo_update(f"nav:charto:{eth}:{obs.id}")
+    await _nav_callback(app)(update, _context())
+    assert len(photos) == 1
+    assert captured["observation_id"] == obs.id
 
 
 async def test_nav_chartgo_sends_photo(db, chart_seeded, tmp_path, monkeypatch):

@@ -418,6 +418,10 @@ CREATE TABLE IF NOT EXISTS ltf_event (
     -- обнаружения относительно закрытия свечи; delayed = processing_mode != 'live'
     processing_mode TEXT NOT NULL DEFAULT 'unknown',
     detection_lag_ms INTEGER NOT NULL DEFAULT 0,
+    -- ТЗ 07.10.2026 §7: состояние графика события отдельно от состояния
+    -- доставки текста (none | sent | failed + число попыток)
+    chart_state TEXT NOT NULL DEFAULT 'none',
+    chart_attempts INTEGER NOT NULL DEFAULT 0,
     UNIQUE (dedupe_key)
 );
 CREATE INDEX IF NOT EXISTS ix_ltf_event_obs ON ltf_event (observation_id, occurred_at);
@@ -492,3 +496,193 @@ CREATE TABLE IF NOT EXISTS bot_mute (
     until INTEGER NOT NULL,
     PRIMARY KEY (chat_id, scope, scope_ref)
 );
+
+-- ===========================================================================
+-- Модуль «Altcoins D1 accumulation» (изолирован; все таблицы alt_*).
+-- Время — ms UTC (int), цены — REAL, как в остальных таблицах.
+-- Вся схема через CREATE ... IF NOT EXISTS: безопасно применяется целиком
+-- к существующим БД из Database.migrate().
+-- ===========================================================================
+
+-- Актив вселенной альткоинов; cmc_id — ключ CoinMarketCap
+CREATE TABLE IF NOT EXISTS alt_asset (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cmc_id INTEGER NOT NULL UNIQUE,
+    canonical_asset_id TEXT,
+    symbol TEXT NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    cmc_rank INTEGER NOT NULL DEFAULT 0,
+    exclusion_category TEXT,
+    mapping_status TEXT NOT NULL DEFAULT 'pending',  -- pending | mapped | mapping_pending | manual
+    mapping_reason TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_ms INTEGER NOT NULL DEFAULT 0,
+    updated_ms INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS ix_alt_asset_rank ON alt_asset (cmc_rank);
+
+-- Снапшот вселенной CMC, на котором работал прогон джобы
+CREATE TABLE IF NOT EXISTS alt_universe_snapshot (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    taken_ms INTEGER NOT NULL,
+    payload_json TEXT NOT NULL DEFAULT '[]',
+    source TEXT NOT NULL DEFAULT 'cmc',
+    stale INTEGER NOT NULL DEFAULT 0
+);
+
+-- Источник свечей D1 актива; версия источника — часть ключа (смена
+-- источника истории создаёт новую строку, старые свечи не переписываются)
+CREATE TABLE IF NOT EXISTS alt_instrument_source (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_id INTEGER NOT NULL REFERENCES alt_asset(id),
+    venue TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    quote TEXT NOT NULL DEFAULT 'USDT',
+    earliest_available_ms INTEGER NOT NULL DEFAULT 0,
+    last_closed_ms INTEGER NOT NULL DEFAULT 0,
+    history_scope TEXT NOT NULL DEFAULT 'full',      -- full | partial
+    source_version INTEGER NOT NULL DEFAULT 1,
+    UNIQUE (asset_id, venue, symbol, quote, source_version)
+);
+
+-- Свечи D1 источника (таймфрейм модуля всегда D1)
+CREATE TABLE IF NOT EXISTS alt_candle (
+    source_id INTEGER NOT NULL REFERENCES alt_instrument_source(id),
+    open_time INTEGER NOT NULL,
+    open REAL NOT NULL,
+    high REAL NOT NULL,
+    low REAL NOT NULL,
+    close REAL NOT NULL,
+    volume REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (source_id, open_time)
+);
+
+-- Живой кандидат диапазона накопления (пересчитывается до заморозки);
+-- origin_key — стабильный ключ пары якорей для дедупликации версий
+CREATE TABLE IF NOT EXISTS alt_range_candidate (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_id INTEGER NOT NULL REFERENCES alt_asset(id),
+    origin_key TEXT NOT NULL,
+    start_anchor_open_time INTEGER NOT NULL,
+    rebound_anchor_open_time INTEGER NOT NULL,
+    lower REAL NOT NULL,
+    upper REAL NOT NULL,
+    width REAL NOT NULL,
+    mid REAL NOT NULL,
+    n_days INTEGER NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    state TEXT NOT NULL DEFAULT 'searching',
+    metrics_json TEXT NOT NULL DEFAULT '{}',
+    first_seen_ms INTEGER NOT NULL DEFAULT 0,
+    updated_ms INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS ix_alt_range_candidate_asset ON alt_range_candidate (asset_id, state);
+
+-- Замороженная зрелая версия диапазона (геометрия фиксируется навсегда)
+CREATE TABLE IF NOT EXISTS alt_frozen_range (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    range_id INTEGER NOT NULL REFERENCES alt_range_candidate(id),
+    lower REAL NOT NULL,
+    upper REAL NOT NULL,
+    width REAL NOT NULL,
+    mid REAL NOT NULL,
+    start_anchor_open_time INTEGER NOT NULL,
+    rebound_anchor_open_time INTEGER NOT NULL,
+    included_candles INTEGER NOT NULL DEFAULT 0,
+    mature_at_ms INTEGER NOT NULL DEFAULT 0,
+    classifier_version TEXT NOT NULL DEFAULT 'v1',
+    range_version INTEGER NOT NULL DEFAULT 1
+);
+
+-- Сетап накопления по замороженному диапазону; один актив — один сетап
+-- на диапазон (UNIQUE(asset_id, range_id)). cancel_price — уровень K,
+-- режим проверки отмены — cancel_mode (проектный выбор, см. AltConfig)
+CREATE TABLE IF NOT EXISTS alt_setup (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_id INTEGER NOT NULL REFERENCES alt_asset(id),
+    source_id INTEGER NOT NULL REFERENCES alt_instrument_source(id),
+    range_id INTEGER NOT NULL REFERENCES alt_frozen_range(id),
+    state TEXT NOT NULL DEFAULT 'searching',
+    flags_json TEXT NOT NULL DEFAULT '{}',
+    confirmation_event_id INTEGER,
+    targets_json TEXT NOT NULL DEFAULT '[]',
+    cancel_price REAL,
+    cancel_mode TEXT NOT NULL DEFAULT 'wick_on_closed_d1',
+    cancel_reachable INTEGER NOT NULL DEFAULT 1,
+    breakout_close REAL,
+    breakout_closed_at INTEGER,
+    retest_deadline_ms INTEGER,
+    entry_a_id INTEGER,
+    entry_b_id INTEGER,
+    universe_eligible INTEGER NOT NULL DEFAULT 1,
+    created_ms INTEGER NOT NULL DEFAULT 0,
+    updated_ms INTEGER NOT NULL DEFAULT 0,
+    terminated_ms INTEGER,
+    UNIQUE (asset_id, range_id)
+);
+CREATE INDEX IF NOT EXISTS ix_alt_setup_state ON alt_setup (state);
+
+-- Структурное событие D1 внутри сетапа: слом BOS/SMS или снятие SSL
+CREATE TABLE IF NOT EXISTS alt_structure_event (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    setup_id INTEGER NOT NULL REFERENCES alt_setup(id),
+    kind TEXT NOT NULL,                   -- BOS | SMS | SSL
+    level_price REAL NOT NULL,
+    close_price REAL NOT NULL,
+    candle_open_time INTEGER NOT NULL,
+    anchors_json TEXT NOT NULL DEFAULT '[]'
+);
+CREATE INDEX IF NOT EXISTS ix_alt_structure_event_setup ON alt_structure_event (setup_id);
+
+-- Эпизод манипуляции: уход цены под L диапазона и возврат
+CREATE TABLE IF NOT EXISTS alt_manipulation_episode (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    setup_id INTEGER NOT NULL REFERENCES alt_setup(id),
+    started_candle_open_time INTEGER NOT NULL,
+    min_price REAL NOT NULL,
+    ended_candle_open_time INTEGER,
+    days_below INTEGER NOT NULL DEFAULT 0
+);
+
+-- Точка входа: A — на ретесте после пробоя, B — внутри диапазона
+CREATE TABLE IF NOT EXISTS alt_entry_opportunity (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    setup_id INTEGER NOT NULL REFERENCES alt_setup(id),
+    kind TEXT NOT NULL,                   -- 'A' | 'B'
+    event_time_ms INTEGER NOT NULL,
+    price REAL,
+    zone_json TEXT NOT NULL DEFAULT '{}',
+    bases_json TEXT NOT NULL DEFAULT '[]'
+);
+CREATE INDEX IF NOT EXISTS ix_alt_entry_opportunity_setup ON alt_entry_opportunity (setup_id);
+
+-- Прогон джобы (раз в сутки по расписанию МСК)
+CREATE TABLE IF NOT EXISTS alt_run (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_ms INTEGER NOT NULL,
+    finished_ms INTEGER,
+    as_of_ms INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running',   -- running | ok | error
+    processed INTEGER NOT NULL DEFAULT 0,
+    errors INTEGER NOT NULL DEFAULT 0,
+    universe_snapshot_id INTEGER,
+    summary_json TEXT NOT NULL DEFAULT '{}'
+);
+
+-- Outbox событий модуля; дедупликация — UNIQUE(setup_id, event_type,
+-- source_event_id): повторная детекция того же рыночного факта не создаёт
+-- вторую строку (аналог dedupe_key у ltf_event)
+CREATE TABLE IF NOT EXISTS alt_event (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    setup_id INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    source_event_id TEXT NOT NULL,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    event_time_ms INTEGER NOT NULL DEFAULT 0,
+    detected_at_ms INTEGER NOT NULL DEFAULT 0,
+    run_id INTEGER,
+    delivered INTEGER NOT NULL DEFAULT 0,
+    created_ms INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (setup_id, event_type, source_event_id)
+);
+CREATE INDEX IF NOT EXISTS ix_alt_event_delivered ON alt_event (delivered);

@@ -226,6 +226,18 @@ def test_observation_chart_layers(client, seeded):
     assert chart["liquidity_tests"][0]["state"] == "awaiting_close"
 
 
+def test_chart_layers_ignore_display_scale_params(client, seeded):
+    """§16 п.21: масштаб графика — только отображение. Серверный horizon
+    графика — от observation.activated_at (§4), display-параметры запроса
+    (days/period/scale) геометрию и допуск не меняют (кнопки масштаба в UI —
+    чистый frontend-zoom, app/web/static/ltf.js)."""
+    url = f"/api/ltf/observations/{seeded['obs1'].id}/chart"
+    base = client.get(url, headers=AUTH).json()
+    for param in ("days=7", "days=90", "period=1d", "scale=week"):
+        other = client.get(f"{url}?{param}", headers=AUTH).json()
+        assert other == base
+
+
 def test_entries_table_with_dist(client, seeded):
     sc1 = seeded["sc1"]
     r = client.get(f"/api/ltf/scenarios/{sc1.id}/entries?price=95", headers=AUTH)

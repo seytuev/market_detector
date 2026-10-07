@@ -140,6 +140,39 @@ async def test_ltf_loop_processes_h1_closes():
     assert len(db.list_ltf_pivots(ins.id)) == 1
 
 
+async def test_ltf_h1_loaded_without_observations():
+    """График LTF и data_quality читают таблицу candle: H1 грузятся даже
+    без открытых наблюдений — иначе на свежей БД (деплой, давно без касаний
+    HTF-зон) график пуст до первого случайного касания зоны."""
+    db = Database(":memory:")
+    adapter = FakeAdapter()
+    adapter.candles = _recent_h1([(10, 9), (11, 9), (12, 9)])
+    worker, _ = _make_worker(db, adapter)
+    await worker.seed_instruments()
+    ins = next(i for i in db.get_instruments() if i.symbol == "BTCUSDT")
+
+    assert not db.list_ltf_observations(instrument_id=ins.id)
+    await worker.ltf_poll_once()
+    assert db.get_candles(ins.id, "H1")
+    # загрузка свечей сама по себе наблюдений не открывает
+    assert not db.list_ltf_observations(instrument_id=ins.id)
+
+
+async def test_restore_backfills_h1_without_observations():
+    """§13: восстановление после перезапуска на свежей БД (наблюдений нет)
+    догружает H1-окно для графика, replay при этом не требуется."""
+    db = Database(":memory:")
+    adapter = FakeAdapter()
+    adapter.candles = _recent_h1([(10, 9), (11, 9), (12, 9)])
+    worker, _ = _make_worker(db, adapter)
+    await worker.seed_instruments()
+    ins = next(i for i in db.get_instruments() if i.symbol == "BTCUSDT")
+
+    await worker._ltf_restore_all()
+    assert db.get_candles(ins.id, "H1")
+    assert not db.list_ltf_observations(instrument_id=ins.id)
+
+
 async def test_restart_restore_no_duplicates():
     """§13/п.20: новый Worker поверх той же БД — replay не дублирует
     pivots/события/зоны/сценарии."""

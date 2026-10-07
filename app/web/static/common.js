@@ -9,6 +9,38 @@ window.HTF = (() => {
   let tokenDialogPromise = null;
   const modalStack = [];
 
+  // Тема оформления LevelFrame: 'system' | 'dark' | 'light' (localStorage lf:theme).
+  // data-theme на <html> ставит также inline-скрипт в <head> (до загрузки CSS),
+  // здесь — API для настроек и подписка на смену системной темы.
+  const THEME_KEY = 'lf:theme';
+  const lightMq = window.matchMedia ? window.matchMedia('(prefers-color-scheme: light)') : null;
+
+  function themeGet() {
+    const saved = localStorage.getItem(THEME_KEY);
+    return (saved === 'dark' || saved === 'light') ? saved : 'system';
+  }
+
+  function themeApply(choice) {
+    const mode = choice || themeGet();
+    const resolved = mode === 'system'
+      ? (lightMq && lightMq.matches ? 'light' : 'dark')
+      : mode;
+    document.documentElement.dataset.theme = resolved;
+    return resolved;
+  }
+
+  function themeSet(choice) {
+    localStorage.setItem(THEME_KEY, choice === 'dark' || choice === 'light' ? choice : 'system');
+    return themeApply();
+  }
+
+  if (lightMq) {
+    const onSystemTheme = () => { if (themeGet() === 'system') themeApply(); };
+    if (lightMq.addEventListener) lightMq.addEventListener('change', onSystemTheme);
+    else if (lightMq.addListener) lightMq.addListener(onSystemTheme);
+  }
+  themeApply();
+
   function getToken() {
     if (!urlTokenRead) {
       urlTokenRead = true;
@@ -30,13 +62,13 @@ window.HTF = (() => {
 
   function chartTheme() {
     return {
-      background: cssVar('--bg-panel', '#171B22'),
-      text: cssVar('--text-dim', '#9BA6B5'),
-      grid: cssVar('--border', '#2B323D'),
-      border: cssVar('--border', '#2B323D'),
-      accent: cssVar('--accent', '#5B8DEF'),
-      up: cssVar('--green', '#45B9A5'),
-      down: cssVar('--red', '#EF7573'),
+      background: cssVar('--lf-surface', '#131B28'),
+      text: cssVar('--lf-text2', '#A2B0C5'),
+      grid: cssVar('--lf-border', '#2C3A4E'),
+      border: cssVar('--lf-border', '#2C3A4E'),
+      accent: cssVar('--lf-brand', '#4268DD'),
+      up: cssVar('--lf-positive', '#62C9B0'),
+      down: cssVar('--lf-negative', '#F08D98'),
     };
   }
 
@@ -47,7 +79,7 @@ window.HTF = (() => {
     const dot = document.getElementById('ws-indicator');
     const label = document.getElementById('connection-label')
       || document.querySelector('.connection-label');
-    const text = online ? 'Соединение установлено' : 'Переподключение…';
+    const text = online ? 'Соединение установлено' : 'Нет соединения';
     if (dot) {
       dot.className = 'ws-dot ' + (online ? 'online' : 'offline');
       dot.title = online ? 'WebSocket подключён' : 'Нет соединения';
@@ -82,7 +114,7 @@ window.HTF = (() => {
     if (tokenDialogPromise) return tokenDialogPromise;
     const modal = document.createElement('div');
     modal.className = 'modal';
-    modal.innerHTML = '<form class="modal-card" role="dialog" aria-modal="true" aria-labelledby="auth-title"><h3 id="auth-title">Доступ к HTF Zones</h3><label>Токен владельца <input type="password" autocomplete="current-password" required></label><p class="form-error" role="alert"></p><div class="modal-actions"><button class="btn primary" type="submit">Продолжить</button></div></form>';
+    modal.innerHTML = '<form class="modal-card" role="dialog" aria-modal="true" aria-labelledby="auth-title"><h3 id="auth-title">Доступ к LevelFrame</h3><label>Токен владельца <input type="password" autocomplete="current-password" required></label><p class="form-error" role="alert"></p><div class="modal-actions"><button class="btn primary" type="submit">Продолжить</button></div></form>';
     document.body.appendChild(modal);
     modal.querySelector('.form-error').textContent = error;
     const input = modal.querySelector('input');
@@ -167,6 +199,14 @@ window.HTF = (() => {
     return new Date(ms).toLocaleString('ru-RU', { hour12: false, timeZone: 'Europe/Moscow' }) + ' МСК';
   }
 
+  // datetime-local → ms UTC, трактуя введённое время как московское
+  // (ТЗ 07.10.2026 §6: весь UI — МСК; Москва без DST, фиксированный UTC+3)
+  function parseMskLocal(raw) {
+    if (!raw) return NaN;
+    const withOffset = raw.length === 16 ? raw + ':00+03:00' : raw + '+03:00';
+    return new Date(withOffset).getTime();
+  }
+
   function esc(s) {
     return String(s ?? '').replace(/[&<>"']/g,
       (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -178,8 +218,9 @@ window.HTF = (() => {
   }
 
   return {
-    getToken, ensureToken, api, connectWs, fmtPrice, fmtTime, esc, tradingviewUrl,
+    getToken, ensureToken, api, connectWs, fmtPrice, fmtTime, parseMskLocal, esc, tradingviewUrl,
     chartTheme, openModal, closeModal, setConnectionState,
+    theme: { get: themeGet, set: themeSet, apply: themeApply },
   };
 })();
 

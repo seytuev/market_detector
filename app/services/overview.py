@@ -16,6 +16,7 @@ from ..engine.ltf.eligibility import (
     admitted_scenario_entries,
     evaluate_final,
 )
+from ..engine.ltf.entries import fvg_fill_status
 from ..engine.ltf.pivots import PivotCandidate
 from ..engine.ltf.ranges import provisional_range, zone_half
 from ..models import TIMEFRAME_MINUTES, now_ms
@@ -36,7 +37,7 @@ _ENTRY_ORDER = {"FVG": 0, "OB": 1, "BSL": 2, "SSL": 3}
 STAGE_WAIT_HTF = "Ждём HTF-зону"
 STAGE_WAIT_BOS = "Ждём BOS/SMS"
 STAGE_WAIT_RANGE = "Ждём диапазон"
-STAGE_RETRACEMENT = "Возврат в Premium/Discount"
+STAGE_RETRACEMENT = "Ожидаем возврат в Premium/Discount"
 STAGE_IN_ENTRY = "Цена в Entry Zone"
 STAGE_NO_ZONES = "Нет подходящих зон"
 STAGE_DATA_PENDING = "Недостаточно данных"
@@ -374,7 +375,9 @@ def _instrument_stage(
     ):
         return STAGE_IN_ENTRY, direction
     half = "Premium" if direction == "bear" else "Discount"
-    return f"Возврат в {half}", direction
+    # §11.3 ТЗ 07.10.2026: цена вне подходящей половины — ОЖИДАНИЕ возврата,
+    # а не свершившийся возврат
+    return f"Ожидаем возврат в {half}", direction
 
 
 def _last_cancellation(
@@ -501,6 +504,8 @@ def _entry_row(
         # §9 (Этап 5): точечный уровень (W=0) глубины не имеет — null,
         # UI показывает «—» вместо «0%»
         "max_test_depth": None if zone.is_level else zone.max_test_depth,
+        # §10 (Этап 6): перекрытие FVG (open | partially_filled | filled)
+        "fill_status": fvg_fill_status(zone),
         "first_test_at": zone.first_test_at,
         "liquidity_state": liquidity_state,
         "dist_abs": dist_abs,

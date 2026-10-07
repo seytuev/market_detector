@@ -33,6 +33,7 @@ from ..config import (
 from ..db import Database
 from ..engine import Scanner
 from ..engine.scanner import review_replay_start_ms
+from ..services.journal import JOURNAL_KINDS, collect_journal
 from ..services.zone_groups import union_find_groups
 from ..models import (
     TIMEFRAME_MINUTES,
@@ -610,14 +611,20 @@ def create_app(
     settings: Settings,
     event_bus: Optional[Callable[[Callable[[dict[str, Any]], None]], Any]] = None,
     ltf_engine=None,
+    alt_runner=None,
 ) -> FastAPI:
     """Собирает FastAPI-приложение поверх репозитория Database.
 
     event_bus — необязательный callable, который вызывается один раз с
     ``hub.broadcast``: воркер подписывается на него снаружи и шлёт
-    сообщения {type: price|event|zone|ltf, ...}. Hub доступен как
+    сообщения {type: price|event|zone|ltf|alt, ...}. Hub доступен как
     ``app.state.ws_hub``. ltf_engine — движок окна LTF (ручное завершение
     сценариев); None — LTF-маршруты работают в режиме чтения.
+    alt_runner — дневной runner модуля «Альткоины»; None — ALT-маршруты
+    работают в режиме чтения (ручной пересчёт отвечает 503). В main.py
+    runner конструируется после приложения и ставится в
+    ``app.state.alt_runner`` — эндпоинт пересчёта читает его в момент
+    запроса.
     """
     _load_detector_from_file(settings)
     # A05: recalc-задание в статусе running при старте — процесс умер посреди
@@ -631,18 +638,21 @@ def create_app(
     require_auth = make_auth_dependency(settings)
     hub = WsHub(state_seq_provider=db.get_state_seq)
 
-    app = FastAPI(title="HTF Zones", version=APP_VERSION)
+    app = FastAPI(title="LevelFrame", version=APP_VERSION)
     app.state.db = db
     app.state.settings = settings
     app.state.ws_hub = hub
     app.state.event_bus = event_bus
     app.state.ltf_engine = ltf_engine
+    app.state.alt_runner = alt_runner
     if callable(event_bus):
         event_bus(hub.broadcast)
 
+    from .alt_api import register_alt_routes
     from .ltf_api import register_ltf_routes
 
     register_ltf_routes(app, db, settings, require_auth, ltf_engine)
+    register_alt_routes(app, db, settings, require_auth, alt_runner)
 
     # ------------------------- instruments -------------------------
 
@@ -1092,6 +1102,21 @@ def create_app(
                 "instrument": instrument_to_dict(ins) if ins else None,
             })
         return out
+
+    @app.get("/api/journal", dependencies=[Depends(require_auth)])
+    def journal(
+        kind: str = Query(default="all"),
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> list[dict[str, Any]]:
+        """Единая хронология раздела «Журнал» (план ребрендинга §6.D):
+        рынок (HTF+LTF события) / решения пользователя / доставка,
+        смешанные по времени, свежие первыми. Пагинации нет — limit."""
+        if kind not in JOURNAL_KINDS:
+            raise HTTPException(
+                status_code=400,
+                detail="kind: all | market | decisions | delivery",
+            )
+        return collect_journal(db, kind=kind, limit=limit)
 
     @app.get("/api/candles", dependencies=[Depends(require_auth)])
     def list_candles(

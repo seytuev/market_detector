@@ -49,6 +49,7 @@ const reviewState = {
   candleSeries: null,
   candles: [],
   zone: null,        // карточка текущего кандидата (из GET /api/zones/{id})
+  currentCand: null, // строка очереди /api/candidates (причина, объяснение)
   all: [],           // все кандидаты с сервера
   doneMap: new Map(), // id → кандидат: решения этой сессии (зона может остаться кандидатом)
   currentId: null,
@@ -94,11 +95,18 @@ let STATUS_RU = {
   taken: 'снята', rejected: 'отклонена',
 };
 
+// Типы зон (app/texts_ru.py TYPE_RU) — для карточек очереди проверки
+let TYPE_RU = {
+  fvg: 'FVG', ob: 'Orderblock', prb: 'PRB', breaker: 'Breaker',
+  ssl: 'SSL', bsl: 'BSL', manual: 'Ручная зона',
+};
+
 async function loadLabels() {
   try {
     const l = await api('/api/labels');
     if (l.event_kinds) EVENT_KIND_RU = { ...EVENT_KIND_RU, ...l.event_kinds };
     if (l.statuses) STATUS_RU = { ...STATUS_RU, ...l.statuses };
+    if (l.types) TYPE_RU = { ...TYPE_RU, ...l.types };
   } catch (e) {
     console.warn('labels: используем локальный fallback', e);
   }
@@ -667,6 +675,9 @@ function renderHeaderStats() {
 
 function updateLastPrice() {
   if ($('last-price')) $('last-price').textContent = fmtPrice(state.lastPrice);
+  if ($('desk-price') && state.lastPrice != null) {
+    $('desk-price').textContent = fmtPrice(state.lastPrice);
+  }
   const ins = state.instruments.find((i) => i.id === state.instrumentId);
   if ($('instrument-meta') && ins) {
     $('instrument-meta').textContent = `${ins.venue} · ${ins.market_type || 'spot'}`;
@@ -874,9 +885,9 @@ const REVIEW_DECISION_RU = {
 };
 
 function openZoneDetail(zoneId) {
-  // инспектор живёт во вкладке «Обзор» — переключаемся на неё, иначе клик
-  // из «Проверки» или «Событий» открывал бы детали в скрытой вкладке
-  showView('overview');
+  // инспектор живёт во вкладке рабочего места (desk) — переключаемся на неё,
+  // иначе клик из «Проверки» или «Журнала» открывал бы детали в скрытой вкладке
+  showView('desk');
   return loadZoneDetail(zoneId, true);
 }
 
@@ -1102,15 +1113,29 @@ function visibleCandidates() {
     (!reviewState.tfFilter || c.timeframe === reviewState.tfFilter));
 }
 
+function pluralTasks(n) {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return 'задача';
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return 'задачи';
+  return 'задач';
+}
+
 function renderReviewQueue() {
   const box = $('candidates-list');
   const visible = visibleCandidates();
   const done = [...reviewState.doneMap.values()]
     .filter((c) => !reviewState.tfFilter || c.timeframe === reviewState.tfFilter).length;
   $('review-progress').textContent = `Проверено ${done} из ${done + visible.length}`;
+  const countEl = $('review-count');
+  if (countEl) {
+    countEl.innerHTML = `<span class="state-dot ${visible.length ? 'dot-warning' : 'dot-positive'}"></span>` +
+      `${visible.length} ${pluralTasks(visible.length)}`;
+  }
   box.innerHTML = '';
   if (!visible.length) {
-    box.innerHTML = '<div class="ltf-empty">Кандидатов на проверку нет.</div>';
+    box.innerHTML = '<div class="ltf-empty">Все доступные объекты проверены.</div>' +
+      '<button type="button" class="btn review-back-now" id="review-empty-back">Вернуться к наблюдению</button>';
+    $('review-empty-back').onclick = () => showView('now');
     return;
   }
   for (const c of visible) {
@@ -1118,10 +1143,13 @@ function renderReviewQueue() {
     card.className = 'candidate-card' + (c.id === reviewState.currentId ? ' selected' : '');
     card.dataset.zoneId = String(c.id);
     const why = explanationText(c.explanation);
+    const reason = c.unconfirmed_reason || 'Нужна проверка границ';
     card.innerHTML = `
-      <div class="cand-title">${c.instrument ? esc(c.instrument.symbol) : ''} · ${c.type.toUpperCase()} ${c.timeframe} ${c.direction === 'bull' ? '▲ Рост' : '▼ Снижение'}</div>
-      <div>${fmtPrice(c.lower)} – ${fmtPrice(c.upper)}</div>
-      ${why ? `<p class="cand-explain">${esc(why)}</p>` : ''}`;
+      <div class="cand-title">${c.instrument ? esc(c.instrument.symbol) : ''} · ${c.timeframe}</div>
+      <div class="cand-type">${esc(TYPE_RU[c.type] || c.type.toUpperCase())} ${c.direction === 'bull' ? '▲ Рост' : '▼ Снижение'}</div>
+      <div class="cand-range">${fmtPrice(c.lower)} – ${fmtPrice(c.upper)}</div>
+      <p class="cand-explain">${esc(reason)}</p>
+      ${why && why !== reason ? `<p class="cand-explain cand-detail">${esc(why)}</p>` : ''}`;
     card.onclick = () => openReviewCandidate(c);
     box.appendChild(card);
   }
@@ -1178,13 +1206,29 @@ function initReviewChart() {
   new ResizeObserver(() => drawReviewZone()).observe(wrap);
 }
 
+// Пустая очередь проверки (§7): состояние + возврат к наблюдению
+function renderReviewEmpty() {
+  reviewState.currentId = null;
+  reviewState.currentCand = null;
+  const insp = $('review-inspector');
+  insp.innerHTML =
+    '<div class="rv-task-over">Контроль разметки</div>' +
+    '<h3>Все доступные объекты проверены</h3>' +
+    '<p class="muted">Очередь пуста — новые задачи появятся после сканирования.</p>' +
+    '<button type="button" class="btn" id="rv-back-now">Вернуться к наблюдению</button>';
+  $('rv-back-now').onclick = () => showView('now');
+}
+
 // Вход во вкладку «Проверка»: график при первом входе, очередь, автовыбор
 // первого кандидата, если текущий не выбран или уже выпал из очереди.
 async function enterReviewMode() {
   if (!reviewState.chart) initReviewChart();
   await loadCandidates();
   const visible = visibleCandidates();
-  if (!visible.length) return;
+  if (!visible.length) {
+    renderReviewEmpty();
+    return;
+  }
   if (!visible.some((c) => c.id === reviewState.currentId)) {
     openReviewCandidate(visible[0]);
   }
@@ -1198,6 +1242,7 @@ async function openReviewCandidate(c) {
     reviewState.advanceTimer = null;
   }
   reviewState.currentId = c.id;
+  reviewState.currentCand = c;
   renderReviewQueue();
   const insp = $('review-inspector');
   insp.innerHTML = '<h2>Проверка зоны</h2><p class="muted">Загружаю зону и свечи…</p>';
@@ -1288,40 +1333,44 @@ const VERDICT_GEOM_RU = {
 };
 const VERDICT_LIFE_RU = { completed: 'завершён', converted: 'конвертирован' };
 
-// Инспектор кандидата внутри вкладки «Проверка»: решения о геометрии;
-// рыночная актуальность показана отдельным блоком и не смешивается с ними.
+// Инспектор кандидата внутри вкладки «Проверка» (этап 5 ребрендинга, макет
+// §6.C): задача, правило и решение в одном рабочем контексте. Решения — те
+// же коды ReviewIn через submitReviewDecision; рыночная актуальность —
+// отдельной справкой и не смешивается с решением о геометрии.
+const REVIEW_RULE_FALLBACK =
+  'Граница должна совпадать с экстремумом свечи основания. ' +
+  'Сравните выделенную область со свечами формирования.';
+
 function renderReviewInspector(detail) {
   const z = detail.zone;
   const el = $('review-inspector');
   const ins = detail.instrument;
   const assessments = detail.assessments || [];
   const lastA = assessments[assessments.length - 1];
-  const range = z.is_level ? fmtPrice(z.lower) : `${fmtPrice(z.lower)} – ${fmtPrice(z.upper)}`;
+  const cand = reviewState.currentCand || {};
+  const rule = explanationText(cand.explanation) || REVIEW_RULE_FALLBACK;
+  const range = z.is_level ? fmtPrice(z.lower) : `${fmtPrice(z.lower)} — ${fmtPrice(z.upper)}`;
+  const market = (STATUS_RU[z.status] || z.status) +
+    (z.display_until ? ' · завершена' + (z.end_reason ? ' (' + esc(z.end_reason) + ')' : '') : ' · живая');
   el.innerHTML = `
-    <h3>${ins ? esc(ins.symbol) + ' · ' : ''}${z.type.toUpperCase()} ${z.timeframe}${z.name ? ' · ' + esc(z.name) : ''} <span class="badge ${z.status}">${STATUS_RU[z.status] || z.status}</span></h3>
-    <dl>
-      <dt>Диапазон</dt><dd>${range}</dd>
-      <dt>Середина</dt><dd>${fmtPrice(z.mid)}</dd>
-      <dt>Направление</dt><dd class="dir ${z.direction}">${z.direction === 'bull' ? 'Рост' : 'Снижение'}</dd>
-      <dt>Основание зоны</dt><dd>${fmtTime(z.formed_at)}</dd>
+    <div class="rv-task-over">Задача #${z.id}</div>
+    <h3>Проверьте границы зоны</h3>
+    <p class="rv-rule">${esc(rule)}</p>
+    <dl class="rv-facts">
+      <dt>Объект</dt><dd>${esc(TYPE_RU[z.type] || z.type.toUpperCase())} · ${z.timeframe}${z.name ? ' · ' + esc(z.name) : ''}</dd>
+      <dt>Текущие границы, USDT</dt><dd>${range}</dd>
+      <dt>Рыночное состояние</dt><dd><span class="badge ${z.status}">${STATUS_RU[z.status] || z.status}</span> ${z.display_until ? 'завершена' : 'живая'}</dd>
+      <dt>Инструмент</dt><dd>${ins ? esc(ins.symbol) + ' · ' + esc(ins.venue) : '—'}</dd>
     </dl>
-    <div class="rv-status">
-      <h4>Актуальность зоны</h4>
-      <p>Статус: ${STATUS_RU[z.status] || z.status}${z.display_until ? ' · завершена' + (z.end_reason ? ' (' + esc(z.end_reason) + ')' : '') : ' · живая'}</p>
-      ${lastA
-        ? `<p>Последняя оценка (${fmtTime(lastA.reviewed_at)}): геометрия — ${VERDICT_GEOM_RU[lastA.geometry_verdict] || lastA.geometry_verdict}` +
-          `, цикл — ${lastA.lifecycle_verdict ? (VERDICT_LIFE_RU[lastA.lifecycle_verdict] || lastA.lifecycle_verdict) : '—'}` +
-          `${lastA.requires_clarification ? ' · требует уточнения' : ''}</p>`
-        : '<p>Оценок пока нет.</p>'}
-      <p class="muted">Это справка об актуальности — решение ниже только о геометрии разметки.</p>
+    <div class="rv-actions-main">
+      <button class="btn primary" type="button" data-review="correct">Подтвердить</button>
+      <button class="btn danger" type="button" data-review="wrong_type">Отклонить</button>
+      <button class="btn" type="button" id="rv-open-desk">Открыть актив</button>
     </div>
-    <div class="review-block">
-      <h4>Решение о разметке</h4>
+    <div class="rv-actions-secondary">
       <textarea id="rv-comment" rows="2" placeholder="Комментарий к решению"></textarea>
       <div class="review-actions">
-        <button class="btn ok" type="button" data-review="correct">1 · Размечено верно</button>
-        <button class="btn primary" type="button" data-review="fix_boundaries">2 · Исправить границы</button>
-        <button class="btn danger" type="button" data-review="wrong_type">3 · Отклонить (неверный тип)</button>
+        <button class="btn" type="button" data-review="fix_boundaries">Исправить границы</button>
         <details data-section="other-reviews"><summary class="btn">Другие решения</summary><div class="review-actions">
           <button class="btn" type="button" data-review="wrong_base">Другое основание</button>
           <button class="btn" type="button" data-review="now_irrelevant">Сейчас неактуально</button>
@@ -1330,6 +1379,16 @@ function renderReviewInspector(detail) {
         </div></details>
       </div>
       <div id="rv-verdict" class="review-verdict"></div>
+    </div>
+    <div class="rv-status">
+      <h4>Актуальность зоны</h4>
+      <p>Статус: ${esc(market)}</p>
+      ${lastA
+        ? `<p>Последняя оценка (${fmtTime(lastA.reviewed_at)}): геометрия — ${VERDICT_GEOM_RU[lastA.geometry_verdict] || lastA.geometry_verdict}` +
+          `, цикл — ${lastA.lifecycle_verdict ? (VERDICT_LIFE_RU[lastA.lifecycle_verdict] || lastA.lifecycle_verdict) : '—'}` +
+          `${lastA.requires_clarification ? ' · требует уточнения' : ''}</p>`
+        : '<p>Оценок пока нет.</p>'}
+      <p class="muted">Это справка об актуальности — решение выше только о геометрии разметки.</p>
     </div>
     <details data-section="history"><summary>История</summary>
       <h4>События (${detail.events.length})</h4>
@@ -1343,6 +1402,7 @@ function renderReviewInspector(detail) {
   el.querySelectorAll('[data-review]').forEach((btn) => {
     btn.onclick = () => submitReviewDecision(btn.dataset.review);
   });
+  $('rv-open-desk').onclick = () => window.LFDesk.openInstrument(z.instrument_id);
 }
 
 // Решение в режиме проверки (U04): тот же POST /api/zones/{id}/review, что и
@@ -1402,14 +1462,12 @@ function nextReviewCandidate() {
 function advanceReviewQueue() {
   const visible = visibleCandidates();
   if (!visible.length) {
-    reviewState.currentId = null;
     reviewState.zone = null;
     reviewState.candles = [];
     if (reviewState.candleSeries) reviewState.candleSeries.setData([]);
     drawReviewZone();
     renderReviewQueue();
-    $('review-inspector').innerHTML =
-      '<h2>Проверка зоны</h2><p class="muted">Очередь пуста — все кандидаты проверены.</p>';
+    renderReviewEmpty();
     return;
   }
   openReviewCandidate(visible[0]);
@@ -1464,7 +1522,7 @@ async function saveManualZone() {
   // начало зоны на графике (необязательное; пустое — сервер возьмёт «сейчас»)
   const anchorRaw = $('mz-anchor').value;
   if (anchorRaw) {
-    const anchorMs = new Date(anchorRaw).getTime(); // datetime-local → локальное время
+    const anchorMs = HTF.parseMskLocal(anchorRaw); // datetime-local → московское время (ТЗ §6)
     if (!isNaN(anchorMs)) body.anchor_time = anchorMs;
   }
   if (!isNaN(level)) {
@@ -1791,15 +1849,30 @@ async function saveSettings() {
   status.textContent = `Сохранено: ${res.applied.length} параметров.`;
 }
 
+// Этап 3 ребрендинга: публичные маршруты — now / desk / review / journal /
+// settings. Старые якоря (#overview, #events) — алиасы, id секций не меняем.
+const VIEW_IDS = {
+  now: 'view-now',
+  desk: 'view-overview',
+  review: 'view-review',
+  journal: 'view-events',
+  settings: 'view-settings',
+};
+const VIEW_ALIASES = { overview: 'desk', events: 'journal' };
+
 function showView(name) {
-  const allowed = ['overview', 'review', 'events', 'settings'];
-  if (!allowed.includes(name)) name = 'overview';
-  document.querySelectorAll('.view').forEach((el) => el.classList.toggle('active', el.id === 'view-' + name));
+  name = VIEW_ALIASES[name] || name;
+  if (!VIEW_IDS[name]) name = 'now';
+  document.querySelectorAll('.view').forEach((el) => el.classList.toggle('active', el.id === VIEW_IDS[name]));
   document.querySelectorAll('.app-tab[data-view], .mobile-nav a[data-view]').forEach((el) => {
     el.classList.toggle('active', el.dataset.view === name);
   });
   if (name === 'settings') openSettings();
-  if (name === 'overview') requestAnimationFrame(drawZones);
+  if (name === 'now' && window.LFNow) window.LFNow.show();
+  if (name === 'desk') {
+    requestAnimationFrame(drawZones);
+    scheduleDeskRefresh(); // снимок /current мог устареть, пока desk был скрыт
+  }
   if (name === 'review') enterReviewMode().catch((e) => console.warn('review mode:', e));
   if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
 }
@@ -1812,13 +1885,18 @@ function setupViews() {
       showView(el.dataset.view);
     });
   });
-  window.addEventListener('hashchange', () => showView((location.hash || '#overview').slice(1)));
-  showView((location.hash || '#overview').slice(1));
+  window.addEventListener('hashchange', () => showView((location.hash || '#now').slice(1)));
+  showView((location.hash || '#now').slice(1));
 }
 
 // ---------------------------------------------------------------------------
 // WebSocket: обновления без перезагрузки (§11 п.6)
 // ---------------------------------------------------------------------------
+
+// Дополнительные слушатели WS-сообщений: экран «Сейчас» (now.js) и другие
+// модули подписываются, не меняя основной handleWsMessage
+const wsExtraHandlers = [];
+function registerWsHandler(fn) { wsExtraHandlers.push(fn); }
 
 function handleWsMessage(data) {
   if (data.type === 'price') {
@@ -1851,6 +1929,11 @@ function handleWsMessage(data) {
       if (state.selectedZoneId) loadZoneDetail(state.selectedZoneId, false);
     });
     loadCandidates();
+  }
+  // Дополнительные слушатели (экран «Сейчас» и др.): ошибка слушателя не
+  // должна ломать основную обработку сообщения
+  for (const fn of wsExtraHandlers) {
+    try { fn(data); } catch (e) { console.warn('ws listener:', e); }
   }
 }
 
@@ -1895,6 +1978,384 @@ function syncInstrumentContext() {
   updateLtfLinks();
 }
 
+// Мост для экрана «Сейчас» (now.js): открыть рабочее место выбранного актива.
+// Тот же механизм выбора, что у селекта в workbar: localStorage htf:instrument
+// + ?instrument= (syncInstrumentContext), затем перезагрузка данных desk.
+window.LFDesk = {
+  openInstrument(id) {
+    const numId = Number(id);
+    if (numId && state.instruments.some((i) => i.id === numId)) {
+      state.instrumentId = numId;
+      const sel = $('instrument-select');
+      if (sel) sel.value = String(numId);
+      syncInstrumentContext();
+      showView('desk');
+      showInspector(false);
+      clearZoneSelection();
+      reloadAll().catch((e) => console.warn('desk reload:', e));
+      loadDeskExtras().catch((e) => console.warn('desk extras:', e));
+    } else {
+      showView('desk');
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Рабочее место (LevelFrame, этап 4 ребрендинга; макет §6.B плана): строка
+// актива, список активов слева, карточка состояния сценария и «зоны
+// сценария» под графиком — поверх read model /api/ltf/instruments +
+// /api/ltf/instruments/{id}/current (тот же снимок, что у экрана «Сейчас»).
+// Формулировки «что происходит / чего ждём / условие отмены» повторяют
+// правила карточки now.js — держать синхронно с ней.
+// ---------------------------------------------------------------------------
+
+const deskData = {
+  assets: [],           // строки /api/ltf/instruments
+  currents: new Map(),  // instrument_id -> снимок /current (цены списка)
+  current: null,        // снимок /current выбранного инструмента
+  reqSeq: 0,            // поздний ответ старого запроса не применяется
+  refreshTimer: null,
+};
+
+// L05: основания выбора контекста (коды сервера, app/services/overview.py)
+const DESK_BASIS_RU = {
+  manual: 'Выбран вручную',
+  price_inside: 'Цена внутри зоны',
+  last_scenario: 'Последний действующий сценарий',
+  last_contact: 'Последний контакт с зоной',
+};
+const DESK_DATA_REASON_RU = {
+  no_quote: 'нет котировки',
+  no_h1_candles: 'нет свечей H1',
+  quote_stale: 'котировка устарела',
+  h1_stale: 'свечи H1 устарели',
+  source_stale: 'источник недоступен',
+  replay_in_progress: 'идёт догрузка и пересчёт',
+  processing_lag: 'расчёт отстаёт',
+  history_gap: 'разрыв истории',
+};
+// причины исключения Entry Zone (стабильные коды evaluate_final, §10)
+const DESK_REASON_RU = {
+  ok: 'Подходит по правилам',
+  outside_pd: 'Вне Premium/Discount',
+  tested_too_deep: 'Тест ≥ 90% глубины',
+  type_disabled: 'Тип отключён настройкой',
+  invalid: 'Зона невалидна',
+  swept_level: 'Уровень снят',
+  level_broken: 'Уровень пройден без возврата',
+  fvg_filled: 'FVG перекрыт полностью',
+  origin_unresolved: 'Принадлежность движению не доказана',
+  range_pending: 'Диапазон ещё не подтверждён',
+};
+
+function deskAgeText(ms) {
+  if (!ms) return '—';
+  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  if (s < 60) return `${s} с назад`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} мин назад`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h} ч назад`;
+  return `${Math.round(h / 24)} дн назад`;
+}
+
+function isDeskActive() {
+  const v = $('view-overview');
+  return v && v.classList.contains('active');
+}
+
+function deskDirBadge(d) {
+  if (d === 'bull') return '<span class="dir-badge bull">↑ Рост</span>';
+  if (d === 'bear') return '<span class="dir-badge bear">↓ Снижение</span>';
+  if (d === 'mixed') return '<span class="dir-badge">▲▼ Разные контексты</span>';
+  return '';
+}
+
+// Короткая подпись состояния в списке активов (макет §6.B):
+// Сценарий / Конфликт / В зоне / Проверка / Ожидание
+function deskAssetState(r) {
+  if (r.direction === 'mixed') return { label: 'Конфликт', dot: 'dot-warning' };
+  switch (r.attention) {
+    case 'eligible': return { label: 'Сценарий', dot: 'dot-positive' };
+    case 'price_in_zone': return { label: 'В зоне', dot: 'dot-positive' };
+    case 'review': return { label: 'Проверка', dot: 'dot-warning' };
+    case 'awaiting': return { label: 'Ожидание', dot: 'dot-muted' };
+    case 'data_problem': return { label: 'Данные задерживаются', dot: 'dot-warning' };
+    default: return { label: r.stage || '—', dot: 'dot-muted' };
+  }
+}
+
+function deskHeadline(v, r) {
+  const ds = v.data_state || {};
+  if (ds.state && ds.state !== 'ok') return 'Данные задерживаются';
+  if (r && r.attention === 'review') return 'Нужна проверка';
+  const sc = v.current_scenario;
+  if (sc) return `Контекст ${sc.direction === 'bear' ? 'снижения' : 'роста'} подтверждён`;
+  if (v.scenario_waiting) return 'Ждём нового сценария';
+  if (v.contexts && v.contexts.length) return 'Контекст активен — ждём слома H1';
+  return v.stage || 'Активного контекста нет';
+}
+
+function deskLeadText(v, r, tf) {
+  const ds = v.data_state || {};
+  if (ds.state && ds.state !== 'ok') {
+    return (DESK_DATA_REASON_RU[ds.reason] || 'Источник данных недоступен') +
+      '. Показаны последние известные значения.';
+  }
+  const sc = v.current_scenario;
+  if (sc && sc.break_level != null) {
+    const side = sc.direction === 'bear' ? 'ниже' : 'выше';
+    return `H1 закрылся ${side} ${fmtPrice(sc.break_level)}. Старший контекст ${tf} остаётся активным.`;
+  }
+  if (r && r.attention_reason && r.attention_reason !== '—') return r.attention_reason + '.';
+  return v.stage ? v.stage + '.' : '';
+}
+
+function deskWaitText(v) {
+  const sc = v.current_scenario;
+  if (!sc) {
+    if (v.scenario_waiting) {
+      return 'Ждём подтверждённого слома структуры H1 — сценарий откроется после BOS/SMS.';
+    }
+    return 'Активного сценария нет';
+  }
+  if (!v.range) return 'Ждём подтверждения опор диапазона.';
+  const n = (v.counts && v.counts.eligible) || 0;
+  if (n > 0) {
+    if (v.stage === 'Цена в Entry Zone') {
+      return 'Цена уже в подходящей зоне — сценарий в точке входа.';
+    }
+    const e0 = (v.eligible_entries || [])[0];
+    const rangeTxt = e0 ? ` к ${fmtPrice(e0.lower)}–${fmtPrice(e0.upper)}` : '';
+    return `Ждём возврат цены${rangeTxt}.`;
+  }
+  return 'Подходящих зон сейчас нет — сценарий активен.';
+}
+
+function deskCancelText(v) {
+  // Условие отмены — только из данных снимка (§7: UI не придумывает условие)
+  const sc = v.current_scenario;
+  if (sc && sc.reverse_break && sc.reverse_break.price != null) {
+    const side = sc.direction === 'bear' ? 'выше' : 'ниже';
+    return `Закрытие H1 ${side} ${fmtPrice(sc.reverse_break.price)}`;
+  }
+  return null;
+}
+
+function deskSelectedTf(v) {
+  const ctx = (v.contexts || []).find((c) => c.observation_id === v.selected_context_id);
+  return (ctx && ctx.parent_zone && ctx.parent_zone.timeframe) || state.timeframe;
+}
+
+function renderDeskHead() {
+  const ins = state.instruments.find((i) => i.id === state.instrumentId);
+  if ($('desk-symbol')) $('desk-symbol').textContent = ins ? ins.symbol : '—';
+  if ($('desk-venue')) {
+    $('desk-venue').textContent = ins ? `${ins.venue} · ${ins.market_type || 'spot'}` : '—';
+  }
+  const v = deskData.current;
+  const price = (v && v.price != null) ? v.price : state.lastPrice;
+  if ($('desk-price')) $('desk-price').textContent = price != null ? fmtPrice(price) : '—';
+  renderDeskQuoteAge();
+  const fresh = $('desk-fresh');
+  if (!fresh) return;
+  const ds = v && v.data_state;
+  // качества данных без снимка не выдумываем: блок просто скрыт
+  if (!ds || !ds.state) {
+    fresh.classList.add('hidden');
+    return;
+  }
+  fresh.classList.remove('hidden');
+  const ok = ds.state === 'ok';
+  fresh.innerHTML = `<span class="state-dot ${ok ? 'dot-positive' : 'dot-warning'}"></span>` +
+    esc(ok ? 'Данные актуальны' : 'Данные задерживаются') +
+    (!ok && ds.reason ? ` · ${esc(DESK_DATA_REASON_RU[ds.reason] || ds.reason)}` : '');
+}
+
+function renderDeskQuoteAge() {
+  const el = $('desk-quote-age');
+  if (!el) return;
+  const v = deskData.current;
+  const at = v && v.quote_at;
+  el.textContent = 'Котировка · ' + (at ? deskAgeText(at) : '—');
+}
+
+function renderDeskAssets() {
+  const el = $('desk-assets-list');
+  if (!el) return;
+  if (!deskData.assets.length) {
+    el.innerHTML = '<div class="ltf-empty">Список наблюдения пуст.</div>';
+    return;
+  }
+  el.innerHTML = deskData.assets.map((r) => {
+    const ins = r.instrument;
+    const cur = deskData.currents.get(ins.id);
+    const price = (ins.id === state.instrumentId && state.lastPrice != null)
+      ? state.lastPrice
+      : (cur && cur.price != null ? cur.price : null);
+    const st8 = deskAssetState(r);
+    const sel = ins.id === state.instrumentId ? ' selected' : '';
+    return `<button type="button" class="desk-asset${sel}" data-iid="${ins.id}">` +
+      `<span class="desk-asset-sym">${esc(ins.symbol)}</span>` +
+      `<span class="desk-asset-price">${price != null ? esc(fmtPrice(price)) : '—'}</span>` +
+      `<span class="desk-asset-state"><span class="state-dot ${st8.dot}"></span>${esc(st8.label)}</span>` +
+      '</button>';
+  }).join('');
+  el.querySelectorAll('.desk-asset').forEach((btn) => {
+    btn.onclick = () => window.LFDesk.openInstrument(Number(btn.dataset.iid));
+  });
+}
+
+function renderDeskScenario() {
+  const el = $('desk-scenario');
+  if (!el) return;
+  const v = deskData.current;
+  if (!v) {
+    // снимок недоступен — карточку скрываем, а не показываем выдуманный статус
+    el.classList.add('hidden');
+    el.innerHTML = '';
+    return;
+  }
+  el.classList.remove('hidden');
+  const ins = state.instruments.find((i) => i.id === state.instrumentId) || v.instrument || {};
+  const row = deskData.assets.find((r) => r.instrument.id === state.instrumentId);
+  const tf = deskSelectedTf(v);
+  const cancel = deskCancelText(v);
+  const watching = !!(ins && ins.ltf_analyze);
+  const ds = v.data_state || {};
+  el.innerHTML = `
+    <div class="desk-sc-head">
+      <span>${esc(ins.symbol || '')} · ${esc(tf)}</span>
+      ${deskDirBadge(v.direction)}
+    </div>
+    <h3>${esc(deskHeadline(v, row))}</h3>
+    <p class="desk-sc-lead">${esc(deskLeadText(v, row, tf))}</p>
+    <dl class="now-qa desk-qa">
+      <dt class="qa-q">Что происходит</dt>
+      <dd class="qa-a">${esc(v.stage || (row && row.stage) || '—')}</dd>
+      <dt class="qa-q">Чего ждём</dt>
+      <dd class="qa-a">${esc(deskWaitText(v))}</dd>
+      ${cancel ? `<dt class="qa-q">Условие отмены</dt><dd class="qa-a">${esc(cancel)}</dd>` : ''}
+    </dl>
+    <button type="button" id="desk-watch-btn" class="btn ${watching ? 'primary' : ''} desk-watch">${watching ? '✓ Наблюдение включено' : 'Включить наблюдение'}</button>
+    <details class="desk-basis">
+      <summary>Основания и качество данных</summary>
+      <dl>
+        <dt>Показан контекст</dt>
+        <dd>${esc(DESK_BASIS_RU[v.selected_context_basis] || v.selected_context_basis || '—')}</dd>
+        <dt>Качество данных</dt>
+        <dd>${esc(ds.state === 'ok' ? 'Данные актуальны' : (DESK_DATA_REASON_RU[ds.reason] || ds.reason || ds.state || '—'))}</dd>
+        <dt>Версия состояния</dt>
+        <dd>${v.state_version != null ? v.state_version : '—'}</dd>
+      </dl>
+    </details>`;
+  $('desk-watch-btn').onclick = toggleDeskWatch;
+}
+
+async function toggleDeskWatch() {
+  const ins = state.instruments.find((i) => i.id === state.instrumentId);
+  if (!ins) return;
+  const btn = $('desk-watch-btn');
+  if (btn) btn.disabled = true;
+  try {
+    const res = await api(`/api/instruments/${ins.id}/ltf-analyze`, {
+      method: 'POST', body: JSON.stringify({ analyze: !ins.ltf_analyze }),
+    });
+    ins.ltf_analyze = (res && typeof res.ltf_analyze === 'boolean')
+      ? res.ltf_analyze : !ins.ltf_analyze;
+  } catch (e) {
+    console.warn('ltf-analyze:', e);
+  }
+  renderDeskScenario();
+  scheduleDeskRefresh();
+}
+
+function renderDeskEntries() {
+  const el = $('desk-entries');
+  if (!el) return;
+  const v = deskData.current;
+  if (!v) {
+    el.classList.add('hidden');
+    el.innerHTML = '';
+    return;
+  }
+  el.classList.remove('hidden');
+  if (!v.current_scenario) {
+    el.innerHTML = '<div class="desk-entries-head"><h2>Зоны сценария</h2></div>' +
+      '<div class="ltf-empty">Активного сценария нет.</div>';
+    return;
+  }
+  const entries = v.eligible_entries || [];
+  const rows = entries.map((e) => `
+    <div class="desk-entry">
+      <span class="desk-entry-name">${esc(e.type)} · H1<span class="desk-entry-sub"> / текущий сценарий</span></span>
+      <span class="desk-entry-range">${fmtPrice(e.lower)} — ${fmtPrice(e.upper)} USDT</span>
+      <span class="desk-entry-status${e.eligible_now ? ' ok' : ''}">${e.eligible_now
+        ? '<span class="state-dot dot-positive"></span>Подходит по правилам'
+        : '<span class="state-dot dot-muted"></span>' + esc(DESK_REASON_RU[e.reason] || e.reason || '—')}</span>
+    </div>`).join('');
+  el.innerHTML = `<div class="desk-entries-head"><h2>Зоны сценария / ${entries.length}</h2>` +
+    '<span class="muted">Тот же актив и контекст</span></div>' +
+    (rows || '<div class="ltf-empty">Сценарий активен; подходящих зон сейчас нет.</div>');
+}
+
+function renderDeskExtras() {
+  renderDeskHead();
+  renderDeskAssets();
+  renderDeskScenario();
+  renderDeskEntries();
+}
+
+// Снимок /current грузится параллельно основному графику (reloadAll) и не
+// блокирует его; ошибка чтения — карточка/зоны скрываются, график живёт
+async function loadDeskExtras() {
+  const id = state.instrumentId;
+  const req = ++deskData.reqSeq;
+  const [assetsRes, cur] = await Promise.all([
+    api('/api/ltf/instruments').catch(() => null),
+    id ? api(`/api/ltf/instruments/${id}/current`).catch(() => null) : Promise.resolve(null),
+  ]);
+  if (req !== deskData.reqSeq) return;
+  if (assetsRes) deskData.assets = assetsRes.instruments || [];
+  deskData.current = cur;
+  renderDeskExtras();
+  // цены остальных активов списка — их снимки /current (список мал, как now.js)
+  const others = deskData.assets.filter((r) => r.instrument.id !== id);
+  if (!others.length) return;
+  const currents = await Promise.all(others.map((r) =>
+    api(`/api/ltf/instruments/${r.instrument.id}/current`).catch(() => null)));
+  if (req !== deskData.reqSeq) return;
+  deskData.currents = new Map();
+  others.forEach((r, i) => {
+    if (currents[i]) deskData.currents.set(r.instrument.id, currents[i]);
+  });
+  renderDeskAssets();
+}
+
+function scheduleDeskRefresh() {
+  if (deskData.refreshTimer) return;
+  deskData.refreshTimer = setTimeout(() => {
+    deskData.refreshTimer = null;
+    loadDeskExtras().catch((e) => console.warn('desk extras:', e));
+  }, 800);
+}
+
+function deskOnWs(data) {
+  if (!isDeskActive()) return;
+  if (data.type === 'price' && data.instrument_id === state.instrumentId) {
+    if (deskData.current && data.price) {
+      deskData.current.price = data.price;
+      deskData.current.quote_at = data.time || Date.now();
+    }
+    renderDeskHead();
+  } else if (data.type === 'price') {
+    const cur = deskData.currents.get(data.instrument_id);
+    if (cur && data.price) { cur.price = data.price; renderDeskAssets(); }
+  } else if (data.type === 'ltf' || data.type === 'zone' || data.type === 'event') {
+    scheduleDeskRefresh();
+  }
+}
+
 async function loadInstruments() {
   state.instruments = await api('/api/instruments');
   const sel = $('instrument-select');
@@ -1930,6 +2391,7 @@ async function main() {
     syncInstrumentContext();
     hideInspector();
     reloadAll();
+    loadDeskExtras().catch((e2) => console.warn('desk extras:', e2));
   };
   $('tf-select').onchange = (e) => {
     state.timeframe = e.target.value;
@@ -1987,7 +2449,7 @@ async function main() {
   $('bounds-anchor-dt').onchange = (e) => {
     const raw = e.target.value;
     if (!raw) { setBoundsAnchor(null); return; }
-    const ms = new Date(raw).getTime(); // datetime-local → локальное время
+    const ms = HTF.parseMskLocal(raw); // datetime-local → московское время (ТЗ §6)
     if (!isNaN(ms)) setBoundsAnchor(ms);
   };
   $('bounds-anchor-pick').onclick = startAnchorPick;
@@ -2003,7 +2465,7 @@ async function main() {
   $('draw-cancel').onclick = exitDrawMode;
   $('btn-settings').onclick = () => showView('settings');
   $('settings-save').onclick = saveSettings;
-  $('settings-cancel').onclick = () => showView('overview');
+  $('settings-cancel').onclick = () => showView('now');
   $('mz-save').onclick = saveManualZone;
   $('mz-cancel').onclick = () => HTF.closeModal($('manual-modal'));
   $('btn-new-zone').onclick = () => HTF.openModal($('zone-create-choice'));
@@ -2046,6 +2508,10 @@ async function main() {
   await loadLabels();
   await reloadAll();
   connectWs();
+  registerWsHandler(deskOnWs);
+  loadDeskExtras().catch((e) => console.warn('desk extras:', e));
+  // возраст котировки в шапке рабочего места — точечно, без перерисовки
+  setInterval(() => { if (isDeskActive()) renderDeskQuoteAge(); }, 15000);
 }
 
 main().catch((err) => {

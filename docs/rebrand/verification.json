@@ -1,0 +1,146 @@
+{
+  "results": [
+    {
+      "screen": "overview",
+      "width": 1024,
+      "height": 956,
+      "overflow": false,
+      "outliers": []
+    },
+    {
+      "screen": "desk",
+      "width": 1024,
+      "height": 863,
+      "overflow": false,
+      "outliers": []
+    },
+    {
+      "screen": "review",
+      "width": 1024,
+      "height": 733,
+      "overflow": false,
+      "outliers": []
+    },
+    {
+      "screen": "journal",
+      "width": 1024,
+      "height": 596,
+      "overflow": false,
+      "outliers": []
+    },
+    {
+      "screen": "settings",
+      "width": 1024,
+      "height": 695,
+      "overflow": false,
+      "outliers": []
+    },
+    {
+      "screen": "overview",
+      "width": 768,
+      "height": 956,
+      "overflow": false,
+      "outliers": []
+    },
+    {
+      "screen": "desk",
+      "width": 768,
+      "height": 947,
+      "overflow": false,
+      "outliers": []
+    },
+    {
+      "screen": "review",
+      "width": 768,
+      "height": 865,
+      "overflow": false,
+      "outliers": []
+    },
+    {
+      "screen": "journal",
+      "width": 768,
+      "height": 596,
+      "overflow": false,
+      "outliers": []
+    },
+    {
+      "screen": "settings",
+      "width": 768,
+      "height": 710,
+      "overflow": false,
+      "outliers": []
+    },
+    {
+      "screen": "overview",
+      "width": 390,
+      "height": 1439,
+      "overflow": false,
+      "outliers": []
+    },
+    {
+      "screen": "desk",
+      "width": 390,
+      "height": 1457,
+      "overflow": false,
+      "outliers": []
+    },
+    {
+      "screen": "review",
+      "width": 390,
+      "height": 1288,
+      "overflow": false,
+      "outliers": []
+    },
+    {
+      "screen": "journal",
+      "width": 390,
+      "height": 906,
+      "overflow": false,
+      "outliers": []
+    },
+    {
+      "screen": "settings",
+      "width": 390,
+      "height": 1210,
+      "overflow": false,
+      "outliers": []
+    },
+    {
+      "screen": "overview",
+      "width": 320,
+      "height": 1500,
+      "overflow": false,
+      "outliers": []
+    },
+    {
+      "screen": "desk",
+      "width": 320,
+      "height": 1645,
+      "overflow": false,
+      "outliers": []
+    },
+    {
+      "screen": "review",
+      "width": 320,
+      "height": 1352,
+      "overflow": false,
+      "outliers": []
+    },
+    {
+      "screen": "journal",
+      "width": 320,
+      "height": 984,
+      "overflow": false,
+      "outliers": []
+    },
+    {
+      "screen": "settings",
+      "width": 320,
+      "height": 1246,
+      "overflow": false,
+      "outliers": []
+    }
+  ],
+  "errors": [],
+  "status": "passed"
+}

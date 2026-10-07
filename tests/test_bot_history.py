@@ -125,7 +125,7 @@ def test_render_history_all_and_now_stage(db, seeded):
     text = render_history(db, settings, seeded["eth"], 24, "all")
     assert "История: ETHUSDT · binance · spot" in text
     assert "первое касание" in text            # HTF touch (KIND_RU)
-    assert "слом структуры BOS: уровень 110.00" in text
+    assert "слом структуры BOS: уровень 110,00" in text
     assert "отмена сценария: причина: обратный BOS H1" in text
     assert "Сейчас: " in text                  # последующее состояние
 

@@ -15,21 +15,22 @@ from ..db import Database
 from ..models import EventKind
 from ..notify.suppress import (
     BOT_ALERT_GROUPS,
+    BOT_GRP_ALT,
     BOT_GRP_HTF,
     BOT_GRP_LTF,
     BOT_GRP_SERVICE,
 )
-from ..texts_ru import KIND_RU, LTF_EVENT_KIND_RU
+from ..texts_ru import ALT_EVENT_KIND_RU, KIND_RU, LTF_EVENT_KIND_RU
 
 # Подписи кнопок reply-меню — текстовые, разбираются в handle_menu_text
 MENU_NOW = "Сейчас"
 MENU_PICK = "Выбрать актив"
-MENU_HTF = "HTF-зоны"
-MENU_LTF = "LTF-сценарии"
+MENU_HTF = "Контекст (HTF)"
+MENU_LTF = "Структура H1"
 MENU_ALERTS = "Уведомления"
-MENU_OPEN_APP = "Открыть приложение"
+MENU_OPEN_APP = "Открыть рабочее место"
 
-# «Открыть приложение» — текстом, а не WebAppInfo: WebApp требует HTTPS,
+# «Открыть рабочее место» — текстом, а не WebAppInfo: WebApp требует HTTPS,
 # а сервис часто поднят на http://host:port; ссылку шлём сообщением
 MENU_LABELS = frozenset({
     MENU_NOW, MENU_PICK, MENU_HTF, MENU_LTF, MENU_ALERTS, MENU_OPEN_APP,
@@ -87,17 +88,32 @@ def now_inline(db: Database) -> InlineKeyboardMarkup:
 # Карточки актива / HTF / LTF (шаг 3)
 # --------------------------------------------------------------------- #
 
-def ltf_app_url(settings, instrument_id: int) -> str:
-    """Ссылка «В приложении» на окно LTF выбранного инструмента
-    (формат как в app.js: /ltf.html?token=…&instrument=…)."""
+def public_base_url(settings) -> str | None:
+    """Публичный базовый URL сервиса или None, если адрес локальный
+    (ТЗ 07.10.2026 §12: не отправлять localhost/127.0.0.1 в кнопках)."""
+    from urllib.parse import urlparse
+
     base = settings.effective_base_url()
+    host = urlparse(base).hostname or ""
+    if host in {"127.0.0.1", "localhost", "0.0.0.0", "::1"}:
+        return None
+    return base
+
+
+def ltf_app_url(settings, instrument_id: int) -> str | None:
+    """Ссылка «В приложении» на окно LTF выбранного инструмента
+    (формат как в app.js: /ltf.html?token=…&instrument=…).
+    None — публичный адрес не настроен (localhost слать нельзя, §12)."""
+    base = public_base_url(settings)
+    if base is None:
+        return None
     return f"{base}/ltf.html?token={settings.auth_token}&instrument={instrument_id}"
 
 
 def asset_inline(db: Database, settings, instrument_id: int) -> InlineKeyboardMarkup:
     """Кнопки карточки актива. График и уведомления — заглушки шагов 4/6."""
     iid = instrument_id
-    return InlineKeyboardMarkup([
+    rows = [
         [
             InlineKeyboardButton("График H1", callback_data=f"nav:chart:{iid}:H1"),
             InlineKeyboardButton("HTF-зоны", callback_data=f"nav:htf:{iid}:all"),
@@ -106,8 +122,11 @@ def asset_inline(db: Database, settings, instrument_id: int) -> InlineKeyboardMa
             InlineKeyboardButton("Другие контексты", callback_data=f"nav:ctx:{iid}"),
             InlineKeyboardButton("Уведомления", callback_data=f"nav:alerts:{iid}"),
         ],
-        [InlineKeyboardButton("В приложении", url=ltf_app_url(settings, iid))],
-    ])
+    ]
+    app_url = ltf_app_url(settings, iid)
+    if app_url is not None:
+        rows.append([InlineKeyboardButton("В приложении", url=app_url)])
+    return InlineKeyboardMarkup(rows)
 
 
 def htf_inline(
@@ -247,44 +266,75 @@ def chart_layers_inline(
 
 
 def chart_result_inline(
-    instrument_id: int, tf: str, days: int, mask: int
+    instrument_id: int, tf: str, days: int, mask: int,
+    settings=None, instrument=None,
 ) -> InlineKeyboardMarkup:
-    """Кнопки на сообщении с графиком: переключение ТФ/периода (сразу
-    новый рендер той же маской), слои — отдельным сообщением."""
+    """Кнопки на сообщении с графиком (ТЗ 07.10.2026 §8): «Обновить» и
+    периоды — сразу новый рендер той же маской; слои — отдельным сообщением;
+    ссылки приложения/TradingView — только при публичном адресе (§12)."""
     iid = instrument_id
-    rows = [[
+    rows = []
+    period_row = [InlineKeyboardButton(
+        "🔄 Обновить", callback_data=f"nav:chartgo:{iid}:{tf}:{days}:{mask}"
+    )]
+    if tf == "H1":
+        period_row += [
+            InlineKeyboardButton(
+                f"{'• ' + str(d) + ' дн. •' if d == days else f'{d} дн.'}",
+                callback_data=f"nav:chartgo:{iid}:H1:{d}:{mask}",
+            )
+            for d in (3, 7, 14)
+        ]
+    rows.append(period_row)
+    # D1/W1 — отдельный просмотр HTF-контекста, не замена логики LTF (§8)
+    rows.append([
         InlineKeyboardButton(
             f"{'• ' + t + ' •' if t == tf else t}",
             callback_data=f"nav:chartgo:{iid}:{t}:{days if t == 'H1' else 0}:{mask}",
         )
         for t in ("H1", "D1", "W1")
-    ]]
-    if tf == "H1":
-        rows.append([
-            InlineKeyboardButton(
-                f"{'• ' + str(d) + 'д •' if d == days else f'{d}д'}",
-                callback_data=f"nav:chartgo:{iid}:H1:{d}:{mask}",
-            )
-            for d in (3, 7, 14)
-        ])
-    rows.append([InlineKeyboardButton(
-        "Слои…", callback_data=f"nav:chartlay:{iid}:{tf}:{days}:{mask}"
-    )])
-    rows.append([InlineKeyboardButton("← К активу", callback_data=f"nav:asset:{iid}")])
+    ])
+    rows.append([
+        InlineKeyboardButton(
+            "Слои…", callback_data=f"nav:chartlay:{iid}:{tf}:{days}:{mask}"
+        ),
+        InlineKeyboardButton("Зоны входа", callback_data=f"nav:entries:{iid}"),
+    ])
+    link_row = []
+    if settings is not None:
+        app_url = ltf_app_url(settings, iid)
+        if app_url is not None:
+            link_row.append(InlineKeyboardButton(
+                "Структура H1 в приложении", url=app_url
+            ))
+    if instrument is not None:
+        tv = (
+            f"https://www.tradingview.com/chart/?symbol="
+            f"{instrument['venue'].upper()}:{instrument['symbol']}"
+        )
+        link_row.append(InlineKeyboardButton("TradingView", url=tv))
+    if link_row:
+        rows.append(link_row)
+    rows.append([InlineKeyboardButton("← Назад", callback_data=f"nav:asset:{iid}")])
     return InlineKeyboardMarkup(rows)
 
 
 def ltf_signal_inline(
-    kind: str, instrument_id: int, zone_id: int | None = None, settings=None
+    kind: str, instrument_id: int, zone_id: int | None = None, settings=None,
+    observation_id: int | None = None, instrument=None,
 ) -> InlineKeyboardMarkup:
-    """Единый набор кнопок под LTF-сигналом (ТЗ п.10): «График», «Подробнее»,
-    «Открыть приложение» (URL, если передан settings), «Заглушить» (по зоне
-    контекста, если есть), «🔄 Обновить»; контекстные по виду события:
-    «Зоны входа» под BOS/SMS/entries, «Сценарий» под касанием,
-    «Причина отмены» под отменой."""
+    """Единый набор кнопок под LTF-сигналом (ТЗ п.10, ТЗ 07.10.2026 §8/§12):
+    «График» — открытие за одно нажатие по контексту ЭТОГО сообщения
+    (observation_id события, а не «первый активный сценарий»), «Подробнее»,
+    «Открыть рабочее место» (URL при публичном адресе), «TradingView»,
+    «Заглушить», «🔄 Обновить»; контекстные по виду события."""
     iid = instrument_id
+    if observation_id is not None:
+        chart_cb = f"nav:charto:{iid}:{observation_id}"
+    else:
+        chart_cb = f"nav:chart:{iid}:H1"
     rows = [[
-        InlineKeyboardButton("📊 График", callback_data=f"nav:chart:{iid}:H1"),
+        InlineKeyboardButton("📊 График", callback_data=chart_cb),
         InlineKeyboardButton("Подробнее", callback_data=f"nav:asset:{iid}"),
     ]]
     if kind in ("bos", "sms", "entries_ready", "range_ready"):
@@ -299,10 +349,21 @@ def ltf_signal_inline(
         rows.append([InlineKeyboardButton(
             "Причина отмены", callback_data=f"nav:why:{iid}"
         )])
+    link_row = []
     if settings is not None:
-        rows.append([InlineKeyboardButton(
-            "Открыть приложение", url=ltf_app_url(settings, iid)
-        )])
+        app_url = ltf_app_url(settings, iid)
+        if app_url is not None:
+            link_row.append(InlineKeyboardButton(
+                "Открыть рабочее место", url=app_url
+            ))
+    if instrument is not None:
+        tv = (
+            f"https://www.tradingview.com/chart/?symbol="
+            f"{instrument.venue.upper()}:{instrument.symbol}"
+        )
+        link_row.append(InlineKeyboardButton("TradingView", url=tv))
+    if link_row:
+        rows.append(link_row)
     # «Обновить» — текущее состояние НОВЫМ сообщением (исторический текст
     # сигнала не переписывается)
     rows.append([InlineKeyboardButton(
@@ -366,6 +427,7 @@ _ALERT_GROUP_LABELS = {
     "entry": "Вход (касание Entry Zone)",
     "scenario": "Сценарий (отмена)",
     "service": "Сервис",
+    "alt": "Альткоины D1",
 }
 
 
@@ -374,6 +436,8 @@ def _alert_kind_label(grp: str, kind: str) -> str:
         return KIND_RU.get(EventKind(kind), kind)
     if grp == BOT_GRP_SERVICE:
         return "сервисные сообщения"
+    if grp == BOT_GRP_ALT:
+        return ALT_EVENT_KIND_RU.get(kind, kind)
     return LTF_EVENT_KIND_RU.get(kind, kind)
 
 

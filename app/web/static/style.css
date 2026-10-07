@@ -1,16 +1,33 @@
-/* HTF Zones — тёмная тема, адаптив под телефон (§1) */
+/* LevelFrame — токены бренда (LevelFrame_Rebrand_Plan_RU.md §4),
+   тёмная тема по умолчанию, адаптив под телефон (§1) */
 
 :root {
-  --bg: #101318;
-  --bg-panel: #171C24;
-  --bg-card: #1D2430;
-  --border: #2B3441;
-  --text: #E8EDF5;
-  --text-dim: #9AA8BA;
-  --accent: #5985FF;
-  --green: #55B5A2;
-  --red: #D9797B;
-  --warning: #D7AC65;
+  /* фирменные токены (тёмная тема) */
+  --lf-bg: #0C111B;
+  --lf-surface: #131B28;
+  --lf-raised: #1A2535;
+  --lf-text: #EDF2FA;
+  --lf-text2: #A2B0C5;
+  --lf-border: #2C3A4E;
+  --lf-brand: #4268DD;
+  --lf-positive: #62C9B0;
+  --lf-negative: #F08D98;
+  --lf-warning: #E9BC72;
+  /* радиусы: 6px контролы, 10px панели */
+  --lf-radius-ctrl: 6px;
+  --lf-radius-panel: 10px;
+
+  /* алиасы прежних переменных — вся существующая вёрстка темизируется */
+  --bg: var(--lf-bg);
+  --bg-panel: var(--lf-surface);
+  --bg-card: var(--lf-raised);
+  --border: var(--lf-border);
+  --text: var(--lf-text);
+  --text-dim: var(--lf-text2);
+  --accent: var(--lf-brand);
+  --green: var(--lf-positive);
+  --red: var(--lf-negative);
+  --warning: var(--lf-warning);
 
   /* цвета типов зон */
   --c-fvg: rgba(38, 166, 154, 0.18);
@@ -27,6 +44,20 @@
   --c-bsl-border: rgba(102, 187, 106, 0.8);
   --c-manual: rgba(255, 213, 79, 0.14);
   --c-manual-border: rgba(255, 213, 79, 0.8);
+}
+
+[data-theme="light"] {
+  /* LevelFrame: светлая тема (§4) */
+  --lf-bg: #F3F5F9;
+  --lf-surface: #FFFFFF;
+  --lf-raised: #EBEFF6;
+  --lf-text: #152238;
+  --lf-text2: #53637A;
+  --lf-border: #D5DDE8;
+  --lf-brand: #4268DD;
+  --lf-positive: #176957;
+  --lf-negative: #AA3448;
+  --lf-warning: #82510A;
 }
 
 * { box-sizing: border-box; }
@@ -656,7 +687,7 @@ select, input, textarea {
 .ltf-expected-sms { border-color: #ab71ed; color: #ab71ed; }
 .ltf-expected span {
   position: absolute; left: 2px; white-space: nowrap;
-  background: #12161c; padding: 1px 4px; border-radius: 2px;
+  background: var(--lf-surface); padding: 1px 4px; border-radius: 2px;
 }
 .ltf-expected .lbl-above { bottom: 8px; }
 .ltf-expected .lbl-below { top: 3px; }
@@ -715,12 +746,10 @@ select, input, textarea {
   #ltf-entries-table th, #ltf-entries-table td { padding: 4px 4px; font-size: 12px; }
 }
 
-/* 2026 workspace redesign: shared surfaces and controls */
+/* 2026 workspace redesign: shared surfaces and controls.
+   Базовые токены — алиасы --lf-* из первого :root (темизируются);
+   ниже только устойчивые цвета типов зон. */
 :root {
-  --bg: #101318; --bg-panel: #171b22; --bg-card: #1e242d;
-  --border: #2b323d; --text: #e6eaf0; --text-dim: #9ba6b5;
-  --accent: #5b8def; --green: #45b9a5; --red: #ef7573;
-  --warning: #e6b86a;
   --c-fvg: rgba(69,185,165,.11); --c-fvg-border: rgba(69,185,165,.65);
   --c-ob: rgba(91,141,239,.1); --c-ob-border: rgba(91,141,239,.65);
   --c-prb: rgba(168,137,229,.1); --c-prb-border: rgba(168,137,229,.65);
@@ -741,7 +770,11 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .main-nav a { color: var(--text-dim); text-decoration: none; padding: 7px 15px; border-radius: 8px; font-weight: 600; }
 .main-nav a:hover, .main-nav a.active { background: var(--bg-card); color: var(--text); }
 .topbar-controls { flex-wrap: nowrap; }
-.context-row { border-top: 1px solid var(--border); min-height: 54px; display: flex; align-items: center; gap: 20px; justify-content: space-between; }
+.context-row {
+  border-bottom: 1px solid var(--border); min-height: 54px; display: flex;
+  align-items: center; gap: 20px; justify-content: space-between;
+  padding: 0 20px; background: var(--bg); flex: none;
+}
 .context-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .context-controls select { min-width: 96px; }
 .price-caption, .connection-label { color: var(--text-dim); font-size: 12px; }
@@ -849,7 +882,7 @@ input[type="checkbox"] { min-height: auto; accent-color: var(--accent); }
 .obs-panel-head .ltf-tab-group { display: flex; gap: 4px; flex-wrap: wrap; }
 .obs-panel-head .ltf-tab { padding: 6px 8px; font-size: 12px; }
 .ltf-tab { border-radius: 7px; padding: 6px 12px; }
-.ltf-tab.active { background: #283b60; border-color: #456eaf; color: var(--text); }
+.ltf-tab.active { background: var(--lf-raised); border-color: var(--lf-brand); color: var(--text); }
 .ltf-filters { padding: 4px 0 8px; display: grid; gap: 6px; }
 .ltf-filters select { width: 100%; }
 .scenario-stage { margin: 0 0 14px; padding: 12px 14px; background: var(--bg-card); border-radius: 8px; border-left: 3px solid var(--accent); }
@@ -907,7 +940,7 @@ input[type="checkbox"] { min-height: auto; accent-color: var(--accent); }
   .main-nav { margin-left: 8px; }
   .main-nav a { padding: 7px 9px; }
   .connection-label { font-size: 11px; }
-  .context-row { padding: 8px 0; }
+  .context-row { padding: 8px 12px; }
   .context-controls { gap: 7px; }
   .price-caption, .last-candle, .ltf-updated { display: none; }
   .layout, .ltf-layout { padding: 8px; gap: 8px; height: auto; display: flex; flex-direction: column; }
@@ -955,7 +988,7 @@ input[type="checkbox"] { min-height: auto; accent-color: var(--accent); }
   #zones-table td:empty::before { content: none; }
 }
 
-/* ========== ТЗ редизайна: оболочка Обзор / Проверка / События / Настройки ========== */
+/* ========== Оболочка LevelFrame: Сейчас / Проверка / Журнал / Настройки ========== */
 
 .app-body { min-height: 100vh; }
 .app-nav {
@@ -963,14 +996,30 @@ input[type="checkbox"] { min-height: auto; accent-color: var(--accent); }
   height: 56px; padding: 0 16px;
   background: var(--bg-panel); border-bottom: 1px solid var(--border); flex: none;
 }
-.brand { color: var(--text); text-decoration: none; font-weight: 600; font-size: 16px; }
-.app-tabs { display: flex; gap: 4px; }
-.app-tab {
-  color: var(--text-dim); text-decoration: none; padding: 8px 12px; border-radius: 8px; font-weight: 500;
+.brand {
+  display: inline-flex; align-items: center; gap: 10px;
+  color: var(--text); text-decoration: none; font-weight: 700; font-size: 16px;
 }
-.app-tab:hover, .app-tab.active { color: var(--text); }
-.app-tab.active { box-shadow: inset 0 -2px 0 var(--accent); border-radius: 8px 8px 0 0; }
-.app-nav-right { margin-left: auto; }
+.brand-mark { color: var(--lf-brand); flex: none; display: block; }
+.app-tabs { display: flex; gap: 4px; align-items: center; }
+.app-tab {
+  color: var(--text-dim); text-decoration: none; padding: 8px 12px;
+  border-radius: var(--lf-radius-ctrl); font-weight: 500;
+}
+.app-tab:hover { color: var(--text); }
+.app-tab.active, .app-tab.current { background: var(--bg-card); color: var(--text); }
+.app-nav-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+.conn-status {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 13px; color: var(--text-dim); white-space: nowrap;
+}
+
+/* футер бренда (§8): тонкая строка внизу каждой страницы */
+.app-footer {
+  flex: none; display: flex; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap;
+  padding: 10px 16px; border-top: 1px solid var(--border);
+  color: var(--text-dim); font-size: 12px;
+}
 .view { display: none; flex: 1; min-height: 0; flex-direction: column; }
 .view.active { display: flex; }
 
@@ -1116,7 +1165,9 @@ input[type="checkbox"] { min-height: auto; accent-color: var(--accent); }
   #review-chart-container { height: 46vh; flex: none; }
 }
 @media (max-width: 767px) {
-  .app-tabs, .app-nav-right { display: none; }
+  .app-nav .app-tabs { display: none; }
+  .app-nav { gap: 12px; height: 52px; }
+  .conn-status .connection-label { font-size: 11px; }
   .mobile-nav {
     display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
     border-top: 1px solid var(--border); background: var(--bg-panel);
@@ -1285,3 +1336,458 @@ input[type="checkbox"] { min-height: auto; accent-color: var(--accent); }
 .badge.attn-awaiting { color: #ffb74d; border-color: #ffb74d; }
 .badge.attn-data_problem { color: var(--red); border-color: var(--red); }
 #ltf-sort-priority.active { border-color: var(--accent); color: var(--accent); }
+
+/* ---------------------------------------------------------------------------
+   Окно «Альткоины» (ТЗ 07.10.2026 §16–§18)
+   --------------------------------------------------------------------------- */
+.alt-run {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 6px 12px; font-size: 12px; color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+}
+.alt-run-item { white-space: nowrap; }
+.alt-run .btn { margin-left: auto; }
+
+.alt-filters {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 12px; border-bottom: 1px solid var(--border);
+}
+.alt-filters input[type="number"] { width: 96px; }
+
+.alt-layout {
+  display: grid; grid-template-rows: minmax(180px, 34vh) minmax(320px, 1fr);
+  gap: 12px; padding: 12px;
+  height: calc(100vh - 150px);
+  box-sizing: border-box;
+}
+.alt-table-wrap { overflow: auto; border: 1px solid var(--border); border-radius: 6px; }
+#alt-table { width: 100%; border-collapse: collapse; font-size: 12px; white-space: nowrap; }
+#alt-table th, #alt-table td {
+  padding: 4px 8px; border-bottom: 1px solid var(--border);
+  text-align: left; vertical-align: middle;
+}
+#alt-table thead th {
+  position: sticky; top: 0; z-index: 2;
+  background: var(--lf-surface, #131B28); color: var(--text-dim); font-weight: 500;
+}
+#alt-table tbody tr { cursor: pointer; }
+#alt-table tbody tr:hover { background: rgba(91, 141, 239, 0.08); }
+#alt-table tbody tr.selected { background: rgba(91, 141, 239, 0.16); }
+#alt-table tbody tr.alt-terminal { opacity: 0.75; }
+.alt-dim { color: var(--text-dim); font-size: 11px; }
+.alt-neg { color: var(--red); }
+.alt-k-note {
+  padding: 6px 10px; font-size: 12px; color: #ffb74d;
+}
+.alt-warn { color: #ffb74d; font-size: 12px; }
+
+/* слои графика: рамка аккумуляции (жёлтая), манипуляция (красная),
+   область ретеста (зелёная) — цвета по эталону §16 */
+#alt-overlay {
+  position: absolute; inset: 0;
+  pointer-events: none;
+  z-index: 10;
+}
+#alt-overlay > div { position: absolute; }
+.alt-range-box {
+  background: rgba(227, 179, 65, 0.10);
+  border-top: 1px solid rgba(227, 179, 65, 0.5);
+  border-bottom: 1px solid rgba(227, 179, 65, 0.5);
+  z-index: 1;
+}
+.alt-manip-box {
+  background: rgba(240, 141, 152, 0.14);
+  border-top: 1px dashed rgba(240, 141, 152, 0.6);
+  z-index: 2;
+}
+.alt-retest-box {
+  background: rgba(98, 201, 176, 0.12);
+  border-top: 1px dashed rgba(98, 201, 176, 0.6);
+  border-bottom: 1px dashed rgba(98, 201, 176, 0.6);
+  z-index: 2;
+}
+
+/* панель «Почему найдено» */
+.alt-why-card { max-height: 82vh; overflow: auto; }
+.alt-why h4 { margin: 12px 0 4px; font-size: 13px; }
+.alt-why-row {
+  display: flex; justify-content: space-between; gap: 12px;
+  padding: 2px 0; font-size: 12px;
+  border-bottom: 1px dotted var(--border);
+}
+.alt-why-row > span { color: var(--text-dim); }
+.alt-why-row > b { font-weight: 500; text-align: right; }
+.alt-why-events { margin: 4px 0; padding-left: 16px; font-size: 12px; max-height: 160px; overflow: auto; }
+
+@media (max-width: 900px) {
+  .alt-layout { grid-template-rows: minmax(160px, 28vh) minmax(280px, 1fr); }
+}
+
+/* ========== Экран «Сейчас» (LevelFrame, этап 3 ребрендинга, §6.A) ========== */
+
+.now-page { padding: 24px; overflow: auto; flex: 1; min-height: 0; }
+.now-over {
+  font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--lf-text2);
+}
+.now-title { margin: 4px 0 6px; font-size: 26px; font-weight: 700; }
+.now-sub { margin: 0 0 20px; color: var(--lf-text2); font-size: 13px; }
+
+.now-stats {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px; margin-bottom: 24px;
+}
+.stat-card {
+  background: var(--lf-surface); border: 1px solid var(--lf-border);
+  border-radius: var(--lf-radius-panel); padding: 16px;
+}
+.stat-card .stat-label { color: var(--lf-text2); font-size: 13px; }
+.stat-card .stat-value {
+  margin: 6px 0; font-size: 28px; font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.stat-card .stat-note { color: var(--lf-text2); font-size: 12px; }
+
+.now-layout {
+  display: grid; grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 16px; align-items: start;
+}
+.now-assets, .now-card {
+  background: var(--lf-surface); border: 1px solid var(--lf-border);
+  border-radius: var(--lf-radius-panel);
+}
+.now-assets { overflow: hidden; }
+.now-assets-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 12px 16px; flex-wrap: wrap;
+}
+.now-assets-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
+.now-filters { display: flex; gap: 4px; }
+.now-filter {
+  border: 0; background: transparent; color: var(--lf-text2);
+  padding: 8px 12px; border-radius: var(--lf-radius-ctrl);
+  cursor: pointer; font: inherit;
+}
+.now-filter:hover { color: var(--lf-text); }
+.now-filter.active { background: var(--lf-raised); color: var(--lf-text); }
+
+.asset-table { width: 100%; border-collapse: collapse; }
+.asset-table th {
+  text-align: left; color: var(--lf-text2); font-size: 12px; font-weight: 500;
+  padding: 8px 16px; border-top: 1px solid var(--lf-border);
+}
+.asset-table th.num, .asset-table td.num { text-align: right; }
+.asset-table td {
+  padding: 10px 16px; border-top: 1px solid var(--lf-border);
+  vertical-align: top; font-size: 14px;
+}
+.asset-table tbody tr { cursor: pointer; }
+.asset-table tbody tr:hover { background: var(--lf-raised); }
+.asset-table tbody tr.selected {
+  background: var(--lf-raised);
+  box-shadow: inset 2px 0 0 var(--lf-brand);
+}
+.asset-table tbody tr:focus-visible { outline: 2px solid var(--lf-brand); outline-offset: -2px; }
+.asset-sym { font-weight: 600; }
+.asset-sub, .state-sub, .price-age { color: var(--lf-text2); font-size: 12px; margin-top: 2px; }
+.price-val { font-variant-numeric: tabular-nums; }
+.state-dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  margin-right: 8px; vertical-align: 1px;
+}
+.state-dot.dot-brand { background: var(--lf-brand); }
+.state-dot.dot-positive { background: var(--lf-positive); }
+.state-dot.dot-warning { background: var(--lf-warning); }
+.state-dot.dot-muted { background: var(--lf-text2); }
+
+.now-card { padding: 16px; }
+.now-card-head {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 8px; color: var(--lf-text2); font-size: 13px;
+}
+.dir-badge {
+  font-size: 12px; padding: 2px 8px; border-radius: 10px;
+  border: 1px solid var(--lf-border); white-space: nowrap;
+}
+.dir-badge.bull { color: var(--lf-positive); border-color: var(--lf-positive); }
+.dir-badge.bear { color: var(--lf-negative); border-color: var(--lf-negative); }
+.now-card h3 { margin: 12px 0 6px; font-size: 18px; }
+.now-card-lead { margin: 0 0 16px; color: var(--lf-text2); font-size: 13px; line-height: 1.45; }
+.now-qa { margin: 0 0 16px; }
+.now-qa .qa-q { color: var(--lf-text2); font-size: 12px; margin-top: 10px; }
+.now-qa .qa-a { margin: 2px 0 0; font-size: 14px; line-height: 1.4; }
+.now-card .now-open-desk { width: 100%; }
+.now-card-foot { margin-top: 12px; color: var(--lf-text2); font-size: 12px; }
+.now-empty { padding: 24px 16px; color: var(--lf-text2); margin: 0; }
+.now-foot { margin: 16px 4px 0; color: var(--lf-text2); font-size: 12px; }
+
+@media (max-width: 1023px) {
+  .now-layout { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 767px) {
+  .now-page { padding: 16px 12px 24px; }
+  .now-stats { grid-template-columns: 1fr; gap: 12px; margin-bottom: 16px; }
+  .now-filter { min-height: 44px; }
+}
+/* 320–599 px: таблица становится карточками (строка = блок), без
+   горизонтального скролла */
+@media (max-width: 599px) {
+  .asset-table, .asset-table tbody, .asset-table tbody tr, .asset-table td {
+    display: block; width: 100%;
+  }
+  .asset-table thead { display: none; }
+  .asset-table tbody tr {
+    padding: 10px 12px; border-top: 1px solid var(--lf-border); min-height: 44px;
+  }
+  .asset-table td, .asset-table td.num {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 10px; padding: 4px 0; border: 0; text-align: right;
+  }
+  .asset-table td::before {
+    content: attr(data-label); color: var(--lf-text2); font-size: 12px;
+    text-align: left; white-space: nowrap;
+  }
+  .asset-table td .asset-sub, .asset-table td .state-sub, .asset-table td .price-age {
+    margin-top: 0;
+  }
+}
+
+/* ========== Рабочее место LevelFrame (этап 4, макет §6.B) ==========
+   Сетка: активы | график | (сценарий + зоны). Внешний grid остаётся
+   двухколоночным (desk-main | desk-side) — совместимость со сплиттером
+   ширины правой панели (initLayoutSplitters в common.js). */
+
+.desk-head { flex: none; padding: 12px 16px 0; }
+.desk-all {
+  color: var(--lf-text2); font-size: 12px; text-decoration: none;
+}
+.desk-all:hover { color: var(--lf-text); }
+.desk-head-row {
+  display: flex; justify-content: space-between; align-items: flex-end;
+  gap: 8px 16px; flex-wrap: wrap; margin-top: 4px;
+}
+.desk-title h2 { margin: 0; font-size: 24px; font-weight: 700; display: inline; }
+.desk-title .work-meta { margin-left: 10px; font-size: 13px; }
+.desk-fresh { margin-top: 6px; font-size: 13px; color: var(--lf-text2); }
+.desk-fresh .state-dot { margin-right: 8px; }
+.desk-quote { text-align: right; }
+.desk-price-row {
+  display: flex; align-items: baseline; gap: 6px; justify-content: flex-end;
+}
+.desk-price {
+  font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums;
+}
+.desk-price-ccc { color: var(--lf-text2); font-size: 13px; }
+.desk-quote .price-age { color: var(--lf-text2); font-size: 12px; margin-top: 2px; }
+
+/* правая колонка рабочего места: карточка сценария над рейлом зон */
+.overview-layout { grid-template-columns: minmax(0, 1fr) 340px; }
+.desk-side {
+  display: flex; flex-direction: column; gap: 12px;
+  min-width: 0; min-height: 0;
+}
+.desk-side .zone-rail { flex: 1; min-height: 140px; }
+
+.desk-main {
+  display: grid; grid-template-columns: 220px minmax(0, 1fr);
+  gap: 12px; min-width: 0; min-height: 0;
+}
+
+/* левая колонка: компактный список активов (/api/ltf/instruments) */
+.desk-assets {
+  background: var(--lf-surface); border: 1px solid var(--lf-border);
+  border-radius: var(--lf-radius-panel); padding: 8px;
+  overflow-y: auto; min-height: 0;
+}
+.desk-assets-head {
+  margin: 4px 6px 8px; font-size: 12px; font-weight: 500;
+  color: var(--lf-text2); text-transform: uppercase; letter-spacing: .06em;
+}
+.desk-assets-list { display: flex; flex-direction: column; gap: 4px; }
+.desk-asset {
+  display: block; width: 100%; text-align: left; font: inherit;
+  background: transparent; color: var(--lf-text);
+  border: 1px solid transparent; border-radius: var(--lf-radius-ctrl);
+  padding: 8px 10px; cursor: pointer;
+}
+.desk-asset:hover { background: var(--lf-raised); }
+.desk-asset.selected {
+  background: var(--lf-raised); box-shadow: inset 2px 0 0 var(--lf-brand);
+}
+.desk-asset-sym { display: block; font-weight: 600; }
+.desk-asset-price {
+  display: block; margin-top: 2px; font-size: 12px;
+  color: var(--lf-text2); font-variant-numeric: tabular-nums;
+}
+.desk-asset-state {
+  display: block; margin-top: 2px; font-size: 12px; color: var(--lf-text2);
+}
+.desk-asset-state .state-dot { margin-right: 6px; }
+
+/* табы режима «Контекст | Структура H1» над графиком */
+.desk-modebar {
+  flex: none; display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; min-height: 42px; padding: 0 12px;
+  background: var(--bg-panel); border: 1px solid var(--border);
+  border-bottom: 0; border-radius: var(--lf-radius-panel) var(--lf-radius-panel) 0 0;
+}
+.mode-tabs { display: flex; gap: 4px; }
+.mode-tab {
+  display: inline-flex; align-items: center;
+  padding: 7px 14px; border-radius: var(--lf-radius-ctrl);
+  border: 1px solid transparent; background: transparent;
+  color: var(--lf-text2); text-decoration: none; cursor: pointer;
+  font: inherit; font-weight: 500;
+}
+.mode-tab:hover { color: var(--lf-text); }
+.mode-tab.active {
+  background: var(--lf-raised); color: var(--lf-text);
+  border-color: var(--lf-brand);
+}
+/* график под строкой режимов: скругление только снизу */
+.overview-layout .chart-block #chart-container {
+  border-radius: 0 0 var(--lf-radius-panel) var(--lf-radius-panel);
+}
+
+/* карточка состояния сценария (снимок /current) */
+.desk-scenario {
+  flex: none; background: var(--lf-surface);
+  border: 1px solid var(--lf-border); border-radius: var(--lf-radius-panel);
+  padding: 16px; max-height: 55%; overflow: auto;
+}
+.desk-sc-head {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 8px; color: var(--lf-text2); font-size: 13px;
+}
+.desk-scenario h3 { margin: 12px 0 6px; font-size: 18px; line-height: 1.3; }
+.desk-sc-lead {
+  margin: 0 0 8px; color: var(--lf-text2); font-size: 13px; line-height: 1.45;
+}
+.desk-qa { margin: 0 0 12px; }
+.desk-qa .qa-q { color: var(--lf-text2); font-size: 12px; margin-top: 10px; }
+.desk-qa .qa-a { margin: 2px 0 0; font-size: 14px; line-height: 1.4; }
+.desk-watch { width: 100%; }
+.desk-basis {
+  margin-top: 12px; padding-top: 10px;
+  border-top: 1px solid var(--lf-border);
+  font-size: 12px; color: var(--lf-text2);
+}
+.desk-basis summary { cursor: pointer; }
+.desk-basis dl {
+  display: grid; grid-template-columns: auto 1fr; gap: 3px 10px;
+  margin: 8px 0 0;
+}
+.desk-basis dd { margin: 0; color: var(--lf-text); }
+
+/* «Зоны сценария / N» под графиком (eligible_entries снимка /current) */
+.desk-entries {
+  flex: none; margin-top: 12px; padding: 12px 16px;
+  background: var(--lf-surface); border: 1px solid var(--lf-border);
+  border-radius: var(--lf-radius-panel);
+  max-height: 190px; overflow: auto;
+}
+.desk-entries-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  gap: 8px; margin-bottom: 4px;
+}
+.desk-entries-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
+.desk-entry {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 9px 0; border-top: 1px solid var(--lf-border); font-size: 13px;
+}
+.desk-entry-name { font-weight: 600; }
+.desk-entry-sub { color: var(--lf-text2); font-weight: 400; }
+.desk-entry-range { margin-left: auto; font-variant-numeric: tabular-nums; }
+.desk-entry-status { font-size: 12px; color: var(--lf-text2); }
+.desk-entry-status.ok { color: var(--lf-positive); }
+.desk-entry-status .state-dot { margin-right: 6px; }
+
+/* ========== Проверка (этап 5, макет §6.C) ========== */
+
+.review-head {
+  flex: none; display: flex; justify-content: space-between;
+  align-items: flex-start; gap: 16px; padding: 16px 16px 0;
+}
+.review-over {
+  font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--lf-text2);
+}
+.review-title { margin: 4px 0 6px; font-size: 26px; font-weight: 700; }
+.review-sub { margin: 0; color: var(--lf-text2); font-size: 13px; }
+.review-count {
+  padding-top: 8px; white-space: nowrap;
+  color: var(--lf-text2); font-size: 13px;
+}
+.review-count .state-dot { margin-right: 8px; }
+
+.candidate-card .cand-type {
+  margin-top: 2px; font-size: 12px; color: var(--lf-text2);
+}
+.candidate-card .cand-range {
+  margin-top: 4px; font-variant-numeric: tabular-nums;
+}
+.candidate-card .cand-detail { opacity: 0.75; }
+.review-back-now { margin-top: 4px; width: 100%; }
+
+.rv-task-over {
+  font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--lf-text2);
+}
+.rv-rule { font-size: 13px; line-height: 1.45; }
+.rv-facts { margin-top: 10px; }
+.rv-actions-main { display: grid; gap: 8px; margin-top: 14px; }
+.rv-actions-main .btn { width: 100%; }
+.rv-actions-secondary {
+  margin-top: 14px; padding-top: 12px;
+  border-top: 1px solid var(--lf-border);
+}
+.rv-actions-secondary textarea { width: 100%; resize: vertical; }
+
+/* ---- адаптивная сетка рабочего места (§6) ---- */
+
+/* 1024–1439: активы 160–190 px, инспектор 240–280 px */
+@media (min-width: 1200px) and (max-width: 1439px) {
+  .overview-layout { grid-template-columns: minmax(0, 1fr) 280px; }
+  .desk-main { grid-template-columns: 180px minmax(0, 1fr); }
+}
+@media (min-width: 1024px) and (max-width: 1199px) {
+  .overview-layout { grid-template-columns: minmax(0, 1fr) 260px; }
+  .desk-main { grid-template-columns: 170px minmax(0, 1fr); }
+  .zone-rail { max-height: none; }
+}
+
+/* 600–1023: список активов — горизонтальная лента, инспектор под графиком */
+@media (max-width: 1023px) {
+  .desk-main {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .desk-assets { overflow: hidden; }
+  .desk-assets-list {
+    flex-direction: row; gap: 8px; overflow-x: auto; padding-bottom: 4px;
+  }
+  .desk-asset {
+    flex: none; min-width: 132px;
+    background: var(--bg-card); border-color: var(--lf-border);
+  }
+  .desk-asset.selected { box-shadow: inset 0 -2px 0 var(--lf-brand); }
+  .desk-scenario { max-height: none; }
+  .review-head { padding: 12px 12px 0; }
+}
+
+/* 320–599: один поток — вывод сценария раньше графика, цели касания ≥44px */
+@media (max-width: 599px) {
+  .overview-layout { display: flex; flex-direction: column; }
+  .desk-main, .desk-side { display: contents; }
+  .desk-scenario { order: 1; }
+  .desk-assets { order: 2; }
+  .overview-layout .chart-block { order: 3; }
+  .zone-rail { order: 4; max-height: none; }
+  .desk-head-row { flex-direction: column; align-items: flex-start; }
+  .desk-quote { text-align: left; }
+  .desk-price-row { justify-content: flex-start; }
+  .mode-tab { min-height: 44px; }
+  .desk-asset { min-height: 44px; }
+  .review-head { flex-direction: column; gap: 6px; }
+  .review-count { padding-top: 0; }
+}

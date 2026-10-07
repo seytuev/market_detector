@@ -19,7 +19,8 @@ from ..texts_ru import (
     LTF_TYPE_RU,
     TYPE_RU,
 )
-from .telegram import _fmt_price, _fmt_source, _fmt_time, tradingview_url
+from .formatting import fmt_pct_ru, fmt_time_msk
+from .telegram import _fmt_price, _fmt_time, tradingview_url
 
 # Лимит текста Telegram — 4096; держим запас под юникод/разметку
 TELEGRAM_TEXT_LIMIT = 4000
@@ -43,8 +44,18 @@ def _direction_word(direction: str) -> str:
     return {"bull": "Bullish", "bear": "Bearish"}.get(direction, direction)
 
 
+def _htf_context(ctx: LtfContext) -> str:
+    """«FVG D1 · медвежий» — тип/ТФ/направление родителя (§5.4)."""
+    z = ctx.zone
+    if z is None:
+        return "HTF-контекст отсутствует"
+    type_ru = TYPE_RU.get(z.type.value, z.type.value)
+    dir_ru = DIRECTION_RU.get(z.direction.value, z.direction.value)
+    return f"{type_ru} {z.timeframe} · {dir_ru}"
+
+
 def _htf_part(ctx: LtfContext) -> str:
-    """«HTF Orderblock D1 (медвежий)» — тип/ТФ/направление родителя."""
+    """«HTF Orderblock D1 (медвежий)» — для связного предложения."""
     z = ctx.zone
     if z is None:
         return "HTF-зоны"
@@ -54,14 +65,10 @@ def _htf_part(ctx: LtfContext) -> str:
 
 
 def _footer(ev: LtfEvent, ctx: LtfContext) -> str:
-    parts = [
-        f"Источник: {_fmt_source(ctx.instrument)}.",
-        f"Время: {_fmt_time(ev.occurred_at)}.",
-    ]
-    tv = tradingview_url(ctx.instrument)
-    if tv:
-        parts.append(f"TradingView: {tv}")
-    return "\n".join(parts)
+    """ТЗ 07.10.2026 §5.1/§6: без строки «Источник» (метаданные — в карточке
+    «Подробнее»), время — МСК. Ссылка TradingView живёт кнопкой, чтобы её
+    превью не подменяло собственный график (§7)."""
+    return f"Время события: {_fmt_time(ev.occurred_at)}"
 
 
 def _render_entry_line(e: dict[str, Any]) -> str:
@@ -106,11 +113,12 @@ def _render_entries_block(entries: list[dict[str, Any]]) -> list[str]:
 
 
 def _render_range(rng: Optional[dict[str, Any]]) -> Optional[str]:
+    """Диапазон и середина — отдельными строками (ТЗ 07.10.2026 §5.1)."""
     if not rng:
         return None
     return (
-        f"Premium/Discount: {_fmt_price(rng['lower'])}–{_fmt_price(rng['upper'])}, "
-        f"50%: {_fmt_price(rng['mid'])}."
+        f"Диапазон: {_fmt_price(rng['lower'])}–{_fmt_price(rng['upper'])}\n"
+        f"Середина: {_fmt_price(rng['mid'])}"
     )
 
 
@@ -152,7 +160,7 @@ def _render_movement(mv: Optional[dict[str, Any]]) -> Optional[str]:
     line = f"Движение к слому: {_fmt_price(start)} → {_fmt_price(end)}"
     if start:
         pct = 100 * (end - start) / start
-        line += f" ({pct:+.2f}%"
+        line += f" ({fmt_pct_ru(pct, signed=True)}"
         if mv.get("candles"):
             line += f" · {mv['candles']} свечей H1"
         line += ")"
@@ -165,7 +173,8 @@ def _render_movement(mv: Optional[dict[str, Any]]) -> Optional[str]:
 
 
 def _render_break(ev: LtfEvent, ctx: LtfContext) -> list[str]:
-    """§11.1/§11.2: BOS/SMS — с готовыми зонами либо с ожиданием."""
+    """§5.4 ТЗ 07.10.2026: BOS/SMS — с готовыми зонами либо с ожиданием.
+    Отсутствие зон входа не подменяет факт слома."""
     p = ev.payload
     direction = p.get("direction") or (
         ctx.scenario.direction.value if ctx.scenario else ""
@@ -173,16 +182,18 @@ def _render_break(ev: LtfEvent, ctx: LtfContext) -> list[str]:
     word = _direction_word(direction)
     kind = str(p.get("kind", ev.kind)).upper()
     stage_ru = "вторичный" if p.get("stage") == "secondary" else "первичный"
-    # §3.3: «внутри» — только при явном признаке; иначе «после касания»
-    position = "внутри" if p.get("htf_position") == "inside" else "после касания"
     head = (
-        f"{_symbol(ctx)} · H1\n"
-        f"Произошёл {word} {kind} ({stage_ru}) {position} {_htf_part(ctx)}."
+        f"LevelFrame · {_symbol(ctx)} · H1\n"
+        f"Подтверждён {word} {kind} ({stage_ru}).\n"
+        f"HTF-контекст: {_htf_context(ctx)}"
     )
     if p.get("break_level") is not None:
-        head += f"\nУровень слома: {_fmt_price(p['break_level'])}."
-    if p.get("break_candle_open_time") is not None:
-        head += f" Закрытие: {_fmt_time(p['break_candle_open_time'])}."
+        head += f"\nУровень слома: {_fmt_price(p['break_level'])}"
+    if p.get("close") is not None:
+        head += f"\nЗакрытие H1: {_fmt_price(p['close'])}"
+    # occurred_at события — close_time пробойной свечи (engine._emit);
+    # это именно время закрытия H1, а не открытия (§6 ТЗ 07.10.2026)
+    head += f"\nВремя закрытия H1: {fmt_time_msk(ev.occurred_at)}"
     mv_line = _render_movement(p.get("movement"))
     if mv_line:
         head += f"\n{mv_line}"
@@ -195,9 +206,9 @@ def _render_break(ev: LtfEvent, ctx: LtfContext) -> list[str]:
     if rng_line:
         head += f"\n{rng_line}"
     if not entries:
-        head += "\nПодходящих свежих Entry Zones пока нет."
+        head += "\nПодтверждение есть; подходящих зон входа сейчас нет"
         return _split(head, [], _footer(ev, ctx))
-    lines = (["Возможности входа:"] + _render_entries_block(entries)
+    lines = (["Зоны входа:"] + _render_entries_block(entries)
              + _context_lines(entries, ctx))
     return _split(head, lines, _footer(ev, ctx))
 
@@ -205,11 +216,12 @@ def _render_break(ev: LtfEvent, ctx: LtfContext) -> list[str]:
 def _render_entries_ready(ev: LtfEvent, ctx: LtfContext) -> list[str]:
     """§11.2: дополнение к существующему сценарию — только новые зоны."""
     p = ev.payload
-    head = f"{_symbol(ctx)} · H1\nНовые Entry Zones по сценарию"
+    head = f"LevelFrame · {_symbol(ctx)} · H1\nНовые Entry Zones по сценарию"
     if ctx.scenario is not None:
-        word = _direction_word(ctx.scenario.direction.value)
-        head += f" {word} {ctx.scenario.trigger}"
-    head += f" ({_htf_part(ctx)}):"
+        dir_ru = DIRECTION_RU.get(ctx.scenario.direction.value,
+                                  ctx.scenario.direction.value)
+        head += f" {dir_ru} {ctx.scenario.trigger}"
+    head += f" ({_htf_context(ctx)}):"
     rng_line = _render_range(p.get("range"))
     if rng_line:
         head += f"\n{rng_line}"
@@ -220,27 +232,36 @@ def _render_entries_ready(ev: LtfEvent, ctx: LtfContext) -> list[str]:
 
 
 def _render_touch(ev: LtfEvent, ctx: LtfContext) -> list[str]:
-    """§11.3: достижение Entry Zone; для уровня — ожидание закрытия H1."""
+    """§5.5 ТЗ 07.10.2026: касание допустимой Entry Zone. Сигнал касания
+    не равен исполненному ордеру; для уровня — ожидание закрытия H1."""
     p = ev.payload
     t = LTF_TYPE_RU.get(p.get("type", ""), p.get("type", "?"))
-    head = f"{_symbol(ctx)}: цена пришла к Entry Zone — {t} LTF H1."
+    dir_ru = (
+        DIRECTION_RU.get(ctx.scenario.direction.value, "")
+        if ctx.scenario is not None else ""
+    )
+    head = f"LevelFrame · {_symbol(ctx)} · H1"
+    if dir_ru:
+        head += f" · {dir_ru}"
+    head += f"\nЦена коснулась Entry Zone: {t} H1."
+    head += f"\nHTF-контекст: {_htf_context(ctx)}"
+    if ctx.scenario is not None:
+        basis = f"{ctx.scenario.trigger}"
+        if ctx.scenario.created_at:
+            basis += f", {fmt_time_msk(ctx.scenario.created_at)}"
+        head += f"\nОснование: {basis}"
     lower, upper = p.get("lower"), p.get("upper")
     if lower is not None and upper is not None:
         if lower == upper:
-            head += f"\nЗона (уровень): {_fmt_price(lower)}."
+            head += f"\nУровень: {_fmt_price(lower)}"
         else:
-            head += (
-                f"\nЗона: {_fmt_price(lower)}–{_fmt_price(upper)}"
-                f" (середина {_fmt_price(p['mid'])})."
-            )
+            head += f"\nДиапазон: {_fmt_price(lower)}–{_fmt_price(upper)}"
+            head += f"\nСередина: {_fmt_price(p['mid'])}"
     if p.get("price") is not None:
         # цену события берём только из payload, не выдумываем (§11)
-        head += f" Цена события: {_fmt_price(p['price'])}."
-    if ctx.scenario is not None:
-        word = _direction_word(ctx.scenario.direction.value)
-        head += (
-            f"\nСценарий: {word} {ctx.scenario.trigger}, {_htf_part(ctx)}."
-        )
+        head += f"\nЦена события: {_fmt_price(p['price'])}"
+    head += "\nСобытие: касание зоны входа"
+    head += "\nСигнал касания не равен исполненному ордеру."
     if p.get("type") in ("BSL", "SSL"):
         # §10/§11.3: до закрытия свечи подтверждение не пишем
         head += "\nОжидаем закрытия текущей H1 для проверки снятия без закрепления."
@@ -261,30 +282,40 @@ def _render_touch(ev: LtfEvent, ctx: LtfContext) -> list[str]:
 
 
 def _render_sweep(ev: LtfEvent, ctx: LtfContext) -> list[str]:
-    """§10: исход liquidity-теста — продолжение события касания."""
+    """§3.3 ТЗ 07.10.2026: исход liquidity-теста. Снятый уровень — НЕ
+    обратная зона входа; повторные входы по нему отключены."""
     p = ev.payload
     t = LTF_TYPE_RU.get(p.get("type", ""), p.get("type", "уровень"))
     level = _fmt_price(p["level"]) if p.get("level") is not None else "?"
     close = _fmt_price(p["close_price"]) if p.get("close_price") is not None else "?"
+    head = f"LevelFrame · {_symbol(ctx)} · H1 · {t}"
     if ev.kind == "sweep_confirmed":
-        head = (
-            f"{_symbol(ctx)}: {t} снят, H1 закрылась обратно "
-            f"(уровень {level}, закрытие {close})."
+        head += (
+            f"\nЛиквидность {t} снята."
+            f"\nУровень: {level}"
+            f"\nЗакрытие H1: {close}"
+            "\nСобытие: первое снятие без закрепления, подтверждено закрытием H1"
+            "\nСтатус: снята; повторные входы по этому уровню отключены"
         )
     elif p.get("outcome") == "equal_close":
-        head = (
-            f"{_symbol(ctx)}: {t} — закрытие ровно на уровне {level}, "
-            "исход не подтверждён (§10)."
+        # Close = K: нет подтверждения строго по нужную сторону — без
+        # выдуманного сигнала (§3.2 ТЗ 07.10.2026)
+        head += (
+            f"\nУровень: {level}"
+            f"\nЗакрытие H1: {close} — ровно на уровне"
+            "\nСобытие: закрытие ровно на уровне"
+            "\nСтатус: неопределённость; подтверждения снятия нет"
         )
     else:
         # §9 (Этап 5): строгое закрытие за уровнем — финальный исход,
         # уровень пройден без возврата и исключён из выбора навсегда
-        head = (
-            f"{_symbol(ctx)}: {t} пройден без возврата: "
-            f"H1 закрепилась за уровнем {level} (закрытие {close}); "
-            "уровень исключён из выбора."
+        head += (
+            f"\nЛиквидность {t} снята с закреплением."
+            f"\nУровень: {level}"
+            f"\nЗакрытие H1: {close}"
+            "\nСобытие: закрепление H1 строго за уровнем"
+            "\nСтатус: снята; повторные входы по этому уровню отключены"
         )
-    head += "\nЭто продолжение события касания, а не сообщение о сделке."
     return _split(head, [], _footer(ev, ctx))
 
 
@@ -292,9 +323,12 @@ def _render_cancellation(ev: LtfEvent, ctx: LtfContext) -> list[str]:
     """§11.4: отмена сценария. Про позицию не пишем — данных о ней нет."""
     p = ev.payload
     direction = ctx.scenario.direction.value if ctx.scenario else ""
-    word = _direction_word(direction)
+    dir_ru = DIRECTION_RU.get(direction, direction)
     reason = LTF_CANCELLATION_RU.get(p.get("reason", ""), p.get("reason", "?"))
-    head = f"{_symbol(ctx)}: {word} LTF-сценарий отменён.\nПричина: {reason}."
+    head = (
+        f"LevelFrame · {_symbol(ctx)}: {dir_ru} LTF-сценарий отменён.\n"
+        f"Причина: {reason}."
+    )
     if p.get("reason") in ("reverse_bos", "reverse_sms"):
         # родитель ещё валиден — наблюдение ждёт нового подтверждения (§6.5)
         head += (
@@ -311,7 +345,7 @@ def render_ltf_messages(ev: LtfEvent, ctx: LtfContext) -> list[str]:
     if ev.kind in ("entries_ready", "range_ready"):
         if ev.kind == "range_ready" and not (ev.payload.get("entries")):
             p = ev.payload
-            head = f"{_symbol(ctx)} · H1\nДиапазон готов ({_htf_part(ctx)})."
+            head = f"LevelFrame · {_symbol(ctx)} · H1\nДиапазон готов ({_htf_context(ctx)})."
             rng_line = _render_range(p.get("range"))
             if rng_line:
                 head += f"\n{rng_line}"

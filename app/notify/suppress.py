@@ -26,6 +26,7 @@ BOT_GRP_LTF = "ltf"
 BOT_GRP_ENTRY = "entry"
 BOT_GRP_SCENARIO = "scenario"
 BOT_GRP_SERVICE = "service"
+BOT_GRP_ALT = "alt"
 
 BOT_ALERT_GROUPS: dict[str, list[str]] = {
     BOT_GRP_HTF: [k.value for k in EventKind],
@@ -34,6 +35,18 @@ BOT_ALERT_GROUPS: dict[str, list[str]] = {
     BOT_GRP_ENTRY: ["touch"],
     BOT_GRP_SCENARIO: ["cancellation"],
     BOT_GRP_SERVICE: ["service"],
+    # Отдельная подписка «Альткоины D1» (ТЗ 07.10.2026 §18): по умолчанию
+    # все события модуля — формирование, зрелость, манипуляция, SSL,
+    # BOS/SMS, breakout, ретест, входы A/B, цели, отмена, истечение,
+    # завершение целей, проверка опор
+    BOT_GRP_ALT: [
+        "forming_started", "mature_frozen",
+        "manipulation_started", "manipulation_ended",
+        "ssl_taken", "bos_confirmed", "sms_confirmed",
+        "breakout", "retest", "entry_a", "entry_b",
+        "target_hit", "cancelled", "expired_no_retest",
+        "targets_completed", "review_required",
+    ],
 }
 
 
@@ -43,6 +56,11 @@ def bot_group_for_ltf_kind(kind: str) -> str:
     if kind == "cancellation":
         return BOT_GRP_SCENARIO
     return BOT_GRP_LTF
+
+
+def bot_group_for_alt_kind(kind: str) -> str:
+    """Все события модуля альткоинов — в одной группе подписки (§18)."""
+    return BOT_GRP_ALT
 
 
 def bot_delivery_blocked(

@@ -102,12 +102,17 @@ const REASON_RU = {
   invalid: 'зона невалидна',
   swept_level: 'уровень снят',
   level_broken: 'уровень пройден без возврата',
+  fvg_filled: 'FVG перекрыт полностью',
   origin_unresolved: 'принадлежность движению не доказана',
   range_pending: 'диапазон ещё не подтверждён',
 };
 const ENTRY_STATE_RU = {
   fresh: 'свежая', tested: 'протестирована',
   out_of_range: 'вне диапазона', invalid: 'невалидна',
+};
+const FILL_STATUS_RU = {
+  open: 'не перекрыт', partially_filled: 'перекрыт частично',
+  filled: 'перекрыт полностью',
 };
 const LIQUIDITY_STATE_RU = {
   awaiting_close: 'снятие ожидает закрытия H1',
@@ -389,6 +394,9 @@ function updateHtfLink() {
   url.searchParams.set('token', window.HTF.getToken());
   if (state.instrumentId) url.searchParams.set('instrument', String(state.instrumentId));
   link.href = url.pathname + url.search;
+  // таб режима «Контекст» (рабочее место desk) — тот же инструмент и токен
+  const desk = $('lnk-desk');
+  if (desk) desk.href = url.pathname + url.search + '#desk';
 }
 
 async function selectInstrument(id) {
@@ -824,6 +832,7 @@ function zoneRowsHtml(rows, { withReason }) {
       <dt>Сформирована</dt><dd>${fmtTime(row.formed_at)}</dd>
       <dt>Подтверждена</dt><dd>${fmtTime(row.confirmed_at)}</dd>
       <dt>Первое касание</dt><dd>${row.first_test_at ? fmtTime(row.first_test_at) : '—'}</dd>
+      ${row.fill_status ? `<dt>Перекрытие FVG</dt><dd>${esc(FILL_STATUS_RU[row.fill_status] || row.fill_status)}</dd>` : ''}
       <dt>Середина</dt><dd>${row.is_level ? '—' : fmtPrice(row.mid)}</dd>
       <dt>Версия диапазона</dt><dd>${row.range_version != null ? row.range_version : '—'}${row.outdated ? ' · устарела' : ''}</dd>
     </dl>${ltfReviewBlock(row)}</td></tr>`;
@@ -1170,10 +1179,11 @@ function renderJournal() {
 
 function initChart() {
   const theme = HTF.chartTheme();
-  // стилистика как у HTF-снимка: тёмный фон #12161c, пунктирная сетка,
-  // белые растущие / синие падающие свечи
+  // фон/сетка — из темы LevelFrame (chartTheme: var(--lf-surface) и т.д.),
+  // чтобы работала светлая тема; белые растущие / синие падающие свечи —
+  // устойчивая стилистика LTF-снимка
   state.chart = LightweightCharts.createChart($('chart'), {
-    layout: { background: { color: '#12161c' }, textColor: theme.text },
+    layout: { background: { color: theme.background }, textColor: theme.text },
     grid: {
       vertLines: { color: theme.grid, style: LightweightCharts.LineStyle.Dotted },
       horzLines: { color: theme.grid, style: LightweightCharts.LineStyle.Dotted },

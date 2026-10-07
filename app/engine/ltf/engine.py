@@ -37,6 +37,7 @@ from ...models_ltf import (
 )
 from .breaks import StructureEventDraft, detect_breaks
 from .context import context_complete, context_flags, scenario_context
+from ..depth import reaches_depth
 from .eligibility import (
     ADMISSION_CONTEXT,
     REASON_LEVEL_BROKEN,
@@ -49,6 +50,7 @@ from .entries import (
     H1_MS,
     build_movement,
     detect_entry_zones,
+    fvg_filled,
     merge_test_extreme,
     test_depth_of,
     touch_bar,
@@ -259,6 +261,19 @@ class LtfEngine:
                                               candle, now, processing_mode,
                                               detection_lag_ms, result)
 
+    def _scenario_start(self, sc) -> int:
+        """Рыночное время старта сценария: occurred_at триггера (fallback —
+        created_at). Свечи раньше сценарию не принадлежат: в replay активный
+        сценарий читается из БД до своей рыночной истории и НЕ должен
+        поглощать сломы, диапазоны и касания прошлых эпох (§13: replay не
+        меняет прошлое — в т.ч. чужое)."""
+        trig = next(
+            (e for e in self.db.list_ltf_structure_events(sc.id)
+             if e.id == sc.trigger_event_id),
+            None,
+        )
+        return trig.occurred_at if trig is not None else sc.created_at
+
     # ------------------------------------------------------------------ #
     # (2) Касания и liquidity-тесты (§9, §10)
     # ------------------------------------------------------------------ #
@@ -276,6 +291,8 @@ class LtfEngine:
             sc = self.db.get_active_ltf_scenario(obs.id)
             if sc is None:
                 continue
+            if candle.close_time < self._scenario_start(sc):
+                continue  # свеча раньше триггера сценария — чужая эпоха (§13)
             cur = self.db.get_current_ltf_range(sc.id)
             ver = cur.version if cur is not None else 0
             entries = [
@@ -511,6 +528,33 @@ class LtfEngine:
                 return c
         return None
 
+    def _fvg_fill_scan(
+        self, zone: LtfEntryZone, up_to: list
+    ) -> Optional[tuple[int, float]]:
+        """§10 (Этап 6): первое полное перекрытие FVG по истории закрытых
+        свечей (формирующая тройка тестом не является, §9/п.11). Возвращает
+        (first_test_at, extreme) или None. Вызывается на границах версий
+        диапазона: перекрытие, случившееся пока зона была вне выбора,
+        не остаётся незамеченным."""
+        after = zone.formed_at
+        fvg_candles = zone.evidence.get("fvg_candles")
+        if fvg_candles:
+            after = fvg_candles[-1]
+        first: Optional[int] = None
+        extreme: Optional[float] = None
+        for c in up_to:
+            if not c.closed or c.open_time <= after:
+                continue
+            if not touch_bar(zone.lower, zone.upper, c):
+                continue
+            if first is None:
+                first = c.open_time
+            cur = c.low if zone.direction == Direction.BULL else c.high
+            extreme = merge_test_extreme(zone.direction, extreme, cur)
+            if reaches_depth(zone, extreme, 1.0):
+                return first, extreme
+        return None
+
     def _mark_level_broken(
         self, obs, sc, zone: LtfEntryZone, candle, now: int,
         processing_mode: str, detection_lag_ms: int,
@@ -672,6 +716,10 @@ class LtfEngine:
         now: int, processing_mode: str, detection_lag_ms: int,
         result: LtfTickResult,
     ) -> None:
+        if candle.close_time < self._scenario_start(sc):
+            # replay: свеча раньше триггера — сломы/диапазоны/касания прошлых
+            # эпох этому сценарию не принадлежат (§13: replay не меняет прошлое)
+            return
         cancel = sync.cancellations.get(sc.id)
         fresh = [
             e for e in sync.events.get(sc.id, [])
@@ -1054,6 +1102,21 @@ class LtfEngine:
                     )
                     if t is not None:
                         tests.append(t)
+            # §10 (Этап 6): FVG, полностью перекрытый пока был вне выбора,
+            # на новой версии не возвращается в fresh — терминальный fvg_filled
+            if zone.type == "FVG" and not fvg_filled(zone):
+                fill = self._fvg_fill_scan(zone, up_to)
+                if fill is not None:
+                    first_test, extreme = fill
+                    self.db.update_ltf_entry_zone(
+                        zone.id, validity="tested",
+                        first_test_at=zone.first_test_at or first_test,
+                        max_test_depth=1.0, test_extreme=extreme,
+                    )
+                    zone.validity = "tested"
+                    zone.first_test_at = zone.first_test_at or first_test
+                    zone.max_test_depth = 1.0
+                    zone.test_extreme = extreme
             ev = evaluate_entry(
                 zone, sc.direction, self.cfg, draft,
                 movements=movements, liquidity_tests=tests,
@@ -1324,6 +1387,8 @@ class LtfEngine:
             "direction": sc.direction.value, "kind": e.kind, "stage": e.stage,
             "break_level": e.break_level,
             "break_candle_open_time": e.break_candle_open_time,
+            # цена закрытия пробойной H1 — из evidence слома (§5.4 ТЗ 07.10.2026)
+            "close": e.evidence.get("close"),
             "range": self._range_payload(rng) if rng else None,
             "range_pending": rng is None,
             "movement": self._movement_payload(sc.id, se_id),

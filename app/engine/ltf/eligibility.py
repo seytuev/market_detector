@@ -30,7 +30,7 @@ from typing import Optional
 from ...config import DetectorConfig
 from ...models import Direction
 from ...models_ltf import LtfEntryZone, LtfLiquidityTest, LtfMovement, LtfScenarioEntry
-from .entries import classify_entry, entry_reusable
+from .entries import classify_entry, entry_reusable, fvg_filled
 from .ranges import RangeDraft
 
 # Стабильные reason-коды (ТЗ §10/§12: фильтры истории по причине исключения)
@@ -41,6 +41,7 @@ REASON_TYPE_DISABLED = "type_disabled"  # тип отключён настрой
 REASON_INVALID = "invalid"              # зона рыночно невалидна
 REASON_SWEPT_LEVEL = "swept_level"      # BSL/SSL с подтверждённым снятием
 REASON_LEVEL_BROKEN = "level_broken"    # уровень пройден закрытием без возврата (§9)
+REASON_FVG_FILLED = "fvg_filled"        # FVG перекрыт полностью (§10, Этап 6)
 REASON_ORIGIN_UNRESOLVED = "origin_unresolved"  # принадлежность движению не доказана
 REASON_RANGE_PENDING = "range_pending"  # диапазон ещё не подтверждён — кандидат
 
@@ -52,6 +53,7 @@ ELIGIBILITY_REASONS = (
     REASON_INVALID,
     REASON_SWEPT_LEVEL,
     REASON_LEVEL_BROKEN,
+    REASON_FVG_FILLED,
     REASON_ORIGIN_UNRESOLVED,
     REASON_RANGE_PENDING,
 )
@@ -108,6 +110,10 @@ def evaluate_entry(
         for t in liquidity_tests or ()
     ):
         return EligibilityResult(REASON_LEVEL_BROKEN, "tested", eligible, overlap)
+    # 3c) §10 (Этап 6): полностью перекрытый FVG терминально недопустим как
+    # новая Entry Zone — по собственному правилу, независимо от связанного OB
+    if fvg_filled(zone):
+        return EligibilityResult(REASON_FVG_FILLED, "tested", eligible, overlap)
     # 4) принадлежность движению сценария: movement_id обязан разрешаться;
     # movement_id=0 (уровень якоря диапазона) — вне этой проверки
     if zone.movement_id and movements is not None:

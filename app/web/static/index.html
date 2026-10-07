@@ -3,7 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>HTF Zones</title>
+  <title>LevelFrame · Рынок в контексте</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <script>(function(){try{var c=localStorage.getItem('lf:theme');var l=window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches;document.documentElement.dataset.theme=(c==='dark'||c==='light')?c:(l?'light':'dark');}catch(e){document.documentElement.dataset.theme='dark';}})();</script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
   <link rel="stylesheet" href="/style.css">
@@ -11,19 +13,95 @@
 </head>
 <body class="app-body">
   <header class="app-nav" aria-label="Основная навигация">
-    <a class="brand" href="#overview">HTF Zones</a>
+    <a class="brand" href="#now">
+      <svg class="brand-mark" width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M15 3.5H5v17h10" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+        <line x1="9" y1="9" x2="19" y2="9" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+        <line x1="9" y1="15" x2="19" y2="15" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+      </svg>
+      <span>LevelFrame</span>
+    </a>
     <nav class="app-tabs">
-      <a href="#overview" data-view="overview" class="app-tab active">Обзор</a>
+      <a href="#now" data-view="now" class="app-tab active">Сейчас</a>
       <a href="#review" data-view="review" class="app-tab">Проверка</a>
-      <a href="/ltf.html" id="lnk-ltf" class="app-tab">LTF</a>
-      <a href="#events" data-view="events" class="app-tab">События</a>
+      <a href="#journal" data-view="journal" class="app-tab">Журнал</a>
+      <a href="#settings" data-view="settings" class="app-tab settings-link">Настройки</a>
+      <a href="/alt.html" class="app-tab">Альткоины</a>
     </nav>
     <div class="app-nav-right">
-      <a href="#settings" data-view="settings" class="app-tab settings-link">Настройки</a>
+      <span class="conn-status">
+        <span id="ws-indicator" class="ws-dot offline" title="Нет соединения"></span>
+        <span id="connection-label" class="connection-label">Нет соединения</span>
+      </span>
     </div>
   </header>
 
-  <section id="view-overview" class="view active">
+  <section id="view-now" class="view active">
+    <div class="now-page">
+      <header class="now-head">
+        <div class="now-over">Рабочее место анализа рынка</div>
+        <h1 class="now-title">Рынок в контексте.</h1>
+        <p class="now-sub" id="now-subline">ваш список наблюдения</p>
+      </header>
+      <div class="now-stats">
+        <div class="stat-card">
+          <div class="stat-label">На проверку</div>
+          <div class="stat-value" id="now-stat-review">—</div>
+          <div class="stat-note" id="now-stat-review-note">Очередь пуста</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Цена в зоне</div>
+          <div class="stat-value" id="now-stat-zone">—</div>
+          <div class="stat-note">Ожидается подтверждение H1</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Сценарий подтверждён</div>
+          <div class="stat-value" id="now-stat-eligible">—</div>
+          <div class="stat-note">Ожидается возврат к зоне</div>
+        </div>
+      </div>
+      <div class="now-layout">
+        <section class="now-assets" aria-label="Активы">
+          <div class="now-assets-head">
+            <h2>Активы / <span id="now-assets-count">0</span></h2>
+            <div class="now-filters" role="group" aria-label="Фильтр активов">
+              <button type="button" class="now-filter active" data-filter="all">Все</button>
+              <button type="button" class="now-filter" data-filter="attention">Нужно внимание</button>
+              <button type="button" class="now-filter" data-filter="watch">Наблюдаю</button>
+            </div>
+          </div>
+          <table class="asset-table" id="now-table">
+            <thead>
+              <tr><th>Актив / площадка</th><th>Состояние</th><th class="num">Цена, USDT</th></tr>
+            </thead>
+            <tbody id="now-tbody"></tbody>
+          </table>
+          <div id="now-empty" class="now-empty hidden">По выбранному фильтру активов нет.</div>
+        </section>
+        <aside class="now-card" id="now-card" aria-label="Выбранный актив"></aside>
+      </div>
+      <p class="now-foot">Приоритет означает необходимость внимания. Свежесть данных показана отдельно от рыночного состояния.</p>
+    </div>
+  </section>
+
+  <section id="view-overview" class="view">
+    <div class="desk-head">
+      <a class="desk-all" href="#now" data-view="now">Все активы</a>
+      <div class="desk-head-row">
+        <div class="desk-title">
+          <h2 id="desk-symbol">—</h2>
+          <span id="desk-venue" class="work-meta">—</span>
+          <div id="desk-fresh" class="desk-fresh hidden"></div>
+        </div>
+        <div class="desk-quote">
+          <div class="desk-price-row">
+            <span id="desk-price" class="desk-price">—</span>
+            <span class="desk-price-ccc">USDT</span>
+          </div>
+          <div id="desk-quote-age" class="price-age">Котировка · —</div>
+        </div>
+      </div>
+    </div>
     <div class="workbar">
       <select id="instrument-select" title="Инструмент"></select>
       <span id="instrument-meta" class="work-meta">—</span>
@@ -48,22 +126,33 @@
         </div>
       </details>
       <button id="btn-new-zone" class="btn primary">+ Зона</button>
-      <div class="workbar-status">
-        <span id="ws-indicator" class="ws-dot offline" title="Нет соединения"></span>
-        <span id="connection-label" class="connection-label">Нет данных</span>
-      </div>
     </div>
 
     <div class="overview-layout">
-      <section class="chart-block">
-        <div id="chart-container">
-          <div id="chart"></div>
-          <div id="zone-overlay"></div>
-        </div>
-        <div id="draw-hint" class="draw-hint hidden">Первый клик задаёт начало зоны и первую цену, второй — вторую цену. <button id="draw-cancel" class="btn small" type="button">Отмена</button></div>
-      </section>
+      <div class="desk-main">
+        <aside class="desk-assets" aria-label="Активы">
+          <h2 class="desk-assets-head">Активы</h2>
+          <div id="desk-assets-list" class="desk-assets-list"></div>
+        </aside>
+        <section class="chart-block">
+          <div class="desk-modebar">
+            <div class="mode-tabs" role="group" aria-label="Режим анализа">
+              <span class="mode-tab active" aria-current="page">Контекст</span>
+              <a class="mode-tab" id="lnk-ltf" href="/ltf.html">Структура H1</a>
+            </div>
+          </div>
+          <div id="chart-container">
+            <div id="chart"></div>
+            <div id="zone-overlay"></div>
+          </div>
+          <div id="draw-hint" class="draw-hint hidden">Первый клик задаёт начало зоны и первую цену, второй — вторую цену. <button id="draw-cancel" class="btn small" type="button">Отмена</button></div>
+          <section id="desk-entries" class="desk-entries hidden" aria-label="Зоны сценария"></section>
+        </section>
+      </div>
 
-      <aside class="zone-rail" id="zone-rail">
+      <div class="desk-side">
+        <section id="desk-scenario" class="desk-scenario hidden" aria-label="Состояние сценария"></section>
+        <aside class="zone-rail" id="zone-rail">
         <div class="rail-head">
           <h2>Зоны</h2>
           <button id="btn-table-mode" class="btn small" type="button">Таблица</button>
@@ -98,19 +187,28 @@
           <button class="back-link" id="detail-close" type="button">← К зонам</button>
           <div id="detail-content"></div>
         </aside>
-      </aside>
+        </aside>
+      </div>
     </div>
 
     <footer class="event-strip">
-      <div class="strip-head"><span>События</span><a href="#events" data-view="events">Все события →</a></div>
+      <div class="strip-head"><span>События</span><a href="#journal" data-view="journal">Все события →</a></div>
       <ul id="events-list" class="events strip-events"></ul>
     </footer>
   </section>
 
   <section id="view-review" class="view">
+    <header class="review-head">
+      <div class="review-head-text">
+        <div class="review-over">Контроль разметки</div>
+        <h1 class="review-title">Проверка</h1>
+        <p class="review-sub">Объект, правило и решение в одном рабочем контексте.</p>
+      </div>
+      <span class="review-count" id="review-count"><span class="state-dot dot-warning"></span>0 задач</span>
+    </header>
     <div class="review-layout">
       <aside class="review-queue">
-        <div class="rail-head"><h2>Очередь кандидатов</h2><span id="review-progress" class="muted">0 из 0</span></div>
+        <div class="rail-head"><h2>Очередь</h2><span id="review-progress" class="muted">0 из 0</span></div>
         <div class="list-filters review-queue-filters">
           <select id="review-tf-filter" title="Таймфрейм кандидатов"><option value="">D1 + W1</option><option value="D1">D1</option><option value="W1">W1</option></select>
           <button id="btn-download-labels" class="btn small" type="button" title="Выгрузить все данные проверок (reviews.json: разметка, решения, оценки, правки границ)">Скачать проверенные</button>
@@ -134,7 +232,7 @@
   <section id="view-events" class="view">
     <div class="page-pad">
       <h2>События</h2>
-      <p class="muted">Рыночные события HTF и состояние доставки. Исторически восстановленные помечаются отдельно.</p>
+      <p class="muted">Рыночные события</p>
       <ul id="events-full" class="events events-full"></ul>
     </div>
   </section>
@@ -155,10 +253,10 @@
   </section>
 
   <nav class="mobile-nav" aria-label="Мобильная навигация">
-    <a href="#overview" data-view="overview">Обзор</a>
+    <a href="#now" data-view="now">Сейчас</a>
     <a href="#review" data-view="review">Проверка</a>
-    <a href="/ltf.html" id="lnk-ltf-mobile">LTF</a>
-    <a href="#events" data-view="events">Ещё</a>
+    <a href="#journal" data-view="journal">Журнал</a>
+    <a href="#settings" data-view="settings">Настройки</a>
   </nav>
 
   <div id="header-stats" class="hidden"></div>
@@ -203,7 +301,13 @@
   <div id="settings-modal" class="hidden"></div>
   <button id="btn-settings" class="hidden" type="button"></button>
 
+  <footer class="app-footer">
+    <span>LevelFrame · Рынок в контексте.</span>
+    <span>Веб-интерфейс · v0.1</span>
+  </footer>
+
   <script src="/common.js"></script>
   <script src="/app.js"></script>
+  <script src="/now.js"></script>
 </body>
 </html>
