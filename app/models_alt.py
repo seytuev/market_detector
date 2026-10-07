@@ -13,8 +13,12 @@ from enum import Enum
 from typing import Optional
 
 ALT_RULE_VERSION = "alt-0.1"
+ALT_RULE_VERSION_V2 = "alt-0.2"  # эпизоды диапазонов v2 (R-09: версии не смешиваются)
 
 ALT_CANCEL_MODES = ("wick_on_closed_d1", "close_on_closed_d1")
+
+# Причина завершения заливки базы v2 (R-07)
+ALT_BASE_END_REASONS = ("breakout_confirmed", "decay", "none")
 
 
 class AltState(str, Enum):
@@ -27,6 +31,22 @@ class AltState(str, Enum):
     EXPIRED_NO_RETEST = "expired_no_retest"  # ретест не случился за окно
     TARGETS_COMPLETED = "targets_completed"  # все цели TP1..TP4 достигнуты
     REVIEW_REQUIRED = "review_required"      # неоднозначность — нужен разбор
+
+
+class AltEpisodeState(str, Enum):
+    FORMING = "forming"              # консолидация формируется, база не зрелая
+    MATURE = "mature"                # база зрелая, геометрия заморожена (R-09)
+    ACTIVE = "active"                # зрелая база, цена внутри/у границ
+    ACCOMPANIMENT = "accompaniment"  # подтверждённый выход, сопровождение целей/ретестов
+    DECAYED = "decayed"              # распад базы без подтверждённого выхода
+    TERMINAL = "terminal"            # сопровождение завершено, эпизод в истории
+
+
+class AltSweepState(str, Enum):
+    OPEN = "open"                      # уход под L продолжается
+    RETURN_PENDING = "return_pending"  # выход ниже, возврат не подтверждён (R-05)
+    RETURNED = "returned"              # возврат в базу подтверждён закрытием D1
+    ACCEPTED_BELOW = "accepted_below"  # цена принята ниже L — основание нового кандидата
 
 
 class AltEventType(str, Enum):
@@ -235,3 +255,62 @@ class AltEvent:
     run_id: Optional[int] = None
     delivered: bool = False
     created_ms: int = 0
+
+
+@dataclass
+class AltRangeEpisode:
+    """Эпизод диапазона v2 (ТЗ 07.10.2026 R-01/R-07/R-09): отдельная база
+    накопления со своими якорями, интервалами заливки и сопровождения и
+    версией правил. Сосуществует с другими эпизодами того же актива
+    (исторический / сопровождаемый / формирующийся).
+
+    После mature геометрия L/U/M/W неизменна (W = U − L, M = (L + U)/2);
+    экстремальные тени хранятся отдельно от основных границ (R-03).
+    base_end_* — конец заливки (R-07), отделён от конца сопровождения
+    (accompaniment_end_open_time). origin_key — детерминированный ключ
+    якорей: повторный прогон не дублирует эпизод (R-10, UNIQUE в схеме).
+    quality_json — метрики качества (числа реакций у границ, устойчивость
+    и т.п., R-04); selection_rank_reason — причина выбора актуальным (R-08).
+    """
+    id: Optional[int]
+    asset_id: int
+    source_id: int
+    origin_key: str
+    anchor_start_open_time: int   # ms: open_time свечи якоря-старта эпизода
+    base_start_open_time: int     # ms: начало консолидации (начало заливки)
+    lower: float
+    upper: float
+    width: float
+    mid: float
+    rules_version: str = ALT_RULE_VERSION_V2
+    state: str = AltEpisodeState.FORMING.value
+    base_end_open_time: Optional[int] = None
+    base_end_reason: Optional[str] = None        # ALT_BASE_END_REASONS
+    base_end_confirmed_at_ms: Optional[int] = None
+    accompaniment_end_open_time: Optional[int] = None
+    wick_low: Optional[float] = None
+    wick_high: Optional[float] = None
+    quality_json: str = "{}"
+    selection_rank_reason: Optional[str] = None
+    detected_at_ms: int = 0
+    created_ms: int = 0
+    updated_ms: int = 0
+
+
+@dataclass
+class AltSweepEpisode:
+    """Вынос вниз под L эпизода v2 (R-05): отдельный факт с началом,
+    минимумом, длительностью и возвратом. Не расширяет замороженную базу.
+    Возврат подтверждается закрытием D1 обратно в базу; до этого статус —
+    «возврат не подтверждён», а не завершённая манипуляция."""
+    id: Optional[int]
+    episode_id: int               # alt_range_episode.id
+    start_open_time: int          # ms: свеча ухода под L
+    min_price: float
+    min_open_time: int            # ms: свеча минимума выноса
+    end_open_time: Optional[int] = None
+    return_confirmed: bool = False
+    return_confirmed_at_ms: Optional[int] = None
+    state: str = AltSweepState.OPEN.value
+    created_ms: int = 0
+    updated_ms: int = 0

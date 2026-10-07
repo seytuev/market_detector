@@ -411,3 +411,63 @@ def test_should_run_no_retry_spam_after_error_in_slot(db):
                              status="error"))
     # ошибка в этом слоте не перезапускает job каждый poll
     assert r.should_run(now) is False
+
+
+# ---------------------------------------------------------------------------
+# Этап 7: флаг версии движка, backfill без рассылки, откат v2 → v1
+# ---------------------------------------------------------------------------
+
+
+async def test_v2_flag_backfill_episodes_without_pending_events(db):
+    """engine_version=v2 пишет эпизоды alt-0.2 и не оставляет pending-события."""
+    base = build_accumulation(seg_len=120)
+    venue = FakeVenue("binance", {"AAA": ["USDT"]},
+                      {"AAAUSDT": _to_candles(base)})
+    r = make_runner(
+        db, [venue], FakeCmc([_listing(11, "AAA", 11)]),
+        AltConfig(engine_version="v2"),
+    )
+    res = await r.run_daily("test")
+    assert res["status"] == "ok"
+    asset = db.get_alt_asset_by_cmc_id(11)
+    episodes = db.list_alt_range_episodes(asset.id)
+    assert episodes
+    assert all(e.rules_version == "alt-0.2" for e in episodes)
+    assert db.list_alt_setups(asset.id) == []
+    assert db.pending_alt_events(limit=1000) == []
+    entry = res["summary"]["per_asset"][0]
+    assert entry["mode"] == "backfill"
+    assert entry["events_marked_delivered"] == 0
+    src = db.get_alt_instrument_source(asset.id)
+    assert db.get_meta(f"alt:engine:{asset.id}:{src.id}") == "v2"
+
+
+async def test_switch_v2_to_v1_keeps_episodes_and_does_not_spam(db):
+    """Откат флага на v1 не стирает эпизоды v2 и не шлёт историю v1 как новую."""
+    base = build_accumulation(seg_len=120)
+    venue = FakeVenue("binance", {"AAA": ["USDT"]},
+                      {"AAAUSDT": _to_candles(base)})
+    listings = [_listing(11, "AAA", 11)]
+    r2 = make_runner(
+        db, [venue], FakeCmc(listings), AltConfig(engine_version="v2"),
+    )
+    await r2.run_daily("test")
+    asset = db.get_alt_asset_by_cmc_id(11)
+    before = [
+        (e.origin_key, e.lower, e.upper, e.state)
+        for e in db.list_alt_range_episodes(asset.id)
+    ]
+    assert before
+
+    r1 = make_runner(db, [venue], FakeCmc(listings), AltConfig())
+    res = await r1.run_daily("test")
+    assert res["summary"]["per_asset"][0]["mode"] == "backfill"
+    after = [
+        (e.origin_key, e.lower, e.upper, e.state)
+        for e in db.list_alt_range_episodes(asset.id)
+    ]
+    assert after == before
+    assert db.list_alt_setups(asset.id)
+    assert db.pending_alt_events(limit=1000) == []
+    src = db.get_alt_instrument_source(asset.id)
+    assert db.get_meta(f"alt:engine:{asset.id}:{src.id}") == "v1"

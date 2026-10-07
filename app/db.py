@@ -53,9 +53,11 @@ from .models_alt import (
     AltInstrumentSource,
     AltManipulationEpisode,
     AltRangeCandidate,
+    AltRangeEpisode,
     AltRun,
     AltSetup,
     AltStructureEvent,
+    AltSweepEpisode,
 )
 
 SCHEMA_VERSION = 1
@@ -3275,4 +3277,150 @@ class Database:
             event_time_ms=r["event_time_ms"], detected_at_ms=r["detected_at_ms"],
             run_id=r["run_id"], delivered=bool(r["delivered"]),
             created_ms=r["created_ms"],
+        )
+
+    # ---------- ALT: эпизоды диапазонов v2 (R-01/R-07/R-09) ----------
+
+    def insert_alt_range_episode(self, e: AltRangeEpisode) -> tuple[AltRangeEpisode, bool]:
+        """Идемпотентно по UNIQUE(origin_key): повторный прогон не дублирует
+        эпизод (R-10). Возвращает (episode, created)."""
+        cur = self.conn.execute(
+            """INSERT OR IGNORE INTO alt_range_episode
+               (asset_id, source_id, origin_key, rules_version, state,
+                anchor_start_open_time, base_start_open_time,
+                base_end_open_time, base_end_reason, base_end_confirmed_at_ms,
+                accompaniment_end_open_time, lower, upper, mid, width,
+                wick_low, wick_high, quality_json, selection_rank_reason,
+                detected_at_ms, created_ms, updated_ms)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (e.asset_id, e.source_id, e.origin_key, e.rules_version, e.state,
+             e.anchor_start_open_time, e.base_start_open_time,
+             e.base_end_open_time, e.base_end_reason, e.base_end_confirmed_at_ms,
+             e.accompaniment_end_open_time, e.lower, e.upper, e.mid, e.width,
+             e.wick_low, e.wick_high, e.quality_json, e.selection_rank_reason,
+             e.detected_at_ms, e.created_ms, e.updated_ms),
+        )
+        self._commit()
+        if cur.rowcount == 1:
+            e.id = int(cur.lastrowid)
+            return e, True
+        r = self.conn.execute(
+            "SELECT * FROM alt_range_episode WHERE origin_key=?",
+            (e.origin_key,),
+        ).fetchone()
+        if r is None:  # pragma: no cover — защита от несогласованности схемы
+            raise RuntimeError("alt_range_episode: вставка проигнорирована, строка не найдена")
+        return self._to_alt_range_episode(r), False
+
+    def get_alt_range_episode(self, episode_id: int) -> Optional[AltRangeEpisode]:
+        r = self.conn.execute(
+            "SELECT * FROM alt_range_episode WHERE id=?", (episode_id,)
+        ).fetchone()
+        return self._to_alt_range_episode(r) if r else None
+
+    def get_alt_range_episode_by_origin(self, origin_key: str) -> Optional[AltRangeEpisode]:
+        r = self.conn.execute(
+            "SELECT * FROM alt_range_episode WHERE origin_key=?", (origin_key,)
+        ).fetchone()
+        return self._to_alt_range_episode(r) if r else None
+
+    def list_alt_range_episodes(self, asset_id: int) -> list[AltRangeEpisode]:
+        """Все эпизоды v2 актива от старых к новым — «История диапазонов» (R-08)."""
+        return [
+            self._to_alt_range_episode(r)
+            for r in self.conn.execute(
+                "SELECT * FROM alt_range_episode WHERE asset_id=? "
+                "ORDER BY anchor_start_open_time, id",
+                (asset_id,),
+            ).fetchall()
+        ]
+
+    def update_alt_range_episode(self, episode_id: int, **fields: Any) -> None:
+        """Ход эпизода: state, геометрия до mature, поля конца заливки
+        (base_end_*) и сопровождения (R-07), quality/selection (R-04/R-08)."""
+        if not fields:
+            return
+        cols = ", ".join(f"{k}=?" for k in fields)
+        self.conn.execute(
+            f"UPDATE alt_range_episode SET {cols} WHERE id=?",
+            (*fields.values(), episode_id),
+        )
+        self._commit()
+
+    @staticmethod
+    def _to_alt_range_episode(r: sqlite3.Row) -> AltRangeEpisode:
+        return AltRangeEpisode(
+            id=r["id"], asset_id=r["asset_id"], source_id=r["source_id"],
+            origin_key=r["origin_key"], rules_version=r["rules_version"],
+            state=r["state"],
+            anchor_start_open_time=r["anchor_start_open_time"],
+            base_start_open_time=r["base_start_open_time"],
+            base_end_open_time=r["base_end_open_time"],
+            base_end_reason=r["base_end_reason"],
+            base_end_confirmed_at_ms=r["base_end_confirmed_at_ms"],
+            accompaniment_end_open_time=r["accompaniment_end_open_time"],
+            lower=r["lower"], upper=r["upper"], mid=r["mid"], width=r["width"],
+            wick_low=r["wick_low"], wick_high=r["wick_high"],
+            quality_json=r["quality_json"],
+            selection_rank_reason=r["selection_rank_reason"],
+            detected_at_ms=r["detected_at_ms"],
+            created_ms=r["created_ms"], updated_ms=r["updated_ms"],
+        )
+
+    # ---------- ALT: выносы вниз v2 (R-05) ----------
+
+    def insert_alt_sweep_episode(self, s: AltSweepEpisode) -> AltSweepEpisode:
+        cur = self.conn.execute(
+            """INSERT INTO alt_sweep_episode
+               (episode_id, start_open_time, min_price, min_open_time,
+                end_open_time, return_confirmed, return_confirmed_at_ms,
+                state, created_ms, updated_ms)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (s.episode_id, s.start_open_time, s.min_price, s.min_open_time,
+             s.end_open_time, int(s.return_confirmed), s.return_confirmed_at_ms,
+             s.state, s.created_ms, s.updated_ms),
+        )
+        self._commit()
+        s.id = int(cur.lastrowid)
+        return s
+
+    def update_alt_sweep_episode(self, sweep_id: int, **fields: Any) -> None:
+        """Ход выноса: min_price/min_open_time, конец и подтверждение возврата."""
+        if not fields:
+            return
+        cols = ", ".join(f"{k}=?" for k in fields)
+        args = [
+            int(v) if isinstance(v, bool) else v for v in fields.values()
+        ]
+        self.conn.execute(
+            f"UPDATE alt_sweep_episode SET {cols} WHERE id=?", (*args, sweep_id)
+        )
+        self._commit()
+
+    def get_alt_sweep_episode(self, sweep_id: int) -> Optional[AltSweepEpisode]:
+        r = self.conn.execute(
+            "SELECT * FROM alt_sweep_episode WHERE id=?", (sweep_id,)
+        ).fetchone()
+        return self._to_alt_sweep_episode(r) if r else None
+
+    def list_alt_sweep_episodes(self, episode_id: int) -> list[AltSweepEpisode]:
+        return [
+            self._to_alt_sweep_episode(r)
+            for r in self.conn.execute(
+                "SELECT * FROM alt_sweep_episode WHERE episode_id=? "
+                "ORDER BY start_open_time, id",
+                (episode_id,),
+            ).fetchall()
+        ]
+
+    @staticmethod
+    def _to_alt_sweep_episode(r: sqlite3.Row) -> AltSweepEpisode:
+        return AltSweepEpisode(
+            id=r["id"], episode_id=r["episode_id"],
+            start_open_time=r["start_open_time"], min_price=r["min_price"],
+            min_open_time=r["min_open_time"], end_open_time=r["end_open_time"],
+            return_confirmed=bool(r["return_confirmed"]),
+            return_confirmed_at_ms=r["return_confirmed_at_ms"],
+            state=r["state"], created_ms=r["created_ms"],
+            updated_ms=r["updated_ms"],
         )

@@ -14,14 +14,18 @@ from app.models_alt import (
     AltAsset,
     AltCandle,
     AltEntryOpportunity,
+    AltEpisodeState,
     AltEvent,
     AltFrozenRange,
     AltInstrumentSource,
     AltRangeCandidate,
+    AltRangeEpisode,
     AltRun,
     AltSetup,
     AltState,
     AltStructureEvent,
+    AltSweepEpisode,
+    AltSweepState,
 )
 from app.web.api import create_app
 
@@ -446,3 +450,106 @@ def test_venues_survive_empty_filter_and_last_event(client, seeded):
     fresh = client.get("/api/alt/setups?bucket=new_entries", headers=AUTH).json()
     assert fresh["rows"][0]["last_event"]["event_type"] == "entry_a"
     assert fresh["rows"][0]["last_event"]["label_ru"] == "Вход A"
+
+
+# ---------------------------------------------------------------------------
+# История диапазонов (R-08, §8.12): эпизоды v2 + v1-блок
+# ---------------------------------------------------------------------------
+
+
+def _episode(db: Database, asset: AltAsset, source: AltInstrumentSource,
+             origin: str, state: str, *, anchor: int = T0 + DAY,
+             lower: float = 1.0, upper: float = 2.0,
+             base_end: int | None = None, end_reason: str | None = None,
+             end_confirmed: int | None = None,
+             acc_end: int | None = None) -> AltRangeEpisode:
+    ep, created = db.insert_alt_range_episode(AltRangeEpisode(
+        id=None, asset_id=asset.id, source_id=source.id, origin_key=origin,
+        anchor_start_open_time=anchor, base_start_open_time=anchor,
+        lower=lower, upper=upper, width=upper - lower, mid=(lower + upper) / 2,
+        state=state, base_end_open_time=base_end, base_end_reason=end_reason,
+        base_end_confirmed_at_ms=end_confirmed,
+        accompaniment_end_open_time=acc_end,
+        wick_low=lower * 0.9, wick_high=upper * 1.1,
+        quality_json=json.dumps({"reactions_lower": 3, "reactions_upper": 2}),
+        detected_at_ms=anchor, created_ms=anchor, updated_ms=anchor,
+    ))
+    assert created
+    return ep
+
+
+def test_ranges_auth_required(client):
+    assert client.get("/api/alt/asset/1/ranges").status_code == 401
+    bad = {"Authorization": "Bearer nope"}
+    assert client.get("/api/alt/asset/1/ranges", headers=bad).status_code == 401
+
+
+def test_ranges_404_unknown_asset(client):
+    assert client.get("/api/alt/asset/9999/ranges", headers=AUTH).status_code == 404
+
+
+def test_ranges_empty_v2_history(client, seeded):
+    """Движок v2 ещё не включён: эпизодов нет, v1-блок читается как раньше."""
+    aid = seeded["assets"]["MAT"].id
+    d = client.get(f"/api/alt/asset/{aid}/ranges", headers=AUTH).json()
+    assert d["asset"]["symbol"] == "MAT"
+    assert d["episodes_v2"] == []
+    assert d["current"]["episode_id"] is None
+    assert d["current"]["reason"] == "no_episodes"
+    assert d["rules_versions"] == {"v1": "alt-0.1", "v2": "alt-0.2"}
+    assert d["v1"]["rules_version"] == "alt-0.1"
+    assert len(d["v1"]["ranges"]) == 1
+    assert d["v1"]["ranges"][0]["rules_version"] == "alt-0.1"
+    assert d["v1"]["ranges"][0]["frozen"] is not None
+
+
+def test_ranges_v2_episodes_and_v1_block(client, db, seeded):
+    """Эпизоды v2 с выносом отдаются с версией alt-0.2 и не смешиваются
+    с v1-диапазонами того же актива."""
+    asset = seeded["assets"]["MAT"]
+    source = next(
+        s for s in [db.get_alt_instrument_source(asset.id)] if s is not None
+    )
+    older = _episode(
+        db, asset, source, f"{asset.id}:old", AltEpisodeState.TERMINAL.value,
+        anchor=T0 + 10 * DAY, lower=0.5, upper=0.9,
+        base_end=T0 + 150 * DAY, end_reason="breakout_confirmed",
+        end_confirmed=T0 + 150 * DAY, acc_end=T0 + 300 * DAY,
+    )
+    current = _episode(
+        db, asset, source, f"{asset.id}:cur", AltEpisodeState.MATURE.value,
+        anchor=T0 + 100 * DAY, lower=1.0, upper=3.0,
+    )
+    sweep = db.insert_alt_sweep_episode(AltSweepEpisode(
+        id=None, episode_id=current.id, start_open_time=T0 + 120 * DAY,
+        min_price=0.8, min_open_time=T0 + 121 * DAY,
+        end_open_time=T0 + 130 * DAY, return_confirmed=True,
+        return_confirmed_at_ms=T0 + 130 * DAY + 1,
+        state=AltSweepState.RETURNED.value,
+        created_ms=T0, updated_ms=T0,
+    ))
+
+    d = client.get(f"/api/alt/asset/{asset.id}/ranges", headers=AUTH).json()
+    # порядок — от старых к новым; версии различимы
+    assert [e["id"] for e in d["episodes_v2"]] == [older.id, current.id]
+    old_block, cur_block = d["episodes_v2"]
+    assert old_block["rules_version"] == "alt-0.2"
+    assert old_block["state"] == "terminal"
+    assert old_block["base_end_reason"] == "breakout_confirmed"
+    assert old_block["base_end_reason_ru"] == "Подтверждённый выход"
+    assert old_block["accompaniment_end_open_time"] == T0 + 300 * DAY
+    assert cur_block["state_ru"] == "Зрелая база"
+    assert cur_block["lower"] == 1.0 and cur_block["upper"] == 3.0
+    assert cur_block["mid"] == 2.0 and cur_block["width"] == 2.0
+    assert cur_block["wick_low"] is not None and cur_block["wick_high"] is not None
+    assert cur_block["quality"]["reactions_lower"] == 3
+    assert [s["id"] for s in cur_block["sweeps"]] == [sweep.id]
+    sw = cur_block["sweeps"][0]
+    assert sw["state"] == "returned" and sw["return_confirmed"] is True
+    assert sw["min_price"] == 0.8
+    # последняя закрытая свеча (close=2.0) внутри базы → актуальный эпизод
+    assert d["current"]["episode_id"] == current.id
+    assert d["current"]["reason"] == "inside_base"
+    # v1-блок того же актива на месте и помечен alt-0.1
+    assert d["v1"]["rules_version"] == "alt-0.1"
+    assert all(r["rules_version"] == "alt-0.1" for r in d["v1"]["ranges"])

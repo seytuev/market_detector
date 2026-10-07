@@ -149,6 +149,10 @@
             <button type="button" id="alt-mode-history" data-mode="history" aria-pressed="false">История</button>
             <button type="button" id="alt-mode-none" data-mode="none" aria-pressed="false">Без событий</button>
           </div>
+          <div class="alt-tf" role="group" aria-label="Таймфрейм графика">
+            <button type="button" data-tf="D1" aria-pressed="true">D1</button>
+            <button type="button" data-tf="W1" aria-pressed="false" title="Недельные свечи собираются из тех же D1, сигналы считаются на D1">W1</button>
+          </div>
           <button type="button" id="alt-layers-toggle" class="btn small" aria-expanded="false" aria-controls="alt-layers">Слои</button>
           <button type="button" id="alt-180" class="btn small">180D</button>
           <button type="button" id="alt-range" class="btn small">Весь диапазон</button>
@@ -178,6 +182,11 @@
         <div id="chart-container">
           <div id="chart"></div>
           <div id="alt-overlay"></div>
+        </div>
+        <div class="alt-chart-actions">
+          <button type="button" id="alt-auto" class="btn small" title="Показать все загруженные свечи и подобрать ценовую шкалу по ним">Авто</button>
+          <button type="button" id="alt-png" class="btn small" title="Скачать текущий вид графика в PNG">PNG</button>
+          <button type="button" id="alt-png2" class="btn small" title="Скачать текущий вид графика в PNG, двойное разрешение">PNG 2×</button>
         </div>
         <p id="alt-chart-empty" class="alt-empty">Выберите монету слева — график и карточка обновятся.</p>
         <section class="alt-journal" id="alt-journal">

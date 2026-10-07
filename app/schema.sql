@@ -686,3 +686,53 @@ CREATE TABLE IF NOT EXISTS alt_event (
     UNIQUE (setup_id, event_type, source_event_id)
 );
 CREATE INDEX IF NOT EXISTS ix_alt_event_delivered ON alt_event (delivered);
+
+-- Эпизод диапазона v2 (ТЗ 07.10.2026 R-01/R-07/R-09): отдельная база
+-- накопления со своими якорями, интервалами заливки (base_start..base_end)
+-- и сопровождения, версией правил и замороженной геометрией. Экстремальные
+-- тени хранятся отдельно от основных границ (R-03). origin_key UNIQUE —
+-- повторный прогон не дублирует эпизод (R-10). Живёт рядом с v1-таблицами:
+-- старые frozen range не редактируются
+CREATE TABLE IF NOT EXISTS alt_range_episode (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_id INTEGER NOT NULL REFERENCES alt_asset(id),
+    source_id INTEGER NOT NULL REFERENCES alt_instrument_source(id),
+    origin_key TEXT NOT NULL UNIQUE,
+    rules_version TEXT NOT NULL DEFAULT 'alt-0.2',
+    state TEXT NOT NULL DEFAULT 'forming',
+    anchor_start_open_time INTEGER NOT NULL,
+    base_start_open_time INTEGER NOT NULL,
+    base_end_open_time INTEGER,
+    base_end_reason TEXT,                -- breakout_confirmed | decay | none
+    base_end_confirmed_at_ms INTEGER,
+    accompaniment_end_open_time INTEGER,
+    lower REAL NOT NULL,
+    upper REAL NOT NULL,
+    mid REAL NOT NULL,
+    width REAL NOT NULL,
+    wick_low REAL,
+    wick_high REAL,
+    quality_json TEXT NOT NULL DEFAULT '{}',
+    selection_rank_reason TEXT,
+    detected_at_ms INTEGER NOT NULL DEFAULT 0,
+    created_ms INTEGER NOT NULL DEFAULT 0,
+    updated_ms INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS ix_alt_range_episode_asset ON alt_range_episode (asset_id, state);
+
+-- Вынос вниз под L эпизода v2 (R-05): отдельный факт, не расширяет
+-- замороженную базу; возврат подтверждается закрытием D1 обратно в базу
+CREATE TABLE IF NOT EXISTS alt_sweep_episode (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    episode_id INTEGER NOT NULL REFERENCES alt_range_episode(id),
+    start_open_time INTEGER NOT NULL,
+    min_price REAL NOT NULL,
+    min_open_time INTEGER NOT NULL,
+    end_open_time INTEGER,
+    return_confirmed INTEGER NOT NULL DEFAULT 0,
+    return_confirmed_at_ms INTEGER,
+    state TEXT NOT NULL DEFAULT 'open',  -- open | return_pending | returned | accepted_below
+    created_ms INTEGER NOT NULL DEFAULT 0,
+    updated_ms INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS ix_alt_sweep_episode_episode ON alt_sweep_episode (episode_id);

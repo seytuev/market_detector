@@ -213,6 +213,123 @@ const elapsed = Date.now() - started;
 console.log('group 3000 events ms', elapsed);
 check('группировка 3000 событий завершается', elapsed < 1000);
 
+/* UI-01: агрегация W1 из D1, недели с понедельника 00:00 UTC. */
+const MON = Date.UTC(2026, 8, 7); // понедельник
+check('W1: понедельник остаётся понедельником', ac.weekStartMs(MON) === MON);
+check('W1: среда уходит на понедельник', ac.weekStartMs(MON + 2 * DAY) === MON);
+check('W1: воскресенье уходит на понедельник той же недели', ac.weekStartMs(MON + 6 * DAY) === MON);
+check('W1: следующий понедельник — новая неделя', ac.weekStartMs(MON + 7 * DAY) === MON + 7 * DAY);
+
+function d1(n, o, h, l, c, v) {
+  return { open_time: MON + n * DAY, open: o, high: h, low: l, close: c, volume: v };
+}
+const d1seq = [];
+for (let i = 0; i < 7; i += 1) d1seq.push(d1(i, 10 + i, 20 + i, 5 + i, 15 + i, 100 + i));
+[7, 8, 10, 11, 12, 13].forEach((n, j) => d1seq.push(d1(n, 30 + j, 40 + j, 25 + j, 35 + j, 10)));
+[14, 15, 16].forEach((n, j) => d1seq.push(d1(n, 50 + j, 60 + j, 45 + j, 55 + j, 1 + j)));
+const w1 = ac.aggregateW1(d1seq);
+check('W1: три недели из 16 свечей', w1.length === 3);
+check('W1: OHLCV первой недели совпадает с ручной агрегацией',
+  w1[0].open_time === MON && w1[0].open === 10 && w1[0].high === 26 && w1[0].low === 5 &&
+  w1[0].close === 21 && w1[0].volume === 721);
+check('W1: OHLCV второй недели по имеющимся свечам',
+  w1[1].open_time === MON + 7 * DAY && w1[1].open === 30 && w1[1].high === 45 &&
+  w1[1].low === 25 && w1[1].close === 40 && w1[1].volume === 60);
+check('W1: полная первая неделя без флагов', w1[0].partial === false && w1[0].gaps === false);
+check('W1: пропуск D1 внутри недели помечен', w1[1].gaps === true && w1[1].partial === false);
+check('W1: незавершённая последняя неделя', w1[2].partial === true && w1[2].gaps === false);
+check('W1: неделя до воскресенья не считается неполной',
+  ac.aggregateW1(d1seq.slice(0, 7))[0].partial === false);
+check('W1: пустой вход — пустой выход', ac.aggregateW1([]).length === 0);
+
+/* Слои как данные: уровни и области для экрана и экспорта. */
+const layerDetail = {
+  frozen_range: { lower: 10, upper: 20, mid: 15 },
+  anchors: { start: { open_time: MON } },
+  as_of_ms: MON + 40 * DAY,
+  manipulation_episodes: [
+    { id: 1, started_candle_open_time: MON + 5 * DAY, ended_candle_open_time: null, min_price: 8 },
+  ],
+  targets: [
+    { tp: 1, price: 30, hit: false, passed_at_confirmation: false },
+    { tp: 2, price: 25, hit: false, passed_at_confirmation: false },
+  ],
+  cancel: { price: 5 },
+  events: [],
+};
+const lvl = ac.collectLevels(layerDetail, { range: true, targets: 'nearest', cancel: true }, 18);
+check('слои: L/U/M/TP/K собраны',
+  lvl.levels.map((l2) => l2.name).join(',') === 'L,U,M,TP2,K' && lvl.targetNote === '');
+check('слои: cls уровней', lvl.levels[0].cls === 'range' && lvl.levels[3].cls === 'tp' && lvl.levels[4].cls === 'k');
+const lvlNoClose = ac.collectLevels(layerDetail, { range: true, targets: 'nearest', cancel: true }, null);
+check('слои: без закрытия TP нет, причина явная',
+  lvlNoClose.levels.length === 4 && lvlNoClose.targetNote === 'Нет цены закрытия D1');
+const lvlAll = ac.collectLevels(layerDetail, { range: false, targets: 'all', cancel: false }, 18);
+check('слои: режим «все цели» без L/U/M и K',
+  lvlAll.levels.map((l2) => l2.name).join(',') === 'TP1,TP2');
+const bx = ac.collectBoxes(layerDetail, {
+  range: true, manipulation: true, entries: false, eventMode: 'setup',
+}, MON + 30 * DAY);
+check('слои: область накопления и активная манипуляция',
+  bx.boxes.length === 2 &&
+  bx.boxes[0].kind === 'range' && bx.boxes[0].startMs === MON && bx.boxes[0].endMs === MON + 31 * DAY &&
+  bx.boxes[1].kind === 'manip' && bx.boxes[1].upper === 10 && bx.boxes[1].lower === 8);
+const bxRetest = ac.collectBoxes({
+  frozen_range: { lower: 10, upper: 20, mid: 15 },
+  breakout: { closed_at: MON + 10 * DAY, retest_deadline_ms: null },
+  flags: {},
+  events: [],
+}, { range: false, manipulation: false, entries: true, eventMode: 'setup' }, null);
+check('слои: ретест без границы — причина вместо области',
+  bxRetest.boxes.length === 0 && /не задана/.test(bxRetest.retestNote));
+
+/* UI-04: модель сцены в пикселях с подставными преобразованиями. */
+const pxMap = {
+  mapTime: (ms) => Math.round(ms / DAY) * 10,
+  mapPrice: (p) => 300 - p,
+};
+const scene = ac.buildScene({
+  viewFromMs: 10 * DAY, viewToMs: 20 * DAY,
+  candles: [], mapTime: pxMap.mapTime, mapPrice: pxMap.mapPrice,
+  priceRange: { min: 0, max: 200 }, chartHeight: 300, paneWidth: 400,
+  boxes: [
+    { kind: 'range', startMs: 12 * DAY, endMs: 18 * DAY, upper: 100, lower: 50 },
+    { kind: 'manip', startMs: 25 * DAY, endMs: 27 * DAY, upper: 100, lower: 50 },
+  ],
+  lines: [
+    { name: 'L', price: 100, cls: 'range' },
+    { name: 'U', price: 120, cls: 'range' },
+    { name: 'TP1', price: 105, cls: 'tp' },
+    { name: 'K', price: 500, cls: 'k' },
+  ],
+  markers: [
+    { x: 50, price: 100, position: 'aboveBar', label: 'выход', hasKey: true },
+    { x: 60, price: 90, position: 'belowBar', label: 'BOS', hasKey: false },
+  ],
+});
+check('сцена: область в виде — rect, вне вида — пропущена', scene.rects.length === 1 &&
+  scene.rects[0].x === 120 && scene.rects[0].width === 60 &&
+  scene.rects[0].y === 200 && scene.rects[0].height === 50);
+check('сцена: близкие уровни группируются, дальний K пропущен', scene.lines.length === 2 &&
+  scene.lines[0].label === 'U 120' && scene.lines[1].label === '2 уровня' &&
+  scene.lines[1].kind === 'tp');
+check('сцена: маркеры над/под свечой', scene.markers.length === 2 &&
+  scene.markers[0].y === 180 && scene.markers[0].key === true &&
+  scene.markers[1].y === 214 && scene.markers[1].position === 'belowBar');
+check('сцена: области клиппятся видимым диапазоном', ac.buildScene({
+  viewFromMs: 10 * DAY, viewToMs: 20 * DAY,
+  candles: [], mapTime: pxMap.mapTime, mapPrice: pxMap.mapPrice,
+  priceRange: { min: 0, max: 200 }, chartHeight: 300,
+  boxes: [{ kind: 'range', startMs: 8 * DAY, endMs: 22 * DAY, upper: 100, lower: 50 }],
+  lines: [], markers: [],
+}).rects[0].x === 100);
+check('сцена: уровень вне ценовой шкалы не рисуется', ac.buildScene({
+  viewFromMs: null, viewToMs: null,
+  candles: [], mapTime: pxMap.mapTime, mapPrice: pxMap.mapPrice,
+  priceRange: { min: 0, max: 200 }, chartHeight: 300,
+  boxes: [], lines: [{ name: 'TP4', price: 300, cls: 'tp' }], markers: [],
+}).lines.length === 0);
+
 if (failed) {
   console.error(failed + ' failed');
   process.exit(1);

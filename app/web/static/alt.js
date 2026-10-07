@@ -66,13 +66,14 @@ const state = {
   },
   tableMode: false, columns: DEFAULT_COLUMNS.slice(),
   pane: 'list',
-  candles: [], rawCandles: [], candleByTime: new Map(),
+  timeframe: 'D1',
+  candles: [], rawCandles: [], viewCandles: [], candleByTime: new Map(),
   chart: null, candleSeries: null, ro: null,
   manualPrice: null, priceRange: null, followRight: true,
   pendingViewport: null, viewports: {},
   suspendPrice: false, applyingPrice: false,
   freshNote: '', latestStructureMs: null, jumpNote: '', rangeNote: '',
-  retestNote: '', targetNote: '',
+  retestNote: '', targetNote: '', autoNote: '',
   run: null, refreshing: false, reloadTimer: null,
   drawQueued: false,
 };
@@ -153,7 +154,7 @@ function defaultPrefs() {
   return {
     v: 1, bucket: 'eligible', venue: '', search: '', sort: 'server',
     rankMin: '', rankMax: '', ageMin: '', ageMax: '', ddMin: '', ddMax: '',
-    structure: '', stage: '', eventMode: 'setup',
+    structure: '', stage: '', eventMode: 'setup', timeframe: 'D1',
     layers: {
       range: true, entries: true, manipulation: true, targets: 'nearest',
       cancel: true, reverse: false, reverseUser: false, historyTypes: null,
@@ -173,6 +174,7 @@ function loadPrefs() {
     state[key] = prefs[key] == null ? '' : String(prefs[key]);
   });
   state.eventMode = prefs.eventMode || 'setup';
+  state.timeframe = prefs.timeframe === 'W1' ? 'W1' : 'D1';
   state.layers = Object.assign(defaultPrefs().layers, prefs.layers || {});
   state.tableMode = !!prefs.tableMode;
   state.columns = Array.isArray(prefs.columns) && prefs.columns.length ? prefs.columns.filter((id) => COLUMNS.some((col) => col.id === id)) : DEFAULT_COLUMNS.slice();
@@ -184,6 +186,7 @@ function savePrefs() {
     rankMin: state.rankMin, rankMax: state.rankMax, ageMin: state.ageMin, ageMax: state.ageMax,
     ddMin: state.ddMin, ddMax: state.ddMax, structure: state.structure, stage: state.stage,
     eventMode: state.eventMode, layers: state.layers, tableMode: state.tableMode,
+    timeframe: state.timeframe,
     columns: state.columns,
     selected: state.selected ? { kind: state.selected.kind, id: state.selected.id } : null,
   };
@@ -571,7 +574,7 @@ function renderHeadline() {
   title.textContent = asset.symbol + (state.cardPhase === 'loading' ? ' · загрузка' : '');
   const close = row && row.last_close != null ? row.last_close : null;
   const when = row && row.last_close_open_time;
-  const bits = [source.symbol, source.venue, 'D1'];
+  const bits = [source.symbol, source.venue, state.timeframe];
   if (close != null) bits.push('Цена закрытия D1 ' + fmtPrice(close));
   if (when) bits.push(fmtDate(when));
   $('alt-chart-sub').textContent = bits.filter(Boolean).join(' · ');
@@ -588,6 +591,15 @@ function renderNotes() {
   if (state.rangeNote) notes.push(state.rangeNote);
   if (state.retestNote) notes.push(state.retestNote);
   if (state.targetNote) notes.push(state.targetNote);
+  if (state.autoNote) notes.push(state.autoNote);
+  if (state.timeframe === 'W1' && state.viewCandles.length) {
+    if (state.viewCandles[state.viewCandles.length - 1].partial) {
+      notes.push('Последняя свеча W1 — незавершённая неделя: она изменится по мере закрытия D1.');
+    }
+    if (state.viewCandles.some((candle) => candle.gaps)) {
+      notes.push('В истории W1 есть недели с пропущенными D1.');
+    }
+  }
   if (state.eventMode === 'history') notes.push('История относится к выбранному сетапу, не ко всем сетапам этой монеты.');
   $('alt-chart-note').textContent = notes.filter(Boolean).join(' ');
 }
@@ -655,11 +667,16 @@ async function selectRow(kind, id, options) {
   state.outsideFilter = false;
   state.jumpNote = '';
   state.rangeNote = '';
+  state.autoNote = '';
   const saved = state.viewports[kind + ':' + id];
   if (opts.preserve) state.pendingViewport = opts.preserve;
   else {
-    state.manualPrice = saved ? saved.manualPrice : null;
-    state.pendingViewport = saved && saved.timeRange ? saved : { initial: true };
+    // UI-02: ручная ценовая шкала между активами не переносится — ни чужая,
+    // ни сохранённая от прежнего визита этой же строки.
+    state.manualPrice = null;
+    state.pendingViewport = saved && saved.timeRange
+      ? { timeRange: saved.timeRange, follow: saved.follow }
+      : { initial: true };
   }
   if (window.innerWidth < 1100 && !opts.fromWs) state.pane = 'chart';
   applyPane();
@@ -884,7 +901,17 @@ function applyPrice() {
     scale.applyOptions({ autoScale: false });
     scale.setVisibleRange({ from: range.min, to: range.max });
   } catch (e) {
+    // UI-02: сбой расчёта не должен оставлять шкалу другого актива —
+    // безопасный fit по всей новой серии.
     console.warn('alt: ценовая шкала', e);
+    try {
+      const fallback = window.AltChart.priceRange(state.candles, null, null);
+      state.priceRange = fallback;
+      state.chart.priceScale('right').setVisibleRange({ from: fallback.min, to: fallback.max });
+    } catch (e2) {
+      console.warn('alt: ценовая шкала, авто-fit', e2);
+      try { state.chart.priceScale('right').applyOptions({ autoScale: true }); } catch (e3) { /* noop */ }
+    }
   } finally {
     state.applyingPrice = false;
   }
@@ -893,7 +920,6 @@ function saveViewport() {
   if (!state.selected || !state.chart) return;
   state.viewports[state.selected.kind + ':' + state.selected.id] = {
     timeRange: state.chart.timeScale().getVisibleRange(),
-    manualPrice: state.manualPrice,
     follow: state.followRight,
   };
 }
@@ -922,10 +948,20 @@ function renderChart() {
   }
   const raw = closedCandles(detail);
   state.rawCandles = raw;
-  state.candles = raw.map((candle) => ({
-    time: Math.floor(candle.open_time / 1000),
-    open: candle.open, high: candle.high, low: candle.low, close: candle.close,
-  }));
+  const view = state.timeframe === 'W1' ? window.AltChart.aggregateW1(raw) : raw;
+  state.viewCandles = view;
+  const theme = HTF.chartTheme();
+  state.candles = view.map((candle) => {
+    const point = {
+      time: Math.floor(candle.open_time / 1000),
+      open: candle.open, high: candle.high, low: candle.low, close: candle.close,
+    };
+    if (candle.partial) {
+      point.color = theme.text;
+      point.wickColor = theme.text;
+    }
+    return point;
+  });
   state.candleByTime = new Map(state.candles.map((candle) => [candle.time, candle]));
   if (!state.candles.length) {
     clearSeries();
@@ -990,63 +1026,71 @@ function showLevel(price) {
   scheduleDraw();
   saveViewport();
 }
-function boxSpan(startMs, endMs) {
-  const scale = state.chart.timeScale();
-  const direct = (ms) => scale.timeToCoordinate(Math.floor(ms / 1000));
-  let x1 = direct(startMs);
-  let x2 = direct(endMs);
-  if (x1 != null && x2 != null) return { x1, x2 };
-  const xs = [];
-  state.rawCandles.forEach((candle) => {
-    const open = candle.open_time;
-    if (open + DAY_MS <= startMs || open >= endMs) return;
-    const x = direct(open);
-    if (x != null) xs.push(x);
-  });
-  if (xs.length < 2) return null;
-  return { x1: Math.min.apply(null, xs), x2: Math.max.apply(null, xs) };
+/* Привязка времени к свече текущего таймфрейма (UI-01):
+   в W1 события и области якорятся на неделю, содержащую их дату D1. */
+function anchorMs(ms) {
+  return state.timeframe === 'W1' ? window.AltChart.weekStartMs(ms) : ms;
+}
+function anchorBoxMs(startMs, endMs) {
+  if (state.timeframe !== 'W1') return { startMs, endMs };
+  return {
+    startMs: window.AltChart.weekStartMs(startMs),
+    endMs: window.AltChart.weekStartMs(endMs) + 7 * DAY_MS,
+  };
+}
+function chartContext() {
+  const visible = state.chart.timeScale().getVisibleRange();
+  return {
+    viewFromMs: visible ? visible.from * 1000 : null,
+    viewToMs: visible ? visible.to * 1000 : null,
+    candles: state.viewCandles,
+    mapTime: (ms) => state.chart.timeScale().timeToCoordinate(Math.floor(anchorMs(ms) / 1000)),
+    mapPrice: (price) => state.candleSeries.priceToCoordinate(price),
+    priceRange: state.priceRange,
+    chartHeight: $('chart').clientHeight || 0,
+  };
 }
 function paintBox(overlay, startMs, endMs, upper, lower, cls, title) {
-  const visible = state.chart.timeScale().getVisibleRange();
-  if (!visible) return;
-  const clipped = window.AltChart.intervalOnScreen(startMs, endMs, visible.from * 1000, visible.to * 1000);
-  if (!clipped) return;
-  const span = boxSpan(clipped.startMs, clipped.endMs);
-  if (!span) return;
-  const x1 = span.x1;
-  const x2 = span.x2;
-  const chartHeight = $('chart').clientHeight || 0;
-  const scale = state.priceRange;
-  const priceY = (price) => {
-    if (scale && price > scale.max) return 0;
-    if (scale && price < scale.min) return chartHeight;
-    return state.candleSeries.priceToCoordinate(price);
-  };
-  let y1 = priceY(upper);
-  let y2 = priceY(lower);
-  if (y1 == null && y2 == null) return;
-  if (y1 == null) y1 = upper >= lower ? 0 : chartHeight;
-  if (y2 == null) y2 = lower <= upper ? chartHeight : 0;
-  const left = Math.min(x1, x2);
-  const width = Math.abs(x2 - x1);
-  const top = Math.max(0, Math.min(y1, y2));
-  const height = Math.min(chartHeight, Math.max(y1, y2)) - top;
-  if (width < 1 || height < 1) return;
+  if (!state.chart.timeScale().getVisibleRange()) return;
+  const span = anchorBoxMs(startMs, endMs);
+  const rect = window.AltChart.boxRectPx({
+    startMs: span.startMs, endMs: span.endMs, upper, lower,
+  }, chartContext());
+  if (!rect) return;
   const box = document.createElement('div');
   box.className = 'alt-zone ' + cls;
   box.title = title;
-  box.style.left = left + 'px';
-  box.style.width = width + 'px';
-  box.style.top = top + 'px';
-  box.style.height = height + 'px';
+  box.style.left = rect.x + 'px';
+  box.style.width = rect.width + 'px';
+  box.style.top = rect.y + 'px';
+  box.style.height = rect.height + 'px';
   overlay.appendChild(box);
 }
-function drawLayers() {
-  const overlay = $('alt-overlay');
-  if (!overlay || !state.chart) return;
-  overlay.innerHTML = '';
+function boxTitles(box) {
+  if (box.kind === 'range') {
+    return {
+      cls: 'alt-range-box',
+      title: `Аккумуляция ${fmtPrice(box.lower)}–${fmtPrice(box.upper)}`,
+    };
+  }
+  if (box.kind === 'manip') {
+    return {
+      cls: 'alt-manip-box',
+      title: `Манипуляция, минимум ${fmtPrice(box.minPrice)}`,
+    };
+  }
+  return { cls: 'alt-retest-box', title: 'Область ретеста [M, U]' };
+}
+function layerView() {
+  return {
+    range: state.layers.range,
+    manipulation: state.layers.manipulation,
+    entries: state.layers.entries,
+    eventMode: state.eventMode,
+  };
+}
+function computeMarkerGroups() {
   const detail = state.detail;
-  if (!detail || !state.candles.length || !state.normalized) return;
   const visible = state.chart.timeScale().getVisibleRange();
   const projection = window.AltChart.selectChartEvents(state.normalized.events, {
     mode: state.eventMode,
@@ -1060,51 +1104,45 @@ function drawLayers() {
   });
   state.freshNote = projection.freshNote || '';
   state.latestStructureMs = projection.latestStructureMs;
-  const range = detail.frozen_range || detail.range;
+  const items = [];
+  projection.markers.forEach((event) => {
+    if (event.candle_open_time_ms == null) return;
+    const sec = Math.floor(anchorMs(event.candle_open_time_ms) / 1000);
+    if (!state.candleByTime.has(sec)) return;
+    const x = state.chart.timeScale().timeToCoordinate(sec);
+    if (x == null) return;
+    items.push({ event, x, position: event.position });
+  });
+  return window.AltChart.groupMarkers(items, { measure: measureLabel, selectedKey: state.selectedEventKey })
+    .map((group) => {
+      const sec = Math.floor(anchorMs(group.fromMs) / 1000);
+      const bar = state.candleByTime.get(sec) || state.candles[0];
+      if (!bar) return null;
+      const price = group.position === 'aboveBar' ? bar.high : bar.low;
+      const y = state.candleSeries.priceToCoordinate(price);
+      if (y == null || group.x == null) return null;
+      return Object.assign({}, group, { price, y });
+    })
+    .filter(Boolean);
+}
+function drawLayers() {
+  const overlay = $('alt-overlay');
+  if (!overlay || !state.chart) return;
+  overlay.innerHTML = '';
+  const detail = state.detail;
+  if (!detail || !state.candles.length || !state.normalized) return;
+  const markerGroups = computeMarkerGroups();
   const last = state.rawCandles.length ? state.rawCandles[state.rawCandles.length - 1].open_time : null;
-  if (state.layers.range && range && detail.anchors && detail.anchors.start && last != null) {
-    paintBox(overlay, detail.anchors.start.open_time, last + DAY_MS, range.upper, range.lower, 'alt-range-box',
-      `Аккумуляция ${fmtPrice(range.lower)}–${fmtPrice(range.upper)}`);
-  }
-  if (state.layers.manipulation && range) {
-    window.AltChart.manipulationEpisodes(detail.manipulation_episodes, state.eventMode, detail.as_of_ms)
-      .forEach((episode) => {
-        const end = episode.ended_candle_open_time != null
-          ? episode.ended_candle_open_time + DAY_MS
-          : (last != null ? last + DAY_MS : null);
-        if (end == null) return;
-        paintBox(overlay, episode.started_candle_open_time, end, range.lower, episode.min_price, 'alt-manip-box',
-          `Манипуляция, минимум ${fmtPrice(episode.min_price)}`);
-      });
-  }
-  state.retestNote = '';
-  if (state.layers.entries && range) {
-    const span = window.AltChart.retestSpan(detail, last);
-    if (span && span.missing) state.retestNote = span.reason;
-    else if (span) {
-      paintBox(overlay, span.startMs, span.endMs, range.upper, range.mid, 'alt-retest-box', 'Область ретеста [M, U]');
-    }
-  }
-  const levels = [];
-  if (state.layers.range && range) {
-    [['L', range.lower], ['U', range.upper], ['M', range.mid]].forEach(([name, price]) => {
-      if (price != null) levels.push({ name, price, cls: 'range' });
-    });
-  }
+  const collectedBoxes = window.AltChart.collectBoxes(detail, layerView(), last);
+  state.retestNote = collectedBoxes.retestNote || '';
+  collectedBoxes.boxes.forEach((box) => {
+    const text = boxTitles(box);
+    paintBox(overlay, box.startMs, box.endMs, box.upper, box.lower, text.cls, text.title);
+  });
   const lastClose = state.rawCandles.length ? state.rawCandles[state.rawCandles.length - 1].close : null;
-  if (state.layers.targets === 'nearest') {
-    const found = window.AltChart.nearestTarget(detail.targets, lastClose);
-    state.targetNote = found.target ? '' : (found.reason || '');
-    if (found.target) levels.push({ name: 'TP' + found.target.tp, price: found.target.price, cls: 'tp' });
-  } else if (state.layers.targets === 'all') {
-    state.targetNote = '';
-    (detail.targets || []).forEach((target) => {
-      if (target.price != null) levels.push({ name: 'TP' + target.tp, price: target.price, cls: 'tp' });
-    });
-  } else state.targetNote = '';
-  if (state.layers.cancel && detail.cancel && detail.cancel.price > 0) {
-    levels.push({ name: 'K', price: detail.cancel.price, cls: 'k' });
-  }
+  const collected = window.AltChart.collectLevels(detail, state.layers, lastClose);
+  state.targetNote = collected.targetNote || '';
+  const levels = collected.levels;
   const scale = state.priceRange;
   const placed = [];
   const chips = { above: [], below: [] };
@@ -1156,65 +1194,50 @@ function drawLayers() {
       overlay.appendChild(button);
     });
   });
-  const items = [];
-  projection.markers.forEach((event) => {
-    if (event.candle_open_time_ms == null) return;
-    const sec = Math.floor(event.candle_open_time_ms / 1000);
-    if (!state.candleByTime.has(sec)) return;
-    const x = state.chart.timeScale().timeToCoordinate(sec);
-    if (x == null) return;
-    items.push({ event, x, position: event.position });
-  });
-  window.AltChart.groupMarkers(items, { measure: measureLabel, selectedKey: state.selectedEventKey })
-    .forEach((group) => {
-      const sec = Math.floor(group.fromMs / 1000);
-      const bar = state.candleByTime.get(sec) || state.candles[0];
-      if (!bar) return;
-      const yPrice = group.position === 'aboveBar' ? bar.high : bar.low;
-      let y = state.candleSeries.priceToCoordinate(yPrice);
-      if (y == null || group.x == null) return;
-      y = group.position === 'aboveBar' ? y - 20 : y + 4;
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'alt-marker' + (group.hasKey ? ' key' : '');
-      button.style.left = group.x + 'px';
-      button.style.top = y + 'px';
-      button.textContent = group.label;
-      button.onclick = (click) => {
-        click.stopPropagation();
-        if (group.count === 1) {
-          state.selectedEventKey = group.eventKeys[0];
+  markerGroups.forEach((group) => {
+    const y = group.position === 'aboveBar' ? group.y - 20 : group.y + 4;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'alt-marker' + (group.hasKey ? ' key' : '');
+    button.style.left = group.x + 'px';
+    button.style.top = y + 'px';
+    button.textContent = group.label;
+    button.onclick = (click) => {
+      click.stopPropagation();
+      if (group.count === 1) {
+        state.selectedEventKey = group.eventKeys[0];
+        renderJournal();
+        scheduleDraw();
+        return;
+      }
+      const pop = document.createElement('div');
+      pop.className = 'alt-pop';
+      pop.style.left = group.x + 'px';
+      pop.style.top = (y + 22) + 'px';
+      group.eventKeys.forEach((key) => {
+        const event = state.normalized.events.find((item) => item.key === key);
+        if (!event) return;
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.textContent = `${event.label} · ${fmtTime(event.available_at_ms)}`;
+        item.onclick = (inner) => {
+          inner.stopPropagation();
+          state.selectedEventKey = key;
           renderJournal();
           scheduleDraw();
-          return;
-        }
-        const pop = document.createElement('div');
-        pop.className = 'alt-pop';
-        pop.style.left = group.x + 'px';
-        pop.style.top = (y + 22) + 'px';
-        group.eventKeys.forEach((key) => {
-          const event = state.normalized.events.find((item) => item.key === key);
-          if (!event) return;
-          const item = document.createElement('button');
-          item.type = 'button';
-          item.textContent = `${event.label} · ${fmtTime(event.available_at_ms)}`;
-          item.onclick = (inner) => {
-            inner.stopPropagation();
-            state.selectedEventKey = key;
-            renderJournal();
-            scheduleDraw();
-          };
-          pop.appendChild(item);
-        });
-        overlay.appendChild(pop);
-      };
-      overlay.appendChild(button);
-    });
+        };
+        pop.appendChild(item);
+      });
+      overlay.appendChild(pop);
+    };
+    overlay.appendChild(button);
+  });
   renderNotes();
 }
 
 function jumpTo(candleOpenMs) {
   if (!state.detail) return;
+  state.autoNote = '';
   const spec = window.AltChart.jumpTimeRange(candleOpenMs, state.rawCandles);
   if (spec.missing) {
     const bounds = spec.loadedFromMs ? ` Фрагмент: ${fmtDate(spec.loadedFromMs)} — ${fmtDate(spec.loadedToMs)}.` : '';
@@ -1230,8 +1253,195 @@ function jumpTo(candleOpenMs) {
 }
 function commandViewport(spec) {
   state.manualPrice = null;
+  state.autoNote = '';
   state.pendingViewport = spec;
   renderChart();
+}
+
+/* UI-01: D1/W1 — серия пересобирается из тех же D1 клиентской агрегацией,
+   видимый временной охват сохраняется в датах, цена пересчитывается. */
+function switchTimeframe(tf) {
+  if (tf !== 'D1' && tf !== 'W1') return;
+  if (tf === state.timeframe) return;
+  state.timeframe = tf;
+  savePrefs();
+  syncControls();
+  if (!state.detail || !state.chart) {
+    renderChart();
+    return;
+  }
+  const visible = state.chart.timeScale().getVisibleRange();
+  state.followRight = pinnedRight();
+  if (visible) commandViewport({ fromMs: visible.from * 1000, toMs: visible.to * 1000 });
+  else commandViewport({ fit: true });
+}
+
+/* UI-04: экспорт PNG — снимок canvas графика + единая модель сцены
+   (заливки, уровни, маркеры), заголовок с тикером, ТФ и версией правил. */
+function cssVarValue(name, fallback) {
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return value || fallback;
+}
+function exportColors() {
+  return {
+    range: { fill: 'rgba(227, 179, 65, 0.12)', border: 'rgba(227, 179, 65, 0.7)' },
+    manip: { fill: 'rgba(240, 141, 152, 0.16)', border: 'rgba(240, 141, 152, 0.8)' },
+    retest: { fill: 'rgba(98, 201, 176, 0.14)', border: 'rgba(98, 201, 176, 0.8)' },
+    line: {
+      range: cssVarValue('--lf-warning', '#E3B341'),
+      tp: cssVarValue('--lf-positive', '#62C9B0'),
+      k: cssVarValue('--lf-negative', '#F08D98'),
+    },
+    text: cssVarValue('--lf-text', '#E8EDF5'),
+    dim: cssVarValue('--lf-text2', '#A2B0C5'),
+    surface: cssVarValue('--lf-surface', '#131B28'),
+    raised: cssVarValue('--lf-raised', '#1B2434'),
+    border: cssVarValue('--lf-border', '#2C3A4E'),
+    brand: cssVarValue('--lf-brand', '#4268DD'),
+  };
+}
+function buildExportScene() {
+  const detail = state.detail;
+  const last = state.rawCandles.length ? state.rawCandles[state.rawCandles.length - 1].open_time : null;
+  const lastClose = state.rawCandles.length ? state.rawCandles[state.rawCandles.length - 1].close : null;
+  const ctx = chartContext();
+  const boxes = window.AltChart.collectBoxes(detail, layerView(), last).boxes.map((box) => {
+    const span = anchorBoxMs(box.startMs, box.endMs);
+    return Object.assign({}, box, { startMs: span.startMs, endMs: span.endMs });
+  });
+  const levels = window.AltChart.collectLevels(detail, state.layers, lastClose).levels;
+  const markers = computeMarkerGroups().map((group) => ({
+    x: group.x,
+    price: group.price,
+    position: group.position,
+    label: group.label,
+    hasKey: group.hasKey,
+  }));
+  return window.AltChart.buildScene({
+    candles: ctx.candles,
+    viewFromMs: ctx.viewFromMs,
+    viewToMs: ctx.viewToMs,
+    mapTime: ctx.mapTime,
+    mapPrice: ctx.mapPrice,
+    priceRange: state.priceRange,
+    chartHeight: ctx.chartHeight,
+    paneWidth: Math.max(0, $('chart').clientWidth - state.chart.priceScale('right').width()),
+    boxes,
+    lines: levels,
+    markers,
+    fmtPrice,
+  });
+}
+async function exportPng(zoom) {
+  const detail = state.detail;
+  if (!state.chart || !detail || !state.candles.length || !state.normalized) return;
+  drawLayers();
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  const shot = state.chart.takeScreenshot();
+  const chartWidth = $('chart').clientWidth || shot.width;
+  const chartHeight = $('chart').clientHeight || shot.height;
+  const ratio = chartWidth ? shot.width / chartWidth : 1;
+  const k = ratio * (zoom || 1);
+  const colors = exportColors();
+  const headerH = 40;
+  const out = document.createElement('canvas');
+  out.width = Math.round(shot.width * (zoom || 1));
+  out.height = Math.round(shot.height * (zoom || 1) + headerH * k);
+  const ctx = out.getContext('2d');
+  ctx.fillStyle = colors.surface;
+  ctx.fillRect(0, 0, out.width, out.height);
+  const bandH = headerH * k;
+  ctx.fillStyle = colors.raised;
+  ctx.fillRect(0, 0, out.width, bandH);
+  const asset = detail.asset || {};
+  const source = detail.source || {};
+  const versions = detail.versions || {};
+  const lastOpen = state.rawCandles.length ? state.rawCandles[state.rawCandles.length - 1].open_time : null;
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = colors.text;
+  ctx.font = `600 ${Math.round(13 * k)}px Inter, "Segoe UI", sans-serif`;
+  ctx.fillText(
+    [asset.symbol, source.symbol, source.venue, state.timeframe].filter(Boolean).join(' · '),
+    Math.round(10 * k), Math.round(bandH * 0.3)
+  );
+  ctx.fillStyle = colors.dim;
+  ctx.font = `${Math.round(11 * k)}px Inter, "Segoe UI", sans-serif`;
+  ctx.fillText(
+    ['Данные на ' + (lastOpen ? fmtDate(lastOpen) : '—'), 'правила ' + (versions.rule || '—')]
+      .join(' · '),
+    Math.round(10 * k), Math.round(bandH * 0.72)
+  );
+  ctx.drawImage(shot, 0, bandH, shot.width * (zoom || 1), shot.height * (zoom || 1));
+  const scene = buildExportScene();
+  ctx.save();
+  ctx.translate(0, bandH);
+  ctx.scale(k, k);
+  ctx.beginPath();
+  ctx.rect(0, 0, chartWidth, chartHeight);
+  ctx.clip();
+  scene.rects.forEach((rect) => {
+    const style = colors[rect.kind] || colors.range;
+    ctx.fillStyle = style.fill;
+    ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+    ctx.strokeStyle = style.border;
+    ctx.lineWidth = 1;
+    ctx.setLineDash(rect.kind === 'range' ? [] : [4, 3]);
+    ctx.beginPath();
+    ctx.moveTo(rect.x, rect.y + 0.5);
+    ctx.lineTo(rect.x + rect.width, rect.y + 0.5);
+    if (rect.kind !== 'manip') {
+      ctx.moveTo(rect.x, rect.y + rect.height - 0.5);
+      ctx.lineTo(rect.x + rect.width, rect.y + rect.height - 0.5);
+    }
+    ctx.stroke();
+  });
+  ctx.setLineDash([]);
+  const labelFont = '11px Inter, "Segoe UI", sans-serif';
+  scene.lines.forEach((line) => {
+    ctx.strokeStyle = colors.line[line.kind] || colors.dim;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    ctx.moveTo(0, line.y + 0.5);
+    ctx.lineTo(line.width || chartWidth, line.y + 0.5);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.font = labelFont;
+    const w = ctx.measureText(line.label).width + 10;
+    const x = Math.max(0, (line.width || chartWidth) - w - 8);
+    ctx.fillStyle = colors.surface;
+    ctx.strokeStyle = colors.border;
+    ctx.fillRect(x, line.y - 15, w, 15);
+    ctx.strokeRect(x, line.y - 15, w, 15);
+    ctx.fillStyle = colors.text;
+    ctx.textBaseline = 'middle';
+    ctx.fillText(line.label, x + 5, line.y - 7.5);
+  });
+  scene.markers.forEach((marker) => {
+    ctx.font = labelFont;
+    const w = ctx.measureText(marker.label).width + 10;
+    const x = marker.x - w / 2;
+    ctx.fillStyle = colors.surface;
+    ctx.strokeStyle = marker.key ? colors.brand : colors.border;
+    ctx.lineWidth = 1;
+    ctx.fillRect(x, marker.y, w, 15);
+    ctx.strokeRect(x, marker.y, w, 15);
+    ctx.fillStyle = colors.text;
+    ctx.textBaseline = 'middle';
+    ctx.fillText(marker.label, x + 5, marker.y + 7.5);
+  });
+  ctx.restore();
+  const ticker = String(asset.symbol || 'ALT').replace(/[^A-Za-z0-9_-]+/g, '') || 'ALT';
+  const datePart = lastOpen ? mskDay(lastOpen) : 'nodate';
+  const name = `${ticker}_${state.timeframe}_${datePart}.png`;
+  out.toBlob((blob) => {
+    if (!blob) return;
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = name;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+  }, 'image/png');
 }
 
 function applyPane() {
@@ -1273,6 +1483,9 @@ function syncControls() {
   renderTabs();
   document.querySelectorAll('.alt-modes button').forEach((button) => {
     button.setAttribute('aria-pressed', button.dataset.mode === state.eventMode ? 'true' : 'false');
+  });
+  document.querySelectorAll('.alt-tf button').forEach((button) => {
+    button.setAttribute('aria-pressed', button.dataset.tf === state.timeframe ? 'true' : 'false');
   });
   $('layer-range').checked = !!state.layers.range;
   $('layer-entries').checked = !!state.layers.entries;
@@ -1466,6 +1679,20 @@ function bind() {
       renderNotes();
     };
   });
+  document.querySelectorAll('.alt-tf button').forEach((button) => {
+    button.onclick = () => switchTimeframe(button.dataset.tf);
+  });
+  $('alt-auto').onclick = () => {
+    state.followRight = false;
+    commandViewport({ fit: true });
+    const hist = state.detail && state.detail.candle_history;
+    state.autoNote = hist && (hist.truncated || hist.windowed)
+      ? '«Авто» показал все загруженные свечи, но загружен фрагмент истории пары, а не вся рыночная история.'
+      : '';
+    renderNotes();
+  };
+  $('alt-png').onclick = () => { exportPng(1); };
+  $('alt-png2').onclick = () => { exportPng(2); };
   $('alt-layers-toggle').onclick = () => {
     if ($('alt-layers').classList.contains('hidden')) openPanel('alt-layers', $('alt-layers-toggle'));
     else closePanel('alt-layers');

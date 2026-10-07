@@ -17,10 +17,11 @@ UTC-дня — настройки job_hour_msk/job_minute_msk):
    last_closed_ms. Только ЗАКРЫТЫЕ свечи (include_forming=False + фильтр
    close boundary <= now — формирующаяся D1 не хранится, §4). Пропуски дней
    не синтезируются — фиксируются gaps в meta (§4).
-4. Движок: AltEngine.process_asset_history по полной сохранённой серии
-   (replay идемпотентен — дедуп по origin_key/UNIQUE-ключам alt_event,
-   ретраи внутри run не множат рыночные события). Движок/БД синхронные —
-   вызов в asyncio.to_thread, чтобы не блокировать event loop.
+4. Движок: по флагу AltConfig.engine_version (дефолт v1). v1 —
+   AltEngine.process_asset_history; v2 — AltEngineV2, таблицы эпизодов
+   рядом, freeze v1 не переписывается. Replay идемпотентен. Движок и БД
+   синхронные — вызов в asyncio.to_thread. Уведомления v2 не эмитируются:
+   сравнение версий идёт без внешней рассылки, пока дедуп не проверен.
 5. Антиспам (§18): первичная загрузка актива (processing_mode="backfill",
    meta-флаг alt:loaded:{asset}:{source}) НЕ рассылает месяцы старых
    событий — новые alt_event помечаются delivered без отправки, их id
@@ -58,6 +59,7 @@ from ..models_alt import (
     AltState,
 )
 from .engine import AltEngine
+from .engine_v2 import AltEngineV2
 from .universe import refresh_universe
 
 log = logging.getLogger(__name__)
@@ -479,6 +481,12 @@ class AltRunner:
     # (d–f) движок, антиспам, флаги вселенной
     # ------------------------------------------------------------------
 
+    def _engine(self) -> AltEngine | AltEngineV2:
+        """v1 по умолчанию. v2 — отдельный расчёт эпизодов, без рассылки."""
+        if self.cfg.engine_version == "v2":
+            return AltEngineV2(self.db, self.cfg)
+        return AltEngine(self.db, self.cfg)
+
     async def _process_asset(
         self, asset: AltAsset, src: AltInstrumentSource, new_days: int, now: int
     ) -> tuple[str, list[int]]:
@@ -490,11 +498,20 @@ class AltRunner:
         восстановление пропущенных дней; live — обычный дневной шаг.
         """
         mode_key = f"alt:loaded:{asset.id}:{src.id}"
-        backfill = self.db.get_meta(mode_key) is None
+        version_key = f"alt:engine:{asset.id}:{src.id}"
+        seen_version = self.db.get_meta(version_key)
+        # Смена v1↔v2 — тоже первичная загрузка этой версии: исторический
+        # replay не должен уйти как поток новых уведомлений (§8.12).
+        # Пустой version_key у уже загруженного актива не считается сменой,
+        # чтобы обновление кода не проглатывало живые события v1.
+        switched = (
+            seen_version is not None and seen_version != self.cfg.engine_version
+        )
+        backfill = self.db.get_meta(mode_key) is None or switched
         mode = "backfill" if backfill else ("catchup" if new_days > 1 else "live")
 
         candles = self.db.get_alt_candles(src.id)
-        engine = AltEngine(self.db, self.cfg)
+        engine = self._engine()
         await asyncio.to_thread(
             engine.process_asset_history, asset.id, src.id, candles, now
         )
@@ -503,7 +520,8 @@ class AltRunner:
         if backfill:
             # §18: первичная загрузка/replay не рассылает месяцы старых
             # событий — помечаем delivered без отправки; id — в summary
-            # прогона (per-run сводку сформирует notify-слой)
+            # прогона (per-run сводку сформирует notify-слой).
+            # v2 сам события не пишет; пометка страхует replay v1 после отката.
             setup_ids = {s.id for s in self.db.list_alt_setups(asset.id)}
             for e in self.db.pending_alt_events(limit=100_000):
                 if e.setup_id in setup_ids:
@@ -512,6 +530,7 @@ class AltRunner:
             self.db.set_meta(
                 mode_key, json.dumps({"at_ms": now, "candles": len(candles)})
             )
+        self.db.set_meta(version_key, self.cfg.engine_version)
         return mode, marked
 
     def _update_universe_flags(

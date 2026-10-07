@@ -29,11 +29,15 @@ from ..db import Database
 from ..models import close_boundary_ms, now_ms
 from ..models_alt import (
     ALT_RULE_VERSION,
+    ALT_RULE_VERSION_V2,
     AltAsset,
+    AltEpisodeState,
     AltFrozenRange,
     AltRangeCandidate,
+    AltRangeEpisode,
     AltSetup,
     AltState,
+    AltSweepEpisode,
 )
 
 DAY_MS = 86_400_000
@@ -129,6 +133,40 @@ BUCKETS = (
     "eligible", "new_entries", "awaiting_retest", "mature", "forming",
     "review", "history", "all",
 )
+
+# Эпизоды диапазонов v2 (ТЗ 07.10.2026 R-05/R-07/R-08)
+EPISODE_STATE_RU = {
+    AltEpisodeState.FORMING.value: "Формируется",
+    AltEpisodeState.MATURE.value: "Зрелая база",
+    AltEpisodeState.ACTIVE.value: "Активная база",
+    AltEpisodeState.ACCOMPANIMENT.value: "Сопровождение",
+    AltEpisodeState.DECAYED.value: "Распад",
+    AltEpisodeState.TERMINAL.value: "Завершён",
+}
+
+BASE_END_REASON_RU = {
+    "breakout_confirmed": "Подтверждённый выход",
+    "decay": "Распад базы",
+    "none": "Без выхода",
+}
+
+SWEEP_STATE_RU = {
+    "open": "Выход ниже продолжается",
+    "return_pending": "Выход ниже, возврат не подтверждён",
+    "returned": "Возврат подтверждён",
+    "accepted_below": "Принятие ниже L",
+}
+
+# состояния эпизода, которые могут быть выбраны актуальными (R-08)
+EPISODE_QUALIFIED_STATES = (
+    AltEpisodeState.MATURE.value,
+    AltEpisodeState.ACTIVE.value,
+    AltEpisodeState.ACCOMPANIMENT.value,
+)
+
+# срок релевантности после подтверждённого выхода (R-08; §5 ТЗ — параметр,
+# подлежит калибровке на данных; значение проектное, не торговое условие)
+EPISODE_RELEVANCE_WINDOW_MS = 180 * DAY_MS
 
 # потолок свечей в detail (предшествующее падение + диапазон + последние дни)
 _DETAIL_CANDLE_LIMIT = 2000
@@ -1126,6 +1164,7 @@ def alt_setup_detail(db: Database, setup_id: int, settings: Settings) -> Optiona
         "as_of_ms": last_run.as_of_ms if last_run else None,
         "versions": {
             "rule": ALT_RULE_VERSION,
+            "rules_v2": ALT_RULE_VERSION_V2,
             "classifier": (
                 frozen.classifier_version if frozen is not None
                 else cfg.classifier_version
@@ -1199,6 +1238,7 @@ def alt_candidate_detail(db: Database, candidate_id: int, settings: Settings) ->
         "as_of_ms": last_run.as_of_ms if last_run else None,
         "versions": {
             "rule": ALT_RULE_VERSION,
+            "rules_v2": ALT_RULE_VERSION_V2,
             "classifier": cfg.classifier_version,
             "source": source.source_version if source is not None else None,
             "range": candidate.version,
@@ -1283,4 +1323,225 @@ def alt_run_status(db: Database, cfg: Any) -> dict[str, Any]:
                 "source": snap["source"],
             } if snap is not None else None
         ),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Эпизоды диапазонов v2 (ТЗ 07.10.2026 R-05/R-07/R-08/R-09)
+# ---------------------------------------------------------------------------
+
+
+def _episode_relevance(
+    episode: AltRangeEpisode,
+    last_close: Optional[float],
+    as_of_ms: Optional[int],
+    relevance_window_ms: int,
+) -> Optional[str]:
+    """Связь квалифицированного эпизода с текущей ценой (R-08):
+    цена внутри базы либо недавний подтверждённый выход с ещё действующим
+    сопровождением. None — эпизод не релевантен."""
+    if episode.state not in EPISODE_QUALIFIED_STATES:
+        return None
+    if last_close is not None and episode.lower <= last_close <= episode.upper:
+        return "inside_base"
+    if (
+        episode.base_end_reason == "breakout_confirmed"
+        and episode.base_end_confirmed_at_ms is not None
+        and as_of_ms is not None
+        and 0 <= as_of_ms - episode.base_end_confirmed_at_ms <= relevance_window_ms
+        and (
+            episode.accompaniment_end_open_time is None
+            or episode.accompaniment_end_open_time >= as_of_ms
+        )
+    ):
+        return "recent_breakout_accompaniment"
+    return None
+
+
+def _episode_selection_key(episode: AltRangeEpisode) -> tuple[int, int, int]:
+    """Свежесть эпизода и устойчивый порядок равных (R-08): свежесть базы,
+    затем время подтверждения, затем ID. Ширина в ключ не входит — узость
+    сама по себе не преимущество."""
+    return (*_episode_parity_key(episode), episode.id or 0)
+
+
+def _episode_parity_key(episode: AltRangeEpisode) -> tuple[int, int]:
+    """Содержательный паритет кандидатов (без ID): совпадение свежести и
+    времени подтверждения означает сопоставимых конкурентов (R-08)."""
+    confirmation = episode.base_end_confirmed_at_ms or episode.detected_at_ms or 0
+    return (episode.base_start_open_time, confirmation)
+
+
+def select_current_episode(
+    episodes: list[AltRangeEpisode],
+    last_close: Optional[float],
+    as_of_ms: Optional[int],
+    relevance_window_ms: int = EPISODE_RELEVANCE_WINDOW_MS,
+) -> tuple[Optional[AltRangeEpisode], str, list[AltRangeEpisode]]:
+    """Выбор актуального диапазона (R-08). Чистая функция read model.
+
+    Возвращает (episode, reason, alternatives):
+    - episode=None с явной причиной, если актуального диапазона нет
+      ("no_episodes" | "no_qualified_episode" | "no_relevant_episode");
+    - сопоставимые противоречивые кандидаты (паритет свежести и времени
+      подтверждения) → (None, "ambiguous", кандидаты) — статус
+      неоднозначности, альтернативы отсортированы устойчиво (по ID);
+    - иначе лучший эпизод, причина ("inside_base" |
+      "recent_breakout_accompaniment") и остальные релевантные альтернативы.
+    """
+    if not episodes:
+        return None, "no_episodes", []
+    relevant: list[tuple[AltRangeEpisode, str]] = []
+    for ep in episodes:
+        rel = _episode_relevance(ep, last_close, as_of_ms, relevance_window_ms)
+        if rel is not None:
+            relevant.append((ep, rel))
+    if not relevant:
+        reason = (
+            "no_qualified_episode"
+            if not any(ep.state in EPISODE_QUALIFIED_STATES for ep in episodes)
+            else "no_relevant_episode"
+        )
+        return None, reason, []
+    # цена внутри базы — более сильная связь, чем сопровождение после выхода
+    best_category = min(rel for _, rel in relevant)  # inside_base < recent_...
+    category = sorted(
+        (ep for ep, rel in relevant if rel == best_category),
+        key=_episode_selection_key,
+        reverse=True,
+    )
+    if len(category) > 1 and (
+        _episode_parity_key(category[0]) == _episode_parity_key(category[1])
+    ):
+        return None, "ambiguous", category
+    return category[0], best_category, category[1:]
+
+
+def _sweep_episode_to_dict(sweep: AltSweepEpisode) -> dict[str, Any]:
+    return {
+        "id": sweep.id,
+        "episode_id": sweep.episode_id,
+        "state": sweep.state,
+        "state_ru": SWEEP_STATE_RU.get(sweep.state, sweep.state),
+        "start_open_time": sweep.start_open_time,
+        "min_price": sweep.min_price,
+        "min_open_time": sweep.min_open_time,
+        "end_open_time": sweep.end_open_time,
+        "return_confirmed": bool(sweep.return_confirmed),
+        "return_confirmed_at_ms": sweep.return_confirmed_at_ms,
+        "created_ms": sweep.created_ms,
+        "updated_ms": sweep.updated_ms,
+    }
+
+
+def _range_episode_to_dict(
+    episode: AltRangeEpisode, sweeps: list[AltSweepEpisode]
+) -> dict[str, Any]:
+    return {
+        "id": episode.id,
+        "asset_id": episode.asset_id,
+        "source_id": episode.source_id,
+        "origin_key": episode.origin_key,
+        "rules_version": episode.rules_version,
+        "state": episode.state,
+        "state_ru": EPISODE_STATE_RU.get(episode.state, episode.state),
+        "anchor_start_open_time": episode.anchor_start_open_time,
+        "base_start_open_time": episode.base_start_open_time,
+        "base_end_open_time": episode.base_end_open_time,
+        "base_end_reason": episode.base_end_reason,
+        "base_end_reason_ru": (
+            BASE_END_REASON_RU.get(episode.base_end_reason)
+            if episode.base_end_reason is not None else None
+        ),
+        "base_end_confirmed_at_ms": episode.base_end_confirmed_at_ms,
+        "accompaniment_end_open_time": episode.accompaniment_end_open_time,
+        "lower": episode.lower,
+        "upper": episode.upper,
+        "mid": episode.mid,
+        "width": episode.width,
+        "wick_low": episode.wick_low,
+        "wick_high": episode.wick_high,
+        "quality": _loads(episode.quality_json, {}),
+        "selection_rank_reason": episode.selection_rank_reason,
+        "detected_at_ms": episode.detected_at_ms,
+        "created_ms": episode.created_ms,
+        "updated_ms": episode.updated_ms,
+        "sweeps": [_sweep_episode_to_dict(s) for s in sweeps],
+    }
+
+
+def alt_asset_ranges_history(db: Database, asset_id: int) -> Optional[dict[str, Any]]:
+    """«История диапазонов» актива (R-08): все эпизоды v2 от старых к новым
+    (пусто, пока движок v2 не включён) плюс v1-блок того же актива с явной
+    версией правил — исторические и текущие, v1 и v2 различимы (§8.12 ТЗ).
+    Только чтение; v1-данные не изменяются."""
+    asset = db.get_alt_asset(asset_id)
+    if asset is None:
+        return None
+    episodes = db.list_alt_range_episodes(asset_id)
+    episode_blocks = [
+        _range_episode_to_dict(ep, db.list_alt_sweep_episodes(ep.id))
+        for ep in episodes
+    ]
+
+    source = db.get_alt_instrument_source(asset_id)
+    last_close: Optional[float] = None
+    as_of_ms: Optional[int] = None
+    if source is not None and source.last_closed_ms:
+        tail = db.get_alt_candles(
+            source.id, start_ms=source.last_closed_ms, end_ms=source.last_closed_ms
+        )
+        if tail:
+            last_close = tail[-1].close
+            as_of_ms = tail[-1].open_time
+    selected, reason, alternatives = select_current_episode(
+        episodes, last_close, as_of_ms
+    )
+    current = {
+        "episode_id": selected.id if selected is not None else None,
+        "reason": reason,
+        "alternatives": [ep.id for ep in alternatives],
+    }
+
+    v1_ranges = []
+    for cand in db.list_alt_range_candidates(asset_id):
+        frozen = db.get_alt_frozen_range_by_range(cand.id)
+        v1_ranges.append({
+            "rules_version": ALT_RULE_VERSION,
+            "candidate_id": cand.id,
+            "origin_key": cand.origin_key,
+            "state": cand.state,
+            "state_ru": STATE_RU.get(cand.state, cand.state),
+            "lower": cand.lower,
+            "upper": cand.upper,
+            "mid": cand.mid,
+            "width": cand.width,
+            "start_anchor_open_time": cand.start_anchor_open_time,
+            "rebound_anchor_open_time": cand.rebound_anchor_open_time,
+            "n_days": cand.n_days,
+            "version": cand.version,
+            "frozen": (
+                {
+                    "id": frozen.id,
+                    "mature_at_ms": frozen.mature_at_ms,
+                    "included_candles": frozen.included_candles,
+                    "classifier_version": frozen.classifier_version,
+                    "range_version": frozen.range_version,
+                } if frozen is not None else None
+            ),
+        })
+    return {
+        "asset": {
+            "id": asset.id, "cmc_id": asset.cmc_id, "symbol": asset.symbol,
+            "name": asset.name, "cmc_rank": asset.cmc_rank,
+        },
+        "source": _source_brief(source),
+        "rules_versions": {"v1": ALT_RULE_VERSION, "v2": ALT_RULE_VERSION_V2},
+        "current": current,
+        "episodes_v2": episode_blocks,
+        "v1": {
+            "rules_version": ALT_RULE_VERSION,
+            "note": "Данные движка v1 (кандидаты и frozen ranges); не редактируются расчётом v2 (R-09).",
+            "ranges": v1_ranges,
+        },
     }

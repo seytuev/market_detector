@@ -27,6 +27,7 @@ from fastapi import Depends, HTTPException
 from ..db import Database
 from ..services.alt_overview import (
     BUCKETS,
+    alt_asset_ranges_history,
     alt_candidate_detail,
     alt_run_status,
     alt_setup_detail,
@@ -87,6 +88,19 @@ def register_alt_routes(app, db: Database, settings, require_auth,
             data = alt_candidate_detail(db, candidate_id, settings)
         if data is None:
             raise HTTPException(status_code=404, detail="Диапазон не найден")
+        return data
+
+    # ------------------------- история диапазонов (R-08) -------------------------
+
+    @app.get("/api/alt/asset/{asset_id}/ranges",
+             dependencies=[Depends(require_auth)])
+    def alt_asset_ranges(asset_id: int) -> dict[str, Any]:
+        """«История диапазонов» актива: эпизоды v2 (rules_version alt-0.2)
+        и отдельный v1-блок (alt-0.1) — версии и эпохи различимы (§8.12)."""
+        with db.read_tx():
+            data = alt_asset_ranges_history(db, asset_id)
+        if data is None:
+            raise HTTPException(status_code=404, detail="Актив не найден")
         return data
 
     # ------------------------- статус прогона (§18) -------------------------

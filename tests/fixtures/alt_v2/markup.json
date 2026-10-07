@@ -1,0 +1,274 @@
+{
+ "as_of": "2026-10-06",
+ "comment": "Этап 1 эталонов v2. Разметка по 9 скриншотам владельца от 06.10.2026 (спека docs/Altcoins_Range_Engine_Spec_RU_2026_10_07.md, §2). Границы L/U — ДОПУСТИМЫЕ ИНТЕРВАЛЫ (min..max), а не константы алгоритма: точные значения восстанавливаются по OHLC на этапе калибровки. Даты ориентировочные, по осям скриншотов и реальным свечам Binance D1.",
+ "tickers": {
+  "NEAR": {
+   "symbol": "NEARUSDT",
+   "comment": "Изображение 1. Разделить старую базу 2022–2023 и новую базу 2025–2026; нижние выносы новой базы — отдельные эпизоды.",
+   "episodes": [
+    {
+     "id": "near_old_base",
+     "role": "historical_base",
+     "start": "2022-06-01",
+     "end": "2023-10-31",
+     "L": {"min": 0.9, "max": 1.1},
+     "U": {"min": 2.7, "max": 3.1},
+     "expected_status_as_of": "historical",
+     "events": [
+      {"type": "breakout", "date_from": "2023-11-01", "date_to": "2023-12-15",
+       "comment": "выход из старой базы; заливка завершается у выхода"}
+     ]
+    },
+    {
+     "id": "near_new_base",
+     "role": "current_base",
+     "start": "2025-06-01",
+     "end": "2026-10-06",
+     "L": {"min": 1.5, "max": 1.7},
+     "U": {"min": 3.4, "max": 3.8},
+     "expected_status_as_of": "current",
+     "events": [
+      {"type": "breakout", "date_from": "2026-09-10", "date_to": "2026-09-30",
+       "comment": "выход вверх из новой базы в сентябре 2026"}
+     ]
+    },
+    {
+     "id": "near_sweep_2025_12_2026_04",
+     "role": "sweep",
+     "start": "2025-12-01",
+     "end": "2026-04-30",
+     "L": {"min": 0.8, "max": 1.0},
+     "U": {"min": 1.5, "max": 1.7},
+     "expected_status_as_of": "closed",
+     "events": [
+      {"type": "sweep_below_L", "date_from": "2026-01-15", "date_to": "2026-02-15",
+       "comment": "вынос ниже L новой базы (~0.85); не расширяет замороженную базу"},
+      {"type": "return_to_base", "date_from": "2026-05-01", "date_to": "2026-05-31",
+       "comment": "возврат закрытием D1 обратно в базу"}
+     ]
+    }
+   ]
+  },
+  "SUI": {
+   "symbol": "SUIUSDT",
+   "comment": "Изображение 2. Вместо конверта 0.362–3.479 — локальная база после снижения начала 2026 (~0.7–1.35); верх требует подтверждения закрытиями. Низкий летний участок — отдельно.",
+   "episodes": [
+    {
+     "id": "sui_local_base_2026",
+     "role": "current_base",
+     "start": "2026-02-01",
+     "end": "2026-10-06",
+     "L": {"min": 0.65, "max": 0.75},
+     "U": {"min": 1.30, "max": 1.40},
+     "expected_status_as_of": "current",
+     "events": [
+      {"type": "reaction_at_U", "date_from": "2026-05-01", "date_to": "2026-05-31",
+       "comment": "реакция около 1.35–1.42; верхняя граница ещё требует подтверждения"},
+      {"type": "return_to_base", "date_from": "2026-09-01", "date_to": "2026-09-30",
+       "comment": "возврат в тело базы после летнего выноса"}
+     ]
+    },
+    {
+     "id": "sui_summer_low_2026",
+     "role": "sweep",
+     "start": "2026-06-01",
+     "end": "2026-08-31",
+     "L": {"min": 0.60, "max": 0.66},
+     "U": {"min": 0.68, "max": 0.75},
+     "expected_status_as_of": "closed",
+     "events": [
+      {"type": "sweep_below_L", "date_from": "2026-08-10", "date_to": "2026-08-25",
+       "comment": "летний минимум ~0.635 ниже основного тела базы; отдельный эпизод"}
+     ]
+    }
+   ]
+  },
+  "HBAR": {
+   "symbol": "HBARUSDT",
+   "comment": "Изображение 3. Два самостоятельных эпизода: старая база до импульса конца 2024 и новая база 2026; не объединять одним возрастом и одной рамкой.",
+   "episodes": [
+    {
+     "id": "hbar_old_base",
+     "role": "historical_base",
+     "start": "2022-06-01",
+     "end": "2024-10-31",
+     "L": {"min": 0.035, "max": 0.045},
+     "U": {"min": 0.125, "max": 0.140},
+     "expected_status_as_of": "historical",
+     "events": [
+      {"type": "breakout", "date_from": "2024-11-01", "date_to": "2024-12-15",
+       "comment": "импульс конца 2024; заливка старой базы завершается у выхода"}
+     ]
+    },
+    {
+     "id": "hbar_new_base_2026",
+     "role": "current_base",
+     "start": "2026-01-01",
+     "end": "2026-10-06",
+     "L": {"min": 0.070, "max": 0.080},
+     "U": {"min": 0.105, "max": 0.115},
+     "expected_status_as_of": "current",
+     "events": []
+    },
+    {
+     "id": "hbar_sweep_2026_summer",
+     "role": "sweep",
+     "start": "2026-06-01",
+     "end": "2026-08-31",
+     "L": {"min": 0.062, "max": 0.068},
+     "U": {"min": 0.070, "max": 0.080},
+     "expected_status_as_of": "closed",
+     "events": [
+      {"type": "sweep_below_L", "date_from": "2026-08-10", "date_to": "2026-08-25",
+       "comment": "вынос ниже L новой базы (~0.064); хранится отдельно"}
+     ]
+    }
+   ]
+  },
+  "TAO": {
+   "symbol": "TAOUSDT",
+   "comment": "Изображение 4. Контрольный пример против чрезмерного сужения: верх ~500 по повторным реакциям (не 618.5), низ ~130–150 требует проверки. Широкая рамка здесь корректна.",
+   "episodes": [
+    {
+     "id": "tao_wide_base",
+     "role": "current_base",
+     "start": "2025-06-01",
+     "end": "2026-10-06",
+     "L": {"min": 130.0, "max": 150.0},
+     "U": {"min": 480.0, "max": 520.0},
+     "expected_status_as_of": "current",
+     "control_case_no_excessive_narrowing": true,
+     "events": [
+      {"type": "reaction_at_L", "date_from": "2025-10-01", "date_to": "2025-10-20",
+       "comment": "реакция у нижней зоны ~140"},
+      {"type": "reaction_at_U", "date_from": "2025-11-01", "date_to": "2025-11-30",
+       "comment": "повторная реакция у верхней зоны ~500–540"},
+      {"type": "reaction_at_L", "date_from": "2026-02-01", "date_to": "2026-02-15",
+       "comment": "повторная реакция у нижней зоны ~143"}
+     ]
+    }
+   ]
+  },
+  "ENA": {
+   "symbol": "ENAUSDT",
+   "comment": "Изображение 5. Рамка 0.194–0.6743 не описывает новую нижнюю базу 2026 (~0.08–0.14); летние минимумы ниже основной базы — отдельный эпизод; затем выход и ретест.",
+   "episodes": [
+    {
+     "id": "ena_lower_base_2026",
+     "role": "current_base",
+     "start": "2026-01-15",
+     "end": "2026-08-10",
+     "L": {"min": 0.075, "max": 0.085},
+     "U": {"min": 0.135, "max": 0.145},
+     "expected_status_as_of": "current",
+     "events": [
+      {"type": "breakout", "date_from": "2026-08-11", "date_to": "2026-09-05",
+       "comment": "подтверждённый выход вверх из нижней базы"},
+      {"type": "retest", "date_from": "2026-09-06", "date_to": "2026-09-30",
+       "comment": "возврат к бывшему U (~0.135–0.14) — ретест того же диапазона"}
+     ]
+    },
+    {
+     "id": "ena_summer_lows_2026",
+     "role": "sweep",
+     "start": "2026-06-01",
+     "end": "2026-07-31",
+     "L": {"min": 0.068, "max": 0.072},
+     "U": {"min": 0.075, "max": 0.085},
+     "expected_status_as_of": "closed",
+     "events": [
+      {"type": "sweep_below_L", "date_from": "2026-06-05", "date_to": "2026-06-20",
+       "comment": "летние минимумы ~0.070 ниже основной базы; отдельный эпизод"}
+     ]
+    }
+   ]
+  },
+  "PUMP": {
+   "symbol": "PUMPUSDT",
+   "comment": "Изображения 6 и 8 (повтор PUMP). Верх базы ~0.0034, а не 0.005485; летний выход вниз — отдельный участок; выход вверх и возврат к бывшему верху (ретест).",
+   "episodes": [
+    {
+     "id": "pump_base",
+     "role": "current_base",
+     "start": "2025-12-01",
+     "end": "2026-08-05",
+     "L": {"min": 0.0016, "max": 0.0018},
+     "U": {"min": 0.0033, "max": 0.0035},
+     "expected_status_as_of": "current",
+     "events": [
+      {"type": "breakout", "date_from": "2026-08-06", "date_to": "2026-08-31",
+       "comment": "выход вверх из базы"},
+      {"type": "retest", "date_from": "2026-09-01", "date_to": "2026-09-20",
+       "comment": "возврат к бывшему U (~0.0034) — ретест; не расширяет U"}
+     ]
+    },
+    {
+     "id": "pump_summer_excursion_2026",
+     "role": "sweep",
+     "start": "2026-06-01",
+     "end": "2026-07-31",
+     "L": {"min": 0.0011, "max": 0.0012},
+     "U": {"min": 0.0016, "max": 0.0018},
+     "expected_status_as_of": "closed",
+     "events": [
+      {"type": "sweep_below_L", "date_from": "2026-06-20", "date_to": "2026-07-05",
+       "comment": "летний выход вниз (~0.00115); хранится отдельно от тела базы"}
+     ]
+    }
+   ]
+  },
+  "AAVE": {
+   "symbol": "AAVEUSDT",
+   "comment": "Изображение 7. Историческая база 2022–2024 (~45–55 / ~125): заливка завершается у подтверждённого выхода, возвраты к уровню — ретесты. НЕ должна становиться актуальной в октябре 2026.",
+   "episodes": [
+    {
+     "id": "aave_historical_base",
+     "role": "historical_base",
+     "start": "2022-06-01",
+     "end": "2024-10-31",
+     "L": {"min": 45.0, "max": 55.0},
+     "U": {"min": 120.0, "max": 130.0},
+     "expected_status_as_of": "historical",
+     "must_not_be_current_as_of": true,
+     "events": [
+      {"type": "breakout", "date_from": "2024-11-01", "date_to": "2024-12-15",
+       "comment": "подтверждённый выход; конец заливки базы"},
+      {"type": "retest", "date_from": "2026-01-01", "date_to": "2026-03-31",
+       "comment": "возврат к зоне бывшего U (~125) после выхода — ретест"}
+     ]
+    }
+   ]
+  },
+  "ONDO": {
+   "symbol": "ONDOUSDT",
+   "comment": "Изображение 9 (в перечне назван «скрином 8»). Нижняя база начала 2026 (~0.20–0.295); майский выход и июньско-июльский возврат — сопровождение того же эпизода; поздний диапазон 0.33–0.49 — отдельный кандидат, если подтвердится.",
+   "episodes": [
+    {
+     "id": "ondo_lower_base_2026",
+     "role": "historical_base",
+     "start": "2026-01-15",
+     "end": "2026-04-30",
+     "L": {"min": 0.195, "max": 0.205},
+     "U": {"min": 0.290, "max": 0.300},
+     "expected_status_as_of": "historical",
+     "events": [
+      {"type": "breakout", "date_from": "2026-05-01", "date_to": "2026-05-31",
+       "comment": "майский выход вверх"},
+      {"type": "retest", "date_from": "2026-06-01", "date_to": "2026-07-31",
+       "comment": "июньско-июльский возврат к бывшему U — сопровождение того же эпизода"}
+     ]
+    },
+    {
+     "id": "ondo_late_range_candidate",
+     "role": "late_consolidation_candidate",
+     "start": "2026-08-01",
+     "end": "2026-10-06",
+     "L": {"min": 0.31, "max": 0.35},
+     "U": {"min": 0.47, "max": 0.51},
+     "expected_status_as_of": "candidate_unconfirmed",
+     "events": []
+    }
+   ]
+  }
+ }
+}

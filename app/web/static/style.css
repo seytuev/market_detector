@@ -1360,11 +1360,11 @@ input[type="checkbox"] { min-height: auto; accent-color: var(--accent); }
 .alt-fresh-main { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 14px; }
 .alt-fresh p, .alt-asset-head p { margin: 0; }
 .alt-tabs { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.alt-tab, .alt-modes button {
+.alt-tab, .alt-modes button, .alt-tf button {
   border: 1px solid transparent; background: transparent; color: var(--lf-text2);
   font: inherit; font-size: 14px; padding: 6px 10px; border-radius: var(--lf-radius-ctrl); cursor: pointer;
 }
-.alt-tab[aria-selected="true"], .alt-modes button[aria-pressed="true"] {
+.alt-tab[aria-selected="true"], .alt-modes button[aria-pressed="true"], .alt-tf button[aria-pressed="true"] {
   background: var(--lf-raised); color: var(--lf-text); border-color: var(--lf-border);
 }
 .alt-venue-label, .alt-list-head label, .alt-filter-panel label, .alt-journal-filters label, .alt-layers label {
@@ -1430,7 +1430,8 @@ input[type="checkbox"] { min-height: auto; accent-color: var(--accent); }
   display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0;
   position: sticky; top: 0; z-index: 3; background: var(--lf-surface);
 }
-.alt-modes { display: flex; gap: 4px; }
+.alt-modes, .alt-tf { display: flex; gap: 4px; }
+.alt-chart-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 6px; }
 .alt-layers { margin-bottom: 8px; }
 .alt-chart-note { margin: 0 0 6px; font-size: 12px; color: var(--lf-text2); }
 .alt-chart-note:empty { display: none; }

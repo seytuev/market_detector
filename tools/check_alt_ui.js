@@ -155,6 +155,63 @@ async function main() {
   await clickVisible(page, failures, '#alt-mode-setup');
   await page.waitForFunction(() => document.querySelectorAll('.alt-marker').length > 0, { timeout: 10000 });
 
+  /* UI-01/UI-03/UI-04: переключатель D1/W1, «Авто», кнопки PNG. */
+  const actions = await page.evaluate(() => ({
+    auto: !!document.getElementById('alt-auto'),
+    png: !!document.getElementById('alt-png'),
+    png2: !!document.getElementById('alt-png2'),
+    tf: [...document.querySelectorAll('.alt-tf button')].map((button) => button.dataset.tf),
+    actionsBelow: (() => {
+      const bar = document.querySelector('.alt-chart-actions');
+      const chart = document.getElementById('chart-container');
+      if (!bar || !chart) return false;
+      return bar.getBoundingClientRect().top >= chart.getBoundingClientRect().bottom - 1;
+    })(),
+  }));
+  console.log('actions', JSON.stringify(actions));
+  if (!actions.auto) fail(failures, 'нет кнопки «Авто»');
+  if (!actions.png || !actions.png2) fail(failures, 'нет кнопок PNG/PNG 2×');
+  if (actions.tf.join('|') !== 'D1|W1') fail(failures, 'переключатель таймфрейма: ' + actions.tf.join('|'));
+  if (!actions.actionsBelow) fail(failures, 'панель «Авто/PNG» не под графиком');
+
+  await clickVisible(page, failures, '.alt-tf button[data-tf="W1"]');
+  await page.waitForFunction(() =>
+    document.querySelector('.alt-tf button[data-tf="W1"]').getAttribute('aria-pressed') === 'true' &&
+    document.querySelector('#chart canvas'), { timeout: 10000 });
+  const w1note = await page.evaluate(() => document.getElementById('alt-chart-note').textContent);
+  console.log('w1 note', w1note);
+  await clickVisible(page, failures, '.alt-tf button[data-tf="D1"]');
+  await page.waitForFunction(() =>
+    document.querySelector('.alt-tf button[data-tf="D1"]').getAttribute('aria-pressed') === 'true' &&
+    document.querySelectorAll('.alt-marker').length > 0, { timeout: 10000 });
+
+  await clickVisible(page, failures, '#alt-auto');
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  const autoState = await page.evaluate(() => ({
+    canvas: !!document.querySelector('#chart canvas'),
+    note: document.getElementById('alt-chart-note').textContent,
+  }));
+  if (!autoState.canvas) fail(failures, 'после «Авто» пропал график');
+
+  /* UI-02: серия переключений активов (в бою TAO→PUMP→AAVE): шкала и серия
+     не должны оставаться от прежнего актива; здесь — отсутствие ошибок
+     страницы и смена заголовка на каждом шаге. */
+  const switchSymbols = await page.evaluate(() =>
+    [...document.querySelectorAll('#alt-list .alt-row')].slice(0, 3)
+      .map((row) => row.querySelector('.alt-row-symbol').textContent));
+  for (const symbol of switchSymbols) {
+    await page.evaluate((sym) => {
+      const row = [...document.querySelectorAll('#alt-list .alt-row')]
+        .find((button) => button.querySelector('.alt-row-symbol').textContent === sym);
+      if (row) row.click();
+    }, symbol);
+    await page.waitForFunction((sym) =>
+      document.getElementById('alt-chart-title').textContent.startsWith(sym) &&
+      document.querySelector('#chart canvas'), { timeout: 20000 }, symbol);
+  }
+  const switchErrors = posts.filter((url) => url.startsWith('pageerror'));
+  if (switchErrors.length) fail(failures, 'переключение активов: ' + switchErrors.join('; '));
+
   await clickVisible(page, failures, '#alt-layers-toggle');
   await page.select('#layer-targets', 'all');
   await page.waitForFunction(() => [...document.querySelectorAll('.alt-edge')].some((button) => button.textContent.startsWith('TP4')), { timeout: 10000 });

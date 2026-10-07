@@ -10,6 +10,7 @@
   'use strict';
 
   const DAY_MS = 86400000;
+  const WEEK_MS = 7 * DAY_MS;
   const WINDOW_MS = 180 * DAY_MS;
   const EXTRA_BUDGET = 8;
   const HISTORY_CLUSTER_BUDGET = 24;
@@ -667,6 +668,211 @@
     return 'inside';
   }
 
+  function weekStartMs(openTime) {
+    const day = Math.floor(openTime / DAY_MS);
+    const offset = (day + 3) % 7; // 01.01.1970 — четверг; понедельник = 0
+    return (day - offset) * DAY_MS;
+  }
+
+  /* W1 из D1 по неделям понедельник 00:00 UTC (ТЗ §6 UI-01).
+     Open первой свечи, High максимум, Low минимум, Close последней, Volume сумма.
+     partial — последняя неделя не завершена (последняя свеча раньше воскресенья);
+     gaps — внутри недели пропущены D1 между её первой и последней свечой. */
+  function aggregateW1(candles) {
+    const weeks = [];
+    let current = null;
+    (candles || []).forEach((candle) => {
+      const start = weekStartMs(candle.open_time);
+      if (!current || current.open_time !== start) {
+        current = {
+          open_time: start, open: candle.open, high: candle.high,
+          low: candle.low, close: candle.close, volume: 0,
+          partial: false, gaps: false,
+          _count: 0, _first: null, _last: null, _seen: {},
+        };
+        weeks.push(current);
+      }
+      const offset = Math.round((candle.open_time - start) / DAY_MS);
+      if (current._count === 0) current.open = candle.open;
+      if (candle.high > current.high) current.high = candle.high;
+      if (candle.low < current.low) current.low = candle.low;
+      current.close = candle.close;
+      current.volume += Number(candle.volume) || 0;
+      current._seen[offset] = true;
+      if (current._first == null || offset < current._first) current._first = offset;
+      if (current._last == null || offset > current._last) current._last = offset;
+      current._count += 1;
+    });
+    weeks.forEach((week, index) => {
+      for (let d = week._first; d <= week._last; d += 1) {
+        if (!week._seen[d]) { week.gaps = true; break; }
+      }
+      if (index === weeks.length - 1 && week._last != null && week._last < 6) week.partial = true;
+      delete week._count;
+      delete week._first;
+      delete week._last;
+      delete week._seen;
+    });
+    return weeks;
+  }
+
+  /* Слои графика в виде данных для экрана и экспорта (ТЗ §6 UI-04). */
+  function collectBoxes(detail, view, lastCandleOpenMs) {
+    const result = { boxes: [], retestNote: '' };
+    const range = detail && (detail.frozen_range || detail.range);
+    if (!detail || !range) return result;
+    const last = lastCandleOpenMs == null ? null : lastCandleOpenMs;
+    if (view.range && detail.anchors && detail.anchors.start && last != null) {
+      result.boxes.push({
+        kind: 'range',
+        startMs: detail.anchors.start.open_time, endMs: last + DAY_MS,
+        upper: range.upper, lower: range.lower,
+      });
+    }
+    if (view.manipulation) {
+      manipulationEpisodes(detail.manipulation_episodes, view.eventMode || 'setup', detail.as_of_ms)
+        .forEach((episode) => {
+          const end = episode.ended_candle_open_time != null
+            ? episode.ended_candle_open_time + DAY_MS
+            : (last != null ? last + DAY_MS : null);
+          if (end == null) return;
+          result.boxes.push({
+            kind: 'manip',
+            startMs: episode.started_candle_open_time, endMs: end,
+            upper: range.lower, lower: episode.min_price, minPrice: episode.min_price,
+          });
+        });
+    }
+    if (view.entries) {
+      const span = retestSpan(detail, last);
+      if (span && span.missing) result.retestNote = span.reason;
+      else if (span) {
+        result.boxes.push({
+          kind: 'retest', startMs: span.startMs, endMs: span.endMs,
+          upper: range.upper, lower: range.mid,
+        });
+      }
+    }
+    return result;
+  }
+
+  function collectLevels(detail, view, lastClosePrice) {
+    const result = { levels: [], targetNote: '' };
+    const range = detail && (detail.frozen_range || detail.range);
+    if (view.range && range) {
+      [['L', range.lower], ['U', range.upper], ['M', range.mid]].forEach(([name, price]) => {
+        if (price != null) result.levels.push({ name, price, cls: 'range' });
+      });
+    }
+    if (view.targets === 'nearest') {
+      const found = nearestTarget(detail && detail.targets, lastClosePrice);
+      result.targetNote = found.target ? '' : (found.reason || '');
+      if (found.target) result.levels.push({ name: 'TP' + found.target.tp, price: found.target.price, cls: 'tp' });
+    } else if (view.targets === 'all') {
+      ((detail && detail.targets) || []).forEach((target) => {
+        if (target.price != null) result.levels.push({ name: 'TP' + target.tp, price: target.price, cls: 'tp' });
+      });
+    }
+    if (view.cancel && detail && detail.cancel && detail.cancel.price > 0) {
+      result.levels.push({ name: 'K', price: detail.cancel.price, cls: 'k' });
+    }
+    return result;
+  }
+
+  /* Пиксельная проекция областей и линий: общая для DOM-оверлея и PNG. */
+  function boxSpanPx(startMs, endMs, candles, mapTime) {
+    const x1 = mapTime(startMs);
+    const x2 = mapTime(endMs);
+    if (x1 != null && x2 != null) return { x1, x2 };
+    const xs = [];
+    (candles || []).forEach((candle) => {
+      const open = candle.open_time;
+      if (open + DAY_MS <= startMs || open >= endMs) return;
+      const x = mapTime(open);
+      if (x != null) xs.push(x);
+    });
+    if (xs.length < 2) return null;
+    return { x1: Math.min.apply(null, xs), x2: Math.max.apply(null, xs) };
+  }
+
+  function boxRectPx(box, ctx) {
+    const clipped = intervalOnScreen(box.startMs, box.endMs, ctx.viewFromMs, ctx.viewToMs);
+    if (!clipped) return null;
+    const span = boxSpanPx(clipped.startMs, clipped.endMs, ctx.candles, ctx.mapTime);
+    if (!span) return null;
+    const chartHeight = ctx.chartHeight;
+    const scale = ctx.priceRange;
+    const priceY = (price) => {
+      if (scale && price > scale.max) return 0;
+      if (scale && price < scale.min) return chartHeight;
+      return ctx.mapPrice(price);
+    };
+    let y1 = priceY(box.upper);
+    let y2 = priceY(box.lower);
+    if (y1 == null && y2 == null) return null;
+    if (y1 == null) y1 = box.upper >= box.lower ? 0 : chartHeight;
+    if (y2 == null) y2 = box.lower <= box.upper ? chartHeight : 0;
+    const left = Math.min(span.x1, span.x2);
+    const width = Math.abs(span.x2 - span.x1);
+    const top = Math.max(0, Math.min(y1, y2));
+    const height = Math.min(chartHeight, Math.max(y1, y2)) - top;
+    if (width < 1 || height < 1) return null;
+    return { x: left, y: top, width, height };
+  }
+
+  /* Единая модель сцены для экспорта: примитивы в пикселях панели графика.
+     Координатные преобразования приходят снаружи (mapTime/mapPrice). */
+  function buildScene(opts) {
+    const scene = { rects: [], lines: [], markers: [] };
+    if (!opts) return scene;
+    const fmt = opts.fmtPrice || ((price) => String(price));
+    (opts.boxes || []).forEach((box) => {
+      const rect = boxRectPx(box, {
+        viewFromMs: opts.viewFromMs, viewToMs: opts.viewToMs,
+        candles: opts.candles, mapTime: opts.mapTime, mapPrice: opts.mapPrice,
+        priceRange: opts.priceRange, chartHeight: opts.chartHeight,
+      });
+      if (rect) scene.rects.push({ kind: box.kind || 'range', x: rect.x, y: rect.y, width: rect.width, height: rect.height });
+    });
+    const placed = [];
+    (opts.lines || []).forEach((line) => {
+      if (levelPlacement(line.price, opts.priceRange) !== 'inside') return;
+      const y = opts.mapPrice(line.price);
+      if (y == null) return;
+      placed.push({ line, y });
+    });
+    placed.sort((a, b) => a.y - b.y);
+    const groups = [];
+    placed.forEach((item) => {
+      const prev = groups[groups.length - 1];
+      if (prev && Math.abs(item.y - prev.y) < 14) prev.items.push(item);
+      else groups.push({ y: item.y, items: [item] });
+    });
+    groups.forEach((group) => {
+      scene.lines.push({
+        kind: group.items[0].line.cls || 'range',
+        y: group.y,
+        width: opts.paneWidth || 0,
+        label: group.items.length === 1
+          ? group.items[0].line.name + ' ' + fmt(group.items[0].line.price)
+          : group.items.length + ' уровня',
+      });
+    });
+    (opts.markers || []).forEach((marker) => {
+      if (marker.x == null || marker.price == null) return;
+      const base = opts.mapPrice(marker.price);
+      if (base == null) return;
+      scene.markers.push({
+        x: marker.x,
+        y: marker.position === 'belowBar' ? base + 4 : base - 20,
+        label: marker.label,
+        key: !!marker.hasKey,
+        position: marker.position === 'belowBar' ? 'belowBar' : 'aboveBar',
+      });
+    });
+    return scene;
+  }
+
   function nearestTarget(targets, lastClose) {
     if (!(lastClose > 0)) {
       return { target: null, reason: 'Нет цены закрытия D1' };
@@ -746,9 +952,11 @@
   }
 
   return {
-    DAY_MS, WINDOW_MS, EXTRA_BUDGET, HISTORY_CLUSTER_BUDGET,
+    DAY_MS, WEEK_MS, WINDOW_MS, EXTRA_BUDGET, HISTORY_CLUSTER_BUDGET,
     closeBoundaryMs, normalizeDetail, selectChartEvents, groupMarkers,
     initialTimeRange, rangeTimeRange, jumpTimeRange, priceRange, levelPlacement,
     nearestTarget, manipulationEpisodes, retestSpan, intervalOnScreen, firstRetest,
+    weekStartMs, aggregateW1, collectBoxes, collectLevels,
+    boxSpanPx, boxRectPx, buildScene,
   };
 });
