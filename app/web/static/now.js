@@ -244,8 +244,10 @@
     const ins = r.instrument;
     const v = st.currents.get(ins.id);
     const tf = (r.htf_context && r.htf_context.timeframe) || '—';
+    const [base, quote] = baseQuote(ins.symbol || '');
+    const pair = quote ? `${base} / ${quote}` : (base || '—');
     if (!v) {
-      el.innerHTML = `<div class="now-card-head"><span>${esc(ins.symbol)} · ${esc(tf)}</span></div>` +
+      el.innerHTML = `<div class="now-card-head"><span>${esc(pair)} · ${esc(tf)}</span></div>` +
         '<h3>Ошибка чтения снимка</h3>' +
         '<p class="now-empty">Карточка не скрыта: снимок актива не прочитан.</p>';
       return;
@@ -254,7 +256,7 @@
     const p = priceOf(ins.id);
     el.innerHTML = `
       <div class="now-card-head">
-        <span>${esc(ins.symbol)} · ${esc(tf)}</span>
+        <span>${esc(pair)} · ${esc(tf)}</span>
         ${dirBadge(v.direction)}
       </div>
       <h3>${esc(headline(v))}</h3>

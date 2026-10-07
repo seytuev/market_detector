@@ -1052,7 +1052,7 @@ function eventLi(e) {
   const sym = e.instrument ? e.instrument.symbol : '';
   const ztype = e.zone ? e.zone.type.toUpperCase() : '';
   li.innerHTML = `<span class="ev-time">${fmtTime(e.occurred_at)}</span>` +
-    `<b>${esc(sym)}</b> ${ztype}: ${EVENT_KIND_RU[e.kind] || e.kind} @ ${fmtPrice(e.price)}` +
+    `<b>${esc(displayPair(sym))}</b> ${ztype}: ${EVENT_KIND_RU[e.kind] || e.kind} @ ${fmtPrice(e.price)}` +
     (e.delayed ? ' <span class="badge">восстановлено</span>' : '');
   if (e.zone) li.onclick = () => openZoneDetail(e.zone.id);
   li.style.cursor = 'pointer';
@@ -1064,14 +1064,35 @@ function eventLi(e) {
 // ---------------------------------------------------------------------------
 
 function explanationText(ev) {
-  if (!ev || typeof ev !== 'object') return '';
-  if (ev.reason) return String(ev.reason);
-  const parts = [];
-  for (const [key, value] of Object.entries(ev)) {
-    if (value == null || typeof value === 'object') continue;
-    parts.push(`${key}: ${value}`);
-  }
-  return parts.join(' · ');
+  if (!ev) return '';
+  if (typeof ev === 'string') return ev;
+  if (typeof ev !== 'object') return '';
+  const rule = ev.rule ? String(ev.rule) : '';
+  const reason = typeof ev.reason === 'string' ? ev.reason : '';
+  const notes = [];
+  if (ev.external_fvg === false) notes.push('внешний FVG не найден');
+  if (ev.phase === 'departed') notes.push('цена вышла из базы до подтверждения');
+  if (ev.base_search_limited) notes.push('поиск базы упёрся в технический лимит');
+  const head = rule || reason;
+  const tail = notes
+    .filter((note) => !head.toLowerCase().includes(note.toLowerCase()))
+    .map((note) => note.charAt(0).toUpperCase() + note.slice(1))
+    .join('. ');
+  if (head && tail) return `${head}. ${tail}.`;
+  if (head) return head;
+  return tail ? `${tail}.` : '';
+}
+
+const UNCONFIRMED_RU = {
+  timeline_violation: 'Нарушена хронология',
+  data_incomplete: 'Не хватает свечей',
+  no_external_fvg: 'Нет внешнего FVG',
+};
+
+function displayPair(symbol) {
+  const s = symbol || '';
+  if (s.endsWith('USDT') && s.length > 4) return s.slice(0, -4) + ' / USDT';
+  return s || '—';
 }
 
 async function loadCandidates() {
@@ -1159,9 +1180,10 @@ function renderReviewQueue() {
     card.className = 'candidate-card' + (c.id === reviewState.currentId ? ' selected' : '');
     card.dataset.zoneId = String(c.id);
     const why = explanationText(c.explanation);
-    const reason = c.unconfirmed_reason || 'Нужна проверка границ';
+    const reason = UNCONFIRMED_RU[c.unconfirmed_reason] || c.unconfirmed_reason || 'Нужна проверка границ';
+    card.title = [reason, why].filter(Boolean).join('\n');
     card.innerHTML = `
-      <div class="cand-title">${c.instrument ? esc(c.instrument.symbol) : ''} · ${c.timeframe}</div>
+      <div class="cand-title">${c.instrument ? esc(displayPair(c.instrument.symbol)) : ''} · ${c.timeframe}</div>
       <div class="cand-type">${esc(TYPE_RU[c.type] || c.type.toUpperCase())} ${c.direction === 'bull' ? '▲ Рост' : '▼ Снижение'}</div>
       <div class="cand-range">${fmtPrice(c.lower)} – ${fmtPrice(c.upper)}</div>
       <p class="cand-explain">${esc(reason)}</p>
@@ -1434,7 +1456,7 @@ function renderReviewInspector(detail) {
       <dt>Объект</dt><dd>${esc(TYPE_RU[z.type] || z.type.toUpperCase())} · ${z.timeframe}${z.name ? ' · ' + esc(z.name) : ''}</dd>
       <dt>Текущие границы, USDT</dt><dd>${range}</dd>
       <dt>Рыночное состояние</dt><dd><span class="badge ${z.status}">${STATUS_RU[z.status] || z.status}</span> ${z.display_until ? 'завершена' : 'живая'}</dd>
-      <dt>Инструмент</dt><dd>${ins ? esc(ins.symbol) + ' · ' + esc(ins.venue) : '—'}</dd>
+      <dt>Инструмент</dt><dd>${ins ? esc(displayPair(ins.symbol)) + ' · ' + esc(ins.venue) : '—'}</dd>
     </dl>
     <div class="rv-actions-main">
       <button class="btn primary" type="button" data-review="correct">Подтвердить</button>
@@ -2252,7 +2274,7 @@ function deskSelectedTf(v) {
 
 function renderDeskHead() {
   const ins = state.instruments.find((i) => i.id === state.instrumentId);
-  if ($('desk-symbol')) $('desk-symbol').textContent = ins ? ins.symbol : '—';
+  if ($('desk-symbol')) $('desk-symbol').textContent = ins ? displayPair(ins.symbol) : '—';
   if ($('desk-venue')) {
     $('desk-venue').textContent = ins ? `${ins.venue} · ${ins.market_type || 'spot'}` : '—';
   }
@@ -2299,7 +2321,7 @@ function renderDeskAssets() {
     const st8 = deskAssetState(r);
     const sel = ins.id === state.instrumentId ? ' selected' : '';
     return `<button type="button" class="desk-asset${sel}" data-iid="${ins.id}">` +
-      `<span class="desk-asset-sym">${esc(ins.symbol)}</span>` +
+      `<span class="desk-asset-sym">${esc(displayPair(ins.symbol))}</span>` +
       `<span class="desk-asset-price">${price != null ? esc(fmtPrice(price)) : '—'}</span>` +
       `<span class="desk-asset-state"><span class="state-dot ${st8.dot}"></span>${esc(st8.label)}</span>` +
       '</button>';
@@ -2333,11 +2355,11 @@ function renderDeskScenario() {
   const conflict = v.direction_conflict;
   el.innerHTML = `
     <div class="desk-sc-head">
-      <span>${esc(ins.symbol || '')} · ${esc(tf)}</span>
+      <span>${esc(displayPair(ins.symbol || ''))} · ${esc(tf)}</span>
       ${deskDirBadge(v.direction)}
-      ${deskReviewBadge(v)}
     </div>
     <h3>${esc(deskHeadline(v))}</h3>
+    ${deskReviewBadge(v)}
     <p class="desk-sc-lead">${esc(deskLeadText(v, row, tf))}</p>
     ${deskFactsHtml(v)}
     ${conflict ? `<p class="desk-sc-lead">${esc(conflict.note)}</p>` : ''}
@@ -2514,7 +2536,7 @@ async function loadInstruments() {
   for (const ins of state.instruments) {
     const opt = document.createElement('option');
     opt.value = ins.id;
-    opt.textContent = ins.symbol + (ins.enabled ? '' : ' (откл.)');
+    opt.textContent = displayPair(ins.symbol) + (ins.enabled ? '' : ' (откл.)');
     sel.appendChild(opt);
   }
   if (state.instruments.length && !state.instrumentId) {

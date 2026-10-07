@@ -53,12 +53,12 @@
         <div class="stat-card">
           <div class="stat-label">Цена в зоне</div>
           <div class="stat-value" id="now-stat-zone">—</div>
-          <div class="stat-note">Ожидается подтверждение H1</div>
+          <div class="stat-note">Активов внутри старшей зоны</div>
         </div>
         <div class="stat-card">
           <div class="stat-label">Сценарий подтверждён</div>
           <div class="stat-value" id="now-stat-eligible">—</div>
-          <div class="stat-note">Ожидается возврат к зоне</div>
+          <div class="stat-note">Активов с подтверждённым сценарием</div>
         </div>
       </div>
       <div class="now-layout">
@@ -163,9 +163,9 @@
         <div class="rail-tabs" role="tablist">
           <button type="button" class="rail-tab active" data-bucket="live">Актуальные</button>
           <button type="button" class="rail-tab" data-bucket="candidate">Кандидаты <span id="candidates-count"></span></button>
-          <span id="candidates-global-note" class="work-meta"></span>
           <button type="button" class="rail-tab" data-bucket="archive">Архив</button>
         </div>
+        <p id="candidates-global-note" class="work-meta rail-global-note"></p>
         <div class="list-filters">
           <select id="zone-type-filter"><option value="">Все типы</option><option value="fvg">FVG</option><option value="ob">OB</option><option value="prb">PRB</option><option value="breaker">Breaker</option><option value="ssl">SSL</option><option value="bsl">BSL</option><option value="manual">Ручная</option></select>
           <select id="zone-tf-filter"><option value="">D1 + W1</option><option value="D1">D1</option><option value="W1">W1</option></select>
@@ -306,7 +306,8 @@
     <a href="#now" data-view="now">Сейчас</a>
     <a href="#review" data-view="review">Проверка</a>
     <a href="#journal" data-view="journal">Журнал</a>
-    <a href="#desk" id="lnk-ltf-mobile" data-chart-mode="h1" title="Структура H1">Структура H1</a>
+    <a href="#desk" id="lnk-ltf-mobile" data-chart-mode="h1" title="Структура H1">H1</a>
+    <a href="/alt.html" title="Альткоины">Альты</a>
     <a href="#settings" data-view="settings">Настройки</a>
   </nav>
 
