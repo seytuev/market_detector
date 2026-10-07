@@ -13,6 +13,7 @@ from typing import Optional
 
 from ..db import Database
 from ..models import now_ms
+from ..notify.chart_series import screenshot_candles
 from ..notify.chartimg import candles_to_df, make_dark_style
 from ..notify.chartlabels import (
     FIG_DPI,
@@ -59,15 +60,19 @@ def _chart_candles(
     db: Database, instrument_id: int, tf: str, period_days: int, now: int,
     end_ms: Optional[int] = None,
 ) -> list:
+    """Окно снимка. Текущая ситуация включает незакрытый бар периода now;
+    график события (end_ms) — только закрытые свечи до правой границы."""
     if tf == "H1":
         since = now - period_days * 86_400_000
-        return db.get_candles(instrument_id, "H1", start_ms=since,
-                              end_ms=end_ms)
+        return screenshot_candles(
+            db, instrument_id, "H1", start_ms=since, end_ms=end_ms, now=now,
+        )
     limit = _TF_CANDLE_LIMIT.get(tf)
     if limit is None:
         return []
-    rows = db.get_candles(instrument_id, tf, end_ms=end_ms)
-    return rows[-limit:]
+    return screenshot_candles(
+        db, instrument_id, tf, end_ms=end_ms, limit=limit, now=now,
+    )
 
 
 def render_ltf_chart(
@@ -90,7 +95,8 @@ def render_ltf_chart(
     caption, чтобы цена/сценарий/время на картинке и в подписи совпадали.
     end_ms — правая граница периода (режим «график события», §11.1 ТЗ
     07.10.2026: картинка по снимку, на котором событие произошло);
-    None — до последней свечи («текущая ситуация»).
+    None — до текущего незакрытого бара, если его период ещё идёт
+    («текущая ситуация»); иначе до последней закрытой свечи.
     None — наблюдение не найдено или свечей нет (хендлер отвечает текстом).
     source_label оставлен для совместимости — на изображение источник не
     выводится (ТЗ 07.10.2026 §5.1).

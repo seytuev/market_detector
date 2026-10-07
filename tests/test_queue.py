@@ -265,6 +265,43 @@ async def test_chart_image_attached_when_charts_dir(tmp_path):
     assert Path(img).exists() and Path(img).stat().st_size > 0
 
 
+async def test_chart_image_uses_current_forming_close(tmp_path, monkeypatch):
+    """Снимок уведомления заканчивается незакрытым баром текущей недели,
+    а не последним закрытием."""
+    db, z = _make_db()
+    zone = db.get_zone(z["btc_zone"])
+    assert zone is not None
+    w1_ms = TIMEFRAME_MINUTES["W1"] * 60_000
+    now = now_ms()
+    week_open = now - (now % w1_ms)
+    db.insert_candles([
+        make_candle(
+            week_open - w1_ms, 100, 110, 90, 105,
+            timeframe="W1", instrument_id=zone.instrument_id,
+        ),
+        make_candle(
+            week_open, 105, 112, 104, 111.5,
+            timeframe="W1", instrument_id=zone.instrument_id, closed=False,
+        ),
+    ])
+    captured: dict = {}
+
+    def fake_render(candles, zone_, out, source):
+        captured["last"] = candles[-1]
+        Path(out).parent.mkdir(parents=True, exist_ok=True)
+        Path(out).write_bytes(b"\x89PNG\r\n\x1a\nfake")
+        return str(out)
+
+    monkeypatch.setattr("app.notify.chartimg.render_zone_chart", fake_render)
+    sender = LogSender()
+    disp = EventDispatcher(db, DetectorConfig(), sender, charts_dir=str(tmp_path))
+    await disp.dispatch(
+        [_new_event(db, z["btc_zone"], EventKind.TOUCH, 111.5, now)]
+    )
+    assert captured["last"].closed is False
+    assert captured["last"].close == 111.5
+
+
 async def test_chart_image_skipped_without_charts_dir():
     """Без charts_dir поведение прежнее: image_path пуст, текст доставляется."""
     db, z = _make_db()

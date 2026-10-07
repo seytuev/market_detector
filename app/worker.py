@@ -20,7 +20,10 @@ from .engine import Scanner
 from .engine.replay import migrate_display_fields
 from dataclasses import replace
 
-from .models import Candle, Event, EventKind, Instrument, ZoneStatus, ZoneType, now_ms
+from .models import (
+    Candle, Event, EventKind, Instrument, ZoneStatus, ZoneType,
+    bar_period_contains, now_ms,
+)
 from .services.htf_parent import (
     PARENT_QUERY_STATUSES,
     eligible_htf_parent,
@@ -319,20 +322,23 @@ class Worker:
         events = await asyncio.to_thread(
             self.scanner.on_price, ins.id, price, ts, True, set(self.scan_tfs)
         )
+        # Котировка двигает high/low/close текущего незакрытого бара.
+        # D1/W1 — график HTF; H1 — снимки бота и структура. В детектор H1
+        # не передаём: on_price остаётся на scan_tfs, закрытые свечи.
+        candle_payload: dict[str, dict] = {}
+        for tf in dict.fromkeys((*self.scan_tfs, "H1")):
+            bar = self._apply_price_to_forming(ins.id, tf, price)
+            if bar is not None:
+                candle_payload[tf] = {
+                    "time": bar.open_time // 1000,
+                    "open": bar.open, "high": bar.high,
+                    "low": bar.low, "close": bar.close,
+                }
         if self.broadcast:
-            payload = {
+            self.broadcast({
                 "type": "price", "instrument_id": ins.id, "price": price, "time": ts,
-                "candles": {},
-            }
-            for tf in self.scan_tfs:
-                bar = self._apply_price_to_forming(ins.id, tf, price)
-                if bar is not None:
-                    payload["candles"][tf] = {
-                        "time": bar.open_time // 1000,
-                        "open": bar.open, "high": bar.high,
-                        "low": bar.low, "close": bar.close,
-                    }
-            self.broadcast(payload)
+                "candles": candle_payload,
+            })
         return events
 
     async def _dispatch_events(self, events: list[Event]) -> None:
@@ -356,6 +362,9 @@ class Worker:
         """Подтянуть high/low/close текущей незакрытой свечи. Детектор не трогаем."""
         bar = self.db.last_candle(instrument_id, timeframe, closed_only=False)
         if bar is None or bar.closed:
+            return None
+        # Застрявший бар прошлого периода не переписываем ценой нового.
+        if not bar_period_contains(bar.open_time, timeframe, now_ms()):
             return None
         updated = replace(
             bar,

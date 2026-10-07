@@ -26,6 +26,7 @@ from .conftest import make_candle
 
 D1_MS = 1440 * 60_000
 W1_MS = 10080 * 60_000
+H1_MS = 3_600_000
 
 
 class FakeAdapter:
@@ -106,6 +107,50 @@ async def test_quote_loop_updates_quote_independent_of_htf_cycle():
 
     assert db.get_quote(ins.id) == adapter.price
     assert adapter.klines_calls == 0  # HTF-цикл не затрагивался
+
+
+async def test_quote_updates_open_h1_and_skips_expired_bar():
+    """Котировка двигает close текущего часа. Бар прошлого часа, ещё
+    помеченный незакрытым, ценой нового часа не переписывается.
+    События детектора от этого не появляются: H1 не входит в scan_tfs."""
+    db = Database(":memory:")
+    adapter = FakeAdapter()
+    worker = _make_worker(db, adapter)
+    ins = await _seed(db, worker)
+    now = now_ms()
+    hour_open = now - (now % H1_MS)
+    db.insert_candles([
+        make_candle(
+            hour_open, 100, 101, 99, 100,
+            timeframe="H1", instrument_id=ins.id, closed=False,
+        ),
+    ])
+    adapter.price = (107.5, now)
+    await worker._quote_poll_once()
+    bar = db.last_candle(ins.id, "H1", closed_only=False)
+    assert bar is not None and bar.closed is False
+    assert bar.close == 107.5
+    assert bar.high == 107.5
+    assert bar.low == 99
+    assert db.get_events() == []
+
+    db2 = Database(":memory:")
+    adapter2 = FakeAdapter()
+    worker2 = _make_worker(db2, adapter2)
+    ins2 = await _seed(db2, worker2)
+    prev = hour_open - H1_MS
+    db2.insert_candles([
+        make_candle(
+            prev, 100, 101, 99, 100,
+            timeframe="H1", instrument_id=ins2.id, closed=False,
+        ),
+    ])
+    adapter2.price = (150.0, now)
+    await worker2._quote_poll_once()
+    stale = db2.last_candle(ins2.id, "H1", closed_only=False)
+    assert stale is not None
+    assert stale.close == 100
+    assert stale.high == 101
 
 
 async def test_poll_once_skips_quote_when_quote_loop_enabled():

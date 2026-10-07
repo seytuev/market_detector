@@ -58,7 +58,9 @@ from .cards import (
     render_zone_tests,
     split_long,
 )
-from .charts import DEFAULT_MASK, layers_from_mask, render_ltf_chart
+from .charts import (
+    DEFAULT_MASK, layers_from_mask, render_ltf_chart, screenshot_candles,
+)
 from .keyboards import (
     MENU_ALERTS,
     MENU_HIST,
@@ -317,7 +319,9 @@ def register_bot_handlers(app, settings, db: Database):
             f"{ins.venue} {ins.market_type} / {ins.symbol}"
             if ins is not None else "источник неизвестен"
         )
-        candles = db.get_candles(zone.instrument_id, zone.timeframe)[-120:]
+        candles = screenshot_candles(
+            db, zone.instrument_id, zone.timeframe, limit=120,
+        )
         if not candles:
             await message.reply_text("Недостаточно данных для графика.")
             return

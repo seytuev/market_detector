@@ -25,6 +25,7 @@ from ..models import (
     now_ms,
 )
 from ..services.zone_groups import group_members_by_zone
+from .chart_series import screenshot_candles
 from .suppress import (
     BOT_GRP_HTF,
     BOT_GRP_SERVICE,
@@ -223,7 +224,9 @@ class EventDispatcher:
         zone, ins = view.zone, view.instrument
         if zone is None or zone.id is None or ins is None:
             return
-        candles = self.db.get_candles(zone.instrument_id, zone.timeframe)
+        candles = screenshot_candles(
+            self.db, zone.instrument_id, zone.timeframe, limit=CHART_CANDLES,
+        )
         if not candles:
             return
         out = (
@@ -235,7 +238,7 @@ class EventDispatcher:
             from .chartimg import render_zone_chart  # тяжёлый импорт — лениво
 
             payload.image_path = await asyncio.to_thread(
-                render_zone_chart, candles[-CHART_CANDLES:], zone, out, source
+                render_zone_chart, candles, zone, out, source
             )
         except Exception:
             log.warning(

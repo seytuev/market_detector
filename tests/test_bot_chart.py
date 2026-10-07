@@ -12,9 +12,12 @@ from types import SimpleNamespace
 import pytest
 from telegram.ext import CallbackQueryHandler, CommandHandler
 
-from app.bot.charts import DEFAULT_MASK, layers_from_mask, render_ltf_chart
+from app.bot.charts import (
+    DEFAULT_MASK, layers_from_mask, render_ltf_chart, screenshot_candles,
+)
 from app.config import Settings
 from app.db import Database
+from app.models import now_ms
 from app.notify.telegram import _fmt_time, build_application
 from tests.conftest import make_candle
 from tests.test_bot_cards import (  # noqa: F401 — фикстуры и хелперы
@@ -129,6 +132,82 @@ def test_render_ltf_chart_layer_combos(db, chart_seeded, tmp_path, mask):
     )
     assert path is not None
     assert Path(path).is_file() and Path(path).stat().st_size > 0
+
+
+def test_current_chart_ends_on_forming_close(db, chart_seeded, tmp_path, monkeypatch):
+    """Снимок «сейчас» заканчивается незакрытым баром идущего часа.
+    График события (end_ms) этот бар не подмешивает, даже если open_time
+    левее правой границы."""
+    eth = chart_seeded["eth"]
+    last_closed = db.last_candle(eth, "H1").open_time
+    forming_open = last_closed + H1
+    as_of = forming_open + 60_000
+    db.insert_candles([make_candle(
+        forming_open, 200, 210, 190, 207,
+        timeframe="H1", instrument_id=eth, closed=False,
+    )])
+    seen: dict = {}
+    from app.notify.chartimg import candles_to_df as real_df
+
+    def wrap(candles):
+        seen["last"] = candles[-1]
+        return real_df(candles)
+
+    monkeypatch.setattr("app.bot.charts.candles_to_df", wrap)
+    path = render_ltf_chart(
+        db, chart_seeded["obs_bear"].id, tmp_path / "live.png",
+        tf="H1", period_days=7, settings=_settings(tmp_path), now=as_of,
+    )
+    assert path is not None
+    assert seen["last"].closed is False
+    assert seen["last"].close == 207
+
+    past = screenshot_candles(
+        db, eth, "H1", start_ms=as_of - 7 * 86_400_000,
+        end_ms=forming_open + H1, now=as_of,
+    )
+    assert past
+    assert all(c.closed for c in past)
+    assert all(c.open_time != forming_open for c in past)
+
+
+def test_screenshot_omits_expired_unclosed_and_keeps_limit(db, chart_seeded):
+    """Незакрытый бар прошлого периода не рисуется. limit режется после
+    добавления текущего бара, чтобы окно не отрезало именно его."""
+    eth = chart_seeded["eth"]
+    last_closed = db.last_candle(eth, "H1").open_time
+    expired = last_closed + H1
+    as_of = expired + H1 + 5_000
+    db.insert_candles([make_candle(
+        expired, 50, 55, 45, 52,
+        timeframe="H1", instrument_id=eth, closed=False,
+    )])
+    rows = screenshot_candles(
+        db, eth, "H1", start_ms=as_of - 7 * 86_400_000, now=as_of,
+    )
+    assert all(c.closed for c in rows)
+    assert all(c.open_time != expired for c in rows)
+
+    day = 86_400_000
+    existing = db.get_candles(eth, "D1")
+    day_open = as_of - (as_of % day)
+    if existing and existing[-1].open_time >= day_open:
+        day_open = existing[-1].open_time + day
+    snap = day_open + 60_000
+    db.insert_candles([
+        make_candle(
+            day_open - (3 - i) * day, 10 + i, 12 + i, 9 + i, 11 + i,
+            timeframe="D1", instrument_id=eth,
+        )
+        for i in range(3)
+    ] + [make_candle(
+        day_open, 14, 16, 13, 15.5,
+        timeframe="D1", instrument_id=eth, closed=False,
+    )])
+    window = screenshot_candles(db, eth, "D1", limit=2, now=snap)
+    assert len(window) == 2
+    assert window[-1].closed is False
+    assert window[-1].close == 15.5
 
 
 def test_render_ltf_chart_no_data(db, chart_seeded, tmp_path):

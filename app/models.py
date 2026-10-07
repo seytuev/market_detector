@@ -27,6 +27,14 @@ def close_boundary_ms(open_time: int, timeframe: str) -> int:
     return open_time + TIMEFRAME_MINUTES[timeframe] * 60_000
 
 
+def bar_period_contains(open_time: int, timeframe: str, as_of: int) -> bool:
+    """True, если as_of лежит в полуинтервале [open_time, open_time + ТФ)."""
+    minutes = TIMEFRAME_MINUTES.get(timeframe)
+    if minutes is None:
+        return False
+    return open_time <= as_of < open_time + minutes * 60_000
+
+
 class ZoneType(str, Enum):
     FVG = "fvg"
     OB = "ob"
