@@ -391,3 +391,58 @@ def test_run_status_empty(client):
     st = client.get("/api/alt/run-status", headers=AUTH).json()
     assert st["last_run"] is None and st["universe"] is None
     assert st["next_run_ms"] > 0
+
+
+def test_detail_keeps_history_and_links_confirmation(client, db, seeded):
+    """Новые поля совместимы: старые массивы на месте, связь точная, не по цене."""
+    sid = seeded["cnf"].id
+    candle = T0 + 150 * DAY
+    source = f"bos:{sid}:{candle}"
+    event, created = db.insert_alt_event(AltEvent(
+        id=None, setup_id=sid, event_type="bos_confirmed",
+        source_event_id=source, payload_json=json.dumps({"level_price": 9.9}),
+        event_time_ms=candle + DAY, detected_at_ms=candle + DAY,
+        created_ms=candle + DAY,
+    ))
+    assert created
+    db.update_alt_setup(sid, confirmation_event_id=event.id)
+    detail = client.get(f"/api/alt/setup/{sid}", headers=AUTH).json()
+    assert any(row["event_type"] == "bos_confirmed" for row in detail["events"])
+    assert detail["events"][0]["source_event_id"]
+    assert detail["confirmation"]["structure_link"]["status"] == "exact"
+    assert detail["confirmation"]["structure_link"]["structure_event_id"]
+    assert detail["structure_events"]
+    assert detail["candle_history"]["loaded_from_ms"]
+    assert detail["candle_history"]["truncated"] is False
+    assert "не вся" in detail["candle_history"]["note"] or "не является" in detail["candle_history"]["note"] or "фрагмент" in detail["candle_history"]["note"]
+
+    # Цена в payload другая: связь держится на source_event_id, не на цене.
+    assert detail["confirmation"]["payload"]["level_price"] == 9.9
+    linked = next(
+        row for row in detail["structure_events"]
+        if row["id"] == detail["confirmation"]["structure_link"]["structure_event_id"]
+    )
+    assert linked["level_price"] != 9.9
+
+    db.update_alt_setup(sid, confirmation_event_id=None)
+    other, _ = db.insert_alt_event(AltEvent(
+        id=None, setup_id=sid, event_type="sms_confirmed",
+        source_event_id=f"sms:{sid}:{candle + DAY}",
+        payload_json="{}", event_time_ms=candle + 2 * DAY,
+        detected_at_ms=candle + 2 * DAY, created_ms=candle + 2 * DAY,
+    ))
+    db.update_alt_setup(sid, confirmation_event_id=other.id)
+    unknown = client.get(f"/api/alt/setup/{sid}", headers=AUTH).json()
+    assert unknown["confirmation"]["structure_link"]["status"] == "unknown"
+    assert len(unknown["events"]) >= len(detail["events"])
+
+
+def test_venues_survive_empty_filter_and_last_event(client, seeded):
+    empty = client.get(
+        "/api/alt/setups?bucket=eligible&venue=no-such-venue", headers=AUTH
+    ).json()
+    assert empty["rows"] == []
+    assert "bybit" in empty["venues"]
+    fresh = client.get("/api/alt/setups?bucket=new_entries", headers=AUTH).json()
+    assert fresh["rows"][0]["last_event"]["event_type"] == "entry_a"
+    assert fresh["rows"][0]["last_event"]["label_ru"] == "Вход A"

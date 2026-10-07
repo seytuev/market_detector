@@ -37,99 +37,200 @@
     </div>
   </header>
 
-  <!-- §18: последний run, as_of, следующий запуск МСК, обработано/ошибок,
-       universe stale — сбой источника ≠ «сетапов нет» -->
-  <section class="alt-run" id="alt-run">
-    <span class="alt-run-item" id="alt-run-last">Последний run: —</span>
-    <span class="alt-run-item" id="alt-run-asof">as_of: —</span>
-    <span class="alt-run-item" id="alt-run-next">Следующий запуск: —</span>
-    <span class="alt-run-item" id="alt-run-counts"></span>
-    <span class="badge dq-stale hidden" id="alt-universe-stale"
-          title="Снимок CMC устарел: используется последний успешный. Сбой источника не означает «сетапов нет».">вселенная устарела</span>
-    <span class="badge hidden" id="alt-running">идёт прогон…</span>
-    <button id="alt-recalc" class="btn small" title="Ручной пересчёт: тот же дневной прогон вне расписания (без исторического спама)">Пересчитать</button>
-  </section>
-
-  <!-- §16: фильтры стадий + вторичные -->
-  <section class="alt-filters">
-    <select id="flt-bucket" title="Стадия">
-      <option value="eligible">Подходящие</option>
-      <option value="new_entries">Новые входы</option>
-      <option value="awaiting_retest">Ожидание ретеста</option>
-      <option value="mature">Зрелые</option>
-      <option value="forming">Формирующиеся</option>
-      <option value="review">Требуют проверки</option>
-      <option value="history">История</option>
-      <option value="all">Все</option>
-    </select>
-    <select id="flt-venue" title="Биржа"><option value="">Биржа: все</option></select>
-    <input id="flt-rank-min" type="number" min="1" placeholder="Ранг от" title="CMC-rank от">
-    <input id="flt-rank-max" type="number" min="1" placeholder="Ранг до" title="CMC-rank до">
-    <input id="flt-age-min" type="number" min="0" placeholder="Возраст от, дн" title="Возраст аккумуляции от, дней">
-    <input id="flt-dd-min" type="number" min="0" max="100" step="1" placeholder="Падение от, %" title="Историческое падение от, %">
-    <select id="flt-structure" title="Структурные события">
-      <option value="">События: любые</option>
-      <option value="bos_sms">BOS/SMS</option>
-      <option value="manipulation">Манипуляция</option>
-      <option value="breakout">Выход</option>
-    </select>
-    <button id="flt-apply" class="btn small">Применить</button>
-    <button id="flt-reset" class="btn small">Сбросить</button>
-  </section>
-
-  <main class="alt-layout">
-    <section class="alt-table-wrap table-wrap">
-      <table id="alt-table">
-        <thead>
-          <tr>
-            <th title="Монета · пара · биржа">Монета / пара / биржа</th>
-            <th title="CMC-rank (не оценка надёжности)">Ранг</th>
-            <th title="Биржевой ATH по теням и дата">ATH</th>
-            <th title="Минимум после ATH по теням и дата">Мин. после ATH</th>
-            <th title="Историческое падение">Падение</th>
-            <th title="Close последней закрытой D1">Close</th>
-            <th>L</th><th>U</th><th>M</th><th>W</th>
-            <th title="Ширина вверх (U/L−1)×100% / снижение (1−L/U)×100%">Ширина</th>
-            <th title="Возраст аккумуляции, дней">Возраст</th>
-            <th>Стадия</th>
-            <th title="BOS/SMS · манипуляция · выход">Флаги</th>
-            <th title="Возможность входа A/B">Вход</th>
-            <th title="Цели TP1–TP4">TP</th>
-            <th title="K и режим отмены (проектная настройка)">K · режим</th>
-            <th title="Достижимость K">K дост.</th>
-            <th title="Deadline ретеста (МСК)">Deadline</th>
-            <th title="Расстояние до входа, %">До входа</th>
-            <th title="Причины пропуска/ошибки последнего run">Причины</th>
-          </tr>
-        </thead>
-        <tbody id="alt-tbody"></tbody>
-      </table>
-      <div id="alt-table-empty" class="ltf-empty hidden"></div>
+  <main class="alt-page" id="alt-page" data-pane="list">
+    <header class="alt-fresh">
+      <div class="alt-fresh-main">
+        <h1>Альткоины D1</h1>
+        <p id="alt-asof">Данные на …</p>
+        <p id="alt-run-state" class="alt-dim"></p>
+        <span id="alt-problem" class="badge hidden" role="status">Проблема данных</span>
+        <span id="alt-running" class="badge hidden">Идёт обработка</span>
+      </div>
+      <button type="button" id="alt-proc-toggle" class="btn small" aria-expanded="false" aria-controls="alt-proc">Обработка</button>
+    </header>
+    <section id="alt-proc" class="alt-proc hidden">
+      <p id="alt-proc-body"></p>
+      <button type="button" id="alt-recalc" class="btn small">Пересчитать</button>
     </section>
 
-    <section class="chart-block">
-      <div class="chart-toolbar">
-        <span class="section-label" id="alt-chart-title">График · D1</span>
-        <button id="alt-why-btn" class="btn small" disabled>Почему найдено</button>
+    <div class="alt-tabs" role="tablist" aria-label="Группы сетапов">
+      <button type="button" class="alt-tab" data-bucket="eligible" title="Активные сетапы без стадии «требует проверки». Не означает, что вход доступен.">Все активные</button>
+      <button type="button" class="alt-tab" data-bucket="new_entries">Новые входы</button>
+      <button type="button" class="alt-tab" data-bucket="awaiting_retest">Ожидание ретеста</button>
+      <button type="button" class="alt-tab" data-bucket="review">Требуют проверки</button>
+      <button type="button" class="alt-tab" data-bucket="history">История</button>
+      <label class="alt-venue-label">Биржа
+        <select id="flt-venue"><option value="">Все</option></select>
+      </label>
+      <button type="button" id="alt-filters-toggle" class="btn small" aria-expanded="false" aria-controls="alt-filter-panel">Фильтры</button>
+      <button type="button" id="alt-table-toggle" class="btn small" aria-pressed="false">Таблица</button>
+    </div>
+    <div id="alt-chips" class="alt-chips" aria-label="Применённые фильтры"></div>
+    <form id="alt-filter-panel" class="alt-filter-panel hidden">
+      <label>Ранг капитализации от
+        <input id="flt-rank-min" type="number" min="0" inputmode="numeric">
+      </label>
+      <label>до
+        <input id="flt-rank-max" type="number" min="0" inputmode="numeric">
+      </label>
+      <p id="err-rank" class="alt-field-error" role="alert"></p>
+      <label>Возраст диапазона от, дни
+        <input id="flt-age-min" type="number" min="0" inputmode="numeric">
+      </label>
+      <label>до, дни
+        <input id="flt-age-max" type="number" min="0" inputmode="numeric">
+      </label>
+      <p id="err-age" class="alt-field-error" role="alert"></p>
+      <label>Падение от ATH от, %
+        <input id="flt-dd-min" type="number" min="0" max="100" step="1" inputmode="numeric">
+      </label>
+      <label>до, %
+        <input id="flt-dd-max" type="number" min="0" max="100" step="1" inputmode="numeric">
+      </label>
+      <p id="err-dd" class="alt-field-error" role="alert"></p>
+      <label>Структурные события
+        <select id="flt-structure">
+          <option value="">Любые</option>
+          <option value="bos_sms">BOS/SMS</option>
+          <option value="manipulation">Манипуляция</option>
+          <option value="breakout">Выход</option>
+        </select>
+      </label>
+      <label>Стадия
+        <select id="flt-stage" title="Зрелые и формирующиеся остаются здесь, не в основных вкладках">
+          <option value="">Как на вкладке</option>
+          <option value="mature">Зрелые</option>
+          <option value="forming">Формирующиеся</option>
+        </select>
+      </label>
+      <div class="alt-filter-actions">
+        <button type="submit" id="alt-apply" class="btn small">Применить</button>
+        <button type="button" id="alt-reset" class="btn small">Сбросить фильтры</button>
       </div>
-      <div id="chart-container">
-        <div id="chart"></div>
-        <div id="alt-overlay"></div>
+    </form>
+
+    <div class="alt-work" id="alt-work">
+      <aside class="alt-list" id="alt-list-pane">
+        <div class="alt-list-head">
+          <label class="alt-search-label">Поиск монеты
+            <input id="alt-search" type="search" placeholder="Тикер, имя или пара" autocomplete="off">
+          </label>
+          <label>Сортировка
+            <select id="alt-sort">
+              <option value="server">Порядок сервера</option>
+              <option value="distance">Ближе ко входу</option>
+              <option value="rank">Ранг капитализации</option>
+              <option value="age">Возраст диапазона</option>
+            </select>
+          </label>
+          <button type="button" id="alt-collapse-list" class="btn small alt-collapse">Свернуть список</button>
+        </div>
+        <p id="alt-shown" aria-live="polite">Показано 0</p>
+        <p id="alt-outside" class="alt-warn hidden">Выбранный сетап вне текущего фильтра
+          <button type="button" id="alt-reveal" class="btn small">Показать в списке</button>
+        </p>
+        <p id="alt-picked" class="alt-dim"></p>
+        <div id="alt-list" role="listbox" aria-label="Монеты" tabindex="0"></div>
+        <p id="alt-list-empty" class="alt-empty hidden"></p>
+        <p id="alt-list-error" class="alt-warn hidden">Не удалось загрузить список.
+          <button type="button" id="alt-retry-list" class="btn small">Повторить</button>
+        </p>
+      </aside>
+
+      <section class="alt-chart-col" aria-label="График">
+        <div class="alt-asset-head">
+          <button type="button" id="alt-back" class="btn small alt-back">К списку</button>
+          <h2 id="alt-chart-title">Выберите монету</h2>
+          <p id="alt-chart-sub" class="alt-dim"></p>
+        </div>
+        <div class="alt-toolbar" id="alt-toolbar">
+          <div class="alt-modes" role="group" aria-label="Режим событий">
+            <button type="button" id="alt-mode-setup" data-mode="setup" aria-pressed="true">Сетап</button>
+            <button type="button" id="alt-mode-history" data-mode="history" aria-pressed="false">История</button>
+            <button type="button" id="alt-mode-none" data-mode="none" aria-pressed="false">Без событий</button>
+          </div>
+          <button type="button" id="alt-layers-toggle" class="btn small" aria-expanded="false" aria-controls="alt-layers">Слои</button>
+          <button type="button" id="alt-180" class="btn small">180D</button>
+          <button type="button" id="alt-range" class="btn small">Весь диапазон</button>
+          <button type="button" id="alt-all-history" class="btn small">Вся история</button>
+          <button type="button" id="alt-expand" class="btn small" aria-pressed="false">Развернуть график</button>
+          <button type="button" id="alt-card-toggle" class="btn small alt-card-toggle" aria-expanded="false">Карточка</button>
+        </div>
+        <div id="alt-layers" class="alt-layers hidden">
+          <label><input type="checkbox" id="layer-range" checked> Диапазон L/U/M</label>
+          <label><input type="checkbox" id="layer-entries" checked> Входы и ретест</label>
+          <label><input type="checkbox" id="layer-manip" checked> Последняя манипуляция</label>
+          <label>Цели
+            <select id="layer-targets">
+              <option value="nearest">Ближайшая</option>
+              <option value="all">Все</option>
+              <option value="hide">Скрыть</option>
+            </select>
+          </label>
+          <label><input type="checkbox" id="layer-cancel" checked> Отмена K</label>
+          <label><input type="checkbox" id="layer-reverse"> Обратная структура</label>
+          <fieldset id="layer-types">
+            <legend>Типы в режиме «История»</legend>
+          </fieldset>
+          <p class="alt-dim">История — события выбранного сетапа, не всех сетапов монеты. Масштаб она не меняет.</p>
+        </div>
+        <p id="alt-chart-note" class="alt-chart-note"></p>
+        <div id="chart-container">
+          <div id="chart"></div>
+          <div id="alt-overlay"></div>
+        </div>
+        <p id="alt-chart-empty" class="alt-empty">Выберите монету слева — график и карточка обновятся.</p>
+        <section class="alt-journal" id="alt-journal">
+          <h2>События выбранного сетапа</h2>
+          <div class="alt-journal-filters">
+            <label>Тип
+              <select id="journal-type"><option value="">Все</option></select>
+            </label>
+            <label>С даты
+              <input id="journal-from" type="date">
+            </label>
+            <label>По дату
+              <input id="journal-to" type="date">
+            </label>
+          </div>
+          <div id="alt-journal-list"></div>
+        </section>
+      </section>
+
+      <aside class="alt-card" id="alt-card" aria-label="Карточка сетапа">
+        <div class="alt-card-head">
+          <h2>Состояние сетапа</h2>
+          <button type="button" id="alt-collapse-card" class="btn small alt-collapse">Свернуть</button>
+          <button type="button" id="alt-card-close" class="btn small">Закрыть</button>
+        </div>
+        <div id="alt-card-body">
+          <p class="alt-empty">Объект не выбран.</p>
+        </div>
+      </aside>
+    </div>
+
+    <section id="alt-table-mode" class="alt-table-mode hidden">
+      <div class="alt-table-tools">
+        <button type="button" id="alt-columns-toggle" class="btn small" aria-expanded="false">Колонки</button>
+        <button type="button" id="alt-table-back" class="btn small">К графику</button>
       </div>
-      <div id="alt-k-note" class="alt-k-note hidden"></div>
-      <div id="alt-chart-empty" class="ltf-empty hidden">Выберите строку таблицы — график и карточка обновятся.</div>
+      <div id="alt-columns" class="alt-columns hidden"></div>
+      <div class="alt-table-scroll">
+        <table id="alt-table">
+          <thead id="alt-thead"></thead>
+          <tbody id="alt-tbody"></tbody>
+        </table>
+      </div>
     </section>
   </main>
 
-  <!-- «Почему найдено»: опоры, свечи подтверждения, формулы, метрики,
-       пороги, источник, as_of, версии -->
-  <div id="alt-why-modal" class="modal hidden">
-    <div class="modal-card wide alt-why-card" role="dialog" aria-modal="true" aria-labelledby="alt-why-title">
-      <button class="drawer-close" id="alt-why-close" title="Закрыть">×</button>
-      <h3 id="alt-why-title">Почему найдено</h3>
-      <div id="alt-why"></div>
-    </div>
-  </div>
+  <nav class="mobile-nav" aria-label="Мобильная навигация">
+    <a href="/#overview">Сейчас</a>
+    <a href="/#review">Проверка</a>
+    <a href="/#events">Журнал</a>
+    <a href="/ltf.html">Структура H1</a>
+    <a href="/#settings">Настройки</a>
+  </nav>
 
   <footer class="app-footer">
     <span>LevelFrame · Рынок в контексте.</span>
@@ -137,6 +238,7 @@
   </footer>
 
   <script src="/common.js"></script>
+  <script src="/alt_chart.js"></script>
   <script src="/alt.js"></script>
 </body>
 </html>

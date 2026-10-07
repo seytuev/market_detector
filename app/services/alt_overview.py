@@ -63,6 +63,48 @@ CANCEL_MODE_RU = {
     "close_on_closed_d1": "закрытие D1 (Close ≤ K)",
 }
 
+# Подписи существующих типов событий. Новых торговых состояний здесь нет.
+EVENT_RU = {
+    "forming_started": "Начало формирования",
+    "mature_frozen": "Диапазон зафиксирован",
+    "manipulation_started": "Манипуляция началась",
+    "manipulation_ended": "Манипуляция завершилась",
+    "ssl_taken": "SSL снят",
+    "bos_confirmed": "BOS",
+    "sms_confirmed": "SMS",
+    "breakout": "Выход из диапазона",
+    "retest": "Ретест",
+    "target_hit": "Цель достигнута",
+    "cancelled": "Отмена",
+    "expired_no_retest": "Срок ретеста истёк",
+    "targets_completed": "Цели выполнены",
+    "entry_a": "Вход A",
+    "entry_b": "Вход B",
+    "review_required": "Требует проверки",
+    "data_stale": "Данные устарели",
+}
+
+# При равном времени события более позднее по смыслу сценария выигрывает.
+_EVENT_RANK = {
+    "cancelled": 100,
+    "expired_no_retest": 100,
+    "targets_completed": 100,
+    "review_required": 90,
+    "data_stale": 90,
+    "entry_a": 80,
+    "entry_b": 80,
+    "retest": 70,
+    "breakout": 60,
+    "bos_confirmed": 40,
+    "sms_confirmed": 40,
+    "target_hit": 30,
+    "ssl_taken": 20,
+    "manipulation_ended": 15,
+    "manipulation_started": 15,
+    "mature_frozen": 10,
+    "forming_started": 5,
+}
+
 # §12 ТЗ, дословно
 K_NONPOSITIVE_TEXT = "По выбранной формуле ценовой уровень отмены неположительный"
 
@@ -104,6 +146,107 @@ def _loads(raw: Optional[str], default: Any) -> Any:
 
 def _is_terminal(setup: AltSetup) -> bool:
     return setup.terminated_ms is not None or setup.state in TERMINAL_STATES
+
+
+def _last_event_brief(events: list[Any]) -> Optional[dict[str, Any]]:
+    """Последнее событие строки списка: время, затем смысл, затем id."""
+    if not events:
+        return None
+    event = max(
+        events,
+        key=lambda e: (
+            e.event_time_ms or 0,
+            _EVENT_RANK.get(e.event_type, 0),
+            e.id or 0,
+        ),
+    )
+    return {
+        "id": event.id,
+        "event_type": event.event_type,
+        "event_time_ms": event.event_time_ms,
+        "label_ru": EVENT_RU.get(event.event_type, event.event_type),
+    }
+
+
+def _structure_source_event_id(
+    setup_id: int, kind: str, candle_open_time: int, anchors: Any
+) -> Optional[str]:
+    """Тот же ключ, которым движок пишет lifecycle-событие.
+
+    SSL без formed_at не получает ключ: угадывать связь по цене нельзя.
+    BOS_REV/SMS_REV в outbox не пишутся; ключ нужен только как идентификатор
+    факта на графике.
+    """
+    inner: list[Any] = []
+    if isinstance(anchors, dict) and isinstance(anchors.get("anchors"), list):
+        inner = anchors["anchors"]
+    if kind == "SSL":
+        formed = None
+        if inner and isinstance(inner[0], dict):
+            formed = inner[0].get("formed_at")
+        if formed is None:
+            return None
+        return f"ssl:{setup_id}:{formed}:{candle_open_time}"
+    if kind in ("BOS", "SMS", "BOS_REV", "SMS_REV"):
+        return f"{kind.lower()}:{setup_id}:{candle_open_time}"
+    return None
+
+
+def _candle_from_source_id(source_event_id: Optional[str]) -> Optional[int]:
+    if not source_event_id or ":" not in source_event_id:
+        return None
+    tail = source_event_id.rsplit(":", 1)[-1]
+    try:
+        value = int(tail)
+    except ValueError:
+        return None
+    # id сетапа тоже число, но не метка времени. Свеча D1 — миллисекунды.
+    if value < 1_000_000_000_000:
+        return None
+    return value
+
+
+def _confirmation_link(
+    confirmation: Any, structure_events: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Связь подтверждения со структурной строкой внутри одного сетапа.
+
+    Совпадение: тип + точная свеча, уже зашитая в source_event_id движка.
+    Округлённая цена не используется. Несколько совпадений — связь неизвестна.
+    """
+    if confirmation is None:
+        return {"status": "absent", "structure_event_id": None}
+    source_event_id = confirmation.source_event_id or ""
+    if confirmation.event_type == "breakout":
+        return {
+            "status": "not_structure",
+            "structure_event_id": None,
+            "source_event_id": source_event_id,
+        }
+    kind = {"bos_confirmed": "BOS", "sms_confirmed": "SMS", "ssl_taken": "SSL"}.get(
+        confirmation.event_type
+    )
+    if kind is None or not source_event_id:
+        return {
+            "status": "unknown",
+            "structure_event_id": None,
+            "source_event_id": source_event_id,
+        }
+    matches = [
+        event for event in structure_events
+        if event.get("kind") == kind and event.get("source_event_id") == source_event_id
+    ]
+    if len(matches) == 1:
+        return {
+            "status": "exact",
+            "structure_event_id": matches[0]["id"],
+            "source_event_id": source_event_id,
+        }
+    return {
+        "status": "unknown",
+        "structure_event_id": None,
+        "source_event_id": source_event_id,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -298,6 +441,7 @@ def _setup_row(
 
     entries = db.list_alt_entry_opportunities(setup.id)
     entry_kinds = sorted({e.kind for e in entries})
+    last_event = _last_event_brief(db.list_alt_events(setup.id))
     start_ot = (
         frozen.start_anchor_open_time if frozen is not None
         else (candidate.start_anchor_open_time if candidate else None)
@@ -376,6 +520,7 @@ def _setup_row(
         "distance_pct": distance,
         "terminated_ms": setup.terminated_ms,
         "updated_ms": setup.updated_ms,
+        "last_event": last_event,
         "run_status": reason.get("status") if reason else None,
         "reason": reason.get("reason") if reason else None,
     }
@@ -450,6 +595,7 @@ def _candidate_row(
         "distance_pct": distance,
         "terminated_ms": None,
         "updated_ms": candidate.updated_ms,
+        "last_event": None,
         "run_status": reason.get("status") if reason else None,
         "reason": reason.get("reason") if reason else None,
     }
@@ -505,6 +651,7 @@ def _nodata_row(
         "distance_pct": None,
         "terminated_ms": None,
         "updated_ms": asset.updated_ms,
+        "last_event": None,
         "run_status": reason.get("status") if reason else None,
         "reason": (
             (reason or {}).get("reason")
@@ -595,9 +742,13 @@ def alt_setups_table(
     active_rows: list[dict[str, Any]] = []
     history_rows: list[dict[str, Any]] = []
     stats_cache: dict[int, Optional[dict[str, Any]]] = {}
+    # Биржи — из источников, а не из уже отфильтрованных строк.
+    venues: set[str] = set()
 
     for asset in db.list_alt_assets():
         source = db.get_alt_instrument_source(asset.id)
+        if source is not None and source.venue:
+            venues.add(source.venue)
         stats: Optional[dict[str, Any]] = None
         if source is not None:
             if source.id not in stats_cache:
@@ -729,6 +880,7 @@ def alt_setups_table(
         "run_id": last_run.id if last_run else None,
         "bucket": bucket,
         "buckets": counts,
+        "venues": sorted(venues),
         "rows": rows,
     }
 
@@ -751,20 +903,49 @@ def _anchor(open_time: int, pivot_right: int) -> dict[str, Any]:
 
 def _detail_candles(
     db: Database, source_id: int, ath_open_time: Optional[int]
-) -> list[dict[str, Any]]:
-    """Серия D1 для графика: предшествующее падение от ATH + диапазон +
-    последние дни; сверх потолка — хвост (масштаб не меняет расчёт, §16)."""
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Серия D1 для графика и границы загруженного фрагмента.
+
+    Фрагмент начинается у контекста ATH и обрезается потолком. Это не вся
+    рыночная история пары: признак усечения и текст отдаются клиенту явно.
+    """
     start = 0
     if ath_open_time:
         start = max(0, ath_open_time - _CANDLES_BEFORE_ATH_DAYS * DAY_MS)
     candles = db.get_alt_candles(source_id, start_ms=start or None)
-    if len(candles) > _DETAIL_CANDLE_LIMIT:
+    truncated = len(candles) > _DETAIL_CANDLE_LIMIT
+    if truncated:
         candles = candles[-_DETAIL_CANDLE_LIMIT:]
-    return [
+    loaded = [
         {"open_time": c.open_time, "open": c.open, "high": c.high,
          "low": c.low, "close": c.close, "volume": c.volume}
         for c in candles
     ]
+    windowed = bool(start)
+    if truncated:
+        note = (
+            "Загружен хвост истории источника: более ранние свечи в этот "
+            "фрагмент не вошли. Это не вся рыночная история пары."
+        )
+    elif windowed:
+        note = (
+            "На графике фрагмент от контекста ATH, а не вся рыночная история пары."
+        )
+    else:
+        note = (
+            "Показаны все сохранённые свечи этого источника. "
+            "Это не утверждение, что биржа отдала историю с листинга."
+        )
+    bounds = {
+        "loaded_from_ms": loaded[0]["open_time"] if loaded else None,
+        "loaded_to_ms": loaded[-1]["open_time"] if loaded else None,
+        "count": len(loaded),
+        "truncated": truncated,
+        "windowed": windowed,
+        "limit": _DETAIL_CANDLE_LIMIT,
+        "note": note,
+    }
+    return loaded, bounds
 
 
 def _classifier_block(candidate: Optional[AltRangeCandidate], settings: Settings) -> Optional[dict[str, Any]]:
@@ -822,10 +1003,45 @@ def alt_setup_detail(db: Database, setup_id: int, settings: Settings) -> Optiona
                 metrics.get("alternative_anchor_open_times") or [],
         }
 
-    candles = (
-        _detail_candles(db, source.id, stats["ath_open_time"] if stats else None)
-        if source is not None else []
-    )
+    if source is not None:
+        candles, candle_history = _detail_candles(
+            db, source.id, stats["ath_open_time"] if stats else None
+        )
+    else:
+        candles, candle_history = [], {
+            "loaded_from_ms": None, "loaded_to_ms": None, "count": 0,
+            "truncated": False, "windowed": False, "limit": _DETAIL_CANDLE_LIMIT,
+            "note": "Источник не выбран — свечей нет.",
+        }
+
+    structure_events = []
+    for event in db.list_alt_structure_events(setup.id):
+        anchors_obj = _loads(event.anchors_json, {})
+        structure_events.append({
+            "id": event.id,
+            "kind": event.kind,
+            "level_price": event.level_price,
+            "close_price": event.close_price,
+            "candle_open_time": event.candle_open_time,
+            "anchors": anchors_obj,
+            "historical": (
+                bool(anchors_obj.get("historical"))
+                if isinstance(anchors_obj, dict) else False
+            ),
+            "source_event_id": _structure_source_event_id(
+                setup.id, event.kind, event.candle_open_time, anchors_obj
+            ),
+        })
+    link = _confirmation_link(confirmation_event, structure_events)
+    confirm_candle = None
+    if link.get("status") == "exact":
+        matched = next(
+            event for event in structure_events
+            if event["id"] == link["structure_event_id"]
+        )
+        confirm_candle = matched["candle_open_time"]
+    elif confirmation_event is not None:
+        confirm_candle = _candle_from_source_id(confirmation_event.source_event_id)
 
     target_snapshot = flags.get("target_snapshot")
     return {
@@ -858,12 +1074,7 @@ def alt_setup_detail(db: Database, setup_id: int, settings: Settings) -> Optiona
         "range_versions": metrics.get("versions") or [],
         "anchors": anchors,
         "classifier": _classifier_block(candidate, settings),
-        "structure_events": [
-            {"id": e.id, "kind": e.kind, "level_price": e.level_price,
-             "close_price": e.close_price, "candle_open_time": e.candle_open_time,
-             "anchors": _loads(e.anchors_json, {})}
-            for e in db.list_alt_structure_events(setup.id)
-        ],
+        "structure_events": structure_events,
         "manipulation_episodes": [
             {"id": m.id,
              "started_candle_open_time": m.started_candle_open_time,
@@ -886,21 +1097,32 @@ def alt_setup_detail(db: Database, setup_id: int, settings: Settings) -> Optiona
             if setup.breakout_closed_at is not None else None
         ),
         "confirmation": (
-            {"event_id": confirmation_event.id,
-             "event_type": confirmation_event.event_type,
-             "event_time_ms": confirmation_event.event_time_ms,
-             "payload": _loads(confirmation_event.payload_json, {})}
+            {
+                "event_id": confirmation_event.id,
+                "event_type": confirmation_event.event_type,
+                "event_time_ms": confirmation_event.event_time_ms,
+                "source_event_id": confirmation_event.source_event_id,
+                "candle_open_time": confirm_candle,
+                "payload": _loads(confirmation_event.payload_json, {}),
+                "structure_link": link,
+            }
             if confirmation_event is not None else None
         ),
         "events": [
-            {"id": e.id, "event_type": e.event_type,
-             "event_time_ms": e.event_time_ms,
-             "detected_at_ms": e.detected_at_ms,
-             "payload": _loads(e.payload_json, {})}
+            {
+                "id": e.id,
+                "event_type": e.event_type,
+                "event_time_ms": e.event_time_ms,
+                "detected_at_ms": e.detected_at_ms,
+                "source_event_id": e.source_event_id,
+                "label_ru": EVENT_RU.get(e.event_type, e.event_type),
+                "payload": _loads(e.payload_json, {}),
+            }
             for e in events
         ],
         "ath": stats,
         "candles": candles,
+        "candle_history": candle_history,
         "as_of_ms": last_run.as_of_ms if last_run else None,
         "versions": {
             "rule": ALT_RULE_VERSION,
@@ -932,10 +1154,16 @@ def alt_candidate_detail(db: Database, candidate_id: int, settings: Settings) ->
     cfg = settings.alt_config
     metrics = _loads(candidate.metrics_json, {})
     stats = _candle_stats(db, source.id) if source is not None else None
-    candles = (
-        _detail_candles(db, source.id, stats["ath_open_time"] if stats else None)
-        if source is not None else []
-    )
+    if source is not None:
+        candles, candle_history = _detail_candles(
+            db, source.id, stats["ath_open_time"] if stats else None
+        )
+    else:
+        candles, candle_history = [], {
+            "loaded_from_ms": None, "loaded_to_ms": None, "count": 0,
+            "truncated": False, "windowed": False, "limit": _DETAIL_CANDLE_LIMIT,
+            "note": "Источник не выбран — свечей нет.",
+        }
     last_run = db.get_latest_alt_run(statuses=("ok", "no_universe"))
     return {
         "kind": "candidate",
@@ -964,8 +1192,10 @@ def alt_candidate_detail(db: Database, candidate_id: int, settings: Settings) ->
         "targets": [],
         "cancel": None,
         "events": [],
+        "confirmation": None,
         "ath": stats,
         "candles": candles,
+        "candle_history": candle_history,
         "as_of_ms": last_run.as_of_ms if last_run else None,
         "versions": {
             "rule": ALT_RULE_VERSION,

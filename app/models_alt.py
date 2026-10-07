@@ -192,7 +192,11 @@ class AltManipulationEpisode:
 
 @dataclass
 class AltEntryOpportunity:
-    """Точка входа: A — на ретесте после пробоя, B — внутри диапазона."""
+    """Точка входа по правилам движка (app/alt/engine.py §10–§11).
+
+    A — закрытие подтверждающей D1. B — зона ретеста [M, U] первого
+    принятого ретеста. Это зафиксированные факты, не текущая заявка.
+    """
     id: Optional[int]
     setup_id: int
     kind: str                     # 'A' | 'B'
