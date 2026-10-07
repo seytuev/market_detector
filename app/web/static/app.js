@@ -15,6 +15,8 @@ const state = {
   instruments: [],
   instrumentId: null,
   timeframe: 'D1',
+  chartMode: 'context',
+  savedTimeframe: 'D1',
   zones: [],
   groups: [],
   candles: [],
@@ -697,7 +699,7 @@ const TF_SECONDS = { H1: 3600, H4: 14400, D1: 86400, W1: 604800 };
 // видимый диапазон от начала формирования зоны до текущего момента.
 async function focusZoneOnChart(z) {
   const tfOptionExists = [...$('tf-select').options].some((o) => o.value === z.timeframe);
-  if (z.timeframe !== state.timeframe && TF_SECONDS[z.timeframe] && tfOptionExists) {
+  if (state.chartMode !== 'h1' && z.timeframe !== state.timeframe && TF_SECONDS[z.timeframe] && tfOptionExists) {
     state.timeframe = z.timeframe;
     $('tf-select').value = z.timeframe;
     await loadCandles();
@@ -1009,22 +1011,31 @@ function showGroupMembers(group) {
 // ---------------------------------------------------------------------------
 
 async function loadEvents() {
-  const events = await api('/api/events?limit=50');
-  renderEvents(events);
+  const assetQ = state.instrumentId
+    ? `/api/events?limit=50&instrument_id=${state.instrumentId}`
+    : '/api/events?limit=50';
+  const [assetEvents, allEvents] = await Promise.all([
+    api(assetQ),
+    api('/api/events?limit=50'),
+  ]);
+  renderEvents(assetEvents, allEvents);
 }
 
-function renderEvents(events) {
+function renderEvents(assetEvents, allEvents) {
+  const journal = allEvents || assetEvents;
   const ul = $('events-list');
+  const label = $('events-strip-label');
+  if (label) label.textContent = 'События актива';
   if (ul) {
     ul.innerHTML = '';
-    events.slice(0, 3).forEach((e) => ul.appendChild(eventLi(e)));
+    (assetEvents || []).slice(0, 3).forEach((e) => ul.appendChild(eventLi(e)));
   }
   const full = $('events-full');
   if (full) {
     full.innerHTML = '';
-    events.forEach((e) => full.appendChild(eventLi(e)));
+    journal.forEach((e) => full.appendChild(eventLi(e)));
   }
-  if ($('events-count')) $('events-count').textContent = events.length;
+  if ($('events-count')) $('events-count').textContent = journal.length;
 }
 
 function showInspector(open) {
@@ -1066,7 +1077,12 @@ function explanationText(ev) {
 async function loadCandidates() {
   const list = (await api('/api/candidates')).filter(isHtf); // только HTF
   reviewState.all = list;
-  $('candidates-count').textContent = list.length;
+  const mine = state.instrumentId
+    ? list.filter((z) => z.instrument_id === state.instrumentId)
+    : list;
+  if ($('candidates-count')) $('candidates-count').textContent = mine.length;
+  const note = $('candidates-global-note');
+  if (note) note.textContent = `По всем активам: ${list.length}`;
   renderReviewQueue();
 }
 
@@ -1978,7 +1994,9 @@ function handleWsMessage(data) {
       loadCandles().then(() => loadZones());
     }
   } else if (data.type === 'event') {
-    if (data.event) {
+    const foreign = data.instrument_id != null
+      && data.instrument_id !== state.instrumentId;
+    if (data.event && !foreign && $('events-list')) {
       $('events-list').prepend(eventLi(data.event));
     }
     loadZones().then(() => {
@@ -2020,13 +2038,12 @@ function resolveInitialInstrument() {
 }
 
 function updateLtfLinks() {
-  const url = new URL('/ltf.html', location.origin);
-  if (state.token) url.searchParams.set('token', state.token);
-  if (state.instrumentId) url.searchParams.set('instrument', String(state.instrumentId));
-  const href = url.pathname + url.search;
-  if ($('lnk-ltf')) $('lnk-ltf').href = href;
-  if ($('lnk-ltf-nav')) $('lnk-ltf-nav').href = href;
-  if ($('lnk-ltf-mobile')) $('lnk-ltf-mobile').href = href;
+  ['lnk-ltf', 'lnk-ltf-nav', 'lnk-ltf-mobile'].forEach((id) => {
+    const el = $(id);
+    if (!el) return;
+    if (el.tagName === 'A') el.href = '#desk';
+    el.dataset.chartMode = 'h1';
+  });
 }
 
 function syncInstrumentContext() {
@@ -2076,6 +2093,9 @@ const deskData = {
   current: null,        // снимок /current выбранного инструмента
   reqSeq: 0,            // поздний ответ старого запроса не применяется
   refreshTimer: null,
+  readError: false,
+  versionRetried: false,
+  assetsVersion: null,
 };
 
 // L05: основания выбора контекста (коды сервера, app/services/overview.py)
@@ -2146,19 +2166,21 @@ function deskAssetState(r) {
   }
 }
 
-function deskHeadline(v, r) {
+function deskHeadline(v) {
+  if (v.market_stage) return v.market_stage;
+  if (v.wait && v.wait.message && !v.selected_context_id) return v.wait.message;
   const ds = v.data_state || {};
-  if (ds.state && ds.state !== 'ok') return 'Данные задерживаются';
-  if (r && r.attention === 'review') return 'Нужна проверка';
-  const sc = v.current_scenario;
-  if (sc) return `Контекст ${sc.direction === 'bear' ? 'снижения' : 'роста'} подтверждён`;
-  if (v.scenario_waiting) return 'Ждём нового сценария';
-  if (v.contexts && v.contexts.length) return 'Контекст активен — ждём слома H1';
+  if (ds.state && ds.state !== 'ok') {
+    return 'Данные задерживаются';
+  }
   return v.stage || 'Активного контекста нет';
 }
 
 function deskLeadText(v, r, tf) {
   const ds = v.data_state || {};
+  const disabled = (v.reached_disabled || [])[0];
+  if (disabled && disabled.message) return disabled.message;
+  if (v.wait && v.wait.message && !v.selected_context_id) return v.wait.message;
   if (ds.state && ds.state !== 'ok') {
     return (DESK_DATA_REASON_RU[ds.reason] || 'Источник данных недоступен') +
       '. Показаны последние известные значения.';
@@ -2168,7 +2190,7 @@ function deskLeadText(v, r, tf) {
     const side = sc.direction === 'bear' ? 'ниже' : 'выше';
     return `H1 закрылся ${side} ${fmtPrice(sc.break_level)}. Старший контекст ${tf} остаётся активным.`;
   }
-  if (r && r.attention_reason && r.attention_reason !== '—') return r.attention_reason + '.';
+  if (v.market_stage) return v.market_stage;
   return v.stage ? v.stage + '.' : '';
 }
 
@@ -2194,13 +2216,33 @@ function deskWaitText(v) {
 }
 
 function deskCancelText(v) {
-  // Условие отмены — только из данных снимка (§7: UI не придумывает условие)
+  const c = v.cancel_condition;
+  if (c && c.level != null && c.status && c.status !== 'undefined') {
+    const side = c.side === 'above' ? 'выше' : 'ниже';
+    const verb = c.status === 'occurred' ? 'Отмена произошла' : 'Отменит';
+    const kind = c.kind ? ` (${c.kind})` : '';
+    return `${verb}: закрытие H1 строго ${side} ${fmtPrice(c.level)}${kind}`;
+  }
   const sc = v.current_scenario;
   if (sc && sc.reverse_break && sc.reverse_break.price != null) {
     const side = sc.direction === 'bear' ? 'выше' : 'ниже';
     return `Закрытие H1 ${side} ${fmtPrice(sc.reverse_break.price)}`;
   }
   return null;
+}
+
+function deskReviewBadge(v) {
+  const rs = v && v.review_state;
+  if (!rs || !rs.needed) return '';
+  return `<a class="review-badge" href="#review">Нужна проверка · ${rs.count}</a>`;
+}
+
+function deskFactsHtml(v) {
+  const facts = (v && v.liquidity_facts) || [];
+  if (!facts.length) return '';
+  return facts.slice(0, 3).map((f) =>
+    `<div class="desk-fact">${esc(String(f.type || 'уровень').toUpperCase())} ${esc(f.timeframe || '')} ` +
+    `${fmtPrice(f.level)} снят · не сценарий</div>`).join('');
 }
 
 function deskSelectedTf(v) {
@@ -2270,11 +2312,15 @@ function renderDeskAssets() {
 function renderDeskScenario() {
   const el = $('desk-scenario');
   if (!el) return;
+  if (deskData.readError) {
+    el.classList.remove('hidden');
+    el.innerHTML = '<h3>Ошибка чтения снимка</h3>' +
+      '<p class="desk-sc-lead">Карточка не скрыта: снимок не прочитан. Обновите экран.</p>';
+    return;
+  }
   const v = deskData.current;
   if (!v) {
-    // снимок недоступен — карточку скрываем, а не показываем выдуманный статус
     el.classList.add('hidden');
-    el.innerHTML = '';
     return;
   }
   el.classList.remove('hidden');
@@ -2284,16 +2330,20 @@ function renderDeskScenario() {
   const cancel = deskCancelText(v);
   const watching = !!(ins && ins.ltf_analyze);
   const ds = v.data_state || {};
+  const conflict = v.direction_conflict;
   el.innerHTML = `
     <div class="desk-sc-head">
       <span>${esc(ins.symbol || '')} · ${esc(tf)}</span>
       ${deskDirBadge(v.direction)}
+      ${deskReviewBadge(v)}
     </div>
-    <h3>${esc(deskHeadline(v, row))}</h3>
+    <h3>${esc(deskHeadline(v))}</h3>
     <p class="desk-sc-lead">${esc(deskLeadText(v, row, tf))}</p>
+    ${deskFactsHtml(v)}
+    ${conflict ? `<p class="desk-sc-lead">${esc(conflict.note)}</p>` : ''}
     <dl class="now-qa desk-qa">
       <dt class="qa-q">Что происходит</dt>
-      <dd class="qa-a">${esc(v.stage || (row && row.stage) || '—')}</dd>
+      <dd class="qa-a">${esc(v.market_stage || v.stage || (row && row.stage) || '—')}</dd>
       <dt class="qa-q">Чего ждём</dt>
       <dd class="qa-a">${esc(deskWaitText(v))}</dd>
       ${cancel ? `<dt class="qa-q">Условие отмены</dt><dd class="qa-a">${esc(cancel)}</dd>` : ''}
@@ -2372,23 +2422,53 @@ function renderDeskExtras() {
 async function loadDeskExtras() {
   const id = state.instrumentId;
   const req = ++deskData.reqSeq;
-  const [assetsRes, cur] = await Promise.all([
-    api('/api/ltf/instruments').catch(() => null),
-    id ? api(`/api/ltf/instruments/${id}/current`).catch(() => null) : Promise.resolve(null),
-  ]);
-  if (req !== deskData.reqSeq) return;
-  if (assetsRes) deskData.assets = assetsRes.instruments || [];
+  let assetsRes = null;
+  let cur = null;
+  let failed = false;
+  try {
+    [assetsRes, cur] = await Promise.all([
+      api('/api/ltf/instruments'),
+      id ? api(`/api/ltf/instruments/${id}/current`) : Promise.resolve(null),
+    ]);
+  } catch (e) {
+    failed = true;
+  }
+  if (req !== deskData.reqSeq || id !== state.instrumentId) return;
+  if (failed || (id && !cur)) {
+    deskData.readError = true;
+    renderDeskScenario();
+    return;
+  }
+  const assetsVersion = assetsRes && assetsRes.state_version;
+  const currentVersion = cur && cur.state_version;
+  if (assetsVersion != null && currentVersion != null && assetsVersion !== currentVersion) {
+    if (!deskData.versionRetried) {
+      deskData.versionRetried = true;
+      deskData.reqSeq -= 1;
+      return loadDeskExtras();
+    }
+    deskData.readError = true;
+    renderDeskScenario();
+    return;
+  }
+  deskData.versionRetried = false;
+  deskData.readError = false;
+  if (assetsRes) {
+    deskData.assets = assetsRes.instruments || [];
+    deskData.assetsVersion = assetsVersion;
+  }
   deskData.current = cur;
   renderDeskExtras();
-  // цены остальных активов списка — их снимки /current (список мал, как now.js)
   const others = deskData.assets.filter((r) => r.instrument.id !== id);
   if (!others.length) return;
   const currents = await Promise.all(others.map((r) =>
     api(`/api/ltf/instruments/${r.instrument.id}/current`).catch(() => null)));
-  if (req !== deskData.reqSeq) return;
+  if (req !== deskData.reqSeq || id !== state.instrumentId) return;
   deskData.currents = new Map();
   others.forEach((r, i) => {
-    if (currents[i]) deskData.currents.set(r.instrument.id, currents[i]);
+    if (currents[i] && currents[i].state_version === currentVersion) {
+      deskData.currents.set(r.instrument.id, currents[i]);
+    }
   });
   renderDeskAssets();
 }
@@ -2403,17 +2483,27 @@ function scheduleDeskRefresh() {
 
 function deskOnWs(data) {
   if (!isDeskActive()) return;
+  if (data.instrument_id != null && data.instrument_id !== state.instrumentId
+      && data.type !== 'price') {
+    return;
+  }
   if (data.type === 'price' && data.instrument_id === state.instrumentId) {
     if (deskData.current && data.price) {
       deskData.current.price = data.price;
       deskData.current.quote_at = data.time || Date.now();
     }
     renderDeskHead();
+    scheduleDeskRefresh();
   } else if (data.type === 'price') {
     const cur = deskData.currents.get(data.instrument_id);
     if (cur && data.price) { cur.price = data.price; renderDeskAssets(); }
-  } else if (data.type === 'ltf' || data.type === 'zone' || data.type === 'event') {
+  } else if (data.type === 'ltf' || data.type === 'zone' || data.type === 'event'
+      || data.type === 'candle') {
     scheduleDeskRefresh();
+    if (data.type === 'candle' && state.chartMode === 'h1'
+        && data.instrument_id === state.instrumentId) {
+      reloadAll().catch((e) => console.warn('h1 reload:', e));
+    }
   }
 }
 
@@ -2433,9 +2523,77 @@ async function loadInstruments() {
   }
 }
 
+function paintChartMode() {
+  document.querySelectorAll('[data-chart-mode]').forEach((el) => {
+    const on = el.dataset.chartMode === state.chartMode;
+    el.classList.toggle('active', on);
+    if (on) el.setAttribute('aria-current', 'page');
+    else el.removeAttribute('aria-current');
+  });
+  const tf = $('tf-select');
+  const candleLabel = $('candle-tf-label');
+  const hidden = $('chart-tf-label');
+  if (state.chartMode === 'h1') {
+    if (tf) { tf.value = 'H1'; tf.disabled = true; }
+    if (candleLabel) candleLabel.textContent = 'Свечи H1';
+    if (hidden) hidden.textContent = 'Свечи H1';
+  } else {
+    if (state.timeframe === 'H1') state.timeframe = state.savedTimeframe || 'D1';
+    if (tf) { tf.disabled = false; tf.value = state.timeframe; }
+    if (candleLabel) candleLabel.textContent = 'Свечи ' + state.timeframe;
+    if (hidden) hidden.textContent = state.timeframe;
+  }
+}
+
+function setChartMode(mode) {
+  const next = mode === 'h1' ? 'h1' : 'context';
+  if (next === 'h1' && state.timeframe !== 'H1') {
+    state.savedTimeframe = state.timeframe || 'D1';
+    state.timeframe = 'H1';
+  }
+  if (next === 'context' && state.chartMode === 'h1') {
+    state.timeframe = state.savedTimeframe || 'D1';
+  }
+  state.chartMode = next;
+  const url = new URL(location.href);
+  if (next === 'h1') url.searchParams.set('mode', 'h1');
+  else url.searchParams.delete('mode');
+  history.replaceState(null, '', url.pathname + url.search + url.hash);
+  paintChartMode();
+}
+
+async function loadH1Markers() {
+  if (!state.candleSeries) return;
+  if (state.chartMode !== 'h1' || !state.instrumentId) {
+    state.candleSeries.setMarkers([]);
+    return;
+  }
+  const ctx = deskData.current && deskData.current.selected_context_id;
+  const q = ctx ? `?context_id=${ctx}` : '';
+  let layers = null;
+  try {
+    layers = await api(`/api/ltf/instruments/${state.instrumentId}/structure${q}`);
+  } catch (e) {
+    state.candleSeries.setMarkers([]);
+    return;
+  }
+  if (!layers || layers.context_id == null) {
+    // без контекста сценарных зон нет — маркеры только подтверждённых опор
+  }
+  const pivots = (layers && layers.pivots || []).filter(
+    (p) => p.state === 'confirmed' && p.confirmed_at);
+  state.candleSeries.setMarkers(pivots.map((p) => ({
+    time: Math.floor((p.candle_open_time || p.pivot_at) / 1000),
+    position: p.kind === 'high' ? 'aboveBar' : 'belowBar',
+    shape: p.kind === 'high' ? 'arrowDown' : 'arrowUp',
+    color: p.kind === 'high' ? '#c4554a' : '#2f7d4a',
+    text: p.role || (p.kind === 'high' ? 'H' : 'L'),
+  })));
+}
+
 async function reloadAll() {
   await loadCandles();
-  await Promise.all([loadZones(), loadEvents(), loadCandidates()]);
+  await Promise.all([loadZones(), loadEvents(), loadCandidates(), loadH1Markers()]);
 }
 
 async function main() {
@@ -2455,11 +2613,26 @@ async function main() {
     loadDeskExtras().catch((e2) => console.warn('desk extras:', e2));
   };
   $('tf-select').onchange = (e) => {
-    state.timeframe = e.target.value;
-    if ($('chart-tf-label')) $('chart-tf-label').textContent = state.timeframe;
+    if (e.target.value === 'H1') setChartMode('h1');
+    else {
+      state.savedTimeframe = e.target.value;
+      state.timeframe = e.target.value;
+      if (state.chartMode === 'h1') state.chartMode = 'context';
+      paintChartMode();
+    }
     hideInspector();
     reloadAll();
   };
+  document.querySelectorAll('[data-chart-mode]').forEach((el) => {
+    el.addEventListener('click', (ev) => {
+      const mode = el.dataset.chartMode;
+      if (mode !== 'h1' && mode !== 'context') return;
+      ev.preventDefault();
+      showView('desk');
+      setChartMode(mode);
+      reloadAll().catch((err) => console.warn('chart mode:', err));
+    });
+  });
   const updateLayers = () => {
     state.showAllTf = $('tf-all').checked;
     state.showCandidates = $('show-candidates').checked;
@@ -2567,13 +2740,25 @@ async function main() {
   initAppearance();
   await loadInstruments();
   syncInstrumentContext();
+  if (new URLSearchParams(location.search).get('mode') === 'h1') {
+    showView('desk');
+    setChartMode('h1');
+  } else {
+    paintChartMode();
+  }
   await loadLabels();
   await reloadAll();
   connectWs();
   registerWsHandler(deskOnWs);
   loadDeskExtras().catch((e) => console.warn('desk extras:', e));
-  // возраст котировки в шапке рабочего места — точечно, без перерисовки
-  setInterval(() => { if (isDeskActive()) renderDeskQuoteAge(); }, 15000);
+  // возраст котировки и резервный опрос, если WebSocket потерян
+  setInterval(() => {
+    if (isDeskActive()) renderDeskQuoteAge();
+    const ws = state.ws;
+    const down = !ws || ws.readyState !== 1;
+    if (!down) return;
+    if (isDeskActive()) loadDeskExtras().catch(() => {});
+  }, 15000);
 }
 
 main().catch((err) => {

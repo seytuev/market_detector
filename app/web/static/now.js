@@ -100,8 +100,7 @@
     const inZone = st.rows.filter((r) => r.attention === 'price_in_zone').length;
     const eligible = st.rows.filter((r) => r.attention === 'eligible').length;
     $('now-stat-review').textContent = st.candidates;
-    $('now-stat-review-note').textContent =
-      st.candidates > 0 ? 'Границы старшей зоны' : 'Очередь пуста';
+    $('now-stat-review-note').textContent = 'По всем активам';
     $('now-stat-zone').textContent = inZone;
     $('now-stat-eligible').textContent = eligible;
     $('now-assets-count').textContent = st.rows.length;
@@ -114,16 +113,15 @@
         `<div class="state-sub">${esc(DATA_STATE_REASON_RU[ds.reason] || ds.reason || '—')}</div>`;
     }
     const dot =
-      r.attention === 'review' || r.attention === 'price_in_zone' ? 'dot-brand'
+      r.attention === 'price_in_zone' ? 'dot-brand'
       : r.attention === 'eligible' ? 'dot-positive'
       : r.attention === 'data_problem' ? 'dot-warning'
       : 'dot-muted';
-    const main = (r.attention_reason && r.attention_reason !== '—')
-      ? r.attention_reason
-      : (r.stage || '—');
-    const sub = (r.stage && r.stage !== main) ? r.stage : '';
-    return `<span class="state-dot ${dot}"></span>${esc(main)}` +
-      (sub ? `<div class="state-sub">${esc(sub)}</div>` : '');
+    const main = r.market_stage || r.stage || '—';
+    const review = (r.review_state && r.review_state.needed)
+      ? `<div class="state-sub"><a href="#review">Нужна проверка · ${r.review_state.count}</a></div>`
+      : '';
+    return `<span class="state-dot ${dot}"></span>${esc(main)}` + review;
   }
 
   function rowHtml(r) {
@@ -153,18 +151,18 @@
 
   // ------------------------------------------------------------- карточка
 
-  function headline(v, r) {
+  function headline(v) {
+    if (v.market_stage) return v.market_stage;
+    if (v.wait && v.wait.message && !v.selected_context_id) return v.wait.message;
     const ds = v.data_state || {};
     if (ds.state && ds.state !== 'ok') return 'Данные задерживаются';
-    if (r && r.attention === 'review') return 'Нужна проверка';
-    const sc = v.current_scenario;
-    if (sc) return `Контекст ${sc.direction === 'bear' ? 'снижения' : 'роста'} подтверждён`;
-    if (v.scenario_waiting) return 'Ждём нового сценария';
-    if (v.contexts && v.contexts.length) return 'Контекст активен — ждём слома H1';
     return v.stage || 'Активного контекста нет';
   }
 
   function leadText(v, r, tf) {
+    const disabled = (v.reached_disabled || [])[0];
+    if (disabled && disabled.message) return disabled.message;
+    if (v.wait && v.wait.message && !v.selected_context_id) return v.wait.message;
     const ds = v.data_state || {};
     if (ds.state && ds.state !== 'ok') {
       return (DATA_STATE_REASON_RU[ds.reason] || 'Источник данных недоступен') +
@@ -175,7 +173,7 @@
       const side = sc.direction === 'bear' ? 'ниже' : 'выше';
       return `H1 закрылся ${side} ${fmtPrice(sc.break_level)}. Старший контекст ${tf} остаётся активным.`;
     }
-    if (r && r.attention_reason && r.attention_reason !== '—') return r.attention_reason + '.';
+    if (v.market_stage) return v.market_stage;
     return v.stage ? v.stage + '.' : '';
   }
 
@@ -201,14 +199,32 @@
   }
 
   function cancelText(v) {
-    // Условие отмены показываем только из данных снимка (§7: UI не придумывает
-    // условие). У живого сценария reverse_break — null, тогда строку не выводим
+    const c = v.cancel_condition;
+    if (c && c.level != null && c.status && c.status !== 'undefined') {
+      const side = c.side === 'above' ? 'выше' : 'ниже';
+      const verb = c.status === 'occurred' ? 'Отмена произошла' : 'Отменит';
+      return `${verb}: закрытие H1 строго ${side} ${fmtPrice(c.level)}`;
+    }
     const sc = v.current_scenario;
     if (sc && sc.reverse_break && sc.reverse_break.price != null) {
       const side = sc.direction === 'bear' ? 'выше' : 'ниже';
       return `Закрытие H1 ${side} ${fmtPrice(sc.reverse_break.price)}`;
     }
     return null;
+  }
+
+  function factsHtml(v) {
+    const facts = (v && v.liquidity_facts) || [];
+    if (!facts.length) return '';
+    return facts.slice(0, 3).map((f) =>
+      `<div class="desk-fact">${esc(String(f.type || 'уровень').toUpperCase())} ${esc(f.timeframe || '')} ` +
+      `${fmtPrice(f.level)} снят · не сценарий</div>`).join('');
+  }
+
+  function reviewBadge(v) {
+    const rs = v && v.review_state;
+    if (!rs || !rs.needed) return '';
+    return `<a class="review-badge" href="#review">Нужна проверка · ${rs.count}</a>`;
   }
 
   function dirBadge(d) {
@@ -230,7 +246,8 @@
     const tf = (r.htf_context && r.htf_context.timeframe) || '—';
     if (!v) {
       el.innerHTML = `<div class="now-card-head"><span>${esc(ins.symbol)} · ${esc(tf)}</span></div>` +
-        '<p class="now-empty">Нет данных снимка.</p>';
+        '<h3>Ошибка чтения снимка</h3>' +
+        '<p class="now-empty">Карточка не скрыта: снимок актива не прочитан.</p>';
       return;
     }
     const cancel = cancelText(v);
@@ -240,11 +257,13 @@
         <span>${esc(ins.symbol)} · ${esc(tf)}</span>
         ${dirBadge(v.direction)}
       </div>
-      <h3>${esc(headline(v, r))}</h3>
+      <h3>${esc(headline(v))}</h3>
+      ${reviewBadge(v)}
       <p class="now-card-lead">${esc(leadText(v, r, tf))}</p>
+      ${factsHtml(v)}
       <dl class="now-qa">
         <dt class="qa-q">Что происходит</dt>
-        <dd class="qa-a">${esc(v.stage || r.stage || '—')}</dd>
+        <dd class="qa-a">${esc(v.market_stage || v.stage || r.market_stage || r.stage || '—')}</dd>
         <dt class="qa-q">Чего ждём</dt>
         <dd class="qa-a">${esc(waitText(v))}</dd>
         ${cancel ? `<dt class="qa-q">Условие отмены</dt><dd class="qa-a">${esc(cancel)}</dd>` : ''}
@@ -335,7 +354,9 @@
       const cur = st.currents.get(data.instrument_id);
       if (cur) { cur.price = data.price; cur.quote_at = data.time || Date.now(); }
       refreshAges();
-    } else if (data.type === 'event' || data.type === 'zone' || data.type === 'ltf') {
+      scheduleRefresh();
+    } else if (data.type === 'event' || data.type === 'zone' || data.type === 'ltf'
+        || data.type === 'candle') {
       scheduleRefresh();
     }
   }
@@ -351,6 +372,8 @@
           return;
         }
         refreshAges();
+        const dot = document.getElementById('ws-indicator');
+        if (dot && dot.classList.contains('offline')) refresh();
       }, 15000);
     }
   }

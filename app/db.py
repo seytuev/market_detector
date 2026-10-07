@@ -7,6 +7,7 @@ import contextlib
 import json
 import sqlite3
 import threading
+import time
 from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence
 
@@ -110,6 +111,7 @@ class Database:
         raw.execute("PRAGMA foreign_keys = ON")
         raw.execute("PRAGMA busy_timeout = 15000")
         self.conn = _LockedConnection(raw)
+        self.path = path
         # Кэш горячих LTF-чтений: replay движка на каждой H1-свече повторяет
         # одни и те же выборки (list_ltf_scenario_entries, list_ltf_pivots,
         # list_ltf_events и др.) — per-candle N+1 превращал startup-restore в
@@ -156,7 +158,15 @@ class Database:
         self._batch_lock = threading.RLock()
         self._batch_depth = 0
         self._state_seq_dirty = False
+        # Межпроцессная инвалидация: кэши этого процесса сбрасываются,
+        # если чужой писатель сдвинул state_seq. Проверка не чаще 0.5 с
+        # и не внутри batch_writes. :memory: — один процесс, проверки нет.
+        self._epoch_lock = threading.Lock()
+        self._epoch_checked_at = 0.0
+        self._seen_epoch: Optional[int] = None
         self.migrate()
+        if path != ":memory:":
+            self._seen_epoch = self.get_state_seq()
 
     def _commit(self) -> None:
         """commit с учётом batch-режима: внутри batch_writes отложен."""
@@ -193,7 +203,31 @@ class Database:
                 if self._state_seq_dirty:
                     self._state_seq_dirty = False
                     self._write_state_seq()
+                    self._seen_epoch = self.get_state_seq()
                 self.conn.commit()
+
+    def _note_external_epoch(self) -> None:
+        """Сбросить кэши, если state_seq изменил другой процесс."""
+        if self.path == ":memory:" or self._batch_depth:
+            return
+        now = time.monotonic()
+        with self._epoch_lock:
+            if now - self._epoch_checked_at < 0.5:
+                return
+            self._epoch_checked_at = now
+            seen = self._seen_epoch
+        try:
+            seq = self.get_state_seq()
+        except Exception:
+            return
+        if seen is None or seq == seen:
+            with self._epoch_lock:
+                if self._seen_epoch is None:
+                    self._seen_epoch = seq
+            return
+        with self._epoch_lock:
+            self._seen_epoch = seq
+        self._drop_read_caches()
 
     def _drop_read_caches(self) -> None:
         """Полный сброс in-memory кэшей чтения (после rollback батча)."""
@@ -717,6 +751,7 @@ class Database:
             return
         self._write_state_seq()
         self._commit()
+        self._seen_epoch = self.get_state_seq()
 
     def get_state_seq(self) -> int:
         r = self.conn.execute(
@@ -761,6 +796,7 @@ class Database:
         поверхностной копией — сортировка/append вызывающего кэш не портит."""
         if not self.ltf_cache_enabled:
             return loader()
+        self._note_external_epoch()
         with self._ltf_cache_lock:
             version = self._ltf_cache_version
             hit = self._ltf_cache.get(key)
@@ -829,6 +865,7 @@ class Database:
         types: Optional[list[ZoneType]] = None,
         timeframes: Optional[set] = None,
     ) -> list[Zone]:
+        self._note_external_epoch()
         key = (
             instrument_id,
             tuple(s.value for s in statuses) if statuses else None,
@@ -2293,6 +2330,20 @@ class Database:
             (se.scenario_id, se.entry_zone_id, se.range_version),
         ).fetchone()
         return self._to_ltf_scenario_entry(r)
+
+    def set_ltf_scenario_entry_reason(self, entry_id: int, reason: str) -> None:
+        """Записать reason привязки. Используется ремонтом терминальных
+        уровней; обычный пересчёт по-прежнему идёт через upsert."""
+        self._update_ltf_row(
+            "ltf_scenario_entry", entry_id,
+            {"reason": reason, "updated_at": now_ms()},
+        )
+
+    def list_all_ltf_scenario_entries(self) -> list[LtfScenarioEntry]:
+        rows = self.conn.execute(
+            "SELECT * FROM ltf_scenario_entry ORDER BY id"
+        ).fetchall()
+        return [self._to_ltf_scenario_entry(r) for r in rows]
 
     def get_ltf_scenario_entry(self, entry_id: int) -> Optional[LtfScenarioEntry]:
         r = self.conn.execute(

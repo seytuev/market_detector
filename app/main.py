@@ -50,11 +50,40 @@ def load_dotenv(path: Path | None = None) -> None:
 
 
 async def run_bot_polling(settings, db) -> None:
-    """Long polling кнопок/заметок. Без токена — пропуск (§9)."""
+    """Long polling кнопок/заметок. Без токена — пропуск (§9).
+
+    Один владелец getUpdates на базу. Живой чужой процесс polling не
+    стартует; Conflict от Telegram пишется в состояние сервиса, без
+    изменения рыночных фактов."""
     application = build_application(settings, db)
     if application is None:
         log.info("TELEGRAM_TOKEN не задан — бот отключён, доставка в лог")
         return
+    from .services.runtime import (
+        TELEGRAM_OWNER,
+        claim_owner,
+        record_telegram_conflict,
+    )
+    claim = claim_owner(db, TELEGRAM_OWNER, {
+        "pid": os.getpid(), "role": "telegram",
+    })
+    if not claim["owned"]:
+        owner = claim.get("owner") or {}
+        log.error(
+            "Telegram polling уже ведёт pid %s — второй getUpdates не стартует",
+            owner.get("pid"),
+        )
+        record_telegram_conflict(db, "owner_busy")
+        return
+
+    async def _on_telegram_error(_update, context) -> None:
+        err = getattr(context, "error", None)
+        text = str(err) if err is not None else ""
+        name = err.__class__.__name__ if err is not None else ""
+        if "Conflict" in name or "Conflict" in text:
+            record_telegram_conflict(db, text or name)
+
+    application.add_error_handler(_on_telegram_error)
     base_url = settings.effective_base_url()
     if "127.0.0.1" in base_url or "localhost" in base_url:
         log.warning(
@@ -95,6 +124,8 @@ async def async_main() -> None:
     settings.detector = load_detector_config()
     settings.alt_config = load_alt_config()
     db = Database(settings.db_path)
+    from .services.htf_profile import migrate_saved_htf_profile
+    migrate_saved_htf_profile(db, settings)
 
     adapters = {
         "binance": BinanceSpotAdapter(settings.binance_base_url),

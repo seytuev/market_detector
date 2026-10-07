@@ -26,7 +26,7 @@
       <a href="#review" data-view="review" class="app-tab">Проверка</a>
       <a href="#journal" data-view="journal" class="app-tab">Журнал</a>
       <a href="#settings" data-view="settings" class="app-tab settings-link">Настройки</a>
-      <a href="/ltf.html" id="lnk-ltf-nav" class="app-tab">Структура H1</a>
+      <a href="#desk" id="lnk-ltf-nav" class="app-tab" data-chart-mode="h1">Структура H1</a>
       <a href="/alt.html" class="app-tab">Альткоины</a>
     </nav>
     <div class="app-nav-right">
@@ -112,6 +112,7 @@
         <select id="tf-select" title="Таймфрейм свечей">
           <option value="D1" selected>D1</option>
           <option value="W1">W1</option>
+          <option value="H1">Свечи H1</option>
         </select>
       </div>
       <details class="layer-menu">
@@ -138,9 +139,10 @@
         <section class="chart-block">
           <div class="desk-modebar">
             <div class="mode-tabs" role="group" aria-label="Режим анализа">
-              <span class="mode-tab active" aria-current="page">Контекст</span>
-              <a class="mode-tab" id="lnk-ltf" href="/ltf.html">Структура H1</a>
+              <button type="button" class="mode-tab active" id="mode-context" data-chart-mode="context" aria-current="page">Контекст</button>
+              <button type="button" class="mode-tab" id="lnk-ltf" data-chart-mode="h1">Структура H1</button>
             </div>
+            <span id="candle-tf-label" class="work-meta">Свечи D1</span>
           </div>
           <div id="chart-container">
             <div id="chart"></div>
@@ -161,6 +163,7 @@
         <div class="rail-tabs" role="tablist">
           <button type="button" class="rail-tab active" data-bucket="live">Актуальные</button>
           <button type="button" class="rail-tab" data-bucket="candidate">Кандидаты <span id="candidates-count"></span></button>
+          <span id="candidates-global-note" class="work-meta"></span>
           <button type="button" class="rail-tab" data-bucket="archive">Архив</button>
         </div>
         <div class="list-filters">
@@ -193,7 +196,7 @@
     </div>
 
     <footer class="event-strip">
-      <div class="strip-head"><span>События</span><a href="#journal" data-view="journal">Все события →</a></div>
+      <div class="strip-head"><span id="events-strip-label">События актива</span><a href="#journal" data-view="journal">Журнал · все активы →</a></div>
       <ul id="events-list" class="events strip-events"></ul>
     </footer>
   </section>
@@ -303,7 +306,7 @@
     <a href="#now" data-view="now">Сейчас</a>
     <a href="#review" data-view="review">Проверка</a>
     <a href="#journal" data-view="journal">Журнал</a>
-    <a href="/ltf.html" id="lnk-ltf-mobile" title="Структура H1">Структура H1</a>
+    <a href="#desk" id="lnk-ltf-mobile" data-chart-mode="h1" title="Структура H1">Структура H1</a>
     <a href="#settings" data-view="settings">Настройки</a>
   </nav>
 

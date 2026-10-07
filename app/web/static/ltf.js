@@ -596,34 +596,31 @@ function scenarioWaitText(v) {
   return 'Подходящих зон нет: все исключены правилами — причины во вкладке «История».';
 }
 
-function cancellationText(sc) {
-  // Отмена на сервере — обратный слом структуры (reverse BOS/SMS): закрытие
-  // H1 за уровнем противоположной стороны. Уровень берём из подтверждённых
-  // экстремумов слоёв графика, сформированных после слома-триггера.
-  const pivots = (state.layers && state.layers.pivots) || [];
-  const oppKind = sc.direction === 'bear' ? 'high' : 'low';
-  const since = sc.break_candle_open_time || 0;
-  const after = pivots.filter((p) =>
-    p.state === 'confirmed' && p.kind === oppKind && p.pivot_at >= since);
-  if (!after.length) {
-    return 'Условие отмены не определено текущей версией правил: обратный ' +
-      'экстремум структуры ещё не подтверждён.';
+function cancellationText(sc, v) {
+  const c = v && v.cancel_condition;
+  if (c && c.level != null && c.status && c.status !== 'undefined') {
+    const side = c.side === 'above' ? 'выше' : 'ниже';
+    const verb = c.status === 'occurred' ? 'Отмена произошла' : 'Отменит';
+    const kind = c.kind ? ` (${c.kind})` : '';
+    return `${verb}: закрытие H1 строго ${side} ${fmtPrice(c.level)}${kind}.`;
   }
-  const last = after.reduce((a, b) => (a.pivot_at > b.pivot_at ? a : b));
-  const side = sc.direction === 'bear' ? 'выше' : 'ниже';
-  return `Отменит обратный слом структуры: закрытие H1 строго ${side} ` +
-    `${fmtPrice(last.price)}.`;
+  if (sc && sc.reverse_break && sc.reverse_break.price != null) {
+    const side = sc.direction === 'bear' ? 'выше' : 'ниже';
+    return `Отмена произошла: закрытие H1 строго ${side} ${fmtPrice(sc.reverse_break.price)}.`;
+  }
+  return 'Условие отмены сервер ещё не определил.';
 }
 
 function scenarioQa(v, ctx) {
   const sc = v.current_scenario;
   const z = (ctx && ctx.parent_zone) || null;
   if (!ctx) {
+    const waitMsg = (v.wait && v.wait.message) || v.market_stage
+      || 'Нет подтверждённого HTF-контекста.';
     return {
-      what: 'Активного сценария нет: цена ещё не коснулась подходящей HTF-зоны.',
-      why: 'HTF-контекста нет — LTF-наблюдение откроется после касания ' +
-        'подтверждённой зоны OB/FVG (D1/W1).',
-      wait: 'Ждём касания HTF-зоны. Действие: наблюдать.',
+      what: waitMsg,
+      why: waitMsg,
+      wait: waitMsg,
       cancel: 'Отменять нечего: сценарий ещё не открыт.',
     };
   }
@@ -671,7 +668,7 @@ function scenarioQa(v, ctx) {
       `Этап: ${v.stage || '—'}.`,
     why: whyParts.join('; ') + '.',
     wait: scenarioWaitText(v),
-    cancel: cancellationText(sc),
+    cancel: cancellationText(sc, v),
   };
 }
 
@@ -1018,8 +1015,9 @@ function renderEntries() {
     return;
   }
   if (!v.selected_context_id) {
-    el.innerHTML = emptyStateHtml(
-      'Ждём HTF-зону: наблюдение откроется после касания подтверждённой зоны OB/FVG (D1/W1). Действие: наблюдать.');
+    const msg = (v.wait && v.wait.message) || v.market_stage
+      || 'Нет подтверждённого HTF-контекста.';
+    el.innerHTML = emptyStateHtml(msg);
     return;
   }
   if (!v.current_scenario) {

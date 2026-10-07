@@ -232,7 +232,7 @@ def test_entry_reason_fallback_pre_migration():
             state=state, reason=reason,
         )
     assert entry_reason(se("fresh")) == REASON_OK
-    assert entry_reason(se("tested")) == REASON_OK
+    assert entry_reason(se("tested")) == ""
     assert entry_reason(se("out_of_range")) == REASON_OUTSIDE_PD
     assert entry_reason(se("invalid")) == REASON_INVALID
     # явный reason всегда побеждает

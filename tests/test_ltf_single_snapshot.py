@@ -40,6 +40,8 @@ def settings(tmp_path) -> Settings:
     s = Settings()
     s.auth_token = TOKEN
     s.db_path = str(tmp_path / "htf_zones.db")
+    # Фикстуры выбирают и OB, и FVG. Кодовый default остаётся OB.
+    s.detector.htf_context_types = "OB,FVG"
     return s
 
 

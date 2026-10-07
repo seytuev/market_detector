@@ -17,9 +17,17 @@ from ..engine.ltf.eligibility import (
     evaluate_final,
 )
 from ..engine.ltf.entries import fvg_fill_status
+from ..engine.ltf.breaks import expected_reverse_condition
 from ..engine.ltf.pivots import PivotCandidate
 from ..engine.ltf.ranges import provisional_range, zone_half
-from ..models import TIMEFRAME_MINUTES, now_ms
+from ..models import TIMEFRAME_MINUTES, EventKind, ZoneStatus, ZoneType, now_ms
+from .htf_parent import (
+    PARENT_QUERY_STATUSES,
+    PARENT_TIMEFRAMES,
+    eligible_htf_parent,
+    parent_decision,
+    policy_types,
+)
 from ..models_ltf import (
     LtfEntryZone,
     LtfObservation,
@@ -35,6 +43,8 @@ _ENTRY_ORDER = {"FVG": 0, "OB": 1, "BSL": 2, "SSL": 3}
 # этапы инструмента (ТЗ «LTF Current Setup» §4.2) — вычисляет сервер,
 # фронт «текущий сценарий» самостоятельно не восстанавливает (§14)
 STAGE_WAIT_HTF = "Ждём HTF-зону"
+STAGE_H1_CALC = "HTF-зона достигнута, рассчитываем H1"
+STAGE_IN_HTF = "Цена в HTF-зоне"
 STAGE_WAIT_BOS = "Ждём BOS/SMS"
 STAGE_WAIT_RANGE = "Ждём диапазон"
 STAGE_RETRACEMENT = "Ожидаем возврат в Premium/Discount"
@@ -140,6 +150,7 @@ ATTENTION_REASON_RU = {
 def _select_context_with_basis(
     db: Database, instrument_id: int, observations: list[LtfObservation],
     price: Optional[float] = None, fresh: bool = False,
+    policy=None, as_of: Optional[int] = None,
 ) -> tuple[Optional[LtfObservation], Optional[str]]:
     """Политика выбора контекста (§7, приоритет «цена внутри» согласован
     владельцем): ручной выбор (meta), если он ещё доступен → контекст, чья
@@ -153,6 +164,13 @@ def _select_context_with_basis(
     Возвращает (контекст, основание) — код BASIS_* или None, если активных
     контекстов нет."""
     active = [o for o in observations if o.state in _ACTIVE_STATES]
+    if policy is not None:
+        # F32: наблюдение с родителем, который больше не актуален,
+        # текущим контекстом не выбирается. История строки сохраняется.
+        active = [
+            o for o in active
+            if eligible_htf_parent(db.get_zone(o.zone_id), policy, as_of=as_of)
+        ]
     if not active:
         return None, None
     raw = db.get_meta(f"ltf:selected_context:{instrument_id}")
@@ -197,11 +215,12 @@ def _select_context_with_basis(
 def _select_context(
     db: Database, instrument_id: int, observations: list[LtfObservation],
     price: Optional[float] = None, fresh: bool = False,
+    policy=None, as_of: Optional[int] = None,
 ) -> Optional[LtfObservation]:
     """Выбор контекста без основания (совместимость); логика и docstring
     политики — в _select_context_with_basis."""
     return _select_context_with_basis(
-        db, instrument_id, observations, price, fresh
+        db, instrument_id, observations, price, fresh, policy, as_of
     )[0]
 
 
@@ -326,6 +345,7 @@ def _scenario_counts(
     else:
         ver = 0
     allow_outside = context_complete(_context_flags(db, sc.id))
+    tests = db.list_ltf_liquidity_tests(scenario_id=sc.id)
     eligible: list[tuple[LtfScenarioEntry, LtfEntryZone]] = []
     counts = {"eligible": 0, "excluded": 0, "historical": 0}
     for e in entries:
@@ -335,7 +355,9 @@ def _scenario_counts(
         z = db.get_ltf_entry_zone(e.entry_zone_id)
         if z is None:
             continue
-        fe = evaluate_final(e, z, allow_outside=allow_outside)
+        fe = evaluate_final(
+            e, z, allow_outside=allow_outside, liquidity_tests=tests,
+        )
         if fe.eligible_now:
             eligible.append((e, z))
         else:
@@ -477,6 +499,7 @@ def _entry_row(
     fe = evaluate_final(
         entry, zone,
         allow_outside=context_complete(_context_flags(db, sc.id)),
+        liquidity_tests=db.list_ltf_liquidity_tests(scenario_id=sc.id),
     )
     return {
         "entry_id": entry.id,
@@ -528,12 +551,339 @@ def _entry_row(
 # Публичный интерфейс read model
 # --------------------------------------------------------------------- #
 
+def _fmt_px(value: float) -> str:
+    text = f"{value:.8f}".rstrip("0").rstrip(".")
+    return text.replace(".", ",")
+
+
+def _parent_zones(db: Database, instrument_id: int):
+    return db.get_zones(
+        instrument_id=instrument_id,
+        statuses=list(PARENT_QUERY_STATUSES),
+        timeframes=set(PARENT_TIMEFRAMES),
+        types=[ZoneType.OB, ZoneType.FVG],
+    )
+
+
+def _zone_params(zone) -> dict[str, Any]:
+    return {
+        "zone_id": zone.id,
+        "type": zone.type.value,
+        "timeframe": zone.timeframe,
+        "direction": zone.direction.value,
+        "lower": zone.lower,
+        "upper": zone.upper,
+    }
+
+
+def _type_name(zone) -> str:
+    """Имя типа в тексте для человека: OB/FVG, не значение enum."""
+    raw = zone.type.value if hasattr(zone.type, "value") else str(zone.type)
+    return str(raw).upper()
+
+
+def _disabled_type_message(zone, allowed) -> str:
+    names = ", ".join(sorted(allowed)) or "—"
+    return (
+        f"Цена в {_type_name(zone)} {zone.timeframe} "
+        f"{_fmt_px(zone.lower)}–{_fmt_px(zone.upper)}. "
+        f"Анализ {_type_name(zone)} отключён; разрешены контексты {names}"
+    )
+
+
+def _cursors(db: Database, instrument_id: int) -> dict[str, Any]:
+    def _i(key: str) -> Optional[int]:
+        raw = db.get_meta(key)
+        return int(raw) if raw else None
+    return {
+        "structure_last_processed_h1": _i(f"ltf:h1:last_close:{instrument_id}"),
+        "scenario_last_processed_h1": _i(
+            f"ltf:h1:scenario_last_close:{instrument_id}"
+        ),
+        "cursor": "split",
+    }
+
+
+def _review_state(count: int) -> dict[str, Any]:
+    return {
+        "needed": count > 0,
+        "count": count,
+        "label": "Нужна проверка" if count else None,
+        "scope": "instrument",
+    }
+
+
+def _liquidity_facts(db: Database, instrument_id: int, limit: int = 8):
+    """Снятия SSL/BSL — отдельные рыночные факты, не торговый сценарий."""
+    facts = []
+    for e in db.list_events_for_instrument(instrument_id, limit=300):
+        if e.kind != EventKind.LEVEL_TAKEN:
+            continue
+        z = db.get_zone(e.zone_id)
+        facts.append({
+            "event_id": e.id,
+            "kind": "level_taken",
+            "instrument_id": instrument_id,
+            "zone_id": e.zone_id,
+            "type": z.type.value if z is not None else None,
+            "timeframe": z.timeframe if z is not None else None,
+            "level": e.price,
+            "occurred_at": e.occurred_at,
+            "source": "htf_scanner",
+            "confirmation": "crossed",
+            "creates_scenario": False,
+        })
+        if len(facts) >= limit:
+            break
+    return facts
+
+
+def _context_wait(
+    db: Database, settings, ins, observations, selected, price, ds, now: int,
+) -> Optional[dict[str, Any]]:
+    """Код причины отсутствия контекста (F22).
+
+    Порядок: источник → анализ выключен → выбранный контекст (тогда None:
+    structure_pending не подменяет рыночную стадию, data_state.reason
+    остаётся processing_lag) → структура не посчитана → прежний родитель
+    больше не актуален → цена в зоне выключенного типа → родитель есть,
+    наблюдения ещё нет → ждём касания → подтверждённых родителей нет.
+    Достигнутая выключенная зона при уже выбранном контексте — поле
+    reached_disabled, не этот код."""
+    cfg = settings.detector
+    if ds.get("reason") in ("source_stale", "no_h1_candles"):
+        return {
+            "code": "source_unavailable",
+            "message": "Источник данных недоступен или свечи H1 не поступили.",
+            "params": {"data_reason": ds.get("reason")},
+        }
+    if not cfg.ltf_enabled or not ins.ltf_analyze:
+        return {
+            "code": "analysis_disabled",
+            "message": "Анализ выключен для инструмента или глобально.",
+            "params": {
+                "ltf_enabled": bool(cfg.ltf_enabled),
+                "ltf_analyze": bool(ins.ltf_analyze),
+            },
+        }
+    if selected is not None:
+        return None
+    structure = _cursors(db, ins.id)["structure_last_processed_h1"]
+    last_h1 = db.last_candle(ins.id, "H1")
+    if last_h1 is not None and (structure is None or structure < last_h1.close_time):
+        return {
+            "code": "structure_pending",
+            "message": "Свечи поступают; структура H1 ещё не рассчитана.",
+            "params": {
+                "last_closed_h1": last_h1.close_time,
+                "structure_last_processed_h1": structure,
+            },
+        }
+    stale_parents = [
+        o for o in observations
+        if o.state in _ACTIVE_STATES
+        and not eligible_htf_parent(db.get_zone(o.zone_id), cfg, as_of=now)
+    ]
+    zones = _parent_zones(db, ins.id)
+    allowed = policy_types(cfg)
+    disabled_hit = None
+    pending = None
+    awaiting = None
+    for zone in zones:
+        decision = parent_decision(zone, cfg, as_of=now)
+        inside = price is not None and zone.lower <= price <= zone.upper
+        if decision.reason == "type_disabled" and inside and disabled_hit is None:
+            disabled_hit = zone
+        elif decision.eligible and inside and pending is None:
+            pending = zone
+        elif decision.eligible and awaiting is None:
+            awaiting = zone
+    if disabled_hit is not None and pending is None:
+        params = _zone_params(disabled_hit)
+        params["allowed"] = sorted(allowed)
+        return {
+            "code": "context_type_disabled",
+            "message": _disabled_type_message(disabled_hit, allowed),
+            "params": params,
+        }
+    if pending is not None:
+        params = _zone_params(pending)
+        return {
+            "code": "observation_pending",
+            "message": STAGE_H1_CALC,
+            "params": params,
+            "direction": pending.direction.value,
+        }
+    if stale_parents and awaiting is None and pending is None:
+        return {
+            "code": "parent_no_longer_relevant",
+            "message": "Предыдущий контекст ушёл в историю.",
+            "params": {"observation_ids": [o.id for o in stale_parents]},
+        }
+    if awaiting is not None and not ins.ltf_analyze:
+        params = _zone_params(awaiting)
+        return {
+            "code": "awaiting_contact",
+            "message": (
+                f"Есть допустимая зона {_type_name(awaiting)} "
+                f"{awaiting.timeframe} {_fmt_px(awaiting.lower)}–"
+                f"{_fmt_px(awaiting.upper)}; ждём касания."
+            ),
+            "params": params,
+        }
+    if not any(parent_decision(z, cfg, as_of=now).eligible for z in zones):
+        if disabled_hit is not None:
+            params = _zone_params(disabled_hit)
+            params["allowed"] = sorted(allowed)
+            return {
+                "code": "context_type_disabled",
+                "message": _disabled_type_message(disabled_hit, allowed),
+                "params": params,
+            }
+        return {
+            "code": "no_confirmed_parent",
+            "message": "Нет подтверждённых родителей разрешённых типов.",
+            "params": {"allowed": sorted(allowed)},
+        }
+    if awaiting is not None:
+        params = _zone_params(awaiting)
+        return {
+            "code": "awaiting_contact",
+            "message": (
+                f"Есть допустимая зона {_type_name(awaiting)} "
+                f"{awaiting.timeframe} {_fmt_px(awaiting.lower)}–"
+                f"{_fmt_px(awaiting.upper)}; ждём касания."
+            ),
+            "params": params,
+        }
+    return {
+        "code": "no_confirmed_parent",
+        "message": "Нет подтверждённых родителей разрешённых типов.",
+        "params": {"allowed": sorted(allowed)},
+    }
+
+
+def _disabled_reached(db, settings, instrument_id, price, now: int):
+    if price is None:
+        return []
+    cfg = settings.detector
+    rows = []
+    for zone in _parent_zones(db, instrument_id):
+        if not (zone.lower <= price <= zone.upper):
+            continue
+        if parent_decision(zone, cfg, as_of=now).reason != "type_disabled":
+            continue
+        rows.append({
+            **_zone_params(zone),
+            "message": _disabled_type_message(zone, policy_types(cfg)),
+        })
+    return rows
+
+
+def _cancel_condition(db, settings, obs, sc) -> dict[str, Any]:
+    empty = {
+        "status": "undefined", "source": "reverse_machine",
+        "kind": None, "level": None, "side": None,
+        "pivot_id": None, "confirmed_at": None,
+    }
+    if sc is None or obs is None:
+        return empty
+    if sc.reverse_break_level_price is not None:
+        side = "above" if sc.direction.value == "bear" else "below"
+        return {
+            "status": "occurred",
+            "source": "reverse_machine",
+            "kind": sc.cancellation_reason,
+            "level": sc.reverse_break_level_price,
+            "side": side,
+            "pivot_id": sc.reverse_break_pivot_id,
+            "confirmed_at": sc.reverse_break_confirmed_at,
+        }
+    since = obs.activated_at - settings.detector.ltf_history_days * 86_400_000
+    pivots = [
+        PivotCandidate(
+            instrument_id=p.instrument_id, price=p.price, kind=p.kind,
+            pivot_at=p.pivot_at, candle_open_time=p.candle_open_time,
+            confirmed_at=p.confirmed_at or 0, left=p.left, right=p.right,
+            state=p.state, pivot_id=p.id, role=p.role,
+        )
+        for p in db.list_ltf_pivots(obs.instrument_id, since_ms=since)
+    ]
+    candles = db.get_candles(obs.instrument_id, "H1", start_ms=since)
+    start = sc.created_at
+    return expected_reverse_condition(
+        pivots, candles, sc.direction, now_ms(),
+        since_ms=since, cancel_not_before_ms=start,
+    )
+
+
+def _engine_state(db: Database, settings, ins) -> dict[str, Any]:
+    """Состояние расчёта по инструменту: флаги, курсоры, разрешённые типы.
+    Секретов и токенов здесь нет."""
+    cfg = settings.detector
+    return {
+        "ltf_enabled": bool(cfg.ltf_enabled),
+        "ltf_analyze": bool(ins.ltf_analyze),
+        "replaying": db.get_meta(f"replaying:{ins.id}") == "1",
+        "allowed_types": sorted(policy_types(cfg)),
+        **_cursors(db, ins.id),
+    }
+
+
+def _finish_stage(
+    stage: str, direction: Optional[str], selected, sc, zone,
+    price: Optional[float], fresh: bool, wait: Optional[dict[str, Any]],
+) -> tuple[str, Optional[str], str]:
+    """stage остаётся прежней строкой для бота и существующих проверок.
+
+    Исключение — наблюдения ещё нет, а цена уже в допустимом родителе:
+    stage становится «HTF-зона достигнута, рассчитываем H1».
+    waiting_structure сохраняет «Ждём BOS/SMS»; расчётная фраза уходит
+    в market_stage. Цена внутри выбранного родителя со сценарием
+    получает префикс «Цена в HTF-зоне»."""
+    if selected is None and wait and wait.get("code") == "observation_pending":
+        stage = STAGE_H1_CALC
+        direction = wait.get("direction") or direction
+    if selected is None:
+        if wait and wait.get("code") == "observation_pending":
+            market = STAGE_H1_CALC
+        elif wait and wait.get("message"):
+            market = wait["message"]
+        else:
+            market = stage
+    elif sc is None and selected.state == "waiting_structure":
+        market = STAGE_H1_CALC
+    elif (
+        fresh and price is not None and zone is not None
+        and zone.lower <= price <= zone.upper
+    ):
+        market = f"{STAGE_IN_HTF}. {stage}"
+    else:
+        market = stage
+    return stage, direction, market
+
+
+def _direction_conflict(observations: list[LtfObservation]) -> Optional[dict[str, Any]]:
+    if _contexts_direction(observations) != "mixed":
+        return None
+    return {
+        "note": (
+            "Активные контексты смотрят в разные стороны; "
+            "направления не объединяются."
+        ),
+        "directions": sorted({
+            o.direction.value for o in observations if o.state in _ACTIVE_STATES
+        }),
+    }
+
+
 def _attention_group(
     db: Database, instrument_id: int,
     observations: list[LtfObservation], eligible_count: int,
     stage: str, ds: dict[str, Any],
     price: Optional[float], fresh: bool,
     has_candidates: bool,
+    policy=None, as_of: Optional[int] = None,
 ) -> str:
     """L06: первая применимая группа из ATTENTION_ORDER (по убыванию
     приоритета). «Цена в зоне» — только по свежей котировке: при stale
@@ -542,8 +892,9 @@ def _attention_group(
     if has_candidates:
         return "review"
     if fresh and price is not None:
-        selected = _select_context(db, instrument_id, observations,
-                                   price, fresh)
+        selected = _select_context(
+            db, instrument_id, observations, price, fresh, policy, as_of,
+        )
         if selected is not None:
             zone = db.get_zone(selected.zone_id)
             if zone is not None and zone.lower <= price <= zone.upper:
@@ -585,7 +936,10 @@ def instruments_overview(db: Database, settings) -> list[dict[str, Any]]:
         price = quote[0] if quote else None
         ds = _data_state(db, settings, iid, quote, now)
         fresh = ds["state"] == "ok"
-        selected = _select_context(db, iid, obs_list, price, fresh)
+        policy = settings.detector
+        selected = _select_context(
+            db, iid, obs_list, price, fresh, policy, now,
+        )
         sc = (
             db.get_active_ltf_scenario(selected.id)
             if selected is not None else None
@@ -597,17 +951,24 @@ def instruments_overview(db: Database, settings) -> list[dict[str, Any]]:
             db, obs_list, selected, sc,
             [z for _, z in eligible], price, fresh, ds,
         )
+        zone = db.get_zone(selected.zone_id) if selected is not None else None
+        wait = _context_wait(
+            db, settings, ins, obs_list, selected, price, ds, now,
+        )
+        stage, direction, market_stage = _finish_stage(
+            stage, direction, selected, sc, zone, price, fresh, wait,
+        )
         htf_context = None
-        if selected is not None:
-            zone = db.get_zone(selected.zone_id)
-            if zone is not None:
-                htf_context = {
-                    "type": zone.type.value, "timeframe": zone.timeframe,
-                }
+        if zone is not None:
+            htf_context = {
+                "type": zone.type.value, "timeframe": zone.timeframe,
+            }
+        review_count = candidate_counts.get(iid, 0)
         attention = _attention_group(
             db, iid, obs_list, len(eligible), stage, ds,
             price, fresh,
-            candidate_counts.get(iid, 0) > 0,
+            review_count > 0,
+            policy, now,
         )
         out.append({
             "instrument": {
@@ -615,8 +976,16 @@ def instruments_overview(db: Database, settings) -> list[dict[str, Any]]:
                 "venue": ins.venue, "market_type": ins.market_type,
             },
             "stage": stage,
+            "market_stage": market_stage,
             "direction": direction,
+            "direction_conflict": _direction_conflict(obs_list),
             "htf_context": htf_context,
+            "wait": wait,
+            "review_state": _review_state(review_count),
+            "engine_state": _engine_state(db, settings, ins),
+            "reached_disabled": _disabled_reached(
+                db, settings, iid, price, now,
+            ),
             "last_event_at": last_event.get(iid) or max(
                 (o.updated_at for o in obs_list), default=None
             ),
@@ -654,12 +1023,15 @@ def instrument_current(
     ds = _data_state(db, settings, instrument_id, quote, now)
     fresh = ds["state"] == "ok"
     observations = db.list_ltf_observations(instrument_id=instrument_id)
+    policy = settings.detector
     selected, basis = _select_context_with_basis(
-        db, instrument_id, observations, price, fresh
+        db, instrument_id, observations, price, fresh, policy, now,
     )
     contexts = [
         _context_view(db, o, price, fresh)
-        for o in observations if o.state in _ACTIVE_STATES
+        for o in observations
+        if o.state in _ACTIVE_STATES
+        and eligible_htf_parent(db.get_zone(o.zone_id), policy, as_of=now)
     ]
     sc = (
         db.get_active_ltf_scenario(selected.id)
@@ -691,6 +1063,13 @@ def instrument_current(
     # (§13: карточка, счётчик и таблица не расходятся внутри снимка)
     stage, direction = _instrument_stage(
         db, observations, selected, sc, eligible_zones, price, fresh, ds,
+    )
+    parent_zone = db.get_zone(selected.zone_id) if selected is not None else None
+    wait = _context_wait(
+        db, settings, ins, observations, selected, price, ds, now,
+    )
+    stage, direction, market_stage = _finish_stage(
+        stage, direction, selected, sc, parent_zone, price, fresh, wait,
     )
     waiting: Optional[dict[str, Any]] = None
     if sc is None and selected is not None:
@@ -726,7 +1105,19 @@ def instrument_current(
         ),
         "data_state": ds,
         "stage": stage,
+        "market_stage": market_stage,
         "direction": direction,
+        "direction_conflict": _direction_conflict(observations),
+        "wait": wait,
+        "review_state": _review_state(
+            db.count_candidate_zones().get(instrument_id, 0)
+        ),
+        "engine_state": _engine_state(db, settings, ins),
+        "liquidity_facts": _liquidity_facts(db, instrument_id),
+        "reached_disabled": _disabled_reached(
+            db, settings, instrument_id, price, now,
+        ),
+        "cancel_condition": _cancel_condition(db, settings, selected, sc),
         "contexts": contexts,
         "selected_context_id": selected.id if selected else None,
         # L05: основание выбора (код BASIS_*) — навигационная политика,
@@ -893,11 +1284,14 @@ def observation_chart_layers(
                 ver = max(e.range_version for e in sc_entries)
             sc_entries = [e for e in sc_entries if e.range_version == ver]
         allow_outside = context_complete(_context_flags(db, sc.id))
+        tests = db.list_ltf_liquidity_tests(scenario_id=sc.id)
         for e in sc_entries:
             z = db.get_ltf_entry_zone(e.entry_zone_id)
             if z is None:
                 continue
-            fe = evaluate_final(e, z, allow_outside=allow_outside)
+            fe = evaluate_final(
+                e, z, allow_outside=allow_outside, liquidity_tests=tests,
+            )
             row = {
                 **z.to_dict(),
                 "entry_zone_id": z.id,
@@ -939,6 +1333,77 @@ def observation_chart_layers(
         "entries_excluded": entries_excluded,  # исключённые с reason (§10)
         "liquidity_tests": liquidity_tests,
         "expected": _expected_levels(db, obs, settings),
+    }
+
+
+def instrument_structure(
+    db: Database, settings, instrument_id: int,
+    context_id: Optional[int] = None,
+) -> Optional[dict[str, Any]]:
+    """Общая структура H1 инструмента (F12–F14).
+
+    Слои сценария и Entry Zones появляются только у явно переданного
+    допустимого контекста. context_id=None — честные пустые ranges/entries:
+    диапазон и зоны входа не выдумываются. Формирующаяся свеча отдельно
+    от закрытых и pivot не подтверждает."""
+    ins = db.get_instrument(instrument_id)
+    if ins is None:
+        return None
+    now = now_ms()
+    since = now - settings.detector.ltf_history_days * 86_400_000
+    raw = db.get_candles(
+        instrument_id, "H1", start_ms=since, closed_only=False,
+    )
+    forming = None
+    for candle in reversed(raw):
+        if candle.closed:
+            continue
+        forming = {
+            "time": candle.open_time // 1000,
+            "open": candle.open, "high": candle.high,
+            "low": candle.low, "close": candle.close,
+            "open_time": candle.open_time, "close_time": candle.close_time,
+            "closed": False,
+        }
+        break
+    pivots = [
+        p.to_dict()
+        for p in db.list_ltf_pivots(instrument_id, since_ms=since)
+    ]
+    ranges: list[dict[str, Any]] = []
+    entries: list[dict[str, Any]] = []
+    entries_excluded: list[dict[str, Any]] = []
+    structure_events: list[dict[str, Any]] = []
+    used_context = None
+    if context_id is not None:
+        obs = db.get_ltf_observation(context_id)
+        parent = db.get_zone(obs.zone_id) if obs is not None else None
+        if (
+            obs is not None
+            and obs.instrument_id == instrument_id
+            and eligible_htf_parent(parent, settings.detector, as_of=now)
+        ):
+            layers = observation_chart_layers(db, settings, obs.id)
+            if layers is not None:
+                used_context = obs.id
+                ranges = layers["ranges"]
+                entries = layers["entries"]
+                entries_excluded = layers["entries_excluded"]
+                structure_events = layers["structure_events"]
+    return {
+        "timeframe": "H1",
+        "instrument_id": instrument_id,
+        "context_id": used_context,
+        "as_of": now,
+        "window_from": since,
+        "forming": forming,
+        "pivots": pivots,
+        "ranges": ranges,
+        "entries": entries,
+        "entries_excluded": entries_excluded,
+        "structure_events": structure_events,
+        "processing": _cursors(db, instrument_id),
+        "state_version": db.get_state_seq(),
     }
 
 

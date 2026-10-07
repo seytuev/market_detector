@@ -270,6 +270,32 @@ class _SideScan:
         out["primary_at"] = self.primary_at
         return out
 
+    def armed_level(self) -> Optional[tuple[str, str, PivotCandidate]]:
+        """Следующий уровень, который on_candle принял бы при закрытии за ним.
+
+        Тот же порядок, что у расчёта слома: первичный BOS, затем SMS,
+        затем вторичный BOS. Уже пробитый уровень не вооружён.
+        """
+        if self.anchor is not None and self.ref is not None and not self.ref_broken:
+            key = _level_key("BOS", "primary", self.ref)
+            if key not in self.broken_keys:
+                return ("BOS", "primary", self.ref)
+        if (
+            self.internal is not None and self.pullback is not None
+            and not self.ref_broken
+        ):
+            key = _level_key("SMS", "primary", self.internal)
+            if key not in self.broken_keys:
+                return ("SMS", "primary", self.internal)
+        if (
+            self.primary_at is not None and not self.secondary_done
+            and self.first is not None and self.pullback2 is not None
+        ):
+            key = _level_key("BOS", "secondary", self.first)
+            if key not in self.broken_keys:
+                return ("BOS", "secondary", self.first)
+        return None
+
     def on_candle(self, c: Candle) -> list[StructureEventDraft]:
         out: list[StructureEventDraft] = []
         brk = bear_break if self.direction == Direction.BEAR else bull_break
@@ -618,3 +644,65 @@ def detect_breaks(
     events.sort(key=lambda e: (e.occurred_at, e.kind))
     return StructureScanResult(events=events, cancellation=cancellation,
                                trace=trace)
+
+
+def expected_reverse_condition(
+    pivots: list[PivotCandidate],
+    candles: list[Candle],
+    direction: Direction,
+    now_ms: int,
+    since_ms: int = 0,
+    cancel_not_before_ms: Optional[int] = None,
+) -> dict[str, Any]:
+    """Ожидаемое условие отмены из обратной машины BOS/SMS (F33).
+
+    status=expected — уровень ещё не пробит; occurred — обратный слом
+    уже случился; undefined — машина не вооружила уровень. side — сторона
+    закрытия H1, которая отменит сценарий (или уже отменила).
+    """
+    cur = BreakCursor(
+        direction, since_ms, stop_on_cancellation=True,
+        cancel_not_before_ms=cancel_not_before_ms,
+    )
+    cur.bear.now_ms = now_ms
+    cur.bull.now_ms = now_ms
+    closed = sorted((c for c in candles if c.closed), key=lambda c: c.open_time)
+    ps = sorted(
+        (p for p in pivots if p.state == "confirmed"),
+        key=lambda p: (p.confirmed_at, p.pivot_at),
+    )
+    result = cur.scan(ps, closed, [c.open_time for c in closed], now_ms)
+    side = "below" if cur.reverse.direction == Direction.BEAR else "above"
+    if result.cancellation is not None:
+        ev = result.cancellation.event
+        return {
+            "status": "occurred",
+            "source": "reverse_machine",
+            "kind": result.cancellation.pattern,
+            "level": ev.break_level,
+            "side": side,
+            "pivot_id": ev.ref_pivot_ids[-1] if ev.ref_pivot_ids else None,
+            "confirmed_at": ev.occurred_at,
+        }
+    armed = cur.reverse.armed_level()
+    if armed is None:
+        return {
+            "status": "undefined",
+            "source": "reverse_machine",
+            "kind": None,
+            "level": None,
+            "side": None,
+            "pivot_id": None,
+            "confirmed_at": None,
+        }
+    kind, _stage, pivot = armed
+    return {
+        "status": "expected",
+        "source": "reverse_machine",
+        "kind": kind,
+        "level": pivot.price,
+        "side": side,
+        "pivot_id": pivot.pivot_id,
+        "pivot_at": pivot.pivot_at,
+        "confirmed_at": pivot.confirmed_at,
+    }

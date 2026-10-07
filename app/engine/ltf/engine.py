@@ -166,7 +166,7 @@ class LtfEngine:
         self._batch = StructureBatch() if self.scan_cursors else None
         try:
             for idx, c in enumerate(closed):
-                if c.close_time <= last_done:
+                if not c.closed or c.close_time <= last_done:
                     continue
                 # F01/A01: лаг обнаружения относительно закрытия свечи. В
                 # пределах grace-окна события — live (доставляются: любой лаг

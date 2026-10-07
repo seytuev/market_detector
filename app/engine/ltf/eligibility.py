@@ -162,30 +162,102 @@ class FinalEligibility:
     rule_version: str
 
 
+def _tests_of(zone: LtfEntryZone, liquidity_tests) -> list:
+    return [
+        t for t in (liquidity_tests or ())
+        if t.entry_zone_id == zone.id
+    ]
+
+
+def _terminal_reason(zone: LtfEntryZone, liquidity_tests) -> Optional[str]:
+    """Обязательный запрет по актуальному lifecycle, а не по старой строке.
+
+    SSL/BSL с исходом confirmed или failed, полностью перекрытый FVG и
+    invalid-зона исключаются на любой версии диапазона. Повторно допустимый
+    OB этим запретом не затрагивается — у него своё правило глубины.
+    """
+    if zone.validity == "invalid":
+        return REASON_INVALID
+    if zone.type in ("BSL", "SSL"):
+        tests = _tests_of(zone, liquidity_tests)
+        if any(t.state == "confirmed" for t in tests):
+            return REASON_SWEPT_LEVEL
+        if any(t.state == "failed" for t in tests):
+            return REASON_LEVEL_BROKEN
+    if fvg_filled(zone):
+        return REASON_FVG_FILLED
+    return None
+
+
+def _resolved_reason(
+    entry: LtfScenarioEntry, zone: LtfEntryZone, cfg: DetectorConfig,
+) -> str:
+    """reason строки. Пустой reason у tested больше не считается ok
+    без типа и проверки глубины (F31)."""
+    if entry.reason:
+        return entry.reason
+    if entry.state != "tested":
+        return entry_reason(entry)
+    if zone.type in ("BSL", "SSL"):
+        return REASON_LEVEL_BROKEN
+    if zone.type == "OB" and not entry_reusable(zone, cfg):
+        return REASON_TESTED_TOO_DEEP
+    if zone.type == "FVG" and fvg_filled(zone):
+        return REASON_FVG_FILLED
+    if zone.type == "OB" and entry_reusable(zone, cfg):
+        return REASON_OK
+    if zone.type == "FVG":
+        return REASON_OK
+    return REASON_LEVEL_BROKEN if zone.is_level else REASON_OK
+
+
 def evaluate_final(
     entry: LtfScenarioEntry,
     zone: LtfEntryZone,
     *,
     allow_outside: bool,
+    liquidity_tests: Optional[list[LtfLiquidityTest]] = None,
+    cfg: Optional[DetectorConfig] = None,
 ) -> FinalEligibility:
-    """Единая функция окончательного решения (L01): конъюнкция evaluate_entry
-    (сохранённая в строке как state+reason) плюс контекстный допуск §18.
+    """Окончательный допуск (L01 + F29–F31).
 
-    Допуск по обычному правилу: строка пространственно подходит,
-    reason == ok и состояние fresh (или tested у строк до миграции с
-    пустым reason — прежний fallback tested → ok, eligibility.entry_reason;
-    мигрированные tested-строки всегда несут явный reason отказа).
-    Контекстное исключение: при полном контексте §18 FVG с
-    reason == outside_pd допускается с основанием context_exception.
+    Сохранённые eligible/reason не перебивают обязательные запреты
+    актуальной зоны и её тестов. Контекстное исключение §18 по-прежнему
+    единственный путь допуска FVG вне половины диапазона и не оживляет
+    терминальный объект.
     """
-    reason = entry_reason(entry)
+    cfg = cfg or DetectorConfig()
+    ban = _terminal_reason(zone, liquidity_tests)
+    if ban is None and zone.type in ("BSL", "SSL") and entry.state == "tested":
+        if not _tests_of(zone, liquidity_tests):
+            # Явный swept_level без строки теста остаётся снятием.
+            # Пустой reason, ok и прочие tested без доказательства
+            # снятия — пробой уровня (F30), не новый вход.
+            ban = (
+                REASON_SWEPT_LEVEL
+                if entry.reason == REASON_SWEPT_LEVEL
+                else REASON_LEVEL_BROKEN
+            )
+    if ban is None and zone.type == "OB" and not entry_reusable(zone, cfg):
+        if zone.validity == "tested" or entry.state == "tested":
+            if zone.max_test_depth >= cfg.entry_reuse_max_depth or (
+                zone.test_extreme is not None
+                and not entry_reusable(zone, cfg)
+            ):
+                ban = REASON_TESTED_TOO_DEEP
+    reason = ban or _resolved_reason(entry, zone, cfg)
     base = dict(
         primary_reason=reason,
-        state=entry.state,
+        state="invalid" if reason == REASON_INVALID else entry.state,
         spatial_overlap=entry.overlap,
         range_version=entry.range_version,
         rule_version=zone.rule_version,
     )
+    if ban is not None:
+        return FinalEligibility(
+            eligible_now=False, blocking_reasons=(ban,),
+            admission_basis=None, **base,
+        )
     if (entry.eligible and reason == REASON_OK
             and entry.state in ("fresh", "tested")):
         return FinalEligibility(
@@ -193,7 +265,6 @@ def evaluate_final(
             admission_basis=ADMISSION_RULE, **base,
         )
     if allow_outside and reason == REASON_OUTSIDE_PD and zone.type == "FVG":
-        # §18: контекстный допуск FVG вне Premium при полном контексте
         return FinalEligibility(
             eligible_now=True, blocking_reasons=(),
             admission_basis=ADMISSION_CONTEXT, **base,
@@ -225,6 +296,7 @@ def admitted_scenario_entries(
     rows = db.list_ltf_scenario_entries(scenario_id, state="fresh")
     if allow_outside:
         rows += db.list_ltf_scenario_entries(scenario_id, state="out_of_range")
+    tests = db.list_ltf_liquidity_tests(scenario_id=scenario_id)
     out: list[tuple[LtfScenarioEntry, LtfEntryZone, FinalEligibility]] = []
     for e in rows:
         if e.range_version != ver:
@@ -232,21 +304,27 @@ def admitted_scenario_entries(
         zone = db.get_ltf_entry_zone(e.entry_zone_id)
         if zone is None:
             continue
-        fe = evaluate_final(e, zone, allow_outside=allow_outside)
+        fe = evaluate_final(
+            e, zone, allow_outside=allow_outside, liquidity_tests=tests,
+        )
         if fe.eligible_now:
             out.append((e, zone, fe))
     return out
 
 
-# Строки до миграции (reason == ''): пригодность выводится из прежнего state
+# Строки до миграции (reason == ''): fresh/out_of_range/invalid выводятся
+# из state. tested → ok снят (F31): без типа и lifecycle это не допуск.
 _STATE_FALLBACK_REASON = {
     "fresh": REASON_OK,
-    "tested": REASON_OK,
     "out_of_range": REASON_OUTSIDE_PD,
     "invalid": REASON_INVALID,
 }
 
 
 def entry_reason(entry: LtfScenarioEntry) -> str:
-    """reason привязки; для строк без миграции (пустой reason) — из state."""
-    return entry.reason or _STATE_FALLBACK_REASON.get(entry.state, REASON_OK)
+    """reason привязки. Пустой reason у tested не становится ok."""
+    if entry.reason:
+        return entry.reason
+    if entry.state == "tested":
+        return ""
+    return _STATE_FALLBACK_REASON.get(entry.state, REASON_OK)

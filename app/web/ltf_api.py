@@ -50,6 +50,7 @@ from ..services.overview import (
     _state_version,
     _zone_brief,
     instrument_current,
+    instrument_structure,
     instruments_overview,
     observation_chart_layers,
 )
@@ -295,6 +296,21 @@ def register_ltf_routes(app, db: Database, settings, require_auth, ltf_engine=No
             raise HTTPException(status_code=404, detail="Инструмент не найден")
         return data
 
+    @app.get("/api/ltf/instruments/{instrument_id}/structure",
+             dependencies=[Depends(require_auth)])
+    def ltf_instrument_structure(
+        instrument_id: int, context_id: Optional[int] = None,
+    ) -> dict[str, Any]:
+        """Общая структура H1 (F12). Сценарные слои только при допустимом
+        context_id; иначе ranges/entries пустые."""
+        with db.read_tx():
+            data = instrument_structure(
+                db, settings, instrument_id, context_id=context_id,
+            )
+        if data is None:
+            raise HTTPException(status_code=404, detail="Инструмент не найден")
+        return data
+
     @app.post("/api/ltf/instruments/{instrument_id}/select-context",
               dependencies=[Depends(require_auth)])
     def ltf_select_context(
@@ -379,12 +395,14 @@ def register_ltf_routes(app, db: Database, settings, require_auth, ltf_engine=No
                 else:
                     ver = 0
                 allow_outside = context_complete(_context_flags(db, sc.id))
+                tests = db.list_ltf_liquidity_tests(scenario_id=sc.id)
                 for e in entries:
                     z = db.get_ltf_entry_zone(e.entry_zone_id)
                     if z is None:
                         continue
                     admitted = evaluate_final(
-                        e, z, allow_outside=allow_outside
+                        e, z, allow_outside=allow_outside,
+                        liquidity_tests=tests,
                     ).eligible_now
                     if view == "eligible" and not admitted:
                         continue

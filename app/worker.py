@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timezone
 
 from .adapters.base import AdapterError, MarketDataAdapter, TIMEFRAME_MS
@@ -20,6 +21,10 @@ from .engine.replay import migrate_display_fields
 from dataclasses import replace
 
 from .models import Candle, Event, EventKind, Instrument, ZoneStatus, ZoneType, now_ms
+from .services.htf_parent import (
+    PARENT_QUERY_STATUSES,
+    eligible_htf_parent,
+)
 from .notify.queue import EventDispatcher
 
 log = logging.getLogger(__name__)
@@ -54,9 +59,9 @@ LTF_START_KINDS = {
     EventKind.FVG_WEAKENED,
 }
 LTF_PARENT_TIMEFRAMES = ("D1", "W1")
-# статусы валидного HTF-родителя (общий движок): ACTIVE и WEAKENED
-# (последний бывает только у FVG после 50% — для OB фильтр не меняется)
-LTF_PARENT_VALID_STATUSES = (ZoneStatus.ACTIVE, ZoneStatus.WEAKENED)
+# Допуск родителя — eligible_htf_parent (F01). Этот набор только не даёт
+# выборке отрезать подтверждённый candidate; уже него быть нельзя.
+LTF_PARENT_VALID_STATUSES = PARENT_QUERY_STATUSES
 # состояния наблюдения, при которых LTF продолжает обработку и восстановление
 LTF_OPEN_STATES = ("waiting_structure", "active", "paused_data")
 
@@ -338,9 +343,11 @@ class Worker:
         await self.dispatcher.dispatch(events)
         if self.broadcast:
             for e in events:
+                zone = self.db.get_zone(e.zone_id)
                 self.broadcast({
                     "type": "event", "zone_id": e.zone_id, "kind": e.kind.value,
                     "price": e.price, "occurred_at": e.occurred_at,
+                    "instrument_id": zone.instrument_id if zone else None,
                 })
 
     def _apply_price_to_forming(
@@ -468,20 +475,26 @@ class Worker:
         zones = await asyncio.to_thread(
             self.db.get_zones, instrument_id=ins.id,
             statuses=list(LTF_PARENT_VALID_STATUSES),
+            timeframes=set(LTF_PARENT_TIMEFRAMES),
         )
+        opened = False
         for zone in zones:
-            if not self._ltf_is_context_zone(zone):
-                continue
-            # ТЗ 06.10.2026 §13 (T21): невалидный/неподтверждённый HTF OB не
-            # порождает новые LTF-сценарии
-            if not zone.is_currently_relevant():
+            # F01: единый допуск. Закрытое пользователем наблюдение уже
+            # есть в БД и здесь не воскрешается.
+            if not eligible_htf_parent(zone, self.cfg, as_of=now_ms()):
                 continue
             existing = await asyncio.to_thread(
                 self.db.get_ltf_observation_by_zone, zone.id, zone.cycle_id
             )
             if existing is not None:
-                continue  # открытое уже анализируется, закрытое не трогаем
+                continue
             await self._ltf_open_observation(ins, zone, self._first_htf_reach_ms(zone))
+            opened = True
+        if opened and self.broadcast:
+            self.broadcast({
+                "type": "ltf", "instrument_id": ins.id,
+                "events": 0, "reason": "observation_opened",
+            })
 
     async def _ltf_open_reached_parents(self, ins: Instrument) -> None:
         """Открыть наблюдение, если HTF-зона D1/W1 разрешённого типа уже
@@ -498,13 +511,10 @@ class Worker:
         zones = await asyncio.to_thread(
             self.db.get_zones, instrument_id=ins.id,
             statuses=list(LTF_PARENT_VALID_STATUSES),
+            timeframes=set(LTF_PARENT_TIMEFRAMES),
         )
         for zone in zones:
-            if not self._ltf_is_context_zone(zone):
-                continue
-            # ТЗ 06.10.2026 §13 (T21): невалидный/неподтверждённый HTF OB не
-            # порождает новые LTF-сценарии
-            if not zone.is_currently_relevant():
+            if not eligible_htf_parent(zone, self.cfg, as_of=now_ms()):
                 continue
             existing = await asyncio.to_thread(
                 self.db.get_ltf_observation_by_zone, zone.id, zone.cycle_id
@@ -583,15 +593,7 @@ class Worker:
             if e.kind not in LTF_START_KINDS:
                 continue
             zone = self.db.get_zone(e.zone_id)
-            if (
-                zone is None
-                or not self._ltf_is_context_zone(zone)
-                # только валидный родитель (WEAKENED FVG валиден — общий
-                # движок не прекращает FVG по касанию 50%)
-                or zone.status not in LTF_PARENT_VALID_STATUSES
-                # ТЗ 06.10.2026 §13 (T21): единый canonical state
-                or not zone.is_currently_relevant()
-            ):
+            if not eligible_htf_parent(zone, self.cfg, as_of=e.occurred_at):
                 continue
             await self._ltf_open_observation(ins, zone, e.occurred_at)
         # §4: инвалидация родителя закрывает сценарий (HTF_INVALIDATED);
@@ -660,11 +662,18 @@ class Worker:
                 o for o in self.db.list_ltf_observations(instrument_id=ins.id)
                 if o.state in LTF_OPEN_STATES
             ]
-            if not observations:
-                continue
+            # F11: общая структура H1 считается и при нуле наблюдений.
+            # Курсор сценария двигается только когда в проходе было
+            # открытое наблюдение — структура и сценарий помечены раздельно.
             result = await asyncio.to_thread(
                 self.ltf_engine.process_h1_close, ins.id
             )
+            if observations:
+                cursor = self.db.get_meta(f"ltf:h1:last_close:{ins.id}")
+                if cursor:
+                    self.db.set_meta(
+                        f"ltf:h1:scenario_last_close:{ins.id}", cursor
+                    )
             if result.events:
                 # точка подключения доставки LTF (этап D): одна строка —
                 # ltf_dispatcher передаётся в Worker из main.py
@@ -675,6 +684,13 @@ class Worker:
                         "type": "ltf", "instrument_id": ins.id,
                         "events": len(result.events),
                     })
+            elif result.processed and self.broadcast:
+                # F27: запись структуры без нового торгового сигнала
+                # тоже повод перечитать снимок
+                self.broadcast({
+                    "type": "ltf", "instrument_id": ins.id,
+                    "events": 0, "structure": True,
+                })
         # автоархивация наблюдений без активности (раз в LTF-цикл, один
         # индексированный запрос + работа только по найденным кандидатам)
         if self._ltf_active:
@@ -699,8 +715,12 @@ class Worker:
             if self._ltf_active:
                 try:
                     await self.ltf_poll_once()
-                except Exception:
+                except Exception as exc:
                     log.exception("ошибка LTF-цикла")
+                    try:
+                        self.db.set_meta("runtime:last_error", str(exc)[:500])
+                    except Exception:
+                        log.exception("не удалось записать runtime:last_error")
             try:
                 await asyncio.wait_for(self._stop.wait(), self.cfg.ltf_poll_seconds)
             except asyncio.TimeoutError:
@@ -717,15 +737,17 @@ class Worker:
                 if o.state in LTF_OPEN_STATES
             ]
             if not observations:
-                # без наблюдений replay не нужен, но H1-окно для графика LTF
-                # догружаем один раз — иначе на свежей БД график пуст до
-                # первого касания HTF-зоны
+                # H1-окно и структура нужны графику и без наблюдения (F11).
                 if self.db.last_candle(ins.id, "H1") is None:
                     try:
                         await self._ltf_load_h1_history(ins, now_ms())
                     except AdapterError as exc:
                         log.warning(
                             "LTF %s: догрузка H1 пропущена: %s", ins.symbol, exc)
+                if self.db.last_candle(ins.id, "H1") is not None:
+                    await asyncio.to_thread(
+                        self.ltf_engine.process_h1_close, ins.id
+                    )
                 continue
             self._set_replaying(ins.id, True)
             try:
@@ -867,6 +889,17 @@ class Worker:
         await self.dispatcher.notify_service(text)
 
     async def run(self) -> None:
+        from .services.runtime import CALC_OWNER, claim_owner
+        claim = claim_owner(self.db, CALC_OWNER, {
+            "pid": os.getpid(), "role": "calc",
+        })
+        if not claim["owned"]:
+            owner = claim.get("owner") or {}
+            log.error(
+                "рыночный расчёт уже ведёт pid %s — второй сканер не стартует",
+                owner.get("pid"),
+            )
+            return
         # ТЗ 07.10.2026 §13: миграция снятых/зеркальных уровней SSL/BSL —
         # идемпотентна (флаг в meta), с бэкапом; выполняется один раз до
         # прогрева кэшей чтения, чтобы снятые уровни не попали в выборки

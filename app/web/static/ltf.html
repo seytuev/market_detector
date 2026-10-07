@@ -12,6 +12,14 @@
   <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
+  <script>
+    (function () {
+      var q = new URLSearchParams(location.search);
+      if (q.get('stay') === '1') return;
+      q.set('mode', 'h1');
+      location.replace('/' + (q.toString() ? '?' + q.toString() : '') + '#desk');
+    })();
+  </script>
   <header class="app-nav" aria-label="Основная навигация">
     <a class="brand" href="/">
       <svg class="brand-mark" width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">

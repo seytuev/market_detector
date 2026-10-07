@@ -1759,8 +1759,14 @@ input[type="checkbox"] { min-height: auto; accent-color: var(--accent); }
   padding: 7px 14px; border-radius: var(--lf-radius-ctrl);
   border: 1px solid transparent; background: transparent;
   color: var(--lf-text2); text-decoration: none; cursor: pointer;
-  font: inherit; font-weight: 500;
+  font: inherit; font-weight: 500; appearance: none;
 }
+.review-badge {
+  display: inline-flex; margin-left: 8px; padding: 2px 8px;
+  border-radius: 999px; background: var(--lf-raised);
+  color: var(--lf-text2); font-size: 12px; text-decoration: none;
+}
+.desk-fact { margin: 4px 0; font-size: 13px; color: var(--lf-text2); }
 .mode-tab:hover { color: var(--lf-text); }
 .mode-tab.active {
   background: var(--lf-raised); color: var(--lf-text);

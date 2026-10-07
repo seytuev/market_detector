@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+import uuid
 from dataclasses import asdict, fields, replace
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -641,6 +642,10 @@ def create_app(
     app = FastAPI(title="LevelFrame", version=APP_VERSION)
     app.state.db = db
     app.state.settings = settings
+    app.state.instance_id = str(uuid.uuid4())
+    app.state.started_at = now_ms()
+    app.state.process_role = "web"
+    app.state.build_id = os.environ.get("HTF_BUILD_ID") or APP_VERSION
     app.state.ws_hub = hub
     app.state.event_bus = event_bus
     app.state.ltf_engine = ltf_engine
@@ -1091,9 +1096,18 @@ def create_app(
     # ------------------------- events / candles -------------------------
 
     @app.get("/api/events", dependencies=[Depends(require_auth)])
-    def list_events(limit: int = Query(default=50, ge=1, le=500)) -> list[dict[str, Any]]:
+    def list_events(
+        limit: int = Query(default=50, ge=1, le=500),
+        instrument_id: Optional[int] = None,
+    ) -> list[dict[str, Any]]:
+        """Лента событий. instrument_id ограничивает её одним активом;
+        без параметра остаётся общий журнал."""
         out = []
-        for e in db.get_events(limit=limit):
+        events = (
+            db.list_events_for_instrument(instrument_id, limit=limit)
+            if instrument_id is not None else db.get_events(limit=limit)
+        )
+        for e in events:
             zone = db.get_zone(e.zone_id)
             ins = db.get_instrument(zone.instrument_id) if zone else None
             out.append({
@@ -1382,6 +1396,22 @@ def create_app(
             "candle_freshness": freshness,
         }
 
+    @app.get("/api/diagnostics", dependencies=[Depends(require_auth)])
+    def diagnostics() -> dict[str, Any]:
+        """Роль процесса, отпечаток профиля и курсоры. Секретов нет."""
+        from ..services.runtime import CALC_OWNER, _read_claim, build_diagnostics
+        role = getattr(app.state, "process_role", "web")
+        calc = _read_claim(db, CALC_OWNER)
+        if calc and int(calc.get("pid") or 0) == os.getpid():
+            role = "calc"
+        return build_diagnostics(
+            db, settings,
+            role=role,
+            instance_id=app.state.instance_id,
+            started_at=app.state.started_at,
+            build_id=app.state.build_id,
+        )
+
     # ------------------------- WebSocket -------------------------
 
     @app.websocket("/ws")
@@ -1630,4 +1660,6 @@ def create_app_from_env() -> FastAPI:
     ``uvicorn --factory app.web.api:create_app_from_env --host 127.0.0.1 --port 8000``"""
     settings = load_settings()
     db = Database(settings.db_path)
+    from ..services.htf_profile import migrate_saved_htf_profile
+    migrate_saved_htf_profile(db, settings)
     return create_app(db, settings)
