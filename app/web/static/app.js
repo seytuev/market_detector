@@ -2260,6 +2260,7 @@ const deskData = {
 const DESK_BASIS_RU = {
   manual: 'Выбран вручную',
   price_inside: 'Цена внутри зоны',
+  nearest: 'Ближайшая к цене зона',
   last_scenario: 'Последний действующий сценарий',
   last_contact: 'Последний контакт с зоной',
 };

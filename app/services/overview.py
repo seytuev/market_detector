@@ -24,6 +24,7 @@ from ..models import TIMEFRAME_MINUTES, EventKind, ZoneStatus, ZoneType, now_ms
 from .htf_parent import (
     PARENT_QUERY_STATUSES,
     PARENT_TIMEFRAMES,
+    context_type_name,
     eligible_htf_parent,
     parent_decision,
     policy_types,
@@ -51,6 +52,10 @@ STAGE_RETRACEMENT = "Ожидаем возврат в Premium/Discount"
 STAGE_IN_ENTRY = "Цена в Entry Zone"
 STAGE_NO_ZONES = "Нет подходящих зон"
 STAGE_DATA_PENDING = "Недостаточно данных"
+# Порог data_state (около 30 с) — свежесть доставки. Котировка моложе
+# этого окна ещё показывает, у какой HTF-зоны стоит цена. Иначе карточка
+# прыгает на дальний сценарий между опросами.
+NAVIGATION_QUOTE_MAX_S = 5 * 60
 
 
 def _instrument_brief(db: Database, instrument_id: int) -> Optional[dict[str, Any]]:
@@ -124,6 +129,7 @@ def _data_state(
 # силы сценария; в UI — нейтральная подпись «Показан контекст: …».
 BASIS_MANUAL = "manual"                # «Выбран вручную»
 BASIS_PRICE_INSIDE = "price_inside"    # «Цена внутри зоны»
+BASIS_NEAREST = "nearest"              # «Ближайшая к цене зона»
 BASIS_LAST_SCENARIO = "last_scenario"  # «Последний действующий сценарий»
 BASIS_LAST_CONTACT = "last_contact"    # «Последний контакт с зоной»
 
@@ -154,12 +160,15 @@ def _select_context_with_basis(
 ) -> tuple[Optional[LtfObservation], Optional[str]]:
     """Политика выбора контекста (§7, приоритет «цена внутри» согласован
     владельцем): ручной выбор (meta), если он ещё доступен → контекст, чья
-    HTF-зона сейчас содержит цену (план «в реализации»: сначала с действующим
-    сценарием, затем последний по активации) → контекст с последним
-    действующим сценарием → последний валидный контакт. Правило навигации,
-    не оценка торговой силы; ручной выбор, ушедший в историю, игнорируется
-    (fallback-политика). При stale-котировке приоритет «цена внутри» не
-    применяется: навигация по устаревшим данным недопустима.
+    HTF-зона сейчас содержит цену (сначала с действующим сценарием, затем
+    последний по активации) → при котировке, которой ещё можно верить
+    (_location_fresh), зона, ближайшая к цене → контекст с последним
+    действующим сценарием → последний валидный контакт. Близость нужна,
+    потому что пачка сценариев с одной датой создания иначе прячет зону,
+    у которой цена стоит. Правило навигации, не оценка торговой силы;
+    ручной выбор, ушедший в историю, игнорируется. Котировка старше
+    навигационного окна и прочие причины stale не включают ни «внутри»,
+    ни «ближайшая».
 
     Возвращает (контекст, основание) — код BASIS_* или None, если активных
     контекстов нет."""
@@ -203,6 +212,9 @@ def _select_context_with_basis(
                         BASIS_PRICE_INSIDE)
             return (max(inside, key=lambda o: (o.activated_at, o.id)),
                     BASIS_PRICE_INSIDE)
+        nearest = _nearest_context(db, active, price)
+        if nearest is not None:
+            return nearest, BASIS_NEAREST
     with_scenario_pairs = with_scenario(active)
     if with_scenario_pairs:
         return (max(with_scenario_pairs,
@@ -210,6 +222,62 @@ def _select_context_with_basis(
                 BASIS_LAST_SCENARIO)
     return (max(active, key=lambda o: (o.activated_at, o.id)),
             BASIS_LAST_CONTACT)
+
+
+def _location_fresh(ds: dict[str, Any], fresh: bool) -> bool:
+    """Можно ли ставить цену относительно HTF-зон.
+
+    data_state.ok — да. quote_stale моложе NAVIGATION_QUOTE_MAX_S — тоже:
+    цикл котировок иногда выходит за порог доставки, и заголовок не должен
+    сменяться дальним сценарием. Другие причины stale и старая котировка
+    цену не используют.
+    """
+    if fresh:
+        return True
+    if ds.get("reason") != "quote_stale":
+        return False
+    age = ds.get("quote_age_s")
+    try:
+        age_s = float(age)
+    except (TypeError, ValueError):
+        return False
+    return 0 <= age_s <= NAVIGATION_QUOTE_MAX_S
+
+
+def _price_distance(zone, price: float) -> float:
+    """Расстояние от цены до диапазона. Внутри зоны — 0."""
+    if zone.lower <= price <= zone.upper:
+        return 0.0
+    if price > zone.upper:
+        return price - zone.upper
+    return zone.lower - price
+
+
+def _nearest_context(
+    db: Database, active: list[LtfObservation], price: float,
+) -> Optional[LtfObservation]:
+    """Активный контекст, чья HTF-зона ближе всего к свежей цене.
+
+    При равной дистанции предпочтителен контекст со сценарием, затем
+    более поздняя активация. Так дальний медвежий OB не перекрывает
+    бычью зону, у границы которой стоит цена."""
+    ranked: list[tuple] = []
+    for obs in active:
+        zone = db.get_zone(obs.zone_id)
+        if zone is None:
+            continue
+        has_scenario = db.get_active_ltf_scenario(obs.id) is not None
+        ranked.append((
+            _price_distance(zone, price),
+            0 if has_scenario else 1,
+            -obs.activated_at,
+            -obs.id,
+            obs,
+        ))
+    if not ranked:
+        return None
+    ranked.sort()
+    return ranked[0][-1]
 
 
 def _select_context(
@@ -561,7 +629,7 @@ def _parent_zones(db: Database, instrument_id: int):
         instrument_id=instrument_id,
         statuses=list(PARENT_QUERY_STATUSES),
         timeframes=set(PARENT_TIMEFRAMES),
-        types=[ZoneType.OB, ZoneType.FVG],
+        types=[ZoneType.OB, ZoneType.FVG, ZoneType.MANUAL],
     )
 
 
@@ -577,7 +645,10 @@ def _zone_params(zone) -> dict[str, Any]:
 
 
 def _type_name(zone) -> str:
-    """Имя типа в тексте для человека: OB/FVG, не значение enum."""
+    """Имя типа в тексте для человека: OB/FVG, в том числе у ручной зоны."""
+    named = context_type_name(zone)
+    if named in ("OB", "FVG"):
+        return named
     raw = zone.type.value if hasattr(zone.type, "value") else str(zone.type)
     return str(raw).upper()
 
@@ -838,8 +909,8 @@ def _finish_stage(
 
     Исключение — наблюдения ещё нет, а цена уже в допустимом родителе:
     stage становится «HTF-зона достигнута, рассчитываем H1».
-    waiting_structure сохраняет «Ждём BOS/SMS»; расчётная фраза уходит
-    в market_stage. Цена внутри выбранного родителя со сценарием
+    Уже открытое waiting_structure в market_stage называется ожиданием
+    BOS/SMS по направлению этой зоны. Цена внутри выбранного родителя
     получает префикс «Цена в HTF-зоне»."""
     if selected is None and wait and wait.get("code") == "observation_pending":
         stage = STAGE_H1_CALC
@@ -851,16 +922,101 @@ def _finish_stage(
             market = wait["message"]
         else:
             market = stage
-    elif sc is None and selected.state == "waiting_structure":
-        market = STAGE_H1_CALC
     elif (
         fresh and price is not None and zone is not None
         and zone.lower <= price <= zone.upper
     ):
-        market = f"{STAGE_IN_HTF}. {stage}"
+        tail = _wait_bos_market(selected, zone) if sc is None else stage
+        market = f"{STAGE_IN_HTF}. {tail}"
+    elif sc is None and getattr(selected, "state", None) == "waiting_structure":
+        market = _wait_bos_market(selected, zone)
     else:
         market = stage
     return stage, direction, market
+
+
+def _wait_bos_market(selected, zone) -> str:
+    """Ожидание слома называется по направлению выбранной зоны.
+
+    «Рассчитываем H1» остаётся только пока наблюдения ещё нет. Уже открытое
+    waiting_structure — это ожидание BOS/SMS, а не незавершённый расчёт."""
+    side = "бычьему" if getattr(selected, "direction", None) and selected.direction.value == "bull" else "медвежьему"
+    if zone is None:
+        return f"Ждём BOS/SMS по {side} контексту"
+    return (
+        f"Ждём BOS/SMS по {side} {_type_name(zone)} {zone.timeframe} "
+        f"{_fmt_px(zone.lower)}–{_fmt_px(zone.upper)}"
+    )
+
+
+def _contained_context_note(
+    db: Database, instrument_id: int, price: Optional[float], policy, now: int,
+    selected_zone_id: Optional[int],
+) -> str:
+    """Зоны, в которых цена уже стоит, но которые не стали выбранным контекстом.
+
+    Неподтверждённый OB и закрытая ручная зона видны на графике и иначе
+    спорят с заголовком сценария."""
+    if price is None:
+        return ""
+    zones = db.get_zones(
+        instrument_id=instrument_id,
+        timeframes=set(PARENT_TIMEFRAMES),
+        types=[ZoneType.OB, ZoneType.FVG, ZoneType.MANUAL],
+    )
+    unconfirmed = []
+    manual = []
+    for zone in zones:
+        if selected_zone_id is not None and zone.id == selected_zone_id:
+            continue
+        if zone.lower == zone.upper:
+            continue
+        if not (zone.lower <= price <= zone.upper):
+            continue
+        decision = parent_decision(zone, policy, as_of=now)
+        if decision.eligible:
+            continue
+        if decision.reason == "unconfirmed":
+            unconfirmed.append(zone)
+        elif zone.source == "manual":
+            manual.append(zone)
+    parts = []
+    if unconfirmed:
+        zone = min(unconfirmed, key=lambda z: (z.upper - z.lower, z.id or 0))
+        parts.append(
+            f"Цена внутри {_type_name(zone)} {zone.timeframe} "
+            f"{_fmt_px(zone.lower)}–{_fmt_px(zone.upper)} без подтверждения — "
+            "контекст по ней не открыт."
+        )
+    if manual:
+        zone = max(manual, key=lambda z: (z.formed_at or 0, z.id or 0))
+        side = "медвежья" if zone.direction.value == "bear" else "бычья"
+        if zone.display_until is not None:
+            why = "уже закрыта"
+            if zone.direction.value == "bear":
+                why = "уже закрыта пробоем вверх"
+        elif context_type_name(zone) not in ("OB", "FVG"):
+            why = "без правила OB или FVG"
+        else:
+            why = "не подходит как контекст"
+        parts.append(
+            f"Ручная зона {side} {zone.timeframe} "
+            f"{_fmt_px(zone.lower)}–{_fmt_px(zone.upper)} {why}."
+        )
+    return " ".join(parts)
+
+
+def _apply_context_note(
+    market: str, db: Database, instrument_id: int, price: Optional[float],
+    policy, now: int, selected,
+) -> str:
+    note = _contained_context_note(
+        db, instrument_id, price, policy, now,
+        selected.zone_id if selected is not None else None,
+    )
+    if not note:
+        return market
+    return f"{market} {note}"
 
 
 def _direction_conflict(observations: list[LtfObservation]) -> Optional[dict[str, Any]]:
@@ -886,9 +1042,9 @@ def _attention_group(
     policy=None, as_of: Optional[int] = None,
 ) -> str:
     """L06: первая применимая группа из ATTENTION_ORDER (по убыванию
-    приоритета). «Цена в зоне» — только по свежей котировке: при stale
-    защита _select_context_with_basis приоритет «цена внутри» не применяет,
-    и группа не присваивается."""
+    приоритета). «Цена в зоне» — когда котировка ещё локализует цену
+    (_location_fresh). Котировка старше навигационного окна группу
+    не включает."""
     if has_candidates:
         return "review"
     if fresh and price is not None:
@@ -936,9 +1092,10 @@ def instruments_overview(db: Database, settings) -> list[dict[str, Any]]:
         price = quote[0] if quote else None
         ds = _data_state(db, settings, iid, quote, now)
         fresh = ds["state"] == "ok"
+        locate = _location_fresh(ds, fresh)
         policy = settings.detector
         selected = _select_context(
-            db, iid, obs_list, price, fresh, policy, now,
+            db, iid, obs_list, price, locate, policy, now,
         )
         sc = (
             db.get_active_ltf_scenario(selected.id)
@@ -949,14 +1106,17 @@ def instruments_overview(db: Database, settings) -> list[dict[str, Any]]:
             eligible, _counts = _scenario_counts(db, sc)
         stage, direction = _instrument_stage(
             db, obs_list, selected, sc,
-            [z for _, z in eligible], price, fresh, ds,
+            [z for _, z in eligible], price, locate, ds,
         )
         zone = db.get_zone(selected.zone_id) if selected is not None else None
         wait = _context_wait(
             db, settings, ins, obs_list, selected, price, ds, now,
         )
         stage, direction, market_stage = _finish_stage(
-            stage, direction, selected, sc, zone, price, fresh, wait,
+            stage, direction, selected, sc, zone, price, locate, wait,
+        )
+        market_stage = _apply_context_note(
+            market_stage, db, iid, price if locate else None, policy, now, selected,
         )
         htf_context = None
         if zone is not None:
@@ -966,7 +1126,7 @@ def instruments_overview(db: Database, settings) -> list[dict[str, Any]]:
         review_count = candidate_counts.get(iid, 0)
         attention = _attention_group(
             db, iid, obs_list, len(eligible), stage, ds,
-            price, fresh,
+            price, locate,
             review_count > 0,
             policy, now,
         )
@@ -1022,13 +1182,14 @@ def instrument_current(
     price = quote[0] if quote else None
     ds = _data_state(db, settings, instrument_id, quote, now)
     fresh = ds["state"] == "ok"
+    locate = _location_fresh(ds, fresh)
     observations = db.list_ltf_observations(instrument_id=instrument_id)
     policy = settings.detector
     selected, basis = _select_context_with_basis(
-        db, instrument_id, observations, price, fresh, policy, now,
+        db, instrument_id, observations, price, locate, policy, now,
     )
     contexts = [
-        _context_view(db, o, price, fresh)
+        _context_view(db, o, price, locate)
         for o in observations
         if o.state in _ACTIVE_STATES
         and eligible_htf_parent(db.get_zone(o.zone_id), policy, as_of=now)
@@ -1053,7 +1214,7 @@ def instrument_current(
         eligible, counts = _scenario_counts(db, sc)
         eligible_zones = [z for _, z in eligible]
         eligible_rows = [
-            _entry_row(db, e, z, sc, price if fresh else None)
+            _entry_row(db, e, z, sc, price if locate else None)
             for e, z in eligible
         ]
         eligible_rows.sort(key=lambda r: (
@@ -1062,14 +1223,18 @@ def instrument_current(
     # этап — из того же результата допуска, что counts/eligible_entries
     # (§13: карточка, счётчик и таблица не расходятся внутри снимка)
     stage, direction = _instrument_stage(
-        db, observations, selected, sc, eligible_zones, price, fresh, ds,
+        db, observations, selected, sc, eligible_zones, price, locate, ds,
     )
     parent_zone = db.get_zone(selected.zone_id) if selected is not None else None
     wait = _context_wait(
         db, settings, ins, observations, selected, price, ds, now,
     )
     stage, direction, market_stage = _finish_stage(
-        stage, direction, selected, sc, parent_zone, price, fresh, wait,
+        stage, direction, selected, sc, parent_zone, price, locate, wait,
+    )
+    market_stage = _apply_context_note(
+        market_stage, db, instrument_id, price if locate else None, policy, now,
+        selected,
     )
     waiting: Optional[dict[str, Any]] = None
     if sc is None and selected is not None:

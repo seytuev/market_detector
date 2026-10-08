@@ -187,6 +187,91 @@ def test_basis_price_inside_not_applied_on_stale(client, db, seeded,
     assert cur["selected_context_basis"] == "last_scenario"
 
 
+def test_basis_nearest_beats_far_bear_scenario(client, db, instrument_id):
+    """Свежая цена у бычьей зоны не отдаёт заголовок дальнему медвежьему сценарию."""
+    far = _zone(db, instrument_id, Direction.BEAR, 200.0, 220.0)
+    far_obs = _observation(db, instrument_id, far, Direction.BEAR, "active", T0)
+    _scenario_with_range(db, far_obs, lower=200.0, upper=220.0)
+    near = _zone(db, instrument_id, Direction.BULL, 100.0, 110.0, offset=1000)
+    near_obs = _observation(
+        db, instrument_id, near, Direction.BULL, "waiting_structure", T0 + 10,
+    )
+    _make_live(db, instrument_id, 112.0)
+    cur = _current(client, instrument_id)
+    assert cur["selected_context_id"] == near_obs.id
+    assert cur["selected_context_basis"] == "nearest"
+    assert cur["stage"] == "Ждём BOS/SMS"
+    assert "бычьему" in cur["market_stage"]
+    assert "Premium" not in cur["market_stage"]
+    assert "Цена в HTF-зоне" not in cur["market_stage"]
+
+
+def test_recent_stale_quote_keeps_nearest(client, db, instrument_id):
+    """Котировка чуть старше порога доставки не отдаёт заголовок дальнему сценарию."""
+    far = _zone(db, instrument_id, Direction.BEAR, 200.0, 220.0)
+    far_obs = _observation(db, instrument_id, far, Direction.BEAR, "active", T0)
+    _scenario_with_range(db, far_obs, lower=200.0, upper=220.0)
+    near = _zone(db, instrument_id, Direction.BULL, 100.0, 110.0, offset=1000)
+    near_obs = _observation(
+        db, instrument_id, near, Direction.BULL, "waiting_structure", T0 + 10,
+    )
+    now = now_ms()
+    candle = make_candle(
+        now - 30 * 60_000, 112, 113, 111, 112,
+        timeframe="H1", instrument_id=instrument_id,
+    )
+    db.insert_candles([candle])
+    db.set_quote(instrument_id, 112.0, now - 45_000)
+    db.set_meta(f"ltf:h1:last_close:{instrument_id}", str(candle.close_time))
+    cur = _current(client, instrument_id)
+    assert cur["data_state"]["state"] == "stale"
+    assert cur["data_state"]["reason"] == "quote_stale"
+    assert cur["selected_context_id"] == near_obs.id
+    assert cur["selected_context_basis"] == "nearest"
+    assert "бычьему" in cur["market_stage"]
+    assert "Premium" not in cur["market_stage"]
+
+
+def test_price_inside_still_beats_nearest(client, db, instrument_id):
+    """Цена внутри зоны важнее близости соседней."""
+    far = _zone(db, instrument_id, Direction.BEAR, 200.0, 220.0)
+    far_obs = _observation(db, instrument_id, far, Direction.BEAR, "active", T0)
+    _scenario_with_range(db, far_obs, lower=200.0, upper=220.0)
+    near = _zone(db, instrument_id, Direction.BULL, 100.0, 110.0, offset=1000)
+    near_obs = _observation(
+        db, instrument_id, near, Direction.BULL, "waiting_structure", T0 + 10,
+    )
+    _make_live(db, instrument_id, 105.0)
+    cur = _current(client, instrument_id)
+    assert cur["selected_context_id"] == near_obs.id
+    assert cur["selected_context_basis"] == "price_inside"
+    assert cur["market_stage"].startswith("Цена в HTF-зоне")
+    assert "бычьему" in cur["market_stage"]
+
+
+def test_unconfirmed_and_closed_manual_are_named(client, db, instrument_id):
+    """Цена в неподтверждённом OB и в закрытой ручной зоне объясняется, а не молчит."""
+    near = _zone(db, instrument_id, Direction.BULL, 100.0, 110.0)
+    _observation(db, instrument_id, near, Direction.BULL, "waiting_structure", T0)
+    db.insert_zone(Zone(
+        id=None, instrument_id=instrument_id, type=ZoneType.OB,
+        direction=Direction.BULL, timeframe="W1", lower=108.0, upper=112.0,
+        formed_at=T0, confirmed_at=None, status=ZoneStatus.CANDIDATE,
+    ))
+    db.insert_zone(Zone(
+        id=None, instrument_id=instrument_id, type=ZoneType.MANUAL,
+        direction=Direction.BEAR, timeframe="D1", lower=104.0, upper=109.0,
+        formed_at=T0 + 5, confirmed_at=None, status=ZoneStatus.ARCHIVED,
+        source="manual", zone_type="ob", display_until=T0 + 6,
+    ))
+    _make_live(db, instrument_id, 108.5)
+    cur = _current(client, instrument_id)
+    text = cur["market_stage"]
+    assert "без подтверждения" in text
+    assert "Ручная зона медвежья" in text
+    assert "закрыта" in text
+
+
 def test_basis_last_scenario(client, db, seeded, instrument_id):
     """Нет свежей котировки и ручного выбора → контекст с последним
     действующим сценарием (last_scenario)."""

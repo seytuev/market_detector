@@ -35,6 +35,23 @@ def policy_types(policy) -> set[str]:
     return {str(t).strip().upper() for t in (policy or ())} & set(PARENT_TYPES)
 
 
+def context_type_name(zone) -> str:
+    """Тип для допуска родителя.
+
+    Ручная зона хранится как type=manual, а торговое правило — в zone_type.
+    ob/fvg на D1/W1 — тот же родитель, что автоматический OB/FVG.
+    """
+    if zone is None:
+        return ""
+    raw = zone.type.value if hasattr(zone.type, "value") else str(zone.type)
+    name = str(raw).upper()
+    if name == "MANUAL":
+        hinted = str(getattr(zone, "zone_type", None) or "").upper()
+        if hinted in PARENT_TYPES:
+            return hinted
+    return name
+
+
 def parent_decision(zone, policy, as_of: Optional[int] = None) -> ParentDecision:
     """Допуск зоны как HTF-родителя на момент as_of.
 
@@ -49,8 +66,7 @@ def parent_decision(zone, policy, as_of: Optional[int] = None) -> ParentDecision
         return ParentDecision(False, "not_relevant")
     if zone.timeframe not in PARENT_TIMEFRAMES:
         return ParentDecision(False, "wrong_timeframe")
-    typ = zone.type.value if hasattr(zone.type, "value") else str(zone.type)
-    typ = str(typ).upper()
+    typ = context_type_name(zone)
     if typ not in PARENT_TYPES:
         return ParentDecision(False, "not_context_type")
     if typ not in policy_types(policy):

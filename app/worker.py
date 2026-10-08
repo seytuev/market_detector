@@ -26,6 +26,7 @@ from .models import (
 )
 from .services.htf_parent import (
     PARENT_QUERY_STATUSES,
+    context_type_name,
     eligible_htf_parent,
 )
 from .notify.queue import EventDispatcher
@@ -453,8 +454,10 @@ class Worker:
         }
 
     def _ltf_is_context_zone(self, zone) -> bool:
+        # Ручной OB/FVG (type=manual, zone_type=ob|fvg) — тот же родитель.
+        allowed = {t.value.upper() for t in self._ltf_context_zone_types()}
         return (
-            zone.type in self._ltf_context_zone_types()
+            context_type_name(zone) in allowed
             and zone.timeframe in LTF_PARENT_TIMEFRAMES
         )
 

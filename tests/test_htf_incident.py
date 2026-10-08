@@ -133,6 +133,32 @@ async def test_a02_touch_opens_candidate_once():
     assert len(db.list_ltf_observations(instrument_id=ins.id)) == 1
 
 
+def test_manual_ob_is_parent_plain_manual_and_closed_are_not(db, instrument_id):
+    """Ручной OB D1 — родитель лонга. Зона без правила и уже закрытая — нет."""
+    cfg = DetectorConfig()
+    bull = db.get_zone(db.insert_zone(Zone(
+        id=None, instrument_id=instrument_id, type=ZoneType.MANUAL,
+        direction=Direction.BULL, timeframe="D1", lower=80.0, upper=81.5,
+        formed_at=now_ms(), confirmed_at=None, status=ZoneStatus.ACTIVE,
+        source="manual", zone_type="ob",
+    )))
+    plain = db.get_zone(db.insert_zone(Zone(
+        id=None, instrument_id=instrument_id, type=ZoneType.MANUAL,
+        direction=Direction.BULL, timeframe="D1", lower=70.0, upper=71.0,
+        formed_at=now_ms(), confirmed_at=None, status=ZoneStatus.ACTIVE,
+        source="manual",
+    )))
+    closed = db.get_zone(db.insert_zone(Zone(
+        id=None, instrument_id=instrument_id, type=ZoneType.MANUAL,
+        direction=Direction.BEAR, timeframe="D1", lower=80.0, upper=82.0,
+        formed_at=now_ms(), confirmed_at=None, status=ZoneStatus.ARCHIVED,
+        source="manual", zone_type="ob", display_until=now_ms(),
+    )))
+    assert eligible_htf_parent(bull, cfg) is True
+    assert eligible_htf_parent(plain, cfg) is False
+    assert eligible_htf_parent(closed, cfg) is False
+
+
 def test_a04_a05_a06_wait_codes(tmp_path, db, instrument_id):
     settings = _settings(tmp_path, "OB,FVG")
     _live(db, instrument_id, 115.83)
