@@ -211,3 +211,47 @@ async def test_backfill_extends_history_backwards():
     calls = adapter.klines_calls
     await worker.backfill(ins)
     assert adapter.klines_calls == calls  # то же окно — без сети
+
+
+async def test_backfill_tail_keeps_existing_candidate():
+    """Рестарт с новой закрытой свечой не переигрывает историю и не
+    снимает уже записанного кандидата."""
+    db = Database(":memory:")
+    adapter = FakeAdapter()
+    old = now_ms() - 5 * D1_MS
+    adapter.candles = [
+        make_candle(old, 100.0, 106.0, 99.0, 104.0, "D1"),
+        make_candle(now_ms() - W1_MS, 100.0, 106.0, 99.0, 104.0, "W1"),
+    ]
+    worker, _ = _make_worker(db, adapter)
+    await worker.seed_instruments()
+    ins = next(i for i in db.get_instruments() if i.symbol == "BTCUSDT")
+    replays: list[int] = []
+    original = worker.scanner.replay_instrument
+
+    def _spy(*args, **kwargs):
+        replays.append(1)
+        return original(*args, **kwargs)
+
+    worker.scanner.replay_instrument = _spy
+    await worker.backfill(ins)
+    assert replays == [1]
+
+    zid = db.insert_zone(Zone(
+        id=None, instrument_id=ins.id, type=ZoneType.OB, direction=Direction.BULL,
+        timeframe="D1", lower=90.0, upper=100.0, formed_at=old,
+        confirmed_at=None, status=ZoneStatus.CANDIDATE,
+    ))
+    assert zid is not None
+    adapter.candles.append(
+        make_candle(old + D1_MS, 94.0, 96.0, 93.0, 95.0, "D1")
+    )
+    await worker.backfill(ins)
+
+    assert replays == [1]
+    kept = db.get_zone(zid)
+    assert kept is not None
+    assert kept.status == ZoneStatus.CANDIDATE
+    assert kept.market_validity == "active"
+    assert kept.display_until is None
+    assert db.last_candle(ins.id, "D1").open_time == old + D1_MS

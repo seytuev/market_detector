@@ -124,6 +124,16 @@ async def async_main() -> None:
     settings.detector = load_detector_config()
     settings.alt_config = load_alt_config()
     db = Database(settings.db_path)
+    if settings.db_path != ":memory:":
+        try:
+            db_bytes = Path(settings.db_path).stat().st_size
+        except OSError:
+            db_bytes = -1
+        mount = os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "").strip().rstrip("/")
+        if mount:
+            log.info("база %s (%s байт), том %s", settings.db_path, db_bytes, mount)
+        else:
+            log.info("база %s (%s байт)", settings.db_path, db_bytes)
     from .services.htf_profile import migrate_saved_htf_profile
     migrate_saved_htf_profile(db, settings)
 

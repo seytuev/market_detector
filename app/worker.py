@@ -21,6 +21,7 @@ from .engine.replay import migrate_display_fields
 from dataclasses import replace
 
 from .models import (
+    TIMEFRAME_MINUTES,
     Candle, Event, EventKind, Instrument, ZoneStatus, ZoneType,
     bar_period_contains, now_ms,
 )
@@ -165,13 +166,16 @@ class Worker:
     async def backfill(self, ins: Instrument) -> None:
         """Догрузка истории и replay пропусков (§11).
 
-        Полный replay запускается только когда появились свечи раньше
-        прежнего хвоста (первичная загрузка или восстановление после сбоя);
-        replay идемпотентен, восстановленные события получают исходное
+        Полный replay — только первичная загрузка, свечи раньше прежнего
+        хвоста или ТФ со свечами без единой зоны. Новые свечи в хвосте
+        (обычный рестарт после деплоя) применяются по одной, как живой
+        опрос, и не пересобирают уже записанную структуру. Replay
+        идемпотентен; восстановленные события получают исходное
         occurred_at и delayed=True.
         """
         adapter = self.adapters[ins.venue]
         need_replay = False
+        tail: list[Candle] = []
         for tf in self.scan_tfs:
             last = self.db.last_candle(ins.id, tf)
             lookback_start = now_ms() - self.cfg.lookback_days_for(tf) * 86_400_000
@@ -220,7 +224,12 @@ class Worker:
             for c in fresh:
                 c.instrument_id = ins.id
             self.db.insert_candles(fresh)
-            need_replay = True
+            if last is None:
+                # первичной истории ещё не было — структуру строит полный replay
+                need_replay = True
+            else:
+                # хвост после уже построенной структуры: не переигрывать всё
+                tail.extend(fresh)
             log.info("%s %s: догружено %d свечей %s", ins.symbol, ins.venue, len(fresh), tf)
         # replay нужен и при незавершённом прошлом запуске: у ТФ есть свечи,
         # но нет ни одной зоны этого ТФ — структура по нему не построена.
@@ -255,6 +264,21 @@ class Worker:
             ]
             if fresh:
                 await self.dispatcher.dispatch(fresh)
+            return
+        if not tail:
+            return
+        tail.sort(key=lambda c: (c.close_time, TIMEFRAME_MINUTES[c.timeframe]))
+
+        def _apply_tail() -> list[Event]:
+            out: list[Event] = []
+            for candle in tail:
+                out += self.scanner.on_closed_candle(candle)
+            return out
+        await asyncio.to_thread(_apply_tail)
+        self.db.set_meta(f"replay_done:{ins.id}", str(now_ms()))
+        log.info(
+            "%s: хвост %d свечей без полного replay", ins.symbol, len(tail),
+        )
 
     # ---------- основной цикл ----------
 

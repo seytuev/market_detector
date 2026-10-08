@@ -18,6 +18,34 @@ def _env(name: str, default: str) -> str:
     return os.environ.get(name, default)
 
 
+def resolve_db_path(raw: str, *, volume_mount: Optional[str] = None) -> str:
+    """Путь файла SQLite. На Railway том не перекрывает каталог образа.
+
+    RAILWAY_VOLUME_MOUNT_PATH Railway выставляет сам, когда том прикреплён.
+    Файл вне этого каталога живёт в слое контейнера и пропадает на деплое:
+    относительный ``data/htf_zones.db`` (рабочий каталог образа) и абсолютный
+    путь не из тома оба дают пустую базу и заново собранных кандидатов.
+    Если том есть, файл кладётся в него. ``:memory:`` не трогаем.
+    Сравнение строковое: пути Railway — POSIX, а Path('/data') на Windows
+    не считается абсолютным.
+    """
+    configured = (raw or "").strip()
+    if configured == ":memory:":
+        return configured
+    if volume_mount is None:
+        volume_mount = os.environ.get("RAILWAY_VOLUME_MOUNT_PATH")
+    mount = (volume_mount or "").strip().rstrip("/")
+    if not mount:
+        return configured or "data/htf_zones.db"
+    posix = configured.replace("\\", "/")
+    if posix == mount or posix.startswith(mount + "/"):
+        return posix
+    name = posix.rstrip("/").split("/")[-1]
+    if name in ("", ".", ".."):
+        name = "htf_zones.db"
+    return f"{mount}/{name}"
+
+
 _BOOL_TRUE = {"1", "true", "yes", "on"}
 _BOOL_FALSE = {"0", "false", "no", "off"}
 
@@ -386,7 +414,9 @@ class AltConfig:
 class Settings:
     """Настройки процесса. Секреты — только ENV, в браузер не попадают (§11 п.8)."""
 
-    db_path: str = field(default_factory=lambda: _env("HTF_DB_PATH", "data/htf_zones.db"))
+    db_path: str = field(
+        default_factory=lambda: resolve_db_path(_env("HTF_DB_PATH", "data/htf_zones.db"))
+    )
     telegram_token: str = field(default_factory=lambda: _env("TELEGRAM_TOKEN", ""))
     telegram_chat_id: str = field(default_factory=lambda: _env("TELEGRAM_CHAT_ID", ""))
     auth_token: str = field(default_factory=lambda: _env("HTF_AUTH_TOKEN", "dev-token"))
