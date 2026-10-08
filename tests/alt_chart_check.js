@@ -283,6 +283,45 @@ const bxRetest = ac.collectBoxes({
 check('слои: ретест без границы — причина вместо области',
   bxRetest.boxes.length === 0 && /не задана/.test(bxRetest.retestNote));
 
+function shelfBar(i, low, high, close) {
+  return { open_time: MON + i * DAY, open: close, low, high, close };
+}
+const shelfCandles = [];
+for (let i = 0; i < 40; i += 1) shelfCandles.push(shelfBar(i, 10, 14, 12));
+shelfCandles[3].low = 8;
+for (let i = 40; i < 55; i += 1) shelfCandles.push(shelfBar(i, 18, 40, 30));
+const shelfDetail = {
+  frozen_range: { lower: 8, upper: 90, mid: 49 },
+  anchors: { start: { open_time: MON } },
+  candles: shelfCandles,
+  manipulation_episodes: [
+    { id: 1, started_candle_open_time: MON + 3 * DAY, ended_candle_open_time: null, min_price: 8 },
+  ],
+};
+const shelfShown = ac.chartRange(shelfDetail, MON + 54 * DAY);
+check('база у дна: пол около 10, потолок около 14, без импульса',
+  shelfShown.shelf === true &&
+  shelfShown.lower === 10 && shelfShown.upper === 14 &&
+  shelfShown.endMs === MON + 40 * DAY);
+const shelfBoxes = ac.collectBoxes(shelfDetail, {
+  range: true, manipulation: true, entries: false, eventMode: 'setup',
+}, MON + 54 * DAY);
+check('заливка базы короче импульса, вынос стыкуется с полом',
+  shelfBoxes.boxes[0].kind === 'range' && shelfBoxes.boxes[0].endMs === MON + 40 * DAY &&
+  shelfBoxes.boxes[0].lower === 10 && shelfBoxes.boxes[0].upper === 14 &&
+  shelfBoxes.boxes[1].upper === 10 && shelfBoxes.boxes[1].lower === 8);
+const shelfLevels = ac.collectLevels(shelfDetail, { range: true, targets: 'nearest', cancel: false }, 12);
+check('линии L/U/M совпадают с базой у дна',
+  shelfLevels.levels.map((level) => level.name + ':' + level.price).join(',') === 'L:10,U:14,M:12');
+const breakOnly = ac.collectBoxes({
+  frozen_range: { lower: 10, upper: 20, mid: 15 },
+  anchors: { start: { open_time: MON } },
+  breakout: { closed_at: MON + 12 * DAY },
+}, { range: true, manipulation: false, entries: false }, MON + 30 * DAY);
+check('без свечей заливка всё равно кончается на выходе',
+  breakOnly.boxes.length === 1 && breakOnly.boxes[0].endMs === MON + 12 * DAY &&
+  breakOnly.boxes[0].lower === 10 && breakOnly.boxes[0].shelf === false);
+
 /* UI-04: модель сцены в пикселях с подставными преобразованиями. */
 const pxMap = {
   mapTime: (ms) => Math.round(ms / DAY) * 10,

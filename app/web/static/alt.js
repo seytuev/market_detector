@@ -490,6 +490,12 @@ function renderCard() {
   if (anchors && anchors.start) why.push(`Старт ${fmtDate(anchors.start.open_time)}, доступен ${fmtTime(anchors.start.available_at_ms)}.`);
   if (anchors && anchors.rebound) why.push(`Отскок ${fmtDate(anchors.rebound.open_time)}.`);
   if (range) why.push(`Диапазон L ${fmtPrice(range.lower)}, U ${fmtPrice(range.upper)}, M ${fmtPrice(range.mid)}.`);
+  const shownRange = window.AltChart.chartRange(detail, null);
+  if (shownRange && shownRange.shelf && range &&
+      (Math.abs(shownRange.lower - range.lower) > range.lower * 0.01 ||
+       Math.abs(shownRange.upper - range.upper) > range.upper * 0.01)) {
+    why.push(`На графике база у дна ${fmtPrice(shownRange.lower)}–${fmtPrice(shownRange.upper)}: пол, где цена консолидируется.`);
+  }
   if (detail.confirmation) why.push(`Подтверждение: ${detail.confirmation.event_type}.`);
   parts.push(`<p>${esc(why.join(' ') || 'Кратких опор в снимке нет.')}</p>`);
 
@@ -1070,7 +1076,9 @@ function boxTitles(box) {
   if (box.kind === 'range') {
     return {
       cls: 'alt-range-box',
-      title: `Аккумуляция ${fmtPrice(box.lower)}–${fmtPrice(box.upper)}`,
+      title: box.shelf
+        ? `База у дна ${fmtPrice(box.lower)}–${fmtPrice(box.upper)}`
+        : `Аккумуляция ${fmtPrice(box.lower)}–${fmtPrice(box.upper)}`,
     };
   }
   if (box.kind === 'manip') {

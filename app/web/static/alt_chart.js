@@ -716,17 +716,116 @@
     return weeks;
   }
 
+  function percentile(values, p) {
+    if (!values.length) return null;
+    const sorted = values.slice().sort((a, b) => a - b);
+    const i = (sorted.length - 1) * p;
+    const lo = Math.floor(i);
+    const hi = Math.min(sorted.length - 1, Math.ceil(i));
+    if (lo === hi) return sorted[lo];
+    return sorted[lo] + (sorted[hi] - sorted[lo]) * (i - lo);
+  }
+
+  /* База у дна: низ — пол, на котором цена стоит, верх — потолок этой
+     консолидации. Одиночная тень и поздний импульс в рамку не входят.
+     Мало свечей — null, график остаётся на сохранённых L/U. */
+  function shelfRange(candles, startMs, lastMs) {
+    const series = [];
+    (candles || []).forEach((candle) => {
+      if (!candle || candle.open_time == null) return;
+      if (candle.open_time < startMs) return;
+      if (lastMs != null && candle.open_time > lastMs) return;
+      if (!(candle.high > candle.low) && candle.high !== candle.low) return;
+      series.push(candle);
+    });
+    if (series.length < 15) return null;
+    const earlyN = Math.min(series.length, Math.max(15, Math.floor(series.length * 0.3)));
+    const early = series.slice(0, earlyN);
+    const floor0 = percentile(early.map((candle) => candle.low), 0.2);
+    const ceiling0 = percentile(early.map((candle) => candle.high), 0.8);
+    if (!(ceiling0 > floor0)) return null;
+    let end = series.length - 1;
+    let run = 0;
+    for (let i = earlyN; i < series.length; i += 1) {
+      if (series[i].close > ceiling0) {
+        run += 1;
+        if (run >= 3) {
+          end = i - 3;
+          break;
+        }
+      } else {
+        run = 0;
+      }
+    }
+    if (end < earlyN - 1) end = earlyN - 1;
+    const kept = series.slice(0, end + 1);
+    if (kept.length < 10) return null;
+    const lows = kept.map((candle) => candle.low);
+    const absLow = Math.min.apply(null, lows);
+    const cluster = lows.filter((value) => value <= absLow * 1.08);
+    const lower = cluster.length >= 3 && cluster.length >= lows.length * 0.12
+      ? percentile(cluster, 0.5)
+      : percentile(lows, 0.15);
+    const touch = kept.filter((candle) => candle.low <= lower * 1.18);
+    const pool = touch.length >= 8 ? touch : kept;
+    const upper = Math.max(
+      percentile(pool.map((candle) => candle.high), 0.8),
+      percentile(pool.map((candle) => candle.close), 0.9),
+    );
+    if (!(upper > lower) || !(lower > 0)) return null;
+    return { lower, upper, endMs: kept[kept.length - 1].open_time + DAY_MS };
+  }
+
+  /* Рамка на графике. Сохранённые L/U остаются внешним пределом: цели и
+     отмена считаются по ним. Заливка кончается на выходе из базы. */
+  function chartRange(detail, lastCandleOpenMs) {
+    const range = detail && (detail.frozen_range || detail.range);
+    if (!range || !(range.upper > range.lower)) return null;
+    const startMs = detail.anchors && detail.anchors.start
+      ? detail.anchors.start.open_time : null;
+    const asOf = detail.as_of_ms;
+    const candles = (detail.candles || []).filter((candle) =>
+      asOf == null || candle.open_time + DAY_MS <= asOf);
+    const lastFromCandles = candles.length ? candles[candles.length - 1].open_time : null;
+    const last = lastCandleOpenMs != null ? lastCandleOpenMs : lastFromCandles;
+    let endMs = last != null ? last + DAY_MS : null;
+    if (detail.breakout && detail.breakout.closed_at != null) {
+      endMs = endMs == null ? detail.breakout.closed_at : Math.min(endMs, detail.breakout.closed_at);
+    }
+    let lower = range.lower;
+    let upper = range.upper;
+    let shelf = false;
+    if (startMs != null) {
+      const found = shelfRange(candles, startMs, last);
+      if (found) {
+        const nextLower = Math.max(found.lower, range.lower);
+        const nextUpper = Math.min(found.upper, range.upper);
+        if (nextUpper > nextLower) {
+          lower = nextLower;
+          upper = nextUpper;
+          shelf = true;
+          if (endMs == null || found.endMs < endMs) endMs = found.endMs;
+        }
+      }
+    }
+    return {
+      lower, upper, mid: (lower + upper) / 2,
+      startMs, endMs, shelf,
+    };
+  }
+
   /* Слои графика в виде данных для экрана и экспорта (ТЗ §6 UI-04). */
   function collectBoxes(detail, view, lastCandleOpenMs) {
     const result = { boxes: [], retestNote: '' };
     const range = detail && (detail.frozen_range || detail.range);
     if (!detail || !range) return result;
+    const shown = chartRange(detail, lastCandleOpenMs);
     const last = lastCandleOpenMs == null ? null : lastCandleOpenMs;
-    if (view.range && detail.anchors && detail.anchors.start && last != null) {
+    if (view.range && shown && shown.startMs != null && shown.endMs != null && shown.endMs > shown.startMs) {
       result.boxes.push({
         kind: 'range',
-        startMs: detail.anchors.start.open_time, endMs: last + DAY_MS,
-        upper: range.upper, lower: range.lower,
+        startMs: shown.startMs, endMs: shown.endMs,
+        upper: shown.upper, lower: shown.lower, shelf: shown.shelf,
       });
     }
     if (view.manipulation) {
@@ -739,7 +838,8 @@
           result.boxes.push({
             kind: 'manip',
             startMs: episode.started_candle_open_time, endMs: end,
-            upper: range.lower, lower: episode.min_price, minPrice: episode.min_price,
+            upper: shown ? shown.lower : range.lower,
+            lower: episode.min_price, minPrice: episode.min_price,
           });
         });
     }
@@ -759,7 +859,12 @@
   function collectLevels(detail, view, lastClosePrice) {
     const result = { levels: [], targetNote: '' };
     const range = detail && (detail.frozen_range || detail.range);
-    if (view.range && range) {
+    const shown = chartRange(detail, null);
+    if (view.range && shown) {
+      [['L', shown.lower], ['U', shown.upper], ['M', shown.mid]].forEach(([name, price]) => {
+        if (price != null) result.levels.push({ name, price, cls: 'range' });
+      });
+    } else if (view.range && range) {
       [['L', range.lower], ['U', range.upper], ['M', range.mid]].forEach(([name, price]) => {
         if (price != null) result.levels.push({ name, price, cls: 'range' });
       });
@@ -956,7 +1061,7 @@
     closeBoundaryMs, normalizeDetail, selectChartEvents, groupMarkers,
     initialTimeRange, rangeTimeRange, jumpTimeRange, priceRange, levelPlacement,
     nearestTarget, manipulationEpisodes, retestSpan, intervalOnScreen, firstRetest,
-    weekStartMs, aggregateW1, collectBoxes, collectLevels,
+    weekStartMs, aggregateW1, shelfRange, chartRange, collectBoxes, collectLevels,
     boxSpanPx, boxRectPx, buildScene,
   };
 });

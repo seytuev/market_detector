@@ -1496,9 +1496,10 @@ input[type="checkbox"] { min-height: auto; accent-color: var(--accent); }
 #alt-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 4; }
 .alt-zone { position: absolute; pointer-events: none; }
 .alt-range-box {
-  background: rgba(227, 179, 65, 0.12);
-  border-top: 1px solid rgba(227, 179, 65, 0.7);
-  border-bottom: 1px solid rgba(227, 179, 65, 0.7);
+  background: rgba(227, 179, 65, 0.2);
+  border-top: 1px solid rgba(227, 179, 65, 0.9);
+  border-bottom: 1px solid rgba(227, 179, 65, 0.9);
+  border-left: 1px solid rgba(227, 179, 65, 0.55);
 }
 .alt-manip-box { background: rgba(240, 141, 152, 0.16); border-top: 1px dashed rgba(240, 141, 152, 0.8); }
 .alt-retest-box {
