@@ -30,10 +30,10 @@
   --warning: var(--lf-warning);
 
   /* цвета типов зон */
-  --c-fvg: rgba(38, 166, 154, 0.18);
-  --c-fvg-border: rgba(38, 166, 154, 0.7);
-  --c-ob: rgba(76, 141, 255, 0.16);
-  --c-ob-border: rgba(76, 141, 255, 0.7);
+  --c-fvg: rgba(38, 166, 154, 0.22);
+  --c-fvg-border: rgba(38, 166, 154, 0.85);
+  --c-ob: rgba(76, 141, 255, 0.28);
+  --c-ob-border: rgba(76, 141, 255, 0.92);
   --c-prb: rgba(171, 113, 237, 0.16);
   --c-prb-border: rgba(171, 113, 237, 0.7);
   --c-breaker: rgba(255, 152, 0, 0.16);
@@ -204,7 +204,7 @@ select, input, textarea {
   border-radius: 2px;
 }
 
-.zone-rect.z-fvg     { background: rgba(85, 181, 162, 0.08);     border-color: var(--c-fvg-border); }
+.zone-rect.z-fvg     { background: var(--c-fvg);  border-color: var(--c-fvg-border); }
 .zone-rect.z-ob      { background: var(--c-ob);      border-color: var(--c-ob-border); }
 .zone-rect.z-prb     { background: var(--c-prb);     border-color: var(--c-prb-border); }
 .zone-rect.z-breaker { background: var(--c-breaker); border-color: var(--c-breaker-border); }
@@ -216,8 +216,10 @@ select, input, textarea {
 .zone-rect.status-candidate:hover { opacity: 0.8; }
 .zone-rect.status-weakened  { opacity: 0.6; }
 .zone-rect.status-worked    { opacity: 0.45; }
-/* §15.1.3: завершённая зона — приглушена и не продлевается вправо */
+/* §15.1.3: завершённая зона — приглушена и не продлевается вправо.
+   Снятый BSL/SSL ещё 7 дней остаётся читаемым, линия кончается на снятии. */
 .zone-rect.status-completed { opacity: 0.25; }
+.zone-rect.level-kept.status-completed { opacity: 0.85; }
 
 .zone-rect.selected {
   outline: 2px solid var(--accent);
@@ -714,8 +716,8 @@ select, input, textarea {
   user-select: none;
 }
 .ltf-pivot.candidate { opacity: 0.5; border-bottom: 1px dotted var(--text-dim); }
-.ltf-pivot.role-HH, .ltf-pivot.role-LH { color: var(--red); }
-.ltf-pivot.role-HL, .ltf-pivot.role-LL { color: var(--green); }
+.ltf-pivot.role-HH, .ltf-pivot.role-HL { color: var(--green); }
+.ltf-pivot.role-LL, .ltf-pivot.role-LH { color: var(--red); }
 
 /* ---------- телефон (§3.5): карточка → график → зоны → журнал ---------- */
 
@@ -751,8 +753,8 @@ select, input, textarea {
    Базовые токены — алиасы --lf-* из первого :root (темизируются);
    ниже только устойчивые цвета типов зон. */
 :root {
-  --c-fvg: rgba(69,185,165,.11); --c-fvg-border: rgba(69,185,165,.65);
-  --c-ob: rgba(91,141,239,.1); --c-ob-border: rgba(91,141,239,.65);
+  --c-fvg: rgba(69,185,165,.22); --c-fvg-border: rgba(69,185,165,.85);
+  --c-ob: rgba(91,141,239,.28); --c-ob-border: rgba(91,141,239,.92);
   --c-prb: rgba(168,137,229,.1); --c-prb-border: rgba(168,137,229,.65);
   --c-breaker: rgba(230,184,106,.1); --c-breaker-border: rgba(230,184,106,.65);
   --c-ssl: rgba(239,117,115,.09); --c-ssl-border: rgba(239,117,115,.65);

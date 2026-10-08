@@ -1374,6 +1374,7 @@ def instrument_structure(
     entries: list[dict[str, Any]] = []
     entries_excluded: list[dict[str, Any]] = []
     structure_events: list[dict[str, Any]] = []
+    expected: dict[str, Any] = {"bos": None, "sms": None}
     used_context = None
     if context_id is not None:
         obs = db.get_ltf_observation(context_id)
@@ -1390,6 +1391,7 @@ def instrument_structure(
                 entries = layers["entries"]
                 entries_excluded = layers["entries_excluded"]
                 structure_events = layers["structure_events"]
+                expected = layers.get("expected") or expected
     return {
         "timeframe": "H1",
         "instrument_id": instrument_id,
@@ -1402,6 +1404,7 @@ def instrument_structure(
         "entries": entries,
         "entries_excluded": entries_excluded,
         "structure_events": structure_events,
+        "expected": expected,
         "processing": _cursors(db, instrument_id),
         "state_version": db.get_state_seq(),
     }

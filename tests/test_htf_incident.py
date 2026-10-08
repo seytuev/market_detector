@@ -200,6 +200,7 @@ def test_a08_structure_without_context(tmp_path, db, instrument_id):
     assert body["ranges"] == []
     assert body["entries"] == []
     assert body["entries_excluded"] == []
+    assert body["expected"] == {"bos": None, "sms": None}
     assert body["timeframe"] == "H1"
     direct = instrument_structure(db, settings, instrument_id)
     assert direct["ranges"] == []
@@ -345,6 +346,7 @@ def test_profile_migration_exact_ob_only(tmp_path):
     report = migrate_saved_htf_profile(db, settings)
     assert report["action"] == "migrated"
     assert report["added"] == ["FVG"]
+    assert settings.detector.htf_context_types == "OB,FVG"
     saved = json.loads(path.read_text(encoding="utf-8"))
     assert saved["detector"]["htf_context_types"] == "OB,FVG"
     assert saved["detector"]["ltf_enabled"] is True

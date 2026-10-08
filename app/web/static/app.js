@@ -63,6 +63,65 @@ const reviewState = {
 
 // Статусы, видимые на графике по умолчанию
 const CHART_STATUSES = new Set(['candidate', 'active', 'weakened', 'worked']);
+// Снятый HTF BSL/SSL остаётся на графике 7 суток. Линия кончается в display_until.
+const SWEPT_LEVEL_KEEP_MS = 7 * 86_400_000;
+
+function sweptLevelVisible(z, now = Date.now()) {
+  if (!z || (z.type !== 'ssl' && z.type !== 'bsl')) return false;
+  if (z.status !== 'taken' || !z.display_until) return false;
+  const age = now - z.display_until;
+  return age >= 0 && age <= SWEPT_LEVEL_KEEP_MS;
+}
+
+function structurePointColor(role) {
+  const name = String(role || '').toUpperCase();
+  const css = getComputedStyle(document.documentElement);
+  if (name === 'HH' || name === 'HL') {
+    return css.getPropertyValue('--lf-positive').trim() || '#62C9B0';
+  }
+  if (name === 'LL' || name === 'LH') {
+    return css.getPropertyValue('--lf-negative').trim() || '#F08D98';
+  }
+  return css.getPropertyValue('--lf-text2').trim() || '#A2B0C5';
+}
+
+// Момент снятия — время котировки, не открытие свечи. Шкала графика знает
+// только открытия, поэтому конец линии ставится внутрь той свечи, куда
+// попало снятие, и не тянется до правого края.
+function barCoordinate(ts, ms) {
+  if (ms == null || !state.candles.length) return null;
+  const sec = Math.floor(Number(ms) / 1000);
+  if (!Number.isFinite(sec)) return null;
+  const exact = ts.timeToCoordinate(sec);
+  if (exact !== null) return exact;
+  const bars = state.candles;
+  let lo = 0;
+  let hi = bars.length - 1;
+  let best = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (bars[mid].time <= sec) { best = mid; lo = mid + 1; }
+    else hi = mid - 1;
+  }
+  if (best < 0) return null;
+  const x0 = ts.timeToCoordinate(bars[best].time);
+  if (x0 === null) return null;
+  const next = bars[best + 1];
+  if (next) {
+    const x1 = ts.timeToCoordinate(next.time);
+    if (x1 === null || next.time <= bars[best].time) return x0;
+    const frac = (sec - bars[best].time) / (next.time - bars[best].time);
+    return x0 + Math.min(1, Math.max(0, frac)) * (x1 - x0);
+  }
+  const prev = bars[best - 1];
+  const period = prev
+    ? (bars[best].time - prev.time)
+    : (TF_SECONDS[state.timeframe] || 86400);
+  const prevX = prev ? ts.timeToCoordinate(prev.time) : null;
+  const barPx = prevX !== null ? (x0 - prevX) : 8;
+  const frac = period > 0 ? Math.min(1, Math.max(0, (sec - bars[best].time) / period)) : 1;
+  return x0 + frac * Math.max(barPx, 1);
+}
 
 // HTF Zones: в интерфейсе и сканировании только старшие ТФ (H1/H4 убраны
 // по решению пользователя; данные H1 в БД сохраняются как история)
@@ -318,9 +377,12 @@ function drawZones() {
     // ТЗ 07.10.2026 §3: актуальные зоны (relevant — canonical state с
     // сервера) рисуются СРАЗУ, без ожидания ручного ревью; статус candidate
     // скрывает только неподтверждённые объекты очереди проверки
-    pool = state.zones.filter((z) =>
-      CHART_STATUSES.has(z.status) && tfMatch(z) &&
-      (z.relevant || z.status !== 'candidate' || state.showCandidates));
+    pool = state.zones.filter((z) => {
+      if (!tfMatch(z)) return false;
+      if (sweptLevelVisible(z)) return true;
+      return CHART_STATUSES.has(z.status) &&
+        (z.relevant || z.status !== 'candidate' || state.showCandidates);
+    });
     if (pool.length > state.maxChartZones) {
       const price = state.lastPrice || 0;
       pool.sort((a, b) => distanceToZone(a, price) - distanceToZone(b, price));
@@ -402,14 +464,17 @@ function drawZones() {
     // §15.1.3: завершённая зона заканчивается в display_until и НЕ
     // продлевается вправо до текущей цены
     const completed = !!z.display_until;
+    const keptLevel = sweptLevelVisible(z);
     let x2 = paneRight;
     if (completed) {
-      const xc = ts.timeToCoordinate(Math.floor(z.display_until / 1000));
+      const xc = barCoordinate(ts, z.display_until);
       if (xc !== null) x2 = Math.min(paneRight, xc);
+      else if (keptLevel) continue; // снятие левее загруженных свечей — линию вправо не тянем
     }
     if (x2 <= x1) continue; // завершилась левее видимой области
     const cls = `zone-rect z-${z.type} status-${z.status}` +
       (completed ? ' status-completed' : '') +
+      (keptLevel ? ' level-kept' : '') +
       (state.selectedZoneId === z.id ? ' selected' : '');
     const labelText =
       `${z.type.toUpperCase()} ${z.timeframe} · ${STATUS_RU[z.status] || z.status}` +
@@ -518,6 +583,68 @@ function drawZones() {
       overlay.appendChild(div);
     }
   }
+  drawH1Breaks(overlay, ts, paneRight, height);
+}
+
+function drawH1Breaks(overlay, ts, paneRight, height) {
+  if (state.chartMode !== 'h1' || !state.candleSeries) return;
+  const layers = state.h1Layers;
+  if (!layers) return;
+  const pivots = new Map((layers.pivots || []).map((p) => [p.id, p]));
+  const yOf = (price) => {
+    const y = state.candleSeries.priceToCoordinate(price);
+    if (y === null || y < 0 || y > height) return null;
+    return y;
+  };
+  const xOf = (ms) => {
+    if (ms == null) return null;
+    return ts.timeToCoordinate(Math.floor(ms / 1000));
+  };
+  const line = (price, x1, x2, cls, title) => {
+    const y = yOf(price);
+    if (y === null || x2 === null || x2 <= x1) return;
+    const div = document.createElement('div');
+    div.className = cls;
+    div.style.top = y + 'px';
+    div.style.left = x1 + 'px';
+    div.style.width = Math.max(4, Math.min(paneRight, x2) - x1) + 'px';
+    div.title = title;
+    overlay.appendChild(div);
+  };
+  for (const ev of layers.structure_events || []) {
+    const kind = String(ev.kind || '').toLowerCase();
+    if (kind !== 'bos' && kind !== 'sms') continue;
+    if (ev.break_level == null) continue;
+    const refs = ev.ref_pivot_ids || [];
+    const levelPivot = refs.length > 1 ? pivots.get(refs[1]) : pivots.get(refs[0]);
+    const startMs = levelPivot
+      ? (levelPivot.pivot_at || levelPivot.candle_open_time)
+      : (ev.break_candle_open_time || ev.occurred_at);
+    const endMs = ev.break_candle_open_time || ev.occurred_at;
+    let x1 = xOf(startMs);
+    const x2 = xOf(endMs);
+    if (x1 === null || x1 < 0) x1 = 0;
+    line(
+      ev.break_level, x1, x2,
+      `ltf-break ltf-${kind}${ev.accompanying ? ' accompanying' : ''}`,
+      `${kind.toUpperCase()} · ${fmtPrice(ev.break_level)}`,
+    );
+  }
+  const exp = layers.expected || {};
+  const waiting = [
+    ['bos', 'BOS', exp.bos, exp.bos && exp.bos.ref_pivot],
+    ['sms', 'SMS', exp.sms, exp.sms && exp.sms.internal_pivot],
+  ];
+  for (const [key, label, row, pivot] of waiting) {
+    if (!row || row.level == null || !pivot) continue;
+    let x1 = xOf(pivot.pivot_at);
+    if (x1 === null || x1 < 0) x1 = 0;
+    line(
+      row.level, x1, paneRight,
+      `ltf-expected ltf-expected-${key}`,
+      `${label} · ${fmtPrice(row.level)}`,
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -555,12 +682,15 @@ function filteredZones() {
   const bucket = state.zoneBucket || 'live';
   if (bucket === 'live') {
     // ТЗ 07.10.2026 §11: «Актуальные» — canonical relevant (подтверждённые,
-    // непробитые, незавершённые), а не просто status=active
-    zones = zones.filter((z) => z.relevant);
+    // непробитые, незавершённые), а не просто status=active.
+    // Снятый BSL/SSL остаётся в этом списке 7 суток после снятия.
+    zones = zones.filter((z) => z.relevant || sweptLevelVisible(z));
   } else if (bucket === 'candidate') {
     zones = zones.filter((z) => z.status === 'candidate' && !z.display_until);
   } else if (bucket === 'archive') {
-    zones = zones.filter((z) => z.display_until || ['rejected', 'archived', 'taken', 'converted'].includes(z.status));
+    zones = zones.filter((z) =>
+      !sweptLevelVisible(z) &&
+      (z.display_until || ['rejected', 'archived', 'taken', 'converted'].includes(z.status)));
   }
   const f = state.zoneStatusFilter;
   if (f && f !== '' && f !== 'all' && bucket === 'live') {
@@ -663,7 +793,7 @@ function renderHeaderStats() {
   const bsl = by((z) => z.type === 'bsl' && z.status === 'active');
   const items = [
     // ТЗ 07.10.2026 §11/§13: счётчики тех же выборок, что и таблица/график
-    ['Актуальные', by((z) => z.relevant)],
+    ['Актуальные', by((z) => z.relevant || sweptLevelVisible(z))],
     ['Кандидаты (неподтверждённые)', by((z) =>
       z.status === 'candidate' && !z.display_until && !z.relevant)],
     ['Цена внутри', inside],
@@ -1321,6 +1451,9 @@ function paintCharts() {
     state.chart.applyOptions(opts);
     if (state.candleSeries) state.candleSeries.applyOptions(candle);
     requestAnimationFrame(drawZones);
+    if (state.chartMode === 'h1') {
+      loadH1Markers().catch((e) => console.warn('h1 markers:', e));
+    }
   }
   if (reviewState.chart) {
     reviewState.chart.applyOptions(opts);
@@ -2480,6 +2613,9 @@ async function loadDeskExtras() {
     deskData.assetsVersion = assetsVersion;
   }
   deskData.current = cur;
+  if (state.chartMode === 'h1') {
+    loadH1Markers().catch((e) => console.warn('h1 markers:', e));
+  }
   renderDeskExtras();
   const others = deskData.assets.filter((r) => r.instrument.id !== id);
   if (!others.length) return;
@@ -2586,7 +2722,9 @@ function setChartMode(mode) {
 
 async function loadH1Markers() {
   if (!state.candleSeries) return;
-  if (state.chartMode !== 'h1' || !state.instrumentId) {
+  const id = state.instrumentId;
+  if (state.chartMode !== 'h1' || !id) {
+    state.h1Layers = null;
     state.candleSeries.setMarkers([]);
     return;
   }
@@ -2594,23 +2732,25 @@ async function loadH1Markers() {
   const q = ctx ? `?context_id=${ctx}` : '';
   let layers = null;
   try {
-    layers = await api(`/api/ltf/instruments/${state.instrumentId}/structure${q}`);
+    layers = await api(`/api/ltf/instruments/${id}/structure${q}`);
   } catch (e) {
+    state.h1Layers = null;
     state.candleSeries.setMarkers([]);
+    drawZones();
     return;
   }
-  if (!layers || layers.context_id == null) {
-    // без контекста сценарных зон нет — маркеры только подтверждённых опор
-  }
+  if (id !== state.instrumentId || state.chartMode !== 'h1') return;
+  state.h1Layers = layers;
   const pivots = (layers && layers.pivots || []).filter(
     (p) => p.state === 'confirmed' && p.confirmed_at);
   state.candleSeries.setMarkers(pivots.map((p) => ({
     time: Math.floor((p.candle_open_time || p.pivot_at) / 1000),
     position: p.kind === 'high' ? 'aboveBar' : 'belowBar',
     shape: p.kind === 'high' ? 'arrowDown' : 'arrowUp',
-    color: p.kind === 'high' ? '#c4554a' : '#2f7d4a',
+    color: structurePointColor(p.role),
     text: p.role || (p.kind === 'high' ? 'H' : 'L'),
   })));
+  drawZones();
 }
 
 async function reloadAll() {

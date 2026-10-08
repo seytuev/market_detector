@@ -1575,7 +1575,7 @@ async function openSettings() {
     <label><input type="checkbox" id="ls-enabled" ${d.ltf_enabled ? 'checked' : ''}> Включить LTF-мониторинг</label>
     <fieldset><legend>HTF-контекст для запуска наблюдения (D1/W1)</legend>
       <label><input type="checkbox" class="ls-ctx" value="OB" ${ctxTypes.has('OB') ? 'checked' : ''}> OB — согласованный триггер</label>
-      <label><input type="checkbox" class="ls-ctx" value="FVG" ${ctxTypes.has('FVG') ? 'checked' : ''}> FVG — предлагаемый режим (§16.1): расширение триггеров владелец отдельно не подтвердил</label>
+      <label><input type="checkbox" class="ls-ctx" value="FVG" ${ctxTypes.has('FVG') ? 'checked' : ''}> FVG — контекст D1/W1</label>
       <small>PRB/Breaker/BSL/SSL триггерами не являются. Тест и актуальность FVG — по общему движку: касание 50% не прекращает FVG.</small>
     </fieldset>
     <label>Структурные pivots слева (3–5)

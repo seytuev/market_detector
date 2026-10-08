@@ -89,5 +89,10 @@ def migrate_saved_htf_profile(db, settings) -> dict:
         "at": now_ms(),
     }
     db.set_meta(META_KEY, json.dumps(report, ensure_ascii=False))
+    # Файл читается до миграции. Без этой записи процесс, который только
+    # что мигрировал профиль, продолжает анализ со старым OB в памяти.
+    detector_cfg = getattr(settings, "detector", None)
+    if detector_cfg is not None and hasattr(detector_cfg, "htf_context_types"):
+        detector_cfg.htf_context_types = "OB,FVG"
     log.info("профиль HTF мигрирован OB → OB,FVG")
     return report
