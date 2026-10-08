@@ -57,7 +57,7 @@ def test_inside_base_preferred_over_accompaniment() -> None:
                  lower=3.0, upper=4.0, end_reason="breakout_confirmed",
                  end_confirmed=AS_OF - 5 * DAY)
     ep, reason, alts = select_current_episode([accomp, inside], 1.5, AS_OF)
-    assert ep is inside and reason == "inside_base" and alts == []
+    assert ep is inside and reason == "inside_base" and alts == [accomp]
 
 
 def test_recent_breakout_accompaniment_selected() -> None:

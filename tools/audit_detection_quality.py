@@ -1,7 +1,9 @@
 """Read-only audit of local data and isolated reproductions of detector defects.
 
-Run: .venv/Scripts/python.exe tools/audit_detection_quality.py
+Run: .venv/Scripts/python.exe tools/audit_detection_quality.py [output.json]
 Does not initialize or migrate the production Database, fetch data or send alerts.
+The default path is the 2026-10-08 baseline. Pass another path to keep that
+snapshot and write a later report.
 """
 from __future__ import annotations
 
@@ -170,7 +172,11 @@ if __name__ == "__main__":
         "scope": "Local checkout; local SQLite read transaction; synthetic probes in memory.",
         "snapshot": snapshot(), "probes": probes(),
     }
-    out = ROOT / "docs" / "audit" / "detection_quality_2026_10_08.json"
+    out = (
+        Path(sys.argv[1])
+        if len(sys.argv) > 1
+        else ROOT / "docs" / "audit" / "detection_quality_2026_10_08.json"
+    )
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result["probes"], ensure_ascii=False, indent=2))

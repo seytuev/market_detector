@@ -31,8 +31,12 @@ from app.db import Database  # noqa: E402
 from app.models_alt import (  # noqa: E402
     AltAsset,
     AltCandle,
-    AltEpisodeState,
     AltInstrumentSource,
+)
+from app.alt.replay_match import (  # noqa: E402
+    intervals_overlap,
+    published_episode,
+    selection_matches,
 )
 from app.services.alt_overview import select_current_episode  # noqa: E402
 
@@ -44,13 +48,8 @@ DAY_MS = 86_400_000
 MATCH_EPS_REL = 0.02
 # допуск окна для base_end у окна breakout разметки (дней)
 BASE_END_WINDOW_DAYS = 20
-
-FROZEN_STATES = (
-    AltEpisodeState.MATURE.value,
-    AltEpisodeState.ACCOMPANIMENT.value,
-    AltEpisodeState.TERMINAL.value,
-    AltEpisodeState.DECAYED.value,
-)
+# даты разметки ориентировочные; год сдвига этим допуском не проходит
+TIME_PAD_DAYS = 90
 
 
 def date_to_ms(s: str) -> int:
@@ -91,6 +90,17 @@ def fresh_db(ticker: str, earliest_ms: int) -> Database:
         earliest_available_ms=earliest_ms, history_scope="full",
     ))
     return db
+
+
+def episode_span_ms(ep: dict) -> tuple[int | None, int | None]:
+    """Интервал эпизода. Открытая база тянется вперёд, но не на годы вне старта."""
+    start_raw = ep.get("base_start") or ep.get("anchor")
+    end_raw = ep.get("base_end") or ep.get("accompaniment_end")
+    start = date_to_ms(start_raw) if start_raw else None
+    end = date_to_ms(end_raw) if end_raw else None
+    if start is not None and end is None:
+        end = start + 800 * DAY_MS
+    return start, end
 
 
 def in_interval(x: float, iv: dict, eps_rel: float = MATCH_EPS_REL) -> bool:
@@ -181,14 +191,29 @@ def run_ticker(ticker: str, markup_eps: list[dict], cfg: AltConfig) -> dict:
             rec["note"] = "контрольный кандидат: не должен расширять старую базу"
             rec["matched"] = None
         else:
-            cands = [
-                ep for ep in episodes
-                if ep["state"] in FROZEN_STATES
-                and in_interval(ep["lower"], me["L"])
-                and in_interval(ep["upper"], me["U"])
-            ]
+            window_lo = date_to_ms(me["start"]) - TIME_PAD_DAYS * DAY_MS
+            window_hi = date_to_ms(me["end"]) + TIME_PAD_DAYS * DAY_MS
+            cands = []
+            for ep in episodes:
+                if ep["id"] in used_episode_ids or not published_episode(ep):
+                    continue
+                if not (
+                    in_interval(ep["lower"], me["L"])
+                    and in_interval(ep["upper"], me["U"])
+                ):
+                    continue
+                span = episode_span_ms(ep)
+                if not intervals_overlap(span[0], span[1], window_lo, window_hi):
+                    continue
+                cands.append(ep)
             if cands:
-                best = cands[0]
+                markup_start = date_to_ms(me["start"])
+                best = min(
+                    cands,
+                    key=lambda ep: abs(
+                        (episode_span_ms(ep)[0] or 0) - markup_start
+                    ),
+                )
                 used_episode_ids.add(best["id"])
                 rec["matched"] = True
                 rec["episode_id"] = best["id"]
@@ -223,7 +248,7 @@ def run_ticker(ticker: str, markup_eps: list[dict], cfg: AltConfig) -> dict:
                     }
             else:
                 # диагностика ближайшего по границам эпизода
-                frozen = [ep for ep in episodes if ep["state"] in FROZEN_STATES]
+                frozen = [ep for ep in episodes if published_episode(ep)]
                 if frozen:
                     mid_l = (me["L"]["min"] + me["L"]["max"]) / 2
                     mid_u = (me["U"]["min"] + me["U"]["max"]) / 2
@@ -239,20 +264,37 @@ def run_ticker(ticker: str, markup_eps: list[dict], cfg: AltConfig) -> dict:
                     }
         markup_match.append(rec)
 
-    false_bases = [
+    unmarked_episodes = [
         {
             "episode_id": ep["id"], "state": ep["state"],
             "L": ep["lower"], "U": ep["upper"], "anchor": ep["anchor"],
         }
         for ep in episodes
-        if ep["state"] in FROZEN_STATES
+        if published_episode(ep)
         and not any(
             me["role"] in ("historical_base", "current_base")
             and in_interval(ep["lower"], me["L"])
             and in_interval(ep["upper"], me["U"])
+            and intervals_overlap(
+                *episode_span_ms(ep),
+                date_to_ms(me["start"]) - TIME_PAD_DAYS * DAY_MS,
+                date_to_ms(me["end"]) + TIME_PAD_DAYS * DAY_MS,
+            )
             for me in markup_eps
         )
     ]
+    current_marks = [
+        m for m in markup_match if m["role"] == "current_base"
+    ]
+    for mark in current_marks:
+        matched_id = mark.get("episode_id") if mark.get("matched") else None
+        mark["selection_ok"] = selection_matches(
+            sel.id if sel else None, matched_id,
+        )
+    selection_ok = (
+        all(m["selection_ok"] for m in current_marks)
+        if current_marks else None
+    )
 
     return {
         "ticker": ticker,
@@ -270,10 +312,11 @@ def run_ticker(ticker: str, markup_eps: list[dict], cfg: AltConfig) -> dict:
                 "episode_id": sel.id if sel else None,
                 "reason": sel_reason,
                 "alternatives": [e.id for e in sel_alts],
+                "selection_ok": selection_ok,
             },
         },
         "markup_match": markup_match,
-        "false_bases": false_bases,
+        "unmarked_episodes": unmarked_episodes,
     }
 
 
@@ -312,7 +355,8 @@ def render_md(results: list[dict], cfg: AltConfig, as_of: str) -> str:
             f"episodes={len(r['v2']['episodes'])}, "
             f"candidates={r['v2']['candidates_total']}, "
             f"selection={r['v2']['selection']['episode_id']}"
-            f" ({r['v2']['selection']['reason']})"
+            f" ({r['v2']['selection']['reason']}"
+            f", selection_ok={r['v2']['selection']['selection_ok']})"
         )
         for m in r["markup_match"]:
             if m["role"] == "sweep":
@@ -352,13 +396,13 @@ def render_md(results: list[dict], cfg: AltConfig, as_of: str) -> str:
                 body.append(f"  - MISS {m['markup_id']}{tail}")
             else:
                 body.append(f"  - NOTE {m['markup_id']}: {m['note']}")
-        if r["false_bases"]:
+        if r["unmarked_episodes"]:
             body.append(
-                f"  - FALSE BASES: "
+                f"  - НЕРАЗМЕЧЕННЫЕ (не ошибка сами по себе): "
                 + ", ".join(
                     f"ep#{b['episode_id']}[{b['state']}] "
                     f"{b['L']:.6g}/{b['U']:.6g}@{b['anchor']}"
-                    for b in r["false_bases"]
+                    for b in r["unmarked_episodes"]
                 )
             )
         body.append("")
@@ -381,11 +425,13 @@ def main() -> None:
         hits = sum(1 for m in r["markup_match"] if m.get("matched"))
         miss = sum(1 for m in r["markup_match"] if m.get("matched") is False)
         print(f"{ticker}: match={hits} miss={miss} "
-              f"false_bases={len(r['false_bases'])} "
+              f"unmarked={len(r['unmarked_episodes'])} "
+              f"selection_ok={r['v2']['selection']['selection_ok']} "
               f"episodes={len(r['v2']['episodes'])}")
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.date.today().isoformat()
+    # Необязательный суффикс, чтобы не затирать снимок до правки измерителя.
+    stamp = sys.argv[1] if len(sys.argv) > 1 else datetime.date.today().isoformat()
     js_path = OUT_DIR / f"alt_replay_compare_{stamp}.json"
     md_path = OUT_DIR / f"alt_replay_compare_{stamp}.md"
     js_path.write_text(

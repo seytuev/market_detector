@@ -197,6 +197,8 @@ def zone_to_dict(z: Zone) -> dict[str, Any]:
         "supersedes_for_entry": z.evidence.get("supersedes_for_entry"),
         "superseded_for_entry_by": z.evidence.get("superseded_for_entry_by"),
         "market_validity": z.market_validity,
+        "needs_replay": bool(z.needs_replay),
+        "history_trusted": not bool(z.needs_replay),
         "evidence": z.evidence,
         "rule_version": z.rule_version,
     }

@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..config import DetectorConfig
-from ..models import Candle, TIMEFRAME_MINUTES, Zone, ZoneType
+from ..models import TIMEFRAME_MINUTES, Candle, Zone, ZoneType, open_times_follow
 
 
 @dataclass
@@ -43,6 +43,13 @@ def find_pivots(
     for i in range(left, len(closed) - right):
         c = closed[i]
         window = closed[i - left : i + right + 1]
+        if any(
+            not open_times_follow(
+                window[j].open_time, window[j + 1].open_time, timeframe,
+            )
+            for j in range(len(window) - 1)
+        ):
+            continue
         others = [w for w in window if w.open_time != c.open_time]
         confirmed_at = closed[i + right].open_time + tf_ms
         ots = tuple(w.open_time for w in window)

@@ -27,6 +27,21 @@ def close_boundary_ms(open_time: int, timeframe: str) -> int:
     return open_time + TIMEFRAME_MINUTES[timeframe] * 60_000
 
 
+def open_times_follow(prev_open: int, next_open: int, timeframe: str) -> bool:
+    """Следующая свеча идёт сразу за предыдущей.
+
+    Пропуск — разность open_time, кратная шагу ТФ и больше одного шага.
+    Ряд вне сетки ТФ (синтетические open_time) этим правилом не режется.
+    """
+    step = TIMEFRAME_MINUTES[timeframe] * 60_000
+    delta = next_open - prev_open
+    if delta <= 0:
+        return False
+    if delta % step == 0:
+        return delta == step
+    return True
+
+
 def bar_period_contains(open_time: int, timeframe: str, as_of: int) -> bool:
     """True, если as_of лежит в полуинтервале [open_time, open_time + ТФ)."""
     minutes = TIMEFRAME_MINUTES.get(timeframe)

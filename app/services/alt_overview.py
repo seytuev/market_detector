@@ -167,6 +167,9 @@ EPISODE_QUALIFIED_STATES = (
 # срок релевантности после подтверждённого выхода (R-08; §5 ТЗ — параметр,
 # подлежит калибровке на данных; значение проектное, не торговое условие)
 EPISODE_RELEVANCE_WINDOW_MS = 180 * DAY_MS
+# Близость оценок выбора: равная свежесть и подтверждение в пределах суток
+# — неоднозначность, а не молчаливый победитель по id.
+EPISODE_AMBIGUITY_MS = DAY_MS
 
 # потолок свечей в detail (предшествующее падение + диапазон + последние дни)
 _DETAIL_CANDLE_LIMIT = 2000
@@ -1331,24 +1334,44 @@ def alt_run_status(db: Database, cfg: Any) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def _breakout_age_ms(
+    episode: AltRangeEpisode, as_of_ms: Optional[int],
+) -> Optional[int]:
+    """Возраст подтверждённого выхода. None — выхода ещё не было."""
+    if (
+        episode.base_end_reason != "breakout_confirmed"
+        or episode.base_end_confirmed_at_ms is None
+        or as_of_ms is None
+    ):
+        return None
+    return as_of_ms - episode.base_end_confirmed_at_ms
+
+
 def _episode_relevance(
     episode: AltRangeEpisode,
     last_close: Optional[float],
     as_of_ms: Optional[int],
     relevance_window_ms: int,
 ) -> Optional[str]:
-    """Связь квалифицированного эпизода с текущей ценой (R-08):
-    цена внутри базы либо недавний подтверждённый выход с ещё действующим
-    сопровождением. None — эпизод не релевантен."""
+    """Связь квалифицированного эпизода с текущей ценой (R-08, A03).
+
+    Цена внутри базы — актуальная консолидация, пока подтверждённый выход
+    не старше окна сопровождения. Просроченный выход не возрождается от
+    того, что цена снова в старых границах. None — эпизод не релевантен.
+    """
     if episode.state not in EPISODE_QUALIFIED_STATES:
         return None
-    if last_close is not None and episode.lower <= last_close <= episode.upper:
+    age = _breakout_age_ms(episode, as_of_ms)
+    expired = age is not None and age > relevance_window_ms
+    if (
+        last_close is not None
+        and episode.lower <= last_close <= episode.upper
+        and not expired
+    ):
         return "inside_base"
     if (
-        episode.base_end_reason == "breakout_confirmed"
-        and episode.base_end_confirmed_at_ms is not None
-        and as_of_ms is not None
-        and 0 <= as_of_ms - episode.base_end_confirmed_at_ms <= relevance_window_ms
+        age is not None
+        and 0 <= age <= relevance_window_ms
         and (
             episode.accompaniment_end_open_time is None
             or episode.accompaniment_end_open_time >= as_of_ms
@@ -1372,6 +1395,16 @@ def _episode_parity_key(episode: AltRangeEpisode) -> tuple[int, int]:
     return (episode.base_start_open_time, confirmation)
 
 
+def _scores_close(left: AltRangeEpisode, right: AltRangeEpisode) -> bool:
+    """Оценки близки, если свежесть базы одна и подтверждения почти совпали."""
+    left_start, left_at = _episode_parity_key(left)
+    right_start, right_at = _episode_parity_key(right)
+    return (
+        left_start == right_start
+        and abs(left_at - right_at) <= EPISODE_AMBIGUITY_MS
+    )
+
+
 def select_current_episode(
     episodes: list[AltRangeEpisode],
     last_close: Optional[float],
@@ -1383,11 +1416,11 @@ def select_current_episode(
     Возвращает (episode, reason, alternatives):
     - episode=None с явной причиной, если актуального диапазона нет
       ("no_episodes" | "no_qualified_episode" | "no_relevant_episode");
-    - сопоставимые противоречивые кандидаты (паритет свежести и времени
-      подтверждения) → (None, "ambiguous", кандидаты) — статус
-      неоднозначности, альтернативы отсортированы устойчиво (по ID);
+    - сопоставимые противоречивые кандидаты (свежесть базы и подтверждение
+      в пределах суток) → (None, "ambiguous", кандидаты);
     - иначе лучший эпизод, причина ("inside_base" |
-      "recent_breakout_accompaniment") и остальные релевантные альтернативы.
+      "recent_breakout_accompaniment") и релевантные альтернативы из всех
+      категорий, не только из победившей.
     """
     if not episodes:
         return None, "no_episodes", []
@@ -1410,11 +1443,13 @@ def select_current_episode(
         key=_episode_selection_key,
         reverse=True,
     )
-    if len(category) > 1 and (
-        _episode_parity_key(category[0]) == _episode_parity_key(category[1])
-    ):
-        return None, "ambiguous", category
-    return category[0], best_category, category[1:]
+    other_categories = [ep for ep, rel in relevant if rel != best_category]
+    if len(category) > 1 and _scores_close(category[0], category[1]):
+        return None, "ambiguous", category + other_categories
+    winner = category[0]
+    rest = [ep for ep, _rel in relevant if ep is not winner]
+    rest.sort(key=_episode_selection_key, reverse=True)
+    return winner, best_category, rest
 
 
 def _sweep_episode_to_dict(sweep: AltSweepEpisode) -> dict[str, Any]:

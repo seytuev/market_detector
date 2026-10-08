@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..models import Candle, Direction, close_boundary_ms
+from ..models import Candle, Direction, close_boundary_ms, open_times_follow
 
 
 @dataclass
@@ -34,6 +34,13 @@ def scan_fvgs(candles: list[Candle], timeframe: str) -> list[FvgRecord]:
     out: list[FvgRecord] = []
     for i in range(2, len(closed)):
         c1, _c2, c3 = closed[i - 2], closed[i - 1], closed[i]
+        # Три соседние записи — не три последовательные свечи, если между
+        # open_time есть пропуск. Разрыв паттерн отменяет.
+        if not (
+            open_times_follow(c1.open_time, _c2.open_time, timeframe)
+            and open_times_follow(_c2.open_time, c3.open_time, timeframe)
+        ):
+            continue
         if c1.high < c3.low:
             direction, lower, upper = Direction.BULL, c1.high, c3.low
         elif c1.low > c3.high:

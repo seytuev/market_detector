@@ -78,6 +78,8 @@ def _zone_brief(db: Database, zone_id: int) -> Optional[dict[str, Any]]:
         "status": z.status.value, "cycle_id": z.cycle_id,
         # §3.3/§4: основание и подтверждение зоны — разные моменты
         "formed_at": z.formed_at, "confirmed_at": z.confirmed_at,
+        "needs_replay": bool(z.needs_replay),
+        "history_trusted": not bool(z.needs_replay),
     }
 
 

@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from ...models import Candle
+from ...models import Candle, open_times_follow
 
 
 @dataclass
@@ -50,6 +50,12 @@ def pivot_candidates_at(
     кандидата (i = len-1-right), окна остальных позиций не меняются.
     """
     c = closed[i]
+    span = closed[i - left : i + 1 + right]
+    if any(
+        not open_times_follow(span[j].open_time, span[j + 1].open_time, c.timeframe)
+        for j in range(len(span) - 1)
+    ):
+        return []
     window = closed[i - left : i] + closed[i + 1 : i + 1 + right]
     is_high = all(c.high > w.high for w in window)
     is_low = all(c.low < w.low for w in window)

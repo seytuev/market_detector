@@ -26,6 +26,9 @@ PARENT_QUERY_STATUSES = (
 class ParentDecision:
     eligible: bool
     reason: str
+    # needs_replay и поздняя ручная пометка не дают права считать историю
+    # проверенной. Показ контекста при eligible остаётся возможным.
+    history_trusted: bool = True
 
 
 def policy_types(policy) -> set[str]:
@@ -80,8 +83,13 @@ def parent_decision(zone, policy, as_of: Optional[int] = None) -> ParentDecision
     if confirmed_at is None and not manual:
         return ParentDecision(False, "unconfirmed")
     if as_of is not None:
-        if confirmed_at is not None and confirmed_at > as_of and not manual:
+        # Ручной источник не обходит будущее подтверждение и время записи.
+        if confirmed_at is not None and confirmed_at > as_of:
             return ParentDecision(False, "confirmation_not_yet")
+        if manual:
+            known_at = int(getattr(zone, "created_at", 0) or 0)
+            if known_at > as_of:
+                return ParentDecision(False, "not_yet_known")
         born = confirmed_at if confirmed_at is not None else (zone.formed_at or 0)
         if manual and confirmed_at is None and born > as_of:
             return ParentDecision(False, "confirmation_not_yet")
@@ -94,7 +102,9 @@ def parent_decision(zone, policy, as_of: Optional[int] = None) -> ParentDecision
     until = zone.display_until
     if until is not None and (as_of is None or until <= as_of):
         return ParentDecision(False, "finished")
-    return ParentDecision(True, "ok")
+    if getattr(zone, "needs_replay", False):
+        return ParentDecision(True, "needs_replay", False)
+    return ParentDecision(True, "ok", True)
 
 
 def eligible_htf_parent(zone, policy, as_of: Optional[int] = None) -> bool:

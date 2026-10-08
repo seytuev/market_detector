@@ -25,6 +25,27 @@ _FVG50_STATUSES = (ZoneStatus.ACTIVE, ZoneStatus.WEAKENED)
 _FVG50_EVENTS = (EventKind.DEPTH_50, EventKind.FVG_WEAKENED)
 
 
+def _fvg_in_force_at(zone, as_of: Optional[int]) -> bool:
+    """Зона могла быть контекстом в момент as_of.
+
+    as_of=None — текущий снимок: только живые ACTIVE/WEAKENED.
+    Иначе подтверждение уже наступило, а известный конец рисунка ещё нет.
+    Смена статуса без display_until не доказывает, что зона была закрыта
+    именно к as_of.
+    """
+    confirmed = zone.confirmed_at
+    if confirmed is None or (as_of is not None and confirmed > as_of):
+        return False
+    until = zone.display_until
+    if until is not None and as_of is not None and until <= as_of:
+        return False
+    if as_of is None and zone.status not in _FVG50_STATUSES:
+        return False
+    if as_of is None and until is not None:
+        return False
+    return True
+
+
 def _ref(p: PivotCandidate) -> int:
     return p.pivot_id if p.pivot_id is not None else p.pivot_at
 
@@ -90,22 +111,22 @@ def find_htf_fvg50_test(
     Приоритет — зона с уже зафиксированным HTF-событием DEPTH_50/FVG_WEAKENED
     (факт теста 50% пишет общий движок); запасной вариант — чистая геометрия.
 
-    Причинность (L02): as_of — момент решения; учитываются только зоны,
-    сформированные (formed_at) и события, происшедшие (occurred_at) не позднее
-    as_of — позднее известный контекст историческому движению не приписывается.
-    event_time — момент самого теста (закрытие свечи-экстремума): зона обязана
-    существовать к нему, иначе геометрическое достижение не является её тестом.
-    Геометрический fallback возвращает confirmed=True только при доказанной
-    временной связи; confirmed=False — неподтверждённый факт, он не включает
-    контекстное исключение §18 (движок его не эмитит).
+    Причинность (L02, A01/A02): as_of — момент решения. Зона доступна только
+    после confirmed_at, не после formed_at. Текущий статус не переписывает
+    прошлый ответ: архив позже as_of зону на тот момент не стирает, а
+    display_until <= as_of означает, что рисунок к этому моменту уже закрыт.
+    event_time — момент самого теста. Геометрический fallback подтверждён
+    только если подтверждение зоны уже было доступно к этому тесту.
+    confirmed=False контекстное исключение §18 не включает.
     """
     opposite = Direction.BULL if direction == Direction.BEAR else Direction.BEAR
-    zones = db.get_zones(
-        instrument_id=instrument_id, statuses=list(_FVG50_STATUSES),
-        types=[ZoneType.FVG], timeframes={"D1"},
-    )
-    if as_of is not None:
-        zones = [z for z in zones if z.formed_at <= as_of]
+    zones = [
+        z for z in db.get_zones(
+            instrument_id=instrument_id, types=[ZoneType.FVG],
+            timeframes={"D1"},
+        )
+        if _fvg_in_force_at(z, as_of)
+    ]
     reached = [
         z for z in zones
         if z.direction == opposite and (
@@ -118,6 +139,8 @@ def find_htf_fvg50_test(
         if any(
             e.kind in _FVG50_EVENTS
             and (as_of is None or e.occurred_at <= as_of)
+            and z.confirmed_at is not None
+            and e.occurred_at >= z.confirmed_at
             for e in db.get_events(zone_id=z.id, limit=100)
         ):
             return {"zone_id": z.id, "tf": z.timeframe, "via": "event",
@@ -127,7 +150,12 @@ def find_htf_fvg50_test(
         # геометрический fallback: доказанным тестом считается только
         # пересечение зоны при допустимой последовательности событий —
         # зона сформирована не позднее момента теста (L02)
-        confirmed = event_time is not None and z.formed_at <= event_time
+        confirmed = (
+            event_time is not None
+            and z.confirmed_at is not None
+            and z.confirmed_at <= event_time
+            and z.formed_at <= event_time
+        )
         return {"zone_id": z.id, "tf": z.timeframe, "via": "geometry",
                 "confirmed": confirmed}
     return None
