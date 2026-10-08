@@ -22,7 +22,7 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Query
 from pydantic import BaseModel
 
 from ..db import Database
@@ -299,13 +299,32 @@ def register_ltf_routes(app, db: Database, settings, require_auth, ltf_engine=No
     @app.get("/api/ltf/instruments/{instrument_id}/structure",
              dependencies=[Depends(require_auth)])
     def ltf_instrument_structure(
-        instrument_id: int, context_id: Optional[int] = None,
+        instrument_id: int,
+        context_id: Optional[int] = None,
+        as_of: Optional[int] = None,
+        window_from: Optional[int] = Query(None, alias="from"),
+        window_to: Optional[int] = Query(None, alias="to"),
+        points: str = "recent",
+        diagnostic: bool = False,
+        zone_history: bool = False,
+        page: int = 0,
+        limit: int = 500,
     ) -> dict[str, Any]:
-        """Общая структура H1 (F12). Сценарные слои только при допустимом
-        context_id; иначе ranges/entries пустые."""
+        """Общая структура H1 (F12) и слои графика.
+
+        Старые поля сохраняются. points=recent|history|hidden выбирает
+        только подписи точек. from/to — окно истории, не лимит расчёта.
+        """
+        if points not in ("recent", "history", "hidden"):
+            raise HTTPException(status_code=400, detail="Неизвестный режим точек")
+        if limit < 1 or limit > 2000 or page < 0:
+            raise HTTPException(status_code=400, detail="Некорректная страница истории")
         with db.read_tx():
             data = instrument_structure(
                 db, settings, instrument_id, context_id=context_id,
+                as_of=as_of, window_from=window_from, window_to=window_to,
+                points=points, diagnostic=diagnostic, page=page, limit=limit,
+                zone_history=zone_history,
             )
         if data is None:
             raise HTTPException(status_code=404, detail="Инструмент не найден")

@@ -45,6 +45,15 @@ const state = {
   innerLevelsZoneId: null,
   // выбор свечи-якоря на графике для модалки исправления границ (U04)
   anchorPickMode: false,
+  h1Layers: null,
+  h1Req: 0,
+  h1LoadError: false,
+  h1SelectedEventId: null,
+  h1SelectedZoneId: null,
+  h1PriceFocus: null,
+  h1HistoryTimer: null,
+  h1Settings: null,
+  loadedCandleTf: null,
 };
 
 // Режим «Проверка» (U04): собственный график + очередь + инспектор в одном
@@ -240,8 +249,23 @@ function initChart() {
     wickUpColor: theme.up, wickDownColor: theme.down,
     borderVisible: false,
   });
+  state.candleSeries.applyOptions({
+    autoscaleInfoProvider: (original) => {
+      const focus = state.h1PriceFocus;
+      if (!focus) return original ? original() : null;
+      const lo = Math.min(Number(focus.lower), Number(focus.upper));
+      const hi = Math.max(Number(focus.lower), Number(focus.upper));
+      if (!Number.isFinite(lo) || !Number.isFinite(hi)) return original ? original() : null;
+      const mid = (lo + hi) / 2;
+      const span = Math.max(Math.abs(hi - lo) / 2, Math.abs(mid) * 0.012, 1);
+      return { priceRange: { minValue: mid - span * 1.6, maxValue: mid + span * 1.6 } };
+    },
+  });
   // перерисовка зон при прокрутке/масштабировании по времени
-  state.chart.timeScale().subscribeVisibleLogicalRangeChange(() => drawZones());
+  state.chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+    drawZones();
+    scheduleH1HistoryReload();
+  });
   // Перетаскивание шкалы цен меняет вертикальный масштаб БЕЗ события ТФ —
   // у LC такого события нет; перерисовываем по движению указателя во время
   // любых перетаскиваний (троттлинг через rAF, чтобы не дёргать DOM зон
@@ -263,7 +287,10 @@ function initChart() {
     queueZoneRedraw(); // финальная перерисовка после отпускания
   });
   // двойной клик по шкале цен сбрасывает масштаб (autoscale)
-  chartWrap.addEventListener('dblclick', () => queueZoneRedraw());
+  chartWrap.addEventListener('dblclick', () => {
+    state.h1PriceFocus = null;
+    queueZoneRedraw();
+  });
   // режим рисования ручной зоны: два клика; первый задаёт цену И время
   // начала (якорь, ТЗ §7), второй — вторую цену
   state.chart.subscribeClick((param) => {
@@ -293,14 +320,24 @@ function initChart() {
 
 async function loadCandles() {
   if (!state.instrumentId) return;
+  const limit = state.timeframe === 'H1' ? 1500 : 500;
+  const preserve = state.loadedCandleTf === 'H1' && state.timeframe === 'H1' && state.chart
+    && state.candles.length
+    ? state.chart.timeScale().getVisibleLogicalRange()
+    : null;
   state.candles = await api(
-    `/api/candles?instrument_id=${state.instrumentId}&timeframe=${state.timeframe}&limit=500`);
+    `/api/candles?instrument_id=${state.instrumentId}&timeframe=${state.timeframe}&limit=${limit}`);
+  state.loadedCandleTf = state.timeframe;
   state.candleSeries.setData(state.candles);
   if (state.candles.length) {
     state.lastPrice = state.candles[state.candles.length - 1].close;
     updateLastPrice();
   }
-  state.chart.timeScale().fitContent();
+  if (preserve && preserve.from != null && preserve.to != null) {
+    state.chart.timeScale().setVisibleLogicalRange(preserve);
+  } else {
+    state.chart.timeScale().fitContent();
+  }
   // пересчёт координат зон после полного макета графика
   requestAnimationFrame(drawZones);
 }
@@ -391,6 +428,10 @@ function drawZones() {
       pool.sort((a, b) => distanceToZone(a, price) - distanceToZone(b, price));
       pool = pool.slice(0, state.maxChartZones);
     }
+  }
+  // HTF-контекст на H1 — отдельный слой. Галочки D1/W1 не снимаются.
+  if (state.chartMode === 'h1' && window.H1Layers && !window.H1Layers.loadSettings().htfContext) {
+    pool = [];
   }
 
   // Группы с 2+ участниками в пуле рисуются одной объединённой полосой —
@@ -589,69 +630,173 @@ function drawZones() {
   drawH1Breaks(overlay, ts, paneRight, height);
 }
 
+function hideH1Chrome() {
+  ['h1-transition', 'h1-layer-status', 'h1-offscreen', 'h1-event-card'].forEach((id) => {
+    const el = $(id);
+    if (el) el.classList.add('hidden');
+  });
+}
+
+function h1CardFormat() {
+  return { time: fmtTime, price: fmtPrice };
+}
+
+function showH1Card(html) {
+  const card = $('h1-event-card');
+  if (!card) return;
+  card.classList.remove('hidden');
+  card.innerHTML = html + '<button type="button" class="btn small">Закрыть</button>';
+  const button = card.querySelector('button');
+  if (button) button.onclick = () => {
+    card.classList.add('hidden');
+    card.innerHTML = '';
+    state.h1SelectedEventId = null;
+    state.h1SelectedZoneId = null;
+    if (state.candleSeries && state.h1Layers && window.H1Layers) {
+      state.candleSeries.setMarkers(window.H1Layers.seriesMarkers(
+        state.h1Layers, null, structurePointColor));
+    }
+  };
+}
+
+function h1VisibleView(height) {
+  const range = state.chart.timeScale().getVisibleRange();
+  let priceMin = null;
+  let priceMax = null;
+  const top = state.candleSeries.coordinateToPrice(0);
+  const bottom = state.candleSeries.coordinateToPrice(height);
+  if (top != null && bottom != null) {
+    priceMin = Math.min(top, bottom);
+    priceMax = Math.max(top, bottom);
+  }
+  return {
+    timeFrom: range ? Math.floor(Number(range.from) * 1000) : null,
+    timeTo: range ? Math.ceil(Number(range.to) * 1000) : null,
+    priceMin,
+    priceMax,
+  };
+}
+
+function focusH1Zone(zone) {
+  if (!state.chart || !zone || !state.candles.length) return;
+  const fromMs = zone.display_from || zone.formed_at;
+  if (fromMs == null) return;
+  const origin = Math.floor(Number(fromMs) / 1000);
+  const last = state.candles[state.candles.length - 1].time;
+  const first = state.candles[0].time;
+  state.h1SelectedZoneId = zone.id;
+  state.h1PriceFocus = { lower: zone.lower, upper: zone.upper };
+  state.chart.timeScale().setVisibleRange({
+    from: Math.max(first, origin - 48 * 3600),
+    to: Math.min(last + 4 * 3600, Math.max(origin + 96 * 3600, first + 3600)),
+  });
+  try {
+    state.chart.priceScale('right').applyOptions({ autoScale: true });
+  } catch (e) { /* шкала ещё не готова */ }
+}
+
+function resetH1ZoneFilters() {
+  if (!window.H1Layers) return;
+  window.H1Layers.saveSettings({
+    zones: true, ob: true, fvg: true, bsl: true, ssl: true,
+    eligibleOnly: false, candidates: false, historicalZones: false,
+  });
+  window.H1Layers.bindControls(onH1LayersChange);
+  state.h1Settings = window.H1Layers.loadSettings();
+  drawZones();
+}
+
+function scheduleH1HistoryReload() {
+  if (state.chartMode !== 'h1' || !window.H1Layers) return;
+  if (window.H1Layers.loadSettings().points !== 'history') return;
+  clearTimeout(state.h1HistoryTimer);
+  state.h1HistoryTimer = setTimeout(() => {
+    loadH1Markers().catch((e) => console.warn('h1 history:', e));
+  }, 300);
+}
+
+function h1QueryExtra() {
+  const extra = {};
+  const ctx = deskData.current && deskData.current.selected_context_id;
+  if (ctx) extra.context_id = ctx;
+  const settings = window.H1Layers.loadSettings();
+  if (settings.points === 'history' && state.chart) {
+    const range = state.chart.timeScale().getVisibleRange();
+    if (range && range.from != null && range.to != null) {
+      extra.from = Math.floor(Number(range.from) * 1000);
+      extra.to = Math.ceil(Number(range.to) * 1000);
+    }
+  }
+  return extra;
+}
+
+function onH1LayersChange(settings) {
+  const prev = state.h1Settings || window.H1Layers.loadSettings();
+  state.h1Settings = settings;
+  if (state.chartMode !== 'h1') return;
+  const refetch = prev.points !== settings.points || !!prev.diagnostic !== !!settings.diagnostic
+    || !!prev.historicalZones !== !!settings.historicalZones;
+  if (refetch) {
+    loadH1Markers().catch((e) => console.warn('h1 layers:', e));
+    return;
+  }
+  if (state.candleSeries && state.h1Layers) {
+    state.candleSeries.setMarkers(window.H1Layers.seriesMarkers(
+      state.h1Layers, state.h1SelectedEventId, structurePointColor));
+  }
+  drawZones();
+}
+
 function drawH1Breaks(overlay, ts, paneRight, height) {
-  if (state.chartMode !== 'h1' || !state.candleSeries) return;
+  if (state.chartMode !== 'h1' || !state.candleSeries || !window.H1Layers) {
+    hideH1Chrome();
+    return;
+  }
   const layers = state.h1Layers;
-  if (!layers) return;
-  const pivots = new Map((layers.pivots || []).map((p) => [p.id, p]));
-  const yOf = (price) => {
-    const y = state.candleSeries.priceToCoordinate(price);
-    if (y === null || y < 0 || y > height) return null;
-    return y;
-  };
-  const xOf = (ms) => {
-    if (ms == null) return null;
-    return ts.timeToCoordinate(Math.floor(ms / 1000));
-  };
-  const line = (price, x1, x2, cls, title) => {
-    const y = yOf(price);
-    if (y === null || x2 === null || x2 <= x1) return;
-    const div = document.createElement('div');
-    div.className = cls;
-    div.style.top = y + 'px';
-    div.style.left = x1 + 'px';
-    div.style.width = Math.max(4, Math.min(paneRight, x2) - x1) + 'px';
-    div.title = title;
-    overlay.appendChild(div);
-  };
-  for (const ev of layers.structure_events || []) {
-    const kind = String(ev.kind || '').toLowerCase();
-    if (kind !== 'bos' && kind !== 'sms') continue;
-    if (ev.break_level == null) continue;
-    const refs = ev.ref_pivot_ids || [];
-    const levelPivot = refs.length > 1 ? pivots.get(refs[1]) : pivots.get(refs[0]);
-    const startMs = levelPivot
-      ? (levelPivot.pivot_at || levelPivot.candle_open_time)
-      : (ev.break_candle_open_time || ev.occurred_at);
-    const endMs = ev.break_candle_open_time || ev.occurred_at;
-    let x1 = xOf(startMs);
-    const x2 = xOf(endMs);
-    if (x1 === null || x1 < 0) x1 = 0;
-    line(
-      ev.break_level, x1, x2,
-      `ltf-break ltf-${kind}${ev.accompanying ? ' accompanying' : ''}`,
-      `${kind.toUpperCase()} · ${fmtPrice(ev.break_level)}`,
-    );
+  if (!layers) {
+    hideH1Chrome();
+    return;
   }
-  const exp = layers.expected || {};
-  const waiting = [
-    ['bos', 'BOS', exp.bos, exp.bos && exp.bos.ref_pivot],
-    ['sms', 'SMS', exp.sms, exp.sms && exp.sms.internal_pivot],
-  ];
-  for (const [key, label, row, pivot] of waiting) {
-    if (!row || row.level == null || !pivot) continue;
-    let x1 = xOf(pivot.pivot_at);
-    if (x1 === null || x1 < 0) x1 = 0;
-    const pending = row.status === 'waiting_prerequisite';
-    const title = pending
-      ? `${label} · ${fmtPrice(row.level)} · сначала нужен подтверждённый откат`
-      : `${label} · ${fmtPrice(row.level)}`;
-    line(
-      row.level, x1, paneRight,
-      `ltf-expected ltf-expected-${key}`,
-      title,
-    );
-  }
+  window.H1Layers.draw(overlay, {
+    layers,
+    settings: window.H1Layers.loadSettings(),
+    xOf: (ms) => (ms == null ? null : ts.timeToCoordinate(Math.floor(Number(ms) / 1000))),
+    yOf: (price) => state.candleSeries.priceToCoordinate(price),
+    paneRight,
+    height,
+    fmtPrice,
+    fmtTime,
+    view: h1VisibleView(height),
+    selectedZoneId: state.h1SelectedZoneId,
+    loadError: state.h1LoadError,
+    transitionEl: $('h1-transition'),
+    statusEl: $('h1-layer-status'),
+    offscreenEl: $('h1-offscreen'),
+    onZone: (zone, adm) => {
+      state.h1SelectedZoneId = zone.id;
+      drawZones();
+      showH1Card(window.H1Layers.zoneCard(zone, adm, h1CardFormat()));
+    },
+    onEvent: (events) => {
+      const first = events && events[0];
+      state.h1SelectedEventId = first ? first.id : null;
+      if (state.candleSeries) {
+        state.candleSeries.setMarkers(window.H1Layers.seriesMarkers(
+          layers, state.h1SelectedEventId, structurePointColor));
+      }
+      showH1Card((events || []).map((ev) => window.H1Layers.eventCard(ev, h1CardFormat())).join(''));
+    },
+    onShowZone: focusH1Zone,
+    onRetry: () => loadH1Markers().catch((e) => console.warn('h1 retry:', e)),
+    onResetFilters: resetH1ZoneFilters,
+    onShowAllZones: () => {
+      window.H1Layers.saveSettings({ eligibleOnly: false });
+      const box = $('h1-eligible-only');
+      if (box) box.checked = false;
+      state.h1Settings = window.H1Layers.loadSettings();
+      drawZones();
+    },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -2756,6 +2901,9 @@ function paintChartMode() {
     if (candleLabel) candleLabel.textContent = 'Свечи ' + state.timeframe;
     if (hidden) hidden.textContent = state.timeframe;
   }
+  document.querySelectorAll('.h1-layer-controls').forEach((el) => {
+    el.classList.toggle('hidden', state.chartMode !== 'h1');
+  });
   syncTfLayersForMode();
   refreshLayers();
 }
@@ -2780,33 +2928,37 @@ function setChartMode(mode) {
 async function loadH1Markers() {
   if (!state.candleSeries) return;
   const id = state.instrumentId;
-  if (state.chartMode !== 'h1' || !id) {
+  const mode = state.chartMode;
+  if (mode !== 'h1' || !id || !window.H1Layers) {
     state.h1Layers = null;
+    state.h1LoadError = false;
     state.candleSeries.setMarkers([]);
+    hideH1Chrome();
     return;
   }
-  const ctx = deskData.current && deskData.current.selected_context_id;
-  const q = ctx ? `?context_id=${ctx}` : '';
+  const token = ++state.h1Req;
+  const q = window.H1Layers.queryString(h1QueryExtra());
   let layers = null;
   try {
-    layers = await api(`/api/ltf/instruments/${id}/structure${q}`);
+    layers = await api(`/api/ltf/instruments/${id}/structure?${q}`);
+    if (token !== state.h1Req || id !== state.instrumentId || state.chartMode !== mode) return;
+    state.h1LoadError = false;
+    state.h1Layers = layers;
   } catch (e) {
-    state.h1Layers = null;
+    if (token !== state.h1Req || id !== state.instrumentId || state.chartMode !== mode) return;
+    state.h1LoadError = true;
+    state.h1Layers = {
+      detected_zones: [],
+      structural_events: [],
+      layer_status: { zones: { state: 'error', total: 0 } },
+      snapshot: {},
+    };
     state.candleSeries.setMarkers([]);
     drawZones();
     return;
   }
-  if (id !== state.instrumentId || state.chartMode !== 'h1') return;
-  state.h1Layers = layers;
-  const pivots = (layers && layers.pivots || []).filter(
-    (p) => p.state === 'confirmed' && p.confirmed_at);
-  state.candleSeries.setMarkers(pivots.map((p) => ({
-    time: Math.floor((p.candle_open_time || p.pivot_at) / 1000),
-    position: p.kind === 'high' ? 'aboveBar' : 'belowBar',
-    shape: p.kind === 'high' ? 'arrowDown' : 'arrowUp',
-    color: structurePointColor(p.role),
-    text: p.role || (p.kind === 'high' ? 'H' : 'L'),
-  })));
+  state.candleSeries.setMarkers(window.H1Layers.seriesMarkers(
+    layers, state.h1SelectedEventId, structurePointColor));
   drawZones();
 }
 
@@ -2826,6 +2978,10 @@ async function main() {
   };
   $('instrument-select').onchange = (e) => {
     state.instrumentId = Number(e.target.value);
+    state.h1SelectedEventId = null;
+    state.h1SelectedZoneId = null;
+    state.h1PriceFocus = null;
+    hideH1Chrome();
     syncInstrumentContext();
     hideInspector();
     reloadAll();
@@ -2871,6 +3027,10 @@ async function main() {
     if ($(id)) $(id).onchange = updateLayers;
   });
   updateLayers();
+  if (window.H1Layers) {
+    state.h1Settings = window.H1Layers.loadSettings();
+    window.H1Layers.bindControls(onH1LayersChange);
+  }
   $('zone-status-filter').onchange = (e) => { state.zoneStatusFilter = e.target.value; renderZonesTable(); };
   $('zone-type-filter').onchange = (e) => { state.zoneTypeFilter = e.target.value || null; renderZonesTable(); };
   $('zone-tf-filter').onchange = (e) => { state.zoneTfFilter = e.target.value || null; renderZonesTable(); };

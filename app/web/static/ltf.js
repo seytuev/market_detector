@@ -51,6 +51,13 @@ const state = {
                              // WS-сообщения старше него (позднее эхо) игнорируются
   reviewFlash: null,
   inspectorDismissed: true,
+  h1Layers: null,
+  h1LoadError: false,
+  h1Req: 0,
+  h1SelectedEventId: null,
+  h1SelectedZoneId: null,
+  h1HistoryTimer: null,
+  h1Settings: null,
 };
 
 // Локальные fallback-формулировки; актуальные — GET /api/labels (texts_ru)
@@ -403,6 +410,9 @@ function updateHtfLink() {
 async function selectInstrument(id) {
   if (!id) return;
   state.instrumentId = id;
+  state.h1SelectedEventId = null;
+  state.h1SelectedZoneId = null;
+  state.h1Req += 1;
   localStorage.setItem(INSTRUMENT_KEY, String(id));
   updateHtfLink();
   $('ltf-instrument').value = id;
@@ -437,14 +447,18 @@ async function reloadCurrent({ keepRange }) {
     const view = await api(`/api/ltf/instruments/${id}/current`);
     if (stale()) return null;
     const obsId = view.selected_context_id;
-    const [layers, candles, journal, assets] = await Promise.all([
+    const h1q = window.H1Layers
+      ? window.H1Layers.queryString(Object.assign({ context_id: obsId || undefined }, visibleWindowMs()))
+      : '';
+    const [layers, candles, journal, assets, h1] = await Promise.all([
       obsId ? api(`/api/ltf/observations/${obsId}/chart`) : Promise.resolve(null),
       api(`/api/candles?instrument_id=${id}&timeframe=H1&limit=2500`),
       obsId ? api(`/api/ltf/observations/${obsId}/journal`) : Promise.resolve(null),
       api('/api/ltf/instruments'),
+      api(`/api/ltf/instruments/${id}/structure?${h1q}`).catch(() => ({ __error: true })),
     ]);
     if (stale()) return null;
-    return { view, layers, candles, journal, assets };
+    return { view, layers, candles, journal, assets, h1 };
   };
   const mismatch = (b) =>
     b.assets.state_version !== b.view.state_version ||
@@ -468,6 +482,11 @@ async function reloadCurrent({ keepRange }) {
   state.current = bundle.view;
   state.lastPrice = bundle.view.price;
   state.layers = bundle.layers;
+  state.h1Req += 1;
+  state.h1LoadError = !!(bundle.h1 && bundle.h1.__error);
+  state.h1Layers = state.h1LoadError
+    ? { detected_zones: [], structural_events: [], layer_status: { zones: { state: 'error', total: 0 } }, snapshot: {} }
+    : bundle.h1;
   state.candles = bundle.candles;
   state.journal = bundle.journal ? bundle.journal.events : [];
   state.appliedSeq = bundle.view.state_version;
@@ -481,6 +500,7 @@ async function reloadCurrent({ keepRange }) {
   renderJournal();
   renderHistoryCount();
   setCandles({ visibleRange: keep, focus: keepFocus });
+  paintH1Markers();
   requestAnimationFrame(() => requestAnimationFrame(drawLtfLayers));
 }
 
@@ -1205,7 +1225,10 @@ function initChart() {
     upColor: '#E8EAF0', downColor: '#3B9DF0',
     wickUpColor: '#E8EAF0', wickDownColor: '#3B9DF0', borderVisible: false,
   });
-  state.chart.timeScale().subscribeVisibleLogicalRangeChange(() => drawLtfLayers());
+  state.chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+    drawLtfLayers();
+    scheduleH1HistoryReload();
+  });
   window.addEventListener('resize', drawLtfLayers);
   new ResizeObserver(() => drawLtfLayers()).observe($('chart-container'));
   state.chart.subscribeCrosshairMove(() => drawLtfLayers());
@@ -1307,17 +1330,147 @@ function applyLtfPriceScale(focus) {
   } catch (e) { /* шкала ещё не готова */ }
 }
 
+function structurePointColor(role) {
+  const name = String(role || '').toUpperCase();
+  const css = getComputedStyle(document.documentElement);
+  if (name === 'HH' || name === 'HL') return css.getPropertyValue('--lf-positive').trim() || '#62C9B0';
+  if (name === 'LL' || name === 'LH') return css.getPropertyValue('--lf-negative').trim() || '#F08D98';
+  return css.getPropertyValue('--lf-text2').trim() || '#A2B0C5';
+}
+
+function visibleWindowMs() {
+  if (!state.chart) return {};
+  const range = state.chart.timeScale().getVisibleRange();
+  if (!range || range.from == null || range.to == null) return {};
+  return {
+    from: Math.floor(Number(range.from) * 1000),
+    to: Math.ceil(Number(range.to) * 1000),
+  };
+}
+
+function paintH1Markers() {
+  if (!state.candleSeries || !window.H1Layers) return;
+  if (!state.h1Layers) {
+    state.candleSeries.setMarkers([]);
+    return;
+  }
+  state.candleSeries.setMarkers(window.H1Layers.seriesMarkers(
+    state.h1Layers, state.h1SelectedEventId, structurePointColor));
+}
+
+function hideH1Chrome() {
+  ['h1-transition', 'h1-layer-status', 'h1-offscreen', 'h1-event-card'].forEach((id) => {
+    const el = $(id);
+    if (el) el.classList.add('hidden');
+  });
+}
+
+function showH1Card(html) {
+  const card = $('h1-event-card');
+  if (!card) return;
+  card.classList.remove('hidden');
+  card.innerHTML = html + '<button type="button" class="btn small">Закрыть</button>';
+  const button = card.querySelector('button');
+  if (button) button.onclick = () => {
+    card.classList.add('hidden');
+    card.innerHTML = '';
+    state.h1SelectedEventId = null;
+    state.h1SelectedZoneId = null;
+    paintH1Markers();
+  };
+}
+
+async function loadH1Structure() {
+  const id = state.instrumentId;
+  if (!id || !window.H1Layers) return;
+  const token = ++state.h1Req;
+  const obsId = state.current && state.current.selected_context_id;
+  const q = window.H1Layers.queryString(Object.assign(
+    { context_id: obsId || undefined },
+    visibleWindowMs(),
+  ));
+  try {
+    const data = await api(`/api/ltf/instruments/${id}/structure?${q}`);
+    if (token !== state.h1Req || id !== state.instrumentId) return;
+    state.h1Layers = data;
+    state.h1LoadError = false;
+  } catch (e) {
+    if (token !== state.h1Req || id !== state.instrumentId) return;
+    state.h1LoadError = true;
+    state.h1Layers = {
+      detected_zones: [],
+      structural_events: [],
+      layer_status: { zones: { state: 'error', total: 0 } },
+      snapshot: {},
+    };
+  }
+  paintH1Markers();
+  drawLtfLayers();
+}
+
+function scheduleH1HistoryReload() {
+  if (!window.H1Layers || window.H1Layers.loadSettings().points !== 'history') return;
+  clearTimeout(state.h1HistoryTimer);
+  state.h1HistoryTimer = setTimeout(() => {
+    loadH1Structure().catch((e) => console.warn('h1 history:', e));
+  }, 300);
+}
+
+function onH1LayersChange(settings) {
+  const prev = state.h1Settings || window.H1Layers.loadSettings();
+  state.h1Settings = settings;
+  const refetch = prev.points !== settings.points || !!prev.diagnostic !== !!settings.diagnostic
+    || !!prev.historicalZones !== !!settings.historicalZones;
+  if (refetch) {
+    loadH1Structure().catch((e) => console.warn('h1 layers:', e));
+    return;
+  }
+  paintH1Markers();
+  drawLtfLayers();
+}
+
+function resetH1ZoneFilters() {
+  if (!window.H1Layers) return;
+  window.H1Layers.saveSettings({
+    zones: true, ob: true, fvg: true, bsl: true, ssl: true,
+    eligibleOnly: false, candidates: false, historicalZones: false,
+  });
+  window.H1Layers.bindControls(onH1LayersChange);
+  state.h1Settings = window.H1Layers.loadSettings();
+  drawLtfLayers();
+}
+
+function focusH1Zone(zone) {
+  if (!state.chart || !zone || !state.candles.length) return;
+  const fromMs = zone.display_from || zone.formed_at;
+  if (fromMs == null) return;
+  const origin = Math.floor(Number(fromMs) / 1000);
+  const last = state.candles[state.candles.length - 1].time;
+  const first = state.candles[0].time;
+  state.h1SelectedZoneId = zone.id;
+  state.chart.timeScale().setVisibleRange({
+    from: Math.max(first, origin - 48 * 3600),
+    to: Math.min(last + 4 * 3600, Math.max(origin + 96 * 3600, first + 3600)),
+  });
+  applyLtfPriceScale({ lower: zone.lower, upper: zone.upper });
+}
+
 function drawLtfLayers() {
   const overlay = $('ltf-overlay');
   overlay.innerHTML = '';
-  if (!state.candleSeries || !state.candles.length || !state.layers) return;
+  if (!state.candleSeries || !state.candles.length) {
+    hideH1Chrome();
+    return;
+  }
+  if (!state.layers && !state.h1Layers) return;
   const chartEl = $('chart');
   const width = chartEl.clientWidth;
   const height = chartEl.clientHeight;
   const paneRight = width - state.chart.priceScale('right').width();
   const ts = state.chart.timeScale();
-  const layers = state.layers;
+  const layers = state.layers || {};
   const toggles = state.layerToggles;
+  const showHtf = !window.H1Layers || window.H1Layers.loadSettings().htfContext;
 
   const xOf = (ms) => ts.timeToCoordinate(Math.floor(ms / 1000));
   const yOf = (p) => state.candleSeries.priceToCoordinate(p);
@@ -1356,7 +1509,7 @@ function drawLtfLayers() {
   // 1) родительская HTF-зона выбранного контекста: линии границ от
   //    формирования вправо с ценой на конце (без сплошного блока)
   const parent = layers.parent_zone;
-  if (parent) {
+  if (parent && showHtf) {
     const fromMs = parent.display_from || parent.formed_at;
     let x1 = fromMs ? xOf(fromMs) : 0;
     if (x1 === null || x1 < 0) x1 = 0;
@@ -1444,9 +1597,10 @@ function drawLtfLayers() {
     provLine(prov.lower, 'предварительный');
   }
 
-  // 3) Entry Zones: по умолчанию — только подходящие (§4.3);
-  //    «Исключённые зоны» — отдельным слоем с причиной в подсказке
-  for (const e of entryList()) {
+  // 3) Зоны сценария. Если расчёт H1 инструмента уже пришёл, его зоны
+  //    рисует общий слой ниже — здесь те же геометрии не дублируются.
+  const useDetected = !!(state.h1Layers && Array.isArray(state.h1Layers.detected_zones) && !state.h1LoadError);
+  if (!useDetected) for (const e of entryList()) {
     const id = e.entry_zone_id || e.id;
     const fromMs = e.confirmed_at || e.formed_at;
     let x1 = xOf(fromMs);
@@ -1475,57 +1629,11 @@ function drawLtfLayers() {
     }
   }
 
-  // 4) BOS/SMS: отрезок от исходного структурного уровня до подтверждающей
-  //    свечи (§5). По умолчанию — последний относящийся к сценарию слом;
-  //    «Подробная структура» показывает все события сценария.
-  const pivotById = {};
-  for (const p of layers.pivots || []) pivotById[p.id] = p;
-  const events = layers.structure_events || [];
-  const visibleEvents = toggles.structure ? events : events.slice(-1);
-  for (const ev of visibleEvents) {
-    const refs = ev.ref_pivot_ids || [];
-    const levelPivot = refs.length > 1 ? pivotById[refs[1]] : pivotById[refs[0]];
-    const startMs = levelPivot ? levelPivot.pivot_at
-      : ev.break_candle_open_time - 10 * H1_MS;
-    const x1 = xOf(startMs);
-    const x2 = xOf(ev.break_candle_open_time);
-    if (x2 === null) continue;
-    hline(ev.break_level, x1 === null ? 0 : x1, x2,
-      `ltf-break ltf-${ev.kind.toLowerCase()}${ev.accompanying ? ' accompanying' : ''}`,
-      `${ev.kind} ${ev.stage} · уровень ${fmtPrice(ev.break_level)} · ` +
-      `закрытие ${fmtTime(ev.occurred_at)} · обнаружено ${fmtTime(ev.detected_at)}`);
-  }
+  // 4–4b) BOS/SMS и ожидаемые уровни рисует общий слой H1Layers ниже.
+  //    Начало отрезка берётся только из известной опоры.
 
-  // 4b) ожидаемые уровни BOS/SMS в ожидании: пунктир от опорного pivot (§6)
-  const exp = layers.expected;
-  if (exp) {
-    const pairs = [
-      ['bos', 'Ожидаемый BOS', exp.bos && exp.bos.ref_pivot],
-      ['sms', 'Ожидаемый SMS', exp.sms && exp.sms.internal_pivot],
-    ];
-    for (const [key, label, pivot] of pairs) {
-      const e = exp[key];
-      if (!e || !pivot) continue;
-      const rawX1 = xOf(pivot.pivot_at);
-      let x1 = rawX1;
-      if (x1 === null || x1 < 0) x1 = 0;
-      const pending = e.status === 'waiting_prerequisite';
-      const labelText = pending ? `${label}: сначала нужен подтверждённый откат` : label;
-      const div = hline(e.level, x1, paneRight, `ltf-expected ltf-expected-${key}`,
-        `${labelText} · уровень ${fmtPrice(e.level)} · экстремум ${fmtTime(pivot.pivot_at)}` +
-        ` · подтверждён ${pivot.confirmed_at ? fmtTime(pivot.confirmed_at) : 'ещё нет'}`);
-      if (div && ((rawX1 !== null && rawX1 >= 0) || paneRight - x1 >= 80)) {
-        // LONG — фраза над линией, SHORT — под линией
-        const span = document.createElement('span');
-        span.className = e.direction === 'bull' ? 'lbl-above' : 'lbl-below';
-        span.textContent = labelText;
-        div.appendChild(span);
-      }
-    }
-  }
-
-  // 5) «Подробная структура»: маркеры подтверждённых pivots (скрыты по умолчанию)
-  if (toggles.structure) {
+  // 5) «Подробная структура»: запасные маркеры, если расчёт точек H1 не пришёл
+  if (toggles.structure && !(state.h1Layers && Array.isArray(state.h1Layers.pivot_markers))) {
     for (const p of layers.pivots || []) {
       if (p.state !== 'confirmed') continue;
       const x = xOf(p.pivot_at);
@@ -1551,6 +1659,59 @@ function drawLtfLayers() {
         `${p.role} · ${fmtPrice(p.price)} · экстремум ${fmtTime(p.pivot_at)}`);
     }
   }
+
+  if (!window.H1Layers || !state.h1Layers) return;
+  const viewRange = ts.getVisibleRange();
+  let priceMin = null;
+  let priceMax = null;
+  const top = state.candleSeries.coordinateToPrice(0);
+  const bottom = state.candleSeries.coordinateToPrice(height);
+  if (top != null && bottom != null) {
+    priceMin = Math.min(top, bottom);
+    priceMax = Math.max(top, bottom);
+  }
+  window.H1Layers.draw(overlay, {
+    layers: state.h1Layers,
+    settings: window.H1Layers.loadSettings(),
+    xOf,
+    yOf,
+    paneRight,
+    height,
+    fmtPrice,
+    fmtTime,
+    view: {
+      timeFrom: viewRange ? Math.floor(Number(viewRange.from) * 1000) : null,
+      timeTo: viewRange ? Math.ceil(Number(viewRange.to) * 1000) : null,
+      priceMin,
+      priceMax,
+    },
+    selectedZoneId: state.h1SelectedZoneId,
+    loadError: state.h1LoadError,
+    transitionEl: $('h1-transition'),
+    statusEl: $('h1-layer-status'),
+    offscreenEl: $('h1-offscreen'),
+    onZone: (zone, adm) => {
+      state.h1SelectedZoneId = zone.id;
+      drawLtfLayers();
+      showH1Card(window.H1Layers.zoneCard(zone, adm, { time: fmtTime, price: fmtPrice }));
+    },
+    onEvent: (events) => {
+      const first = events && events[0];
+      state.h1SelectedEventId = first ? first.id : null;
+      paintH1Markers();
+      showH1Card((events || []).map((ev) => window.H1Layers.eventCard(ev, { time: fmtTime, price: fmtPrice })).join(''));
+    },
+    onShowZone: focusH1Zone,
+    onRetry: () => loadH1Structure().catch((e) => console.warn('h1 retry:', e)),
+    onResetFilters: resetH1ZoneFilters,
+    onShowAllZones: () => {
+      window.H1Layers.saveSettings({ eligibleOnly: false });
+      const box = $('h1-eligible-only');
+      if (box) box.checked = false;
+      state.h1Settings = window.H1Layers.loadSettings();
+      drawLtfLayers();
+    },
+  });
 }
 
 function focusEntryZone(zoneId) {
@@ -1792,6 +1953,10 @@ function setupLtfWorkspace() {
   };
   $('ltf-mode-now').onclick = () => setMode('now');
   $('ltf-mode-history').onclick = () => setMode('history');
+  if (window.H1Layers) {
+    state.h1Settings = window.H1Layers.loadSettings();
+    window.H1Layers.bindControls(onH1LayersChange);
+  }
   document.querySelectorAll('#ltf-layer-toggles input').forEach((cb) => {
     cb.onchange = () => {
       state.layerToggles[cb.dataset.layer] = cb.checked;

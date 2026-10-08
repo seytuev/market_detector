@@ -1558,20 +1558,37 @@ def observation_chart_layers(
 def instrument_structure(
     db: Database, settings, instrument_id: int,
     context_id: Optional[int] = None,
+    as_of: Optional[int] = None,
+    window_from: Optional[int] = None,
+    window_to: Optional[int] = None,
+    points: str = "recent",
+    diagnostic: bool = False,
+    page: int = 0,
+    limit: int = 500,
+    zone_history: bool = False,
 ) -> Optional[dict[str, Any]]:
     """Общая структура H1 инструмента (F12–F14).
 
     Слои сценария и Entry Zones появляются только у явно переданного
     допустимого контекста. context_id=None — честные пустые ranges/entries:
     диапазон и зоны входа не выдумываются. Формирующаяся свеча отдельно
-    от закрытых и pivot не подтверждает."""
+    от закрытых и pivot не подтверждает.
+
+    Дополнительно, не заменяя эти поля, снимок несёт инструментальные
+    точки (лимит 20 только у подписей), BOS/SMS, переход структуры и
+    зоны H1. Они не зависят от сценария и ничего не записывают.
+    """
     ins = db.get_instrument(instrument_id)
     if ins is None:
         return None
-    now = now_ms()
+    now = as_of if as_of is not None else now_ms()
     since = now - settings.detector.ltf_history_days * 86_400_000
+    if window_from is not None:
+        since = min(since, window_from)
     raw = db.get_candles(
-        instrument_id, "H1", start_ms=since, closed_only=False,
+        instrument_id, "H1", start_ms=since,
+        end_ms=now if as_of is not None else None,
+        closed_only=False,
     )
     forming = None
     for candle in reversed(raw):
@@ -1611,7 +1628,7 @@ def instrument_structure(
                 entries_excluded = layers["entries_excluded"]
                 structure_events = layers["structure_events"]
                 expected = layers.get("expected") or expected
-    return {
+    payload = {
         "timeframe": "H1",
         "instrument_id": instrument_id,
         "context_id": used_context,
@@ -1627,6 +1644,30 @@ def instrument_structure(
         "processing": _cursors(db, instrument_id),
         "state_version": db.get_state_seq(),
     }
+    from .h1_chart import assemble_h1_layers
+    extra = assemble_h1_layers(
+        db, settings, instrument_id,
+        as_of=now, window_from=window_from, window_to=window_to,
+        points=points, diagnostic=diagnostic, page=page, limit=limit,
+        context_id=used_context, zone_history=zone_history,
+    )
+    roles = extra.pop("roles_as_of", {})
+    if as_of is not None:
+        pivots = [
+            p for p in pivots
+            if p["pivot_at"] <= now
+            and (p.get("confirmed_at") is None or p["confirmed_at"] <= now)
+        ]
+        for pivot in pivots:
+            if pivot.get("id") in roles:
+                pivot["role"] = roles[pivot["id"]]
+        payload["pivots"] = pivots
+        payload["as_of"] = now
+        payload["window_from"] = since
+        if payload.get("forming") and payload["forming"]["open_time"] > now:
+            payload["forming"] = None
+    payload.update(extra)
+    return payload
 
 
 # --------------------------------------------------------------------- #

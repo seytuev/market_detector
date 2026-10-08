@@ -518,6 +518,49 @@ class BreakCursor:
                                    cancellation=self.cancellation)
 
 
+def scan_instrument_structure(
+    pivots: list[PivotCandidate],
+    candles: list[Candle],
+    now_ms: int,
+    since_ms: int = 0,
+) -> list[StructureEventDraft]:
+    """Подтверждённые BOS/SMS инструмента, без сценария и без записи в БД.
+
+    Те же машины ``_SideScan``, что у ``detect_breaks``: обе стороны на каждой
+    закрытой свече, без остановки на обратном сломе. Событие появляется только
+    из ``on_candle`` — закрытие H1 строго за вооружённым уровнем. Смена
+    текстовой роли, тень, незакрытая свеча и Close == level событие не создают.
+    Свечи раньше ``since_ms`` двигают состояние (уровень не переиздаётся позже),
+    но в список не попадают. ``now_ms`` отсекает будущие свечи и опоры.
+    """
+    closed = sorted(
+        (c for c in candles if c.closed and c.close_time <= now_ms),
+        key=lambda c: c.open_time,
+    )
+    ps = sorted(
+        (
+            p for p in pivots
+            if p.state == "confirmed" and p.confirmed_at <= now_ms
+        ),
+        key=lambda p: (p.confirmed_at, p.pivot_at),
+    )
+    bear = _SideScan(Direction.BEAR, now_ms)
+    bull = _SideScan(Direction.BULL, now_ms)
+    events: list[StructureEventDraft] = []
+    pi = 0
+    for c in closed:
+        while pi < len(ps) and ps[pi].confirmed_at <= c.close_time:
+            bear.absorb(ps[pi])
+            bull.absorb(ps[pi])
+            pi += 1
+        emitted = bear.on_candle(c) + bull.on_candle(c)
+        if c.open_time < since_ms:
+            continue
+        events.extend(emitted)
+    events.sort(key=lambda e: (e.occurred_at, e.kind, e.direction.value, e.level_key))
+    return events
+
+
 def detect_breaks(
     pivots: list[PivotCandidate],
     candles: list[Candle],

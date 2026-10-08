@@ -1947,6 +1947,43 @@ class Database:
             ).fetchall()
         ]
 
+    def list_ltf_pivot_role_logs(
+        self, instrument_id: int, pivot_ids: Optional[list[int]] = None,
+    ) -> dict[int, list[dict[str, Any]]]:
+        """Журнал ролей опор инструмента, по pivot_id и порядку id.
+
+        Нужен снимку H1 на историческом as_of: роль берётся известная тогда,
+        а не финальная из будущего. ``pivot_ids`` ограничивает чтение опорами,
+        чья роль назначена позже as_of. Чтение, без записи.
+        """
+        if pivot_ids is not None and not pivot_ids:
+            return {}
+        grouped: dict[int, list[dict[str, Any]]] = {}
+        chunks: list[Optional[list[int]]]
+        if pivot_ids is None:
+            chunks = [None]
+        else:
+            chunks = [pivot_ids[i:i + 400] for i in range(0, len(pivot_ids), 400)]
+        for chunk in chunks:
+            q = (
+                """SELECT l.id, l.pivot_id, l.old_role, l.new_role, l.changed_at
+                   FROM ltf_pivot_role_log l
+                   JOIN ltf_pivot p ON p.id = l.pivot_id
+                   WHERE p.instrument_id=?"""
+            )
+            args: list[Any] = [instrument_id]
+            if chunk:
+                q += " AND l.pivot_id IN (" + ",".join("?" * len(chunk)) + ")"
+                args.extend(chunk)
+            q += " ORDER BY l.pivot_id, l.id"
+            for r in self.conn.execute(q, args).fetchall():
+                grouped.setdefault(int(r["pivot_id"]), []).append({
+                    "id": r["id"], "pivot_id": r["pivot_id"],
+                    "old_role": r["old_role"], "new_role": r["new_role"],
+                    "changed_at": r["changed_at"],
+                })
+        return grouped
+
     @staticmethod
     def _to_ltf_pivot(r: sqlite3.Row) -> LtfPivot:
         keys = r.keys()

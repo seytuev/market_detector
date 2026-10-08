@@ -100,6 +100,30 @@
     <section class="chart-block">
       <div class="chart-toolbar">
         <span class="section-label">График · H1</span>
+        <details class="layer-menu h1-layer-menu">
+          <summary class="btn small">Слои H1</summary>
+          <div class="layer-options h1-layer-controls">
+            <label>Точки структуры
+              <select id="h1-points" title="Подтверждённые точки HH/HL/LH/LL">
+                <option value="recent">Последние 20</option>
+                <option value="history">История</option>
+                <option value="hidden">Скрыть</option>
+              </select>
+            </label>
+            <label><input type="checkbox" id="h1-diagnostic"> Внутренние и неоднозначные точки</label>
+            <label><input type="checkbox" id="h1-breaks" checked> BOS/SMS</label>
+            <label><input type="checkbox" id="h1-expected" checked> Ожидаемые уровни</label>
+            <label><input type="checkbox" id="h1-zones" checked> Зоны H1</label>
+            <label><input type="checkbox" id="h1-ob" checked> OB</label>
+            <label><input type="checkbox" id="h1-fvg" checked> FVG</label>
+            <label><input type="checkbox" id="h1-bsl" checked> BSL</label>
+            <label><input type="checkbox" id="h1-ssl" checked> SSL</label>
+            <label><input type="checkbox" id="h1-eligible-only"> Только пригодные для сценария</label>
+            <label><input type="checkbox" id="h1-candidates"> Кандидаты зон H1</label>
+            <label><input type="checkbox" id="h1-zone-history"> Исторические зоны</label>
+            <label><input type="checkbox" id="h1-htf" checked> HTF-контекст</label>
+          </div>
+        </details>
         <span class="layer-toggles" id="ltf-layer-toggles">
           <label title="Подтверждённые pivots, все события структуры сценария"><input type="checkbox" data-layer="structure"> Подробная структура</label>
           <label title="Внутренние экстремумы (internal high/low)"><input type="checkbox" data-layer="liquidity"> Внутренняя ликвидность</label>
@@ -111,6 +135,10 @@
       <div id="chart-container">
         <div id="chart"></div>
         <div id="ltf-overlay"></div>
+        <div id="h1-transition" class="h1-transition hidden"></div>
+        <div id="h1-event-card" class="h1-event-card hidden"></div>
+        <div id="h1-layer-status" class="h1-layer-status hidden"></div>
+        <button type="button" id="h1-offscreen" class="btn small h1-offscreen hidden">Вне экрана: 0</button>
       </div>
       <div id="ltf-chart-empty" class="ltf-empty hidden"></div>
     </section>
@@ -167,6 +195,7 @@
 
   <script src="/common.js"></script>
   <script src="/messages.js"></script>
+  <script src="/h1_layers.js"></script>
   <script src="/ltf.js"></script>
 </body>
 </html>
