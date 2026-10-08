@@ -444,9 +444,9 @@ class Worker:
     def _ltf_context_zone_types(self) -> set[ZoneType]:
         """Типы HTF-зон D1/W1, запускающие наблюдение (§16.1).
 
-        Источник — настройка htf_context_types (по умолчанию только OB;
-        FVG — предлагаемый режим). Тест и рыночная актуальность зоны —
-        из общего движка, специальных правил для FVG здесь нет."""
+        Источник — настройка htf_context_types (по умолчанию OB и FVG).
+        Тест и рыночная актуальность зоны — из общего движка, специальных
+        правил касания для FVG здесь нет."""
         return {
             _LTF_CONTEXT_ZONE_TYPES[t]
             for t in self.cfg.htf_context_type_set()

@@ -344,8 +344,7 @@ def _fvg_zone(db, instrument_id, direction=Direction.BEAR,
 
 async def test_fvg_context_opens_observation_when_enabled():
     """§16.1: при htf_context_types="OB,FVG" касание FVG D1 открывает
-    наблюдение (путь «уже достигнутых родителей»); по умолчанию (только OB)
-    FVG наблюдение не открывает."""
+    наблюдение (путь «уже достигнутых родителей»); это профиль по умолчанию."""
     h1 = _recent_h1([(10, 9), (11, 9), (12, 9), (13, 9), (12, 9), (11, 9), (10, 9)])
 
     # включён FVG: цена внутри FVG D1 → наблюдение открывается
@@ -364,18 +363,18 @@ async def test_fvg_context_opens_observation_when_enabled():
     obs = db.get_ltf_observation_by_zone(zone.id, zone.cycle_id)
     assert obs is not None and obs.state in ("waiting_structure", "active")
 
-    # умолчание (только OB): тот же FVG наблюдение не открывает
+    # умолчание OB,FVG: тот же FVG открывает наблюдение
     db2 = Database(":memory:")
     adapter2 = FakeAdapter()
     adapter2.candles = h1
     adapter2.price = (95.0, now_ms())
-    worker2, _ = _make_worker(db2, adapter2)  # htf_context_types="OB"
+    worker2, _ = _make_worker(db2, adapter2)
     await worker2.seed_instruments()
     ins2 = next(i for i in db2.get_instruments() if i.symbol == "BTCUSDT")
     db2.insert_candles([make_candle(now - D1_MS, 95, 96, 94, 95, "D1", ins2.id)])
     _fvg_zone(db2, ins2.id)
     await worker2.ltf_poll_once()
-    assert db2.list_ltf_observations(instrument_id=ins2.id) == []
+    assert db2.list_ltf_observations(instrument_id=ins2.id)
 
 
 async def test_fvg_context_on_poll_touch_event():
@@ -384,7 +383,8 @@ async def test_fvg_context_on_poll_touch_event():
     now = now_ms()
     for cfg, expected in (
         (DetectorConfig(htf_context_types="OB,FVG"), True),
-        (DetectorConfig(), False),  # умолчание: только OB
+        (DetectorConfig(), True),  # FVG включён по умолчанию
+        (DetectorConfig(htf_context_types="OB"), False),
     ):
         db = Database(":memory:")
         adapter = FakeAdapter()
@@ -429,7 +429,7 @@ async def test_fvg_weakened_stays_valid_parent():
 def test_htf_context_types_parser():
     """§16.1: парсер настройки — только OB/FVG; PRB/Breaker/BSL/SSL
     отбрасываются (триггерами не являются)."""
-    assert DetectorConfig().htf_context_type_set() == {"OB"}
+    assert DetectorConfig().htf_context_type_set() == {"OB", "FVG"}
     assert DetectorConfig(
         htf_context_types="OB,FVG"
     ).htf_context_type_set() == {"OB", "FVG"}
