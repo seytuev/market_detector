@@ -314,3 +314,25 @@ class AltSweepEpisode:
     state: str = AltSweepState.OPEN.value
     created_ms: int = 0
     updated_ms: int = 0
+
+
+@dataclass
+class AltRangeRevision:
+    """Неизменяемая ручная ревизия effective-range для setup/candidate."""
+    id: Optional[int]
+    subject_kind: str
+    subject_id: int
+    revision: int
+    lower: float
+    upper: float
+    mid: float
+    width: float
+    base_start_open_time: int
+    base_end_open_time: Optional[int] = None
+    source_kind: str = "manual"
+    derived_json: str = "{}"
+    reason: str = ""
+    expected_previous_revision: int = 0
+    idempotency_key: str = ""
+    active: bool = True
+    created_ms: int = 0

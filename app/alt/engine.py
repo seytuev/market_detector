@@ -983,6 +983,15 @@ class AltEngine:
         cand.candidate_id = self._ensure_candidate_row(
             asset_id, cand, seg[-1].open_time, detected_at
         )
+        manual = self.db.active_alt_range_revision("candidate", cand.candidate_id)
+        effective_lower = manual.lower if manual and manual.source_kind == "manual" else cand.geometry.lower
+        effective_upper = manual.upper if manual and manual.source_kind == "manual" else cand.geometry.upper
+        effective_mid = manual.mid if manual and manual.source_kind == "manual" else cand.geometry.mid
+        effective_width = manual.width if manual and manual.source_kind == "manual" else cand.geometry.width
+        effective_start = (
+            manual.base_start_open_time
+            if manual and manual.source_kind == "manual" else cand.start.formed_at
+        )
         origin = f"{asset_id}:{source_id}:{cand.origin_key}"
 
         existing = self.db.get_alt_frozen_range_by_range(cand.candidate_id)
@@ -992,11 +1001,11 @@ class AltEngine:
             frozen_row = self.db.insert_alt_frozen_range(AltFrozenRange(
                 id=None,
                 range_id=cand.candidate_id,
-                lower=cand.geometry.lower,
-                upper=cand.geometry.upper,
-                width=cand.geometry.width,
-                mid=cand.geometry.mid,
-                start_anchor_open_time=cand.start.formed_at,
+                lower=effective_lower,
+                upper=effective_upper,
+                width=effective_width,
+                mid=effective_mid,
+                start_anchor_open_time=effective_start,
                 rebound_anchor_open_time=cand.rebound.formed_at,
                 included_candles=len(seg),
                 mature_at_ms=recognized_at,  # когда реально стало доступно
@@ -1595,6 +1604,15 @@ class AltEngine:
     ) -> tuple[AltEvent, bool]:
         """Событие в outbox; source_event_id стабилен (опоры+время), не от
         прогона — повторный replay дедуплицируется UNIQUE-ключом (§18)."""
+        revision = self.db.active_alt_range_revision("setup", setup_id)
+        if revision is not None:
+            payload = dict(payload)
+            payload["range_revision"] = revision.revision
+            payload["range_snapshot"] = {
+                "lower": revision.lower, "upper": revision.upper,
+                "mid": revision.mid, "width": revision.width,
+                "source_kind": revision.source_kind,
+            }
         return self.db.insert_alt_event(AltEvent(
             id=None,
             setup_id=setup_id,

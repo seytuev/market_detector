@@ -86,6 +86,13 @@ function fmtDate(ms) {
   if (!ms) return '—';
   return new Date(ms).toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow' });
 }
+function inputDate(ms) {
+  if (!ms) return '';
+  return new Date(ms).toISOString().slice(0, 10);
+}
+function dateMs(value) {
+  return value ? Date.parse(value + 'T00:00:00Z') : null;
+}
 function mskDay(ms) {
   return new Date(ms).toLocaleDateString('en-CA', { timeZone: 'Europe/Moscow' });
 }
@@ -485,6 +492,8 @@ function renderCard() {
 
   const anchors = detail.anchors;
   const range = detail.frozen_range || detail.range;
+  const revision = detail.range_revision;
+  parts.push(`<p><button type="button" class="btn small" id="alt-edit-range">Редактировать диапазон</button> ${revision ? `<span class="alt-dim">${revision.source_kind === 'manual' ? 'Ручной' : 'Авто'} · ревизия ${revision.revision}</span>` : '<span class="alt-dim">Автоматический диапазон</span>'}</p>`);
   parts.push('<h3>Почему найдено</h3>');
   const why = [];
   if (anchors && anchors.start) why.push(`Старт ${fmtDate(anchors.start.open_time)}, доступен ${fmtTime(anchors.start.available_at_ms)}.`);
@@ -512,6 +521,80 @@ function renderCard() {
   body.querySelectorAll('[data-jump]').forEach((button) => {
     button.onclick = () => jumpTo(Number(button.dataset.jump));
   });
+  $('alt-edit-range').onclick = openRangeEditor;
+}
+
+function rangeEditPayload() {
+  return {
+    lower: Number($('range-edit-l').value), upper: Number($('range-edit-u').value),
+    base_start_open_time: dateMs($('range-edit-start').value),
+    base_end_open_time: dateMs($('range-edit-end').value),
+    reason: $('range-edit-reason').value.trim(),
+    expected_revision: Number((state.detail.range_revision || {}).revision || 0),
+  };
+}
+function openRangeEditor() {
+  const detail = state.detail;
+  if (!detail || !state.selected) return;
+  const range = detail.frozen_range || detail.range;
+  const revision = detail.range_revision || {};
+  $('range-edit-l').value = range.lower;
+  $('range-edit-u').value = range.upper;
+  $('range-edit-start').value = inputDate(revision.base_start_open_time || range.start_anchor_open_time || (detail.anchors && detail.anchors.start && detail.anchors.start.open_time));
+  $('range-edit-end').value = inputDate(revision.base_end_open_time);
+  $('range-edit-reason').value = '';
+  $('alt-range-editor-meta').textContent = `${detail.asset.symbol} · ${state.selected.kind} · текущая ревизия ${revision.revision || 0}`;
+  $('alt-range-preview').textContent = 'Измените значения и нажмите «Проверить».';
+  $('alt-range-error').textContent = '';
+  $('range-save-btn').disabled = true;
+  $('alt-range-editor').showModal();
+}
+async function previewRangeEdit() {
+  const sel = state.selected;
+  $('alt-range-error').textContent = '';
+  $('range-save-btn').disabled = true;
+  try {
+    const result = await api(`/api/alt/ranges/${sel.kind}/${sel.id}/preview`, {
+      method: 'POST', body: JSON.stringify(rangeEditPayload()),
+    });
+    const d = result.derived;
+    const hit = d.targets.filter((item) => item.hit).length;
+    $('alt-range-preview').textContent = `M ${fmtPrice(result.range.mid)}, W ${fmtPrice(result.range.width)}, K ${fmtPrice(d.cancel.price)}. Исторически достигнуто целей: ${hit}; выходов вверх: ${d.breakouts.length}; эпизодов ниже L: ${d.excursions_below.length}. Неполученных событий старой версии будет закрыто: ${result.changes.superseded_pending_events}.`;
+    $('range-save-btn').disabled = false;
+  } catch (error) {
+    $('alt-range-error').textContent = error.message;
+  }
+}
+async function saveRangeEdit() {
+  const sel = state.selected;
+  $('range-save-btn').disabled = true;
+  try {
+    const payload = rangeEditPayload();
+    payload.idempotency_key = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
+    await api(`/api/alt/ranges/${sel.kind}/${sel.id}/revisions`, {
+      method: 'POST', body: JSON.stringify(payload),
+    });
+    $('alt-range-editor').close();
+    await selectRow(sel.kind, sel.id, { force: true });
+    await loadTable();
+  } catch (error) {
+    $('alt-range-error').textContent = error.message;
+    $('range-save-btn').disabled = false;
+  }
+}
+async function restoreAutoRange() {
+  const sel = state.selected;
+  try {
+    await api(`/api/alt/ranges/${sel.kind}/${sel.id}/restore-auto`, {
+      method: 'POST', body: JSON.stringify({
+        expected_revision: Number((state.detail.range_revision || {}).revision || 0),
+        idempotency_key: (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`),
+      }),
+    });
+    $('alt-range-editor').close();
+    await selectRow(sel.kind, sel.id, { force: true });
+    await loadTable();
+  } catch (error) { $('alt-range-error').textContent = error.message; }
 }
 
 function renderJournal() {
@@ -1670,6 +1753,13 @@ function bind() {
     items[next].click();
   };
   $('alt-retry-list').onclick = () => loadTable();
+  $('range-preview-btn').onclick = previewRangeEdit;
+  $('range-save-btn').onclick = saveRangeEdit;
+  $('range-restore-btn').onclick = restoreAutoRange;
+  $('range-cancel-btn').onclick = () => $('alt-range-editor').close();
+  ['range-edit-l', 'range-edit-u', 'range-edit-start', 'range-edit-end'].forEach((id) => {
+    $(id).addEventListener('input', () => { $('range-save-btn').disabled = true; });
+  });
   $('alt-reveal').onclick = () => showInList();
   $('alt-back').onclick = () => {
     state.pane = 'list';

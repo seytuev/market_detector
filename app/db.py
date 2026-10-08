@@ -2851,6 +2851,13 @@ class Database:
 
     def update_alt_range_candidate(self, candidate_id: int, **fields: Any) -> None:
         """Обновление живого кандидата (версии/границы/возраст до freeze)."""
+        manual = self.active_alt_range_revision("candidate", candidate_id)
+        if manual is not None and manual.source_kind == "manual":
+            # Ежедневный auto-replay вправе обновить состояние/метрики, но
+            # закреплённую пользователем геометрию не перезаписывает.
+            for key in ("lower", "upper", "mid", "width",
+                        "start_anchor_open_time", "version"):
+                fields.pop(key, None)
         if not fields:
             return
         cols = ", ".join(f"{k}=?" for k in fields)
@@ -3346,6 +3353,90 @@ class Database:
             (*fields.values(), episode_id),
         )
         self._commit()
+
+    # ---------- ALT: ручные ревизии effective-range ----------
+
+    def active_alt_range_revision(self, subject_kind: str, subject_id: int):
+        from .models_alt import AltRangeRevision
+        r = self.conn.execute(
+            "SELECT * FROM alt_range_revision WHERE subject_kind=? AND subject_id=? "
+            "AND active=1 ORDER BY revision DESC LIMIT 1",
+            (subject_kind, subject_id),
+        ).fetchone()
+        return self._to_alt_range_revision(r) if r else None
+
+    def list_alt_range_revisions(self, subject_kind: str, subject_id: int):
+        return [self._to_alt_range_revision(r) for r in self.conn.execute(
+            "SELECT * FROM alt_range_revision WHERE subject_kind=? AND subject_id=? "
+            "ORDER BY revision DESC", (subject_kind, subject_id),
+        ).fetchall()]
+
+    def insert_alt_range_revision(self, revision):
+        """CAS + idempotency. Caller validates geometry and builds derived_json."""
+        existing = self.conn.execute(
+            "SELECT * FROM alt_range_revision WHERE subject_kind=? AND subject_id=? "
+            "AND idempotency_key=?",
+            (revision.subject_kind, revision.subject_id, revision.idempotency_key),
+        ).fetchone()
+        if existing:
+            return self._to_alt_range_revision(existing), False
+        current = self.active_alt_range_revision(revision.subject_kind, revision.subject_id)
+        current_no = current.revision if current else 0
+        if current_no != revision.expected_previous_revision:
+            raise ValueError(f"revision_conflict:{current_no}")
+        revision.revision = current_no + 1
+        self.conn.execute(
+            "UPDATE alt_range_revision SET active=0 WHERE subject_kind=? AND subject_id=?",
+            (revision.subject_kind, revision.subject_id),
+        )
+        cur = self.conn.execute(
+            """INSERT INTO alt_range_revision
+               (subject_kind,subject_id,revision,source_kind,lower,upper,mid,width,
+                base_start_open_time,base_end_open_time,derived_json,reason,
+                expected_previous_revision,idempotency_key,active,created_ms)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?)""",
+            (revision.subject_kind, revision.subject_id, revision.revision,
+             revision.source_kind, revision.lower, revision.upper, revision.mid,
+             revision.width, revision.base_start_open_time,
+             revision.base_end_open_time, revision.derived_json, revision.reason,
+             revision.expected_previous_revision, revision.idempotency_key,
+             revision.created_ms),
+        )
+        revision.id = int(cur.lastrowid)
+        revision.active = True
+        # События старой геометрии, которые ещё не доставлялись, не должны уйти.
+        if revision.subject_kind == "setup":
+            rows = self.conn.execute(
+                "SELECT id,payload_json FROM alt_event WHERE setup_id=? AND delivered=0",
+                (revision.subject_id,),
+            ).fetchall()
+            for row in rows:
+                try:
+                    payload = json.loads(row["payload_json"] or "{}")
+                except (TypeError, ValueError):
+                    payload = {}
+                payload["superseded_by_range_revision"] = revision.revision
+                self.conn.execute(
+                    "UPDATE alt_event SET delivered=1,payload_json=? WHERE id=?",
+                    (json.dumps(payload, ensure_ascii=False), row["id"]),
+                )
+        self._commit()
+        self.bump_state_seq()
+        return revision, True
+
+    @staticmethod
+    def _to_alt_range_revision(r):
+        from .models_alt import AltRangeRevision
+        return AltRangeRevision(
+            id=r["id"], subject_kind=r["subject_kind"], subject_id=r["subject_id"],
+            revision=r["revision"], source_kind=r["source_kind"], lower=r["lower"],
+            upper=r["upper"], mid=r["mid"], width=r["width"],
+            base_start_open_time=r["base_start_open_time"],
+            base_end_open_time=r["base_end_open_time"], derived_json=r["derived_json"],
+            reason=r["reason"], expected_previous_revision=r["expected_previous_revision"],
+            idempotency_key=r["idempotency_key"], active=bool(r["active"]),
+            created_ms=r["created_ms"],
+        )
 
     @staticmethod
     def _to_alt_range_episode(r: sqlite3.Row) -> AltRangeEpisode:

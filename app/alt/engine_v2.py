@@ -25,10 +25,9 @@
 - R-04: classify_sideways_v2 — качество независимо от ширины: реакции у
   границ и переходы между ними, устойчивость центра и границ по третям
   (нормировка на ATR, НЕ на собственную ширину), efficiency, ширина в ATR
-  (отсечение и дегенеративно узких, и абсурдно широких —
-  cfg.v2_max_width_atr_mult), доля ширины от одиночных теней, давность
-  последней реакции (cfg.v2_max_days_since_reaction). Ширина сама оценку
-  не улучшает;
+  (дегенеративно узкие отсекаются; большая ширина и давность реакции
+  остаются диагностикой), доля ширины от одиночных теней. Ширина сама
+  оценку не улучшает и сжатие внутри базы не отменяет внешнюю рамку;
 - зрелость/freeze: пороги v1 (СТРОГО forming_min_days / mature_min_days,
   §5 ТЗ «сначала сохранить текущие 51/101»). На freeze персистится
   AltRangeEpisode (rules_version alt-0.2, state mature, замороженные
@@ -298,8 +297,7 @@ def choose_lu_pair(
     (R-03). Чистая функция.
 
     Требования к паре: ≥ cfg.v2_min_reactions независимых реакций у ОБЕИХ
-    границ; ширина ≤ cfg.v2_max_width_atr_mult ATR (абсурдно широкие рамки
-    отсекаются); возвраты между зонами (≥1 переход через середину); без
+    границ; возвраты между зонами (≥1 переход через середину); без
     выраженного направленного движения внутри (efficiency ≤ V2_MAX_EFFICIENCY).
     Абсолютный High/Low истории и «самый узкий интервал» не выбираются:
     ранжирование — по сбалансированности и числу реакций, переходам и
@@ -329,8 +327,6 @@ def choose_lu_pair(
             if lc.price >= uc.price:
                 continue
             width = uc.price - lc.price
-            if width > cfg.v2_max_width_atr_mult * atr_value:
-                continue
             mid = (lc.price + uc.price) / 2
             start_ot = min(lc.first_formed_at, uc.first_formed_at)
             span = [c for c in candles if c.open_time >= start_ot]
@@ -451,8 +447,9 @@ def classify_sideways_v2(
     Проверки (все нормировки на ATR или на абсолютные величины, не на
     собственную ширину): независимые реакции у каждой границы и переходы
     между ними; устойчивость центра и границ по третям (в ATR);
-    efficiency; ширина в ATR (дегенеративно узкие и абсурдно широкие
-    отсекаются); доля ширины от одиночной тени; давность последней реакции.
+    efficiency; ширина в ATR (дегенеративно узкие отсекаются, большая
+    ширина остаётся диагностикой); доля ширины от одиночной тени; давность
+    последней реакции как диагностический признак.
     """
     n = len(candles)
     metrics: dict[str, Any] = {}
@@ -537,6 +534,12 @@ def classify_sideways_v2(
         "width_pct": width_pct,
         "wick_concentration": wick_concentration,
         "days_since_last_reaction": days_since_last_reaction,
+        # Зрелая внешняя рамка может оставаться структурно значимой после
+        # сжатия цены у L: ширина и давность теперь диагностика, не veto.
+        "width_warning": width_atr_mult > cfg.v2_max_width_atr_mult,
+        "stale_reactions_warning": (
+            days_since_last_reaction > cfg.v2_max_days_since_reaction
+        ),
     })
 
     failed: list[str] = []
@@ -552,14 +555,16 @@ def classify_sideways_v2(
         failed.append("bound_shift")
     if eff > V2_MAX_EFFICIENCY:
         failed.append("efficiency")
-    if width_atr_mult > cfg.v2_max_width_atr_mult:
+    # Широкая рамка допустима только когда её внешние стороны действительно
+    # подтверждены. Пустой огромный конверт по-прежнему отбрасывается.
+    if (width_atr_mult > cfg.v2_max_width_atr_mult
+            and (reactions_lower < cfg.v2_min_reactions
+                 or reactions_upper < cfg.v2_min_reactions)):
         failed.append("width_too_wide")
     if width_atr_mult < V2_MIN_WIDTH_ATR_MULT:
         failed.append("width_too_narrow")
     if wick_concentration > V2_MAX_WICK_CONCENTRATION:
         failed.append("wick_concentration")
-    if days_since_last_reaction > cfg.v2_max_days_since_reaction:
-        failed.append("stale_reactions")
 
     return ClassifierResultV2(
         ready=True,

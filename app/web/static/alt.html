@@ -218,6 +218,28 @@
       </aside>
     </div>
 
+    <dialog id="alt-range-editor" class="alt-range-editor">
+      <form method="dialog" id="alt-range-form">
+        <h2>Редактировать диапазон</h2>
+        <p id="alt-range-editor-meta" class="alt-dim"></p>
+        <div class="alt-range-fields">
+          <label>Нижняя граница L<input id="range-edit-l" type="number" min="0" step="any" required></label>
+          <label>Верхняя граница U<input id="range-edit-u" type="number" min="0" step="any" required></label>
+          <label>Начало базы<input id="range-edit-start" type="date" required></label>
+          <label>Конец базы<input id="range-edit-end" type="date"></label>
+          <label class="alt-range-reason">Комментарий<input id="range-edit-reason" type="text" maxlength="300"></label>
+        </div>
+        <div id="alt-range-preview" class="alt-range-preview alt-dim">Измените значения и нажмите «Проверить».</div>
+        <p id="alt-range-error" class="alt-warn"></p>
+        <div class="alt-range-actions">
+          <button type="button" class="btn" id="range-preview-btn">Проверить</button>
+          <button type="button" class="btn primary" id="range-save-btn" disabled>Сохранить</button>
+          <button type="button" class="btn" id="range-restore-btn">Вернуть авто</button>
+          <button type="button" class="btn" id="range-cancel-btn">Отмена</button>
+        </div>
+      </form>
+    </dialog>
+
     <section id="alt-table-mode" class="alt-table-mode hidden">
       <div class="alt-table-tools">
         <button type="button" id="alt-columns-toggle" class="btn small" aria-expanded="false">Колонки</button>

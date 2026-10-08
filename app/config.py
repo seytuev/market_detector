@@ -350,8 +350,8 @@ class AltConfig:
     v2_cluster_pct: float = 0.02             # допуск кластера: доля медианной цены (R-03)
     v2_min_reactions: int = 2                # мин. независимых реакций у границы (R-03)
     v2_min_reaction_gap_days: int = 10       # разрыв между независимыми реакциями (R-03)
-    v2_max_width_atr_mult: float = 20.0      # отсечение абсурдно широких рамок (R-04)
-    v2_max_days_since_reaction: int = 120    # протухание реакций у границы (R-04)
+    v2_max_width_atr_mult: float = 20.0      # диагностический флаг широкой рамки (R-04)
+    v2_max_days_since_reaction: int = 120    # диагностический флаг давности реакции (R-04)
     # Жизненный цикл v2 post-freeze (R-05/R-06)
     v2_sweep_max_days: int = 75              # принятие ниже L без возврата → распад (R-05).
                                              # Калибровка этапа 6: вынос, который закрывается

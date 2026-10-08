@@ -19,10 +19,11 @@ UNIQUE(setup_id, event_type, source_event_id).
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import Any, Optional
 
-from fastapi import Depends, HTTPException
+from fastapi import Body, Depends, HTTPException
 
 from ..db import Database
 from ..services.alt_overview import (
@@ -32,6 +33,9 @@ from ..services.alt_overview import (
     alt_run_status,
     alt_setup_detail,
     alt_setups_table,
+)
+from ..services.alt_range_editor import (
+    preview_range_revision, revision_to_dict, save_range_revision,
 )
 
 log = logging.getLogger(__name__)
@@ -102,6 +106,62 @@ def register_alt_routes(app, db: Database, settings, require_auth,
         if data is None:
             raise HTTPException(status_code=404, detail="Актив не найден")
         return data
+
+    # ------------------------- ручные ревизии диапазона -------------------------
+
+    @app.post("/api/alt/ranges/{subject_kind}/{subject_id}/preview",
+              dependencies=[Depends(require_auth)])
+    def alt_range_preview(subject_kind: str, subject_id: int,
+                          payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        try:
+            with db.read_tx():
+                return preview_range_revision(db, subject_kind, subject_id, payload)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/api/alt/ranges/{subject_kind}/{subject_id}/revisions",
+              dependencies=[Depends(require_auth)])
+    def alt_range_save(subject_kind: str, subject_id: int,
+                       payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        try:
+            return save_range_revision(db, subject_kind, subject_id, payload)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            status = 409 if str(exc).startswith("revision_conflict:") else 422
+            raise HTTPException(status_code=status, detail=str(exc)) from exc
+
+    @app.get("/api/alt/ranges/{subject_kind}/{subject_id}/revisions",
+             dependencies=[Depends(require_auth)])
+    def alt_range_revisions(subject_kind: str, subject_id: int) -> dict[str, Any]:
+        if subject_kind not in ("setup", "candidate"):
+            raise HTTPException(status_code=422, detail="subject_kind: setup | candidate")
+        return {"items": [revision_to_dict(r) for r in
+                          db.list_alt_range_revisions(subject_kind, subject_id)]}
+
+    @app.post("/api/alt/ranges/{subject_kind}/{subject_id}/restore-auto",
+              dependencies=[Depends(require_auth)])
+    def alt_range_restore(subject_kind: str, subject_id: int,
+                          payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        history = db.list_alt_range_revisions(subject_kind, subject_id)
+        if not history:
+            raise HTTPException(status_code=404, detail="История ручных правок пуста")
+        oldest = history[-1]
+        original = json.loads(oldest.derived_json or "{}").get("original_auto") or {}
+        restore = dict(payload)
+        restore.update({
+            "lower": original.get("lower"), "upper": original.get("upper"),
+            "base_start_open_time": original.get("base_start_open_time"),
+            "base_end_open_time": None, "source_kind": "auto_restore",
+            "reason": str(payload.get("reason") or "Возврат к автоматическому диапазону"),
+        })
+        try:
+            return save_range_revision(db, subject_kind, subject_id, restore)
+        except ValueError as exc:
+            status = 409 if str(exc).startswith("revision_conflict:") else 422
+            raise HTTPException(status_code=status, detail=str(exc)) from exc
 
     # ------------------------- статус прогона (§18) -------------------------
 

@@ -208,6 +208,45 @@ def test_recalc_foreign_origin_rejected(client):
     assert client.post("/api/alt/recalc", headers=headers).status_code == 403
 
 
+def test_manual_range_preview_save_history_and_conflict(client, seeded):
+    sid = seeded["mat"].id
+    payload = {
+        "lower": 1.2, "upper": 2.4,
+        "base_start_open_time": T0 + DAY,
+        "expected_revision": 0, "idempotency_key": "api-range-1",
+    }
+    preview = client.post(
+        f"/api/alt/ranges/setup/{sid}/preview", headers=AUTH, json=payload,
+    )
+    assert preview.status_code == 200
+    assert preview.json()["range"]["mid"] == pytest.approx(1.8)
+    saved = client.post(
+        f"/api/alt/ranges/setup/{sid}/revisions", headers=AUTH, json=payload,
+    )
+    assert saved.status_code == 200
+    assert saved.json()["revision"] == 1
+    detail = client.get(f"/api/alt/setup/{sid}", headers=AUTH).json()
+    assert detail["frozen_range"]["lower"] == pytest.approx(1.2)
+    assert detail["range_revision"]["source_kind"] == "manual"
+    history = client.get(
+        f"/api/alt/ranges/setup/{sid}/revisions", headers=AUTH,
+    ).json()["items"]
+    assert len(history) == 1 and history[0]["active"] is True
+    stale = dict(payload, upper=2.5, idempotency_key="api-range-stale")
+    conflict = client.post(
+        f"/api/alt/ranges/setup/{sid}/revisions", headers=AUTH, json=stale,
+    )
+    assert conflict.status_code == 409
+    restored = client.post(
+        f"/api/alt/ranges/setup/{sid}/restore-auto", headers=AUTH,
+        json={"expected_revision": 1, "idempotency_key": "api-range-restore"},
+    )
+    assert restored.status_code == 200
+    assert restored.json()["source_kind"] == "auto_restore"
+    detail = client.get(f"/api/alt/setup/{sid}", headers=AUTH).json()
+    assert detail["frozen_range"]["lower"] == pytest.approx(1.0)
+
+
 def test_recalc_no_runner_503(client):
     r = client.post("/api/alt/recalc", headers=AUTH)
     assert r.status_code == 503

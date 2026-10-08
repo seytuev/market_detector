@@ -736,3 +736,30 @@ CREATE TABLE IF NOT EXISTS alt_sweep_episode (
     updated_ms INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS ix_alt_sweep_episode_episode ON alt_sweep_episode (episode_id);
+
+-- Редактируемая геометрия диапазона. Исходный auto-диапазон остаётся в
+-- alt_frozen_range/alt_range_candidate; активная manual-ревизия перекрывает
+-- его во всех read-model и новых уведомлениях.
+CREATE TABLE IF NOT EXISTS alt_range_revision (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    subject_kind TEXT NOT NULL,              -- setup | candidate
+    subject_id INTEGER NOT NULL,
+    revision INTEGER NOT NULL,
+    source_kind TEXT NOT NULL DEFAULT 'manual', -- manual | auto_restore
+    lower REAL NOT NULL,
+    upper REAL NOT NULL,
+    mid REAL NOT NULL,
+    width REAL NOT NULL,
+    base_start_open_time INTEGER NOT NULL,
+    base_end_open_time INTEGER,
+    derived_json TEXT NOT NULL DEFAULT '{}',
+    reason TEXT NOT NULL DEFAULT '',
+    expected_previous_revision INTEGER NOT NULL DEFAULT 0,
+    idempotency_key TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_ms INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(subject_kind, subject_id, revision),
+    UNIQUE(subject_kind, subject_id, idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS ix_alt_range_revision_active
+    ON alt_range_revision(subject_kind, subject_id, active);
