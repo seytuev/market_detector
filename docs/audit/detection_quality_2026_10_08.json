@@ -1,0 +1,312 @@
+{
+  "captured_at_utc": "2026-10-08T16:16:12.150337+00:00",
+  "scope": "Local checkout; local SQLite read transaction; synthetic probes in memory.",
+  "snapshot": {
+    "instruments": [
+      {
+        "id": 1,
+        "asset": "BTC",
+        "venue": "binance",
+        "enabled": 1,
+        "ltf_analyze": 1
+      },
+      {
+        "id": 2,
+        "asset": "ETH",
+        "venue": "binance",
+        "enabled": 1,
+        "ltf_analyze": 1
+      },
+      {
+        "id": 3,
+        "asset": "SOL",
+        "venue": "binance",
+        "enabled": 1,
+        "ltf_analyze": 1
+      }
+    ],
+    "candles": [
+      {
+        "instrument_id": 1,
+        "timeframe": "D1",
+        "n": 384,
+        "first_open": 1758240000000,
+        "last_open": 1791331200000
+      },
+      {
+        "instrument_id": 1,
+        "timeframe": "H1",
+        "n": 18616,
+        "first_open": 1724457600000,
+        "last_open": 1791471600000
+      },
+      {
+        "instrument_id": 1,
+        "timeframe": "W1",
+        "n": 106,
+        "first_open": 1727049600000,
+        "last_open": 1790553600000
+      },
+      {
+        "instrument_id": 2,
+        "timeframe": "D1",
+        "n": 384,
+        "first_open": 1758240000000,
+        "last_open": 1791331200000
+      },
+      {
+        "instrument_id": 2,
+        "timeframe": "H1",
+        "n": 9376,
+        "first_open": 1757721600000,
+        "last_open": 1791471600000
+      },
+      {
+        "instrument_id": 2,
+        "timeframe": "W1",
+        "n": 106,
+        "first_open": 1727049600000,
+        "last_open": 1790553600000
+      },
+      {
+        "instrument_id": 3,
+        "timeframe": "D1",
+        "n": 384,
+        "first_open": 1758240000000,
+        "last_open": 1791331200000
+      },
+      {
+        "instrument_id": 3,
+        "timeframe": "H1",
+        "n": 9712,
+        "first_open": 1756512000000,
+        "last_open": 1791471600000
+      },
+      {
+        "instrument_id": 3,
+        "timeframe": "W1",
+        "n": 106,
+        "first_open": 1727049600000,
+        "last_open": 1790553600000
+      }
+    ],
+    "gaps": [],
+    "zone_versions": [
+      {
+        "rule_version": "0.1",
+        "n": 3892
+      },
+      {
+        "rule_version": "0.2",
+        "n": 55
+      }
+    ],
+    "open_observations": [
+      {
+        "state": "active",
+        "n": 20
+      },
+      {
+        "state": "waiting_structure",
+        "n": 15
+      }
+    ],
+    "open_observations_with_finished_parent": [
+      {
+        "id": 32,
+        "zone_id": 5727412,
+        "state": "active",
+        "type": "fvg",
+        "status": "archived",
+        "display_until": 1790334521938,
+        "market_validity": "active"
+      },
+      {
+        "id": 24,
+        "zone_id": 5646103,
+        "state": "active",
+        "type": "ob",
+        "status": "active",
+        "display_until": 1783296000000,
+        "market_validity": "active"
+      },
+      {
+        "id": 31,
+        "zone_id": 5727355,
+        "state": "active",
+        "type": "fvg",
+        "status": "archived",
+        "display_until": 1790553600000,
+        "market_validity": "active"
+      },
+      {
+        "id": 55,
+        "zone_id": 5727426,
+        "state": "active",
+        "type": "fvg",
+        "status": "archived",
+        "display_until": 1791474952807,
+        "market_validity": "active"
+      },
+      {
+        "id": 28,
+        "zone_id": 5727353,
+        "state": "waiting_structure",
+        "type": "fvg",
+        "status": "archived",
+        "display_until": 1790553600000,
+        "market_validity": "active"
+      },
+      {
+        "id": 33,
+        "zone_id": 5727414,
+        "state": "waiting_structure",
+        "type": "fvg",
+        "status": "archived",
+        "display_until": 1790333516501,
+        "market_validity": "active"
+      }
+    ],
+    "latest_reviews": [
+      {
+        "decision": "confirmed",
+        "n": 11
+      },
+      {
+        "decision": "correct",
+        "n": 29
+      },
+      {
+        "decision": "no_context",
+        "n": 1
+      },
+      {
+        "decision": "note",
+        "n": 1
+      },
+      {
+        "decision": "rejected",
+        "n": 53
+      },
+      {
+        "decision": "wrong_type",
+        "n": 16
+      }
+    ],
+    "latest_assessments": [
+      {
+        "geometry_verdict": "invalid",
+        "n": 16
+      },
+      {
+        "geometry_verdict": "unknown",
+        "n": 1
+      },
+      {
+        "geometry_verdict": "valid",
+        "n": 30
+      }
+    ],
+    "alt_assets": [
+      {
+        "n": 0
+      }
+    ],
+    "alt_candles": [
+      {
+        "n": 0
+      }
+    ],
+    "alt_episode_tables": [
+      {
+        "name": "alt_range_episode"
+      },
+      {
+        "name": "alt_sweep_episode"
+      }
+    ],
+    "alt_runs": [
+      {
+        "id": 2,
+        "status": "no_universe",
+        "processed": 0,
+        "errors": 0,
+        "started_ms": 1791418510138,
+        "summary_json": "{\"trigger\": \"schedule\", \"universe_stale\": false, \"venue_errors\": {}, \"per_asset\": [], \"backfill_event_ids\": [], \"error\": \"CMC_API_KEY not configured\"}"
+      },
+      {
+        "id": 1,
+        "status": "no_universe",
+        "processed": 0,
+        "errors": 0,
+        "started_ms": 1791394125517,
+        "summary_json": "{\"trigger\": \"schedule\", \"universe_stale\": false, \"venue_errors\": {}, \"per_asset\": [], \"backfill_event_ids\": [], \"error\": \"CMC_API_KEY not configured\"}"
+      }
+    ]
+  },
+  "probes": {
+    "fvg_across_missing_days": {
+      "input_day_offsets": [
+        0,
+        1,
+        4
+      ],
+      "fvg_count": 1,
+      "expected": "Reject a three-candle pattern across missing D1 intervals."
+    },
+    "alt_chained_cluster": {
+      "tolerance": 1.0,
+      "clusters": [
+        [
+          100,
+          100.9,
+          101.8,
+          102.7
+        ]
+      ],
+      "largest_span": 2.700000000000003
+    },
+    "h1_context_before_d1_confirmation": {
+      "formed_at": 1767225600000,
+      "confirmed_at": 1767312000000,
+      "as_of": 1767268800000,
+      "result": {
+        "zone_id": 1,
+        "tf": "D1",
+        "via": "geometry",
+        "confirmed": true
+      },
+      "expected": "No confirmed D1 FVG context before confirmed_at."
+    },
+    "historical_context_depends_on_current_status": {
+      "before_later_archive": {
+        "zone_id": 1,
+        "tf": "D1",
+        "via": "geometry",
+        "confirmed": true
+      },
+      "after_later_archive_same_as_of": null,
+      "expected": "The historical query must preserve the same answer."
+    },
+    "parent_needs_replay_admitted": {
+      "eligible": true,
+      "reason": "ok"
+    },
+    "manual_parent_future_confirmation": {
+      "confirmed_at": 1768089600000,
+      "as_of": 1767312000000,
+      "decision": {
+        "eligible": true,
+        "reason": "ok"
+      }
+    },
+    "old_base_overrides_recent_breakout": {
+      "selected_id": 1,
+      "reason": "inside_base",
+      "alternatives": [],
+      "old_breakout_age_days": 389,
+      "new_breakout_age_days": 9,
+      "expected": "Old containment must not bypass expiry or hide the recent alternative."
+    }
+  }
+}
