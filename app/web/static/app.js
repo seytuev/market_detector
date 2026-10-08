@@ -35,6 +35,9 @@ const state = {
   tableMode: false,
   showAllTf: false,
   showCandidates: false,
+  // Снимок «Все ТФ» / D1 / W1 до входа в структуру H1. Пока null — при входе
+  // селекторы включаются. Пока режим открыт, повторная отрисовка их не трогает.
+  tfLayersBeforeH1: null,
   maxChartZones: 80,
   orderedZoneIds: null,
   // ТЗ §5: внутренние уровни выбранной зоны (рисуются, пока зона выбрана)
@@ -2681,6 +2684,37 @@ async function loadInstruments() {
   }
 }
 
+// updateLayers объявлен внутри main(); смена режима зовёт его после чекбоксов.
+let refreshLayers = () => {};
+
+// На структуре H1 зоны старших ТФ видны только при «Все ТФ»: текущий ТФ графика
+// становится H1, и без этого флага tfMatch отбрасывает D1 и W1. Включаем
+// «Все ТФ», «Зоны D1» и «Зоны W1» один раз на вход. Снятие галочек в этом
+// режиме сохраняется. Выход в контекст возвращает снимок.
+function syncTfLayersForMode() {
+  const all = $('tf-all');
+  if (!all) return;
+  const d1 = $('layer-tf-d1');
+  const w1 = $('layer-tf-w1');
+  if (state.chartMode === 'h1') {
+    if (!state.tfLayersBeforeH1) {
+      state.tfLayersBeforeH1 = {
+        all: all.checked,
+        d1: d1 ? d1.checked : true,
+        w1: w1 ? w1.checked : true,
+      };
+      all.checked = true;
+      if (d1) d1.checked = true;
+      if (w1) w1.checked = true;
+    }
+  } else if (state.tfLayersBeforeH1) {
+    all.checked = state.tfLayersBeforeH1.all;
+    if (d1) d1.checked = state.tfLayersBeforeH1.d1;
+    if (w1) w1.checked = state.tfLayersBeforeH1.w1;
+    state.tfLayersBeforeH1 = null;
+  }
+}
+
 function paintChartMode() {
   document.querySelectorAll('[data-chart-mode]').forEach((el) => {
     const on = el.dataset.chartMode === state.chartMode;
@@ -2701,6 +2735,8 @@ function paintChartMode() {
     if (candleLabel) candleLabel.textContent = 'Свечи ' + state.timeframe;
     if (hidden) hidden.textContent = state.timeframe;
   }
+  syncTfLayersForMode();
+  refreshLayers();
 }
 
 function setChartMode(mode) {
@@ -2807,6 +2843,7 @@ async function main() {
     if ($('layer-count')) $('layer-count').textContent = labels.length ? '· ' + labels.join(' · ') : '';
     drawZones();
   };
+  refreshLayers = updateLayers;
   $('tf-all').onchange = updateLayers;
   $('show-candidates').onchange = updateLayers;
   ['layer-tf-d1', 'layer-tf-w1', 'layer-history', 'layer-mids', 'layer-labels'].forEach((id) => {
