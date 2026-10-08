@@ -1085,6 +1085,7 @@ def alt_setup_detail(db: Database, setup_id: int, settings: Settings) -> Optiona
         confirm_candle = _candle_from_source_id(confirmation_event.source_event_id)
 
     target_snapshot = flags.get("target_snapshot")
+    manual_revision = db.active_alt_range_revision("setup", setup.id)
     return {
         "kind": "setup",
         "setup_id": setup.id,
@@ -1112,6 +1113,14 @@ def alt_setup_detail(db: Database, setup_id: int, settings: Settings) -> Optiona
                 "range_version": frozen.range_version,
             } if frozen is not None else None
         ),
+        "range_revision": ({
+            "id": manual_revision.id, "revision": manual_revision.revision,
+            "source_kind": manual_revision.source_kind,
+            "base_start_open_time": manual_revision.base_start_open_time,
+            "base_end_open_time": manual_revision.base_end_open_time,
+            "reason": manual_revision.reason, "created_ms": manual_revision.created_ms,
+            "derived": _loads(manual_revision.derived_json, {}),
+        } if manual_revision else None),
         "range_versions": metrics.get("versions") or [],
         "anchors": anchors,
         "classifier": _classifier_block(candidate, settings),
@@ -1207,6 +1216,7 @@ def alt_candidate_detail(db: Database, candidate_id: int, settings: Settings) ->
             "note": "Источник не выбран — свечей нет.",
         }
     last_run = db.get_latest_alt_run(statuses=("ok", "no_universe"))
+    manual_revision = db.active_alt_range_revision("candidate", candidate.id)
     return {
         "kind": "candidate",
         "candidate_id": candidate.id,
@@ -1219,6 +1229,14 @@ def alt_candidate_detail(db: Database, candidate_id: int, settings: Settings) ->
         "state_ru": STATE_RU.get(candidate.state, candidate.state),
         "terminal": False,
         "range": _geometry_of(None, candidate),
+        "range_revision": ({
+            "id": manual_revision.id, "revision": manual_revision.revision,
+            "source_kind": manual_revision.source_kind,
+            "base_start_open_time": manual_revision.base_start_open_time,
+            "base_end_open_time": manual_revision.base_end_open_time,
+            "reason": manual_revision.reason, "created_ms": manual_revision.created_ms,
+            "derived": _loads(manual_revision.derived_json, {}),
+        } if manual_revision else None),
         "n_days": candidate.n_days,
         "anchors": {
             "start": _anchor(candidate.start_anchor_open_time, cfg.pivot_right),
@@ -1298,6 +1316,15 @@ def _run_brief(run: Any) -> Optional[dict[str, Any]]:
     }
 
 
+def _alt_run_message_code(last_ok, snap) -> Optional[str]:
+    """A01 — списка нет. A02 — расчёт прошёл и подходящих баз не оставил."""
+    if snap is None or (last_ok is not None and last_ok.status == "no_universe"):
+        return "A01"
+    if last_ok is not None and last_ok.status == "ok" and not last_ok.processed:
+        return "A02"
+    return None
+
+
 def alt_run_status(db: Database, cfg: Any) -> dict[str, Any]:
     """§18: последний успешный run, следующий запуск (МСК), обработанные/
     ошибочные пары, as_of, running-флаг, свежесть вселенной.
@@ -1318,6 +1345,7 @@ def alt_run_status(db: Database, cfg: Any) -> dict[str, Any]:
         "next_run_ms": _next_run_msk(cfg),
         "job_time_msk": f"{cfg.job_hour_msk:02d}:{cfg.job_minute_msk:02d}",
         "job_enabled": bool(cfg.job_enabled),
+        "message_code": _alt_run_message_code(last_ok, snap),
         "universe": (
             {
                 "snapshot_id": int(snap["id"]),
@@ -1469,6 +1497,27 @@ def _sweep_episode_to_dict(sweep: AltSweepEpisode) -> dict[str, Any]:
     }
 
 
+def _episode_message_code(episode: AltRangeEpisode) -> str:
+    """Код словаря A03–A08 по уже записанному состоянию. Геометрия не меняется."""
+    state = episode.state
+    if state == AltEpisodeState.FORMING.value:
+        return "A03"
+    if state == AltEpisodeState.DECAYED.value or state == AltEpisodeState.TERMINAL.value:
+        return "A08"
+    if (
+        state == AltEpisodeState.ACCOMPANIMENT.value
+        and episode.base_end_reason == "breakout_confirmed"
+    ):
+        return "A06"
+    if episode.base_end_reason == "breakout_confirmed":
+        return "A06"
+    if state in (AltEpisodeState.MATURE.value, AltEpisodeState.ACTIVE.value):
+        if episode.wick_high is not None and episode.wick_high > episode.upper:
+            return "A05"
+        return "A04"
+    return "A04"
+
+
 def _range_episode_to_dict(
     episode: AltRangeEpisode, sweeps: list[AltSweepEpisode]
 ) -> dict[str, Any]:
@@ -1502,6 +1551,7 @@ def _range_episode_to_dict(
         "created_ms": episode.created_ms,
         "updated_ms": episode.updated_ms,
         "sweeps": [_sweep_episode_to_dict(s) for s in sweeps],
+        "message_code": _episode_message_code(episode),
     }
 
 
@@ -1532,10 +1582,23 @@ def alt_asset_ranges_history(db: Database, asset_id: int) -> Optional[dict[str, 
     selected, reason, alternatives = select_current_episode(
         episodes, last_close, as_of_ms
     )
+    if reason == "ambiguous":
+        selection_code = "A10"
+    elif selected is None and any(
+        ep.state in (AltEpisodeState.DECAYED.value, AltEpisodeState.TERMINAL.value)
+        and last_close is not None and ep.lower <= last_close <= ep.upper
+        for ep in episodes
+    ):
+        selection_code = "A09"
+    elif selected is not None:
+        selection_code = _episode_message_code(selected)
+    else:
+        selection_code = None
     current = {
         "episode_id": selected.id if selected is not None else None,
         "reason": reason,
         "alternatives": [ep.id for ep in alternatives],
+        "message_code": selection_code,
     }
 
     v1_ranges = []

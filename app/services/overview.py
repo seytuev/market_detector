@@ -17,7 +17,11 @@ from ..engine.ltf.eligibility import (
     evaluate_final,
 )
 from ..engine.ltf.entries import fvg_fill_status
-from ..engine.ltf.breaks import expected_reverse_condition
+from ..engine.ltf.breaks import (
+    expected_reverse_condition,
+    expected_structure_conditions,
+)
+from .presentation import build_presentation, legacy_expected
 from ..engine.ltf.pivots import PivotCandidate
 from ..engine.ltf.ranges import provisional_range, zone_half
 from ..models import TIMEFRAME_MINUTES, EventKind, ZoneStatus, ZoneType, now_ms
@@ -56,6 +60,12 @@ STAGE_DATA_PENDING = "Недостаточно данных"
 # этого окна ещё показывает, у какой HTF-зоны стоит цена. Иначе карточка
 # прыгает на дальний сценарий между опросами.
 NAVIGATION_QUOTE_MAX_S = 5 * 60
+
+
+def _ruleset_id(settings) -> str:
+    """Отпечаток профиля. Импорт runtime локальный: runtime сам читает overview."""
+    from .runtime import profile_fingerprint
+    return profile_fingerprint(settings.detector)
 
 
 def _instrument_brief(db: Database, instrument_id: int) -> Optional[dict[str, Any]]:
@@ -1066,6 +1076,47 @@ def _attention_group(
     return "none"
 
 
+def _presentation(
+    db, settings, ins, observations, selected, basis, sc, stage, direction,
+    price, quote_at, data_state, now, *,
+    review_count: int, price_in_entry: bool, eligible_count: int,
+    has_range: bool, provisional_only: bool, data_version, wait,
+    entry_zone: Optional[str] = None, contexts: Optional[list] = None,
+    cancel: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Короткий статус и блоки карточки. Склеенные пояснения сюда не входят."""
+    brief = {
+        "id": ins.id, "symbol": ins.symbol, "asset": ins.asset,
+        "venue": ins.venue, "market_type": ins.market_type,
+    }
+    return build_presentation(
+        db, settings,
+        instrument=brief,
+        observations=observations,
+        selected=selected,
+        basis=basis,
+        scenario=sc,
+        stage=stage,
+        direction=direction,
+        price=price,
+        quote_at=quote_at,
+        data_state=data_state,
+        now=now,
+        review_count=review_count,
+        cancel=cancel,
+        price_in_entry=price_in_entry,
+        eligible_count=eligible_count,
+        has_range=has_range,
+        provisional_only=provisional_only,
+        entry_zone=entry_zone,
+        contexts=contexts or [],
+        ruleset_id=_ruleset_id(settings),
+        data_version=data_version,
+        wait=wait,
+        engine=_engine_state(db, settings, ins),
+    )
+
+
 def instruments_overview(db: Database, settings) -> list[dict[str, Any]]:
     """Левая панель «Активы» (§4.2): одна строка на instrument_id
     (symbol/venue/market), сколько бы Observation ни было у инструмента.
@@ -1096,7 +1147,7 @@ def instruments_overview(db: Database, settings) -> list[dict[str, Any]]:
         fresh = ds["state"] == "ok"
         locate = _location_fresh(ds, fresh)
         policy = settings.detector
-        selected = _select_context(
+        selected, basis = _select_context_with_basis(
             db, iid, obs_list, price, locate, policy, now,
         )
         sc = (
@@ -1114,18 +1165,27 @@ def instruments_overview(db: Database, settings) -> list[dict[str, Any]]:
         wait = _context_wait(
             db, settings, ins, obs_list, selected, price, ds, now,
         )
-        stage, direction, market_stage = _finish_stage(
+        stage, direction, _legacy_market = _finish_stage(
             stage, direction, selected, sc, zone, price, locate, wait,
         )
-        market_stage = _apply_context_note(
-            market_stage, db, iid, price if locate else None, policy, now, selected,
+        review_count = candidate_counts.get(iid, 0)
+        presentation = _presentation(
+            db, settings, ins, obs_list, selected, basis, sc, stage, direction,
+            price, quote[1] if quote else None, ds, now,
+            review_count=review_count,
+            price_in_entry=stage == STAGE_IN_ENTRY,
+            eligible_count=len(eligible),
+            has_range=sc is not None and db.get_current_ltf_range(sc.id) is not None,
+            provisional_only=False,
+            data_version=db.get_state_seq(),
+            wait=wait,
         )
+        market_stage = presentation["headline"]["headline"]
         htf_context = None
         if zone is not None:
             htf_context = {
                 "type": zone.type.value, "timeframe": zone.timeframe,
             }
-        review_count = candidate_counts.get(iid, 0)
         attention = _attention_group(
             db, iid, obs_list, len(eligible), stage, ds,
             price, locate,
@@ -1139,6 +1199,7 @@ def instruments_overview(db: Database, settings) -> list[dict[str, Any]]:
             },
             "stage": stage,
             "market_stage": market_stage,
+            "presentation": presentation,
             "direction": direction,
             "direction_conflict": _direction_conflict(obs_list),
             "htf_context": htf_context,
@@ -1231,12 +1292,8 @@ def instrument_current(
     wait = _context_wait(
         db, settings, ins, observations, selected, price, ds, now,
     )
-    stage, direction, market_stage = _finish_stage(
+    stage, direction, _legacy_market = _finish_stage(
         stage, direction, selected, sc, parent_zone, price, locate, wait,
-    )
-    market_stage = _apply_context_note(
-        market_stage, db, instrument_id, price if locate else None, policy, now,
-        selected,
     )
     waiting: Optional[dict[str, Any]] = None
     if sc is None and selected is not None:
@@ -1248,6 +1305,30 @@ def instrument_current(
     last_closed = db.last_candle(instrument_id, "H1")
     last_processed = db.get_meta(f"ltf:h1:last_close:{instrument_id}")
     movements = db.list_ltf_movements(sc.id) if sc is not None else []
+    entry_zone = None
+    if eligible_rows:
+        e0 = eligible_rows[0]
+        entry_zone = f"{e0.get('type') or 'зона'} {e0.get('lower')}–{e0.get('upper')}"
+    provisional_on = bool(
+        settings.detector.ltf_provisional_range_enabled and sc is not None
+        and rng_block is None
+    )
+    cancel = _cancel_condition(db, settings, selected, sc)
+    presentation = _presentation(
+        db, settings, ins, observations, selected, basis, sc, stage, direction,
+        price, quote[1] if quote else None, ds, now,
+        review_count=db.count_candidate_zones().get(instrument_id, 0),
+        price_in_entry=stage == STAGE_IN_ENTRY,
+        eligible_count=len(eligible_rows),
+        has_range=rng_block is not None,
+        provisional_only=provisional_on,
+        data_version=_state_version(db, selected, sc),
+        wait=wait,
+        entry_zone=entry_zone,
+        contexts=contexts,
+        cancel=cancel,
+    )
+    market_stage = presentation["headline"]["headline"]
     return {
         "instrument": _instrument_brief(db, instrument_id),
         # §13: идентичность снимка — все панели интерфейса читают один
@@ -1273,6 +1354,7 @@ def instrument_current(
         "data_state": ds,
         "stage": stage,
         "market_stage": market_stage,
+        "presentation": presentation,
         "direction": direction,
         "direction_conflict": _direction_conflict(observations),
         "wait": wait,
@@ -1284,7 +1366,7 @@ def instrument_current(
         "reached_disabled": _disabled_reached(
             db, settings, instrument_id, price, now,
         ),
-        "cancel_condition": _cancel_condition(db, settings, selected, sc),
+        "cancel_condition": cancel,
         "contexts": contexts,
         "selected_context_id": selected.id if selected else None,
         # L05: основание выбора (код BASIS_*) — навигационная политика,
@@ -1342,58 +1424,28 @@ def _level_broken(candles, level: float, since_ms: int, bear: bool) -> bool:
 
 
 def _expected_levels(db: Database, obs: LtfObservation, settings) -> dict[str, Any]:
-    """Ожидаемые уровни слома из подтверждённых pivots (§6.1–§6.4).
+    """Ожидаемые BOS/SMS из той же машины, которая регистрирует слом.
 
-    bear: BOS — закрытие H1 строго ниже опорного HL, назначенного перед
-    последним HH (как roles.py: откат перед HH получает роль HL); SMS —
-    internal_low выше этого HL. Bull — зеркально (LL → опорный LH,
-    internal_high ниже него). None, когда якорной структуры ещё нет или
-    уровень уже пробит закрытой H1 (слом свершился — ожидания нет).
+    Готовый уровень и уровень с невыполненной предпосылкой остаются видимыми.
+    Свершившийся слом, снятый уровень и отсутствующая опора в слот не попадают:
+    пустая якорная структура — ровно {bos: None, sms: None}.
     """
-    empty: dict[str, Any] = {"bos": None, "sms": None}
     since = obs.activated_at - settings.detector.ltf_history_days * 86_400_000
     pivots = [
-        p for p in db.list_ltf_pivots(obs.instrument_id, since_ms=since)
+        PivotCandidate(
+            instrument_id=p.instrument_id, price=p.price, kind=p.kind,
+            pivot_at=p.pivot_at, candle_open_time=p.candle_open_time,
+            confirmed_at=p.confirmed_at or 0, left=p.left, right=p.right,
+            state=p.state, pivot_id=p.id, role=p.role,
+        )
+        for p in db.list_ltf_pivots(obs.instrument_id, since_ms=since)
         if p.state == "confirmed"
     ]
-    bear = obs.direction.value == "bear"
-    anchor_role = "HH" if bear else "LL"
-    internal_role = "internal_low" if bear else "internal_high"
-    ref_kind = "low" if bear else "high"
-    anchor_idx = None
-    for i, p in enumerate(pivots):
-        if p.role == anchor_role:
-            anchor_idx = i
-    if anchor_idx is None:
-        return empty
-    ref = None
-    for p in reversed(pivots[:anchor_idx]):
-        if p.kind == ref_kind:
-            ref = p
-            break
-    if ref is None:
-        return empty
-    candles = db.get_candles(obs.instrument_id, "H1", start_ms=ref.pivot_at)
-    bos = None
-    ref_since = ref.confirmed_at if ref.confirmed_at is not None else ref.pivot_at
-    if not _level_broken(candles, ref.price, ref_since, bear):
-        bos = {
-            "direction": obs.direction.value,
-            "level": ref.price,
-            "ref_pivot": _pivot_brief(ref),
-        }
-    sms = None
-    for p in pivots[anchor_idx + 1:]:
-        if p.role != internal_role:
-            continue
-        p_since = p.confirmed_at if p.confirmed_at is not None else p.pivot_at
-        if bear and p.price > ref.price:
-            if not _level_broken(candles, p.price, p_since, bear):
-                sms = {"level": p.price, "internal_pivot": _pivot_brief(p)}
-        elif not bear and p.price < ref.price:
-            if not _level_broken(candles, p.price, p_since, bear):
-                sms = {"level": p.price, "internal_pivot": _pivot_brief(p)}
-    return {"bos": bos, "sms": sms}
+    candles = db.get_candles(obs.instrument_id, "H1", start_ms=since)
+    conditions = expected_structure_conditions(
+        pivots, candles, obs.direction, now_ms(), since_ms=since,
+    )
+    return legacy_expected(conditions, obs.direction.value)
 
 
 def observation_chart_layers(

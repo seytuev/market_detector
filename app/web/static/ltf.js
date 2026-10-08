@@ -691,14 +691,20 @@ async function renderCard() {
   else if (ctx.price_position === 'below') positionText = 'ниже HTF-зоны';
   else positionText = 'положение цены неактуально (нет свежей котировки)';
 
-  let html = `
+  let html = '';
+  if (v.presentation && window.LFCopy) {
+    html += LFCopy.card(v.presentation);
+  } else {
+    html += `
     <div class="scenario-stage ${sc ? (v.counts.eligible > 0 ? 'ok' : 'wait') : 'wait'}">
       <span class="stage-label">Текущий этап</span><strong>${esc(v.stage || '—')}</strong>
-    </div>
+    </div>`;
+  }
+  if (!(v.presentation && window.LFCopy)) {
+    html += `
     ${ds.state && ds.state !== 'ok' ? `<div class="ltf-cancel-note">${esc(DATA_STATE_RU[ds.state] || ds.state)}${ds.reason ? ': ' + esc(DATA_STATE_REASON_RU[ds.reason] || ds.reason) : ''}. Положение цены и расстояния могут быть неактуальны.</div>` : ''}
     ${v.contexts_conflict ? '<div class="ltf-cancel-note ctx-conflict-banner">Конфликт контекстов: активны HTF-зоны противоположных направлений — направление не усредняется. Обе зоны — в списке контекстов панели «Активы».</div>' : ''}
     <ul class="scenario-qa">
-      <li><span class="qa-q">Что происходит</span><span class="qa-a">${esc(qa.what)}</span></li>
       <li><span class="qa-q">Почему</span><span class="qa-a">${esc(qa.why)}</span></li>
       <li><span class="qa-q">Чего ждём</span><span class="qa-a">${esc(qa.wait)}</span></li>
       <li><span class="qa-q">Что отменит</span><span class="qa-a">${esc(qa.cancel)}</span></li>
@@ -710,6 +716,9 @@ async function renderCard() {
       <dt>Положение цены</dt><dd>${esc(positionText)}</dd>
       <dt>Актуальность родителя</dt><dd>${esc(ctx.parent_validity === 'active' ? 'актуален' : (ctx.parent_validity || '—'))}</dd>
       <dt>Последнее касание HTF</dt><dd>${ctx.last_touch_at ? fmtTime(ctx.last_touch_at) : '—'}</dd>`;
+  } else {
+    html += '<dl>';
+  }
 
   if (sc) {
     const rng = v.range;
@@ -1500,14 +1509,16 @@ function drawLtfLayers() {
       const rawX1 = xOf(pivot.pivot_at);
       let x1 = rawX1;
       if (x1 === null || x1 < 0) x1 = 0;
+      const pending = e.status === 'waiting_prerequisite';
+      const labelText = pending ? `${label}: сначала нужен подтверждённый откат` : label;
       const div = hline(e.level, x1, paneRight, `ltf-expected ltf-expected-${key}`,
-        `${label} · уровень ${fmtPrice(e.level)} · экстремум ${fmtTime(pivot.pivot_at)}` +
+        `${labelText} · уровень ${fmtPrice(e.level)} · экстремум ${fmtTime(pivot.pivot_at)}` +
         ` · подтверждён ${pivot.confirmed_at ? fmtTime(pivot.confirmed_at) : 'ещё нет'}`);
       if (div && ((rawX1 !== null && rawX1 >= 0) || paneRight - x1 >= 80)) {
         // LONG — фраза над линией, SHORT — под линией
         const span = document.createElement('span');
         span.className = e.direction === 'bull' ? 'lbl-above' : 'lbl-below';
-        span.textContent = label;
+        span.textContent = labelText;
         div.appendChild(span);
       }
     }
@@ -1933,6 +1944,10 @@ async function main() {
     if (state.instrumentId) await reloadCurrent({ keepRange: true });
   });
 }
+
+document.addEventListener('lf-reconciled', () => {
+  if (state.instrumentId) reloadCurrent({ keepRange: true });
+});
 
 main().catch((err) => {
   document.body.insertAdjacentHTML('beforeend',

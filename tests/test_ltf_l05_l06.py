@@ -201,7 +201,8 @@ def test_basis_nearest_beats_far_bear_scenario(client, db, instrument_id):
     assert cur["selected_context_id"] == near_obs.id
     assert cur["selected_context_basis"] == "nearest"
     assert cur["stage"] == "Ждём BOS/SMS"
-    assert "бычьему" in cur["market_stage"]
+    assert cur["presentation"]["headline"]["code"] == "H03"
+    assert "бычьему" not in cur["market_stage"]
     assert "Premium" not in cur["market_stage"]
     assert "Цена в HTF-зоне" not in cur["market_stage"]
 
@@ -228,7 +229,9 @@ def test_recent_stale_quote_keeps_nearest(client, db, instrument_id):
     assert cur["data_state"]["reason"] == "quote_stale"
     assert cur["selected_context_id"] == near_obs.id
     assert cur["selected_context_basis"] == "nearest"
-    assert "бычьему" in cur["market_stage"]
+    assert cur["presentation"]["headline"]["code"] == "H03"
+    assert cur["presentation"]["location"]["relation"] == "unknown"
+    assert "бычьему" not in cur["market_stage"]
     assert "Premium" not in cur["market_stage"]
 
 
@@ -245,8 +248,9 @@ def test_price_inside_still_beats_nearest(client, db, instrument_id):
     cur = _current(client, instrument_id)
     assert cur["selected_context_id"] == near_obs.id
     assert cur["selected_context_basis"] == "price_inside"
-    assert cur["market_stage"].startswith("Цена в HTF-зоне")
-    assert "бычьему" in cur["market_stage"]
+    assert cur["presentation"]["location"]["relation"] == "inside"
+    assert cur["presentation"]["headline"]["code"] == "H03"
+    assert not cur["market_stage"].startswith("Цена в HTF-зоне")
 
 
 def test_unconfirmed_and_closed_manual_are_named(client, db, instrument_id):
@@ -267,9 +271,15 @@ def test_unconfirmed_and_closed_manual_are_named(client, db, instrument_id):
     _make_live(db, instrument_id, 108.5)
     cur = _current(client, instrument_id)
     text = cur["market_stage"]
-    assert "без подтверждения" in text
-    assert "Ручная зона медвежья" in text
-    assert "закрыта" in text
+    assert "без подтверждения" not in text
+    assert "пробоем" not in text
+    zones = cur["presentation"]["other_zones"]
+    codes = {z["code"] for z in zones}
+    assert "C06" in codes
+    assert "C14" in codes or "C15" in codes
+    joined = " ".join(f"{z.get('headline', '')} {z.get('detail', '')}" for z in zones)
+    assert "Причина завершения не записана" in joined
+    assert "пробоем" not in joined
 
 
 def test_basis_last_scenario(client, db, seeded, instrument_id):

@@ -642,10 +642,14 @@ function drawH1Breaks(overlay, ts, paneRight, height) {
     if (!row || row.level == null || !pivot) continue;
     let x1 = xOf(pivot.pivot_at);
     if (x1 === null || x1 < 0) x1 = 0;
+    const pending = row.status === 'waiting_prerequisite';
+    const title = pending
+      ? `${label} · ${fmtPrice(row.level)} · сначала нужен подтверждённый откат`
+      : `${label} · ${fmtPrice(row.level)}`;
     line(
       row.level, x1, paneRight,
       `ltf-expected ltf-expected-${key}`,
-      `${label} · ${fmtPrice(row.level)}`,
+      title,
     );
   }
 }
@@ -2486,9 +2490,24 @@ function renderDeskScenario() {
   const ins = state.instruments.find((i) => i.id === state.instrumentId) || v.instrument || {};
   const row = deskData.assets.find((r) => r.instrument.id === state.instrumentId);
   const tf = deskSelectedTf(v);
-  const cancel = deskCancelText(v);
   const watching = !!(ins && ins.ltf_analyze);
   const ds = v.data_state || {};
+  const pres = v.presentation;
+  const live = state.lastPrice;
+  const quote = pres && pres.location ? pres.location.quote : null;
+  const suppress = live != null && quote != null && Number(live) !== Number(quote);
+  if (pres && window.LFCopy) {
+    el.innerHTML = LFCopy.card(pres, { suppressLocation: suppress }) +
+      `<button type="button" id="desk-watch-btn" class="btn ${watching ? 'primary' : ''} desk-watch">${watching ? '✓ Наблюдение включено' : 'Включить наблюдение'}</button>` +
+      `<details class="desk-basis"><summary>Основания и качество данных</summary><dl>` +
+      `<dt>Показан контекст</dt><dd>${esc(DESK_BASIS_RU[v.selected_context_basis] || v.selected_context_basis || '—')}</dd>` +
+      `<dt>Качество данных</dt><dd>${esc(ds.state === 'ok' ? 'Данные актуальны' : (DESK_DATA_REASON_RU[ds.reason] || ds.reason || ds.state || '—'))}</dd>` +
+      `<dt>Версия состояния</dt><dd>${v.state_version != null ? v.state_version : '—'}</dd>` +
+      `</dl></details>`;
+    $('desk-watch-btn').onclick = toggleDeskWatch;
+    return;
+  }
+  const cancel = deskCancelText(v);
   const conflict = v.direction_conflict;
   el.innerHTML = `
     <div class="desk-sc-head">
@@ -2643,6 +2662,11 @@ function scheduleDeskRefresh() {
   }, 800);
 }
 
+document.addEventListener('lf-reconciled', () => {
+  loadDeskExtras().catch((e) => console.warn('desk reconcile:', e));
+  if (state.instrumentId) loadZones().catch((e) => console.warn('zones reconcile:', e));
+});
+
 function deskOnWs(data) {
   if (!isDeskActive()) return;
   if (data.instrument_id != null && data.instrument_id !== state.instrumentId
@@ -2650,15 +2674,11 @@ function deskOnWs(data) {
     return;
   }
   if (data.type === 'price' && data.instrument_id === state.instrumentId) {
-    if (deskData.current && data.price) {
-      deskData.current.price = data.price;
-      deskData.current.quote_at = data.time || Date.now();
-    }
     renderDeskHead();
+    renderDeskScenario();
     scheduleDeskRefresh();
   } else if (data.type === 'price') {
-    const cur = deskData.currents.get(data.instrument_id);
-    if (cur && data.price) { cur.price = data.price; renderDeskAssets(); }
+    renderDeskAssets();
   } else if (data.type === 'ltf' || data.type === 'zone' || data.type === 'event'
       || data.type === 'candle') {
     scheduleDeskRefresh();

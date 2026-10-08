@@ -380,9 +380,15 @@ def test_expected_levels_hidden_after_break(client, db, seeded):
         T0 + 2000, 92.0, 93.0, 86.0, 88.0, timeframe="H1", instrument_id=iid,
     )])
     exp = client.get(f"/api/ltf/observations/{obs1.id}", headers=AUTH).json()["expected"]
-    assert exp == {"bos": None, "sms": None}
+    # BOS этой свечой уже случился. SMS без отката машина не принимает:
+    # уровень остаётся, статус — ожидание предпосылки.
+    assert exp["bos"] is None
+    assert exp["sms"]["level"] == 95.0
+    assert exp["sms"]["status"] == "waiting_prerequisite"
     chart = client.get(f"/api/ltf/observations/{obs1.id}/chart", headers=AUTH).json()
-    assert chart["expected"] == {"bos": None, "sms": None}
+    assert chart["expected"]["bos"] is None
+    assert chart["expected"]["sms"]["level"] == 95.0
+    assert chart["expected"]["sms"]["status"] == "waiting_prerequisite"
 
 
 def test_close_scenario(client, db, seeded):

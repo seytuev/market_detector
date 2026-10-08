@@ -68,7 +68,10 @@ def _footer(ev: LtfEvent, ctx: LtfContext) -> str:
     """ТЗ 07.10.2026 §5.1/§6: без строки «Источник» (метаданные — в карточке
     «Подробнее»), время — МСК. Ссылка TradingView живёт кнопкой, чтобы её
     превью не подменяло собственный график (§7)."""
-    return f"Время события: {_fmt_time(ev.occurred_at)}"
+    line = f"Время события: {_fmt_time(ev.occurred_at)}"
+    if getattr(ev, "delayed", False):
+        line += f"\nПодтверждено {_fmt_time(ev.occurred_at)}; сообщение доставлено с задержкой"
+    return line
 
 
 def _render_entry_line(e: dict[str, Any]) -> str:
@@ -194,6 +197,8 @@ def _render_break(ev: LtfEvent, ctx: LtfContext) -> list[str]:
     # occurred_at события — close_time пробойной свечи (engine._emit);
     # это именно время закрытия H1, а не открытия (§6 ТЗ 07.10.2026)
     head += f"\nВремя закрытия H1: {fmt_time_msk(ev.occurred_at)}"
+    side = "вниз" if direction == "bear" else "вверх"
+    head += f"\n{kind} {side} подтверждён."
     mv_line = _render_movement(p.get("movement"))
     if mv_line:
         head += f"\n{mv_line}"
@@ -262,6 +267,10 @@ def _render_touch(ev: LtfEvent, ctx: LtfContext) -> list[str]:
         head += f"\nЦена события: {_fmt_price(p['price'])}"
     head += "\nСобытие: касание зоны входа"
     head += "\nСигнал касания не равен исполненному ордеру."
+    head += (
+        "\nЦена коснулась зоны наблюдения за входом. "
+        "Касание само по себе вход не подтверждает."
+    )
     if p.get("type") in ("BSL", "SSL"):
         # §10/§11.3: до закрытия свечи подтверждение не пишем
         head += "\nОжидаем закрытия текущей H1 для проверки снятия без закрепления."
@@ -296,6 +305,8 @@ def _render_sweep(ev: LtfEvent, ctx: LtfContext) -> list[str]:
             f"\nЗакрытие H1: {close}"
             "\nСобытие: первое снятие без закрепления, подтверждено закрытием H1"
             "\nСтатус: снята; повторные входы по этому уровню отключены"
+            f"\n{t} {level}: после пересечения цена закрылась обратно. "
+            "Это подтверждённый возврат, не простое пересечение."
         )
     elif p.get("outcome") == "equal_close":
         # Close = K: нет подтверждения строго по нужную сторону — без
@@ -315,6 +326,7 @@ def _render_sweep(ev: LtfEvent, ctx: LtfContext) -> list[str]:
             f"\nЗакрытие H1: {close}"
             "\nСобытие: закрепление H1 строго за уровнем"
             "\nСтатус: снята; повторные входы по этому уровню отключены"
+            f"\nВозврата за {t} {level} не произошло: H1 закрылась за уровнем."
         )
     return _split(head, [], _footer(ev, ctx))
 

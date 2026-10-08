@@ -706,3 +706,124 @@ def expected_reverse_condition(
         "pivot_at": pivot.pivot_at,
         "confirmed_at": pivot.confirmed_at,
     }
+
+
+def _pivot_view(p: PivotCandidate) -> dict[str, Any]:
+    return {
+        "id": p.pivot_id,
+        "price": p.price,
+        "pivot_at": p.pivot_at,
+        "confirmed_at": p.confirmed_at,
+        "role": p.role,
+    }
+
+
+def _side_word(direction: Direction) -> str:
+    return "below" if direction == Direction.BEAR else "above"
+
+
+def _bos_condition(side: _SideScan) -> dict[str, Any]:
+    """Первичный BOS в том состоянии, в котором on_candle его примет."""
+    bear = side.direction == Direction.BEAR
+    base = {
+        "kind": "BOS", "stage": "primary", "timeframe": "H1",
+        "requires_close": True, "strict": True,
+        "side": _side_word(side.direction),
+        "source": "structure_machine",
+    }
+    if side.anchor is None:
+        missing = (
+            "нет подтверждённого максимума"
+            if bear else "нет подтверждённого минимума"
+        )
+        return {**base, "status": "unavailable", "level": None, "missing": missing,
+                "opens_scenario": False}
+    if side.ref is None:
+        missing = (
+            "после максимума нет подтверждённой опоры"
+            if bear else "после минимума нет подтверждённой опоры"
+        )
+        return {**base, "status": "waiting_prerequisite", "level": None,
+                "missing": missing, "anchor": _pivot_view(side.anchor),
+                "opens_scenario": False}
+    key = _level_key("BOS", "primary", side.ref)
+    occurred = bool(side.ref_broken or key in side.broken_keys)
+    return {
+        **base,
+        "status": "occurred" if occurred else "ready",
+        "level": side.ref.price,
+        "pivot": _pivot_view(side.ref),
+        "anchor": _pivot_view(side.anchor),
+        "opens_scenario": not occurred,
+    }
+
+
+def _sms_condition(side: _SideScan) -> dict[str, Any]:
+    """SMS: уровень внутреннего экстремума не заменяет отсутствующий откат."""
+    bear = side.direction == Direction.BEAR
+    base = {
+        "kind": "SMS", "stage": "primary", "timeframe": "H1",
+        "requires_close": True, "strict": True,
+        "side": _side_word(side.direction),
+        "source": "structure_machine",
+    }
+    if side.internal is None:
+        missing = "нет подтверждённого внутреннего экстремума"
+        return {**base, "status": "unavailable", "level": None, "missing": missing,
+                "opens_scenario": False}
+    key = _level_key("SMS", "primary", side.internal)
+    if key in side.broken_keys:
+        status, missing = "occurred", None
+    elif side.pullback is None:
+        status = "waiting_prerequisite"
+        missing = "сначала нужен подтверждённый откат"
+    elif side.ref_broken:
+        status, missing = "superseded", "опорный уровень уже пробит"
+    else:
+        status, missing = "ready", None
+    return {
+        **base,
+        "status": status,
+        "level": side.internal.price,
+        "pivot": _pivot_view(side.internal),
+        "pullback": _pivot_view(side.pullback) if side.pullback else None,
+        "missing": missing,
+        "opens_scenario": status == "ready",
+    }
+
+
+def expected_structure_conditions(
+    pivots: list[PivotCandidate],
+    candles: list[Candle],
+    direction: Direction,
+    now_ms: int,
+    since_ms: int = 0,
+) -> dict[str, Any]:
+    """Следующие BOS и SMS из той же машины, которая регистрирует слом.
+
+    Свечи проигрываются по порядку, pivots поглощаются только после
+    confirmed_at. Уже подтверждённые к now_ms pivots без последующей свечи
+    вооружают следующее условие и не создают исторический слом.
+    """
+    cur = BreakCursor(direction, since_ms, stop_on_cancellation=False)
+    closed = sorted((c for c in candles if c.closed), key=lambda c: c.open_time)
+    ps = sorted(
+        (p for p in pivots if p.state == "confirmed" and p.confirmed_at <= now_ms),
+        key=lambda p: (p.confirmed_at, p.pivot_at),
+    )
+    cur.scan(ps, closed, [c.open_time for c in closed], now_ms)
+    cur._absorb(ps, now_ms)
+    side = cur.target
+    bos = _bos_condition(side)
+    sms = _sms_condition(side)
+    ready = [
+        name for name, cond in (("BOS", bos), ("SMS", sms))
+        if cond.get("opens_scenario")
+    ]
+    return {
+        "direction": direction.value,
+        "bos": bos,
+        "sms": sms,
+        "opens_scenario": ready,
+        "either": len(ready) == 2,
+    }

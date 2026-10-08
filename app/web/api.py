@@ -1077,6 +1077,24 @@ def create_app(
                        "zone": zone_to_dict(updated)})
         return zone_to_dict(updated)
 
+    @app.post("/api/zones/{zone_id}/reconcile", dependencies=[Depends(require_auth)])
+    def reconcile(zone_id: int) -> dict[str, Any]:
+        """Сверка заполнения: существующий lifecycle на доказавшей свече.
+
+        Чтение карточки расчёт не запускает. Ошибка остаётся с действием
+        «Повторить расчёт», а не вечным «уточняется».
+        """
+        from ..services.reconcile import reconcile_zone
+        result = reconcile_zone(db, settings, zone_id)
+        if result.get("missing"):
+            raise HTTPException(status_code=404, detail="Зона не найдена")
+        zone = db.get_zone(zone_id)
+        if zone is not None:
+            hub.broadcast({
+                "type": "zone", "action": "updated", "zone": zone_to_dict(zone),
+            })
+        return result
+
     @app.get("/api/candidates", dependencies=[Depends(require_auth)])
     def list_candidates(instrument_id: Optional[int] = None) -> list[dict[str, Any]]:
         """Очередь ручной проверки (§10): кандидаты без ревью, с объяснением

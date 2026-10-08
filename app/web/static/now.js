@@ -252,8 +252,22 @@
         '<p class="now-empty">Карточка не скрыта: снимок актива не прочитан.</p>';
       return;
     }
-    const cancel = cancelText(v);
     const p = priceOf(ins.id);
+    const pres = v.presentation;
+    const snapshotQuote = pres && pres.location ? pres.location.quote : null;
+    const suppress = !!(p && snapshotQuote != null && Number(p.price) !== Number(snapshotQuote));
+    if (pres && window.LFCopy) {
+      const arrow = v.direction === 'bull' ? '↑' : (v.direction === 'bear' ? '↓' : '');
+      el.innerHTML = LFCopy.card(pres, {
+        suppressLocation: suppress,
+        extraHtml:
+          `${arrow ? `<div class="msg-v">${esc(arrow)} ${esc(v.direction === 'bull' ? 'рост' : v.direction === 'bear' ? 'снижение' : 'разные направления')}</div>` : ''}` +
+          `<button type="button" class="btn primary now-open-desk" data-iid="${ins.id}">Открыть рабочее место</button>` +
+          `<div class="now-card-foot">Котировка · <span class="price-age">${esc(p ? ageText(p.at) : '—')}</span></div>`,
+      });
+      return;
+    }
+    const cancel = cancelText(v);
     el.innerHTML = `
       <div class="now-card-head">
         <span>${esc(pair)} · ${esc(tf)}</span>
@@ -264,8 +278,6 @@
       <p class="now-card-lead">${esc(leadText(v, r, tf))}</p>
       ${factsHtml(v)}
       <dl class="now-qa">
-        <dt class="qa-q">Что происходит</dt>
-        <dd class="qa-a">${esc(v.market_stage || v.stage || r.market_stage || r.stage || '—')}</dd>
         <dt class="qa-q">Чего ждём</dt>
         <dd class="qa-a">${esc(waitText(v))}</dd>
         ${cancel ? `<dt class="qa-q">Условие отмены</dt><dd class="qa-a">${esc(cancel)}</dd>` : ''}
@@ -353,9 +365,8 @@
     if (!isActive()) return;
     if (data.type === 'price' && data.instrument_id != null && data.price) {
       st.prices.set(data.instrument_id, { price: data.price, at: data.time || Date.now() });
-      const cur = st.currents.get(data.instrument_id);
-      if (cur) { cur.price = data.price; cur.quote_at = data.time || Date.now(); }
       refreshAges();
+      renderCard();
       scheduleRefresh();
     } else if (data.type === 'event' || data.type === 'zone' || data.type === 'ltf'
         || data.type === 'candle') {
@@ -411,6 +422,7 @@
   });
 
   if (typeof registerWsHandler === 'function') registerWsHandler(onWs);
+  document.addEventListener('lf-reconciled', () => { refresh(); });
 
   // Гонка инициализации: main() в app.js продолжается после await ensureToken
   // микрозадачей и может вызвать showView('now') до выполнения этого скрипта
