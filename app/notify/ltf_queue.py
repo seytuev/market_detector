@@ -165,11 +165,17 @@ class LtfDispatcher:
         from ..bot.charts import DEFAULT_MASK, layers_from_mask, render_ltf_chart
 
         obs = ctx.observation
-        elapsed_days = (
-            (ev.occurred_at - obs.activated_at) / 86_400_000
-            if obs.activated_at else 0
-        )
-        days = 3 if elapsed_days <= 3 else (7 if elapsed_days <= 7 else 14)
+        from ..services.h1_setup import local_leg_at
+        leg = local_leg_at(self.db, obs.instrument_id, ev.occurred_at)
+        if leg is not None and leg.get("origin_at"):
+            span = max(0, ev.occurred_at - int(leg["origin_at"]))
+            days = max(2, min(14, int(span / 86_400_000) + 2))
+        else:
+            elapsed_days = (
+                (ev.occurred_at - obs.activated_at) / 86_400_000
+                if obs.activated_at else 0
+            )
+            days = 3 if elapsed_days <= 3 else (7 if elapsed_days <= 7 else 14)
         end = ev.occurred_at  # no candle closed after the event may leak into its snapshot
         out = (
             Path(self.settings.db_path).parent / "charts"
@@ -273,12 +279,22 @@ class LtfDispatcher:
         if not use_transition:
             return ltf_text(lead, ctx, len({e.observation_id for e in events}))
         from ..services.htf_context import reversal_projection, transition_card_text
+        from ..services.h1_setup import project_setup, setup_card_lines
         view = None
         if ctx.observation is not None:
             view = reversal_projection(
                 self.db, ctx.observation.instrument_id, lead.occurred_at, self.cfg,
             )
-        return transition_card_text(events, ctx, view)
+        text = transition_card_text(events, ctx, view)
+        if ctx.observation is not None:
+            snap = project_setup(
+                self.db, self.cfg, ctx.observation.instrument_id, lead.occurred_at,
+                mode="event",
+            )
+            extra = setup_card_lines(snap)
+            if extra:
+                text = text + "\n" + "\n".join(extra)
+        return text
 
     async def deliver(self, events: list[LtfEvent]) -> int:
         from .outbox import Card
@@ -326,6 +342,12 @@ class LtfDispatcher:
                         historic_match = True
                         break
             packet_id = self.outbox.put("ltf", key, Card(""), [ev.id], quiet=ev.kind == "range_ready")
+            from ..services.h1_setup import entry_block_reason
+            block = entry_block_reason(self.db, ev, now_ms())
+            if block:
+                self.outbox.suppress(packet_id, block)
+                self.db.mark_ltf_event_delivered(ev.id)
+                continue
             if historic_match:
                 self.outbox.suppress(packet_id, "equivalent delivered before outbox migration")
                 self.db.mark_ltf_event_delivered(ev.id)

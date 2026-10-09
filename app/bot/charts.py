@@ -114,6 +114,19 @@ def render_ltf_chart(
                              end_ms=end_ms)
     if not candles:
         return None
+    setup = None
+    if settings is not None and tf == "H1":
+        from ..services.h1_setup import project_setup
+        moment = end_ms if end_ms is not None else now
+        setup = project_setup(
+            db, settings.detector, obs.instrument_id, moment,
+            mode="event" if end_ms is not None else "current",
+        )
+        frame = setup.get("frame_from") if setup else None
+        if frame:
+            sliced = [c for c in candles if c.open_time >= int(frame)]
+            if len(sliced) >= 8:
+                candles = sliced
     layer_set = set(layers)
     info = (
         observation_chart_layers(db, settings, observation_id)
@@ -147,6 +160,8 @@ def render_ltf_chart(
 
     extra_levels: list[float] = []
     labels: list[tuple[float, str, str]] = []
+    legend: list[tuple[str, str]] = []
+    legend_dashed: list[str] = []
 
     # рабочий масштаб — по свечам; далёкий HTF-контекст НЕ должен сжимать
     # свечи до нечитаемости (§9.2 ТЗ 07.10.2026): тогда зону не рисуем,
@@ -163,7 +178,7 @@ def render_ltf_chart(
         near = (lo <= c_hi + c_span) and (hi >= c_lo - c_span)
         if not near:
             htf_far_note = (
-                f"HTF {pz['type'].upper()} {pz['timeframe']} вне окна: "
+                f"HTF {pz['type'].upper()} {pz['timeframe']} вне кадра (вне окна): "
                 f"{fmt_price_ru(lo)}–{fmt_price_ru(hi)}"
             )
         else:
@@ -186,6 +201,7 @@ def render_ltf_chart(
                 (lo, f"{htf_name} {fmt_price_ru(lo)}", _COLOR_HTF),
             ]
             extra_levels += [lo, hi]
+            legend.append(("HTF-контекст", _COLOR_HTF))
 
     # ---- слой BOS/SMS: подтверждённый сплошной, ожидаемый пунктиром ----
     if "bos" in layer_set and info:
@@ -203,7 +219,7 @@ def render_ltf_chart(
             x_end = xr if i == last_idx else min(x0 + 6, xr)
             ax.hlines(level, x0, x_end, color=_COLOR_BOS, linewidth=1.2,
                       zorder=4)
-            label = f"{ev['kind'].upper()} ✓ {fmt_price_ru(level)}"
+            label = ev["kind"].upper()
             if i == last_idx:
                 labels.append((level, label, _COLOR_BOS))
                 # §9.4: для подтверждения — время закрытия H1 по МСК у свечи
@@ -214,22 +230,42 @@ def render_ltf_chart(
                 )
             extra_levels.append(level)
         expected = info.get("expected") or {}
-        side = "ниже" if obs.direction.value == "bear" else "выше"
         for key in ("bos", "sms"):
             exp = expected.get(key)
             if exp:
                 ax.hlines(exp["level"], -0.5, xr, color=_COLOR_BOS,
                           linewidth=1.0, linestyles="--", zorder=4)
-                labels.append((
-                    exp["level"],
-                    f"Ожидаем {key.upper()}: закрытие H1 {side} "
-                    f"{fmt_price_ru(exp['level'])}",
-                    _COLOR_BOS,
-                ))
+                labels.append((exp["level"], f"ожид. {key.upper()}", _COLOR_BOS))
                 extra_levels.append(exp["level"])
+        if breaks or any(expected.get(key) for key in ("bos", "sms")):
+            legend.append(("BOS/SMS", _COLOR_BOS))
+            if any(expected.get(key) for key in ("bos", "sms")):
+                legend_dashed.append("BOS/SMS")
 
-    # ---- слой диапазона Premium/Discount ----
-    if "range" in layer_set and info:
+    # ---- слой диапазона: нога инструмента, не последний сценарий ----
+    if "range" in layer_set and setup and setup.get("lower") is not None:
+        provisional = setup.get("range_status") != "confirmed"
+        style = "--" if provisional else "-"
+        origin_at = (setup.get("origin_anchor") or {}).get("at")
+        x0 = x_since(origin_at) if origin_at else -0.5
+        bull = setup.get("direction") == "bull"
+        high_tag = "H потенц." if bull and provisional else ("H подтв." if bull else "H")
+        low_tag = "L потенц." if (not bull) and provisional else ("L подтв." if not bull else "L")
+        for price in (setup["lower"], setup["upper"]):
+            ax.hlines(price, x0, xr, color=_COLOR_RANGE, linewidth=1.0,
+                      linestyles=style, zorder=3)
+        ax.hlines(setup["eq"], x0, xr, color=_COLOR_RANGE, linewidth=0.9,
+                  linestyles="--", zorder=3)
+        labels += [
+            (setup["upper"], high_tag, _COLOR_RANGE),
+            (setup["eq"], "50%", _COLOR_RANGE),
+            (setup["lower"], low_tag, _COLOR_RANGE),
+        ]
+        extra_levels += [setup["lower"], setup["upper"]]
+        legend.append(("PD H1 " + ("потенц." if provisional else "подтв."), _COLOR_RANGE))
+        if provisional:
+            legend_dashed.append("PD H1 потенц.")
+    elif "range" in layer_set and info and setup is None:
         cur_range = next(
             (r for r in info["ranges"] if r.get("current")), None
         )
@@ -240,14 +276,12 @@ def render_ltf_chart(
             ax.hlines(cur_range["mid"], -0.5, xr, color=_COLOR_RANGE,
                       linewidth=0.9, linestyles="--", zorder=3)
             labels += [
-                (cur_range["upper"],
-                 f"P/D {fmt_price_ru(cur_range['upper'])}", _COLOR_RANGE),
-                (cur_range["mid"],
-                 f"P/D 50% {fmt_price_ru(cur_range['mid'])}", _COLOR_RANGE),
-                (cur_range["lower"],
-                 f"P/D {fmt_price_ru(cur_range['lower'])}", _COLOR_RANGE),
+                (cur_range["upper"], "H", _COLOR_RANGE),
+                (cur_range["mid"], "50%", _COLOR_RANGE),
+                (cur_range["lower"], "L", _COLOR_RANGE),
             ]
             extra_levels += [cur_range["lower"], cur_range["upper"]]
+            legend.append(("Диапазон P/D", _COLOR_RANGE))
 
     # ---- слой entry-зон: зелёные long / красные short ----
     if "entries" in layer_set and info:
@@ -274,6 +308,10 @@ def render_ltf_chart(
                     color,
                 ))
             extra_levels += [e["lower"], e["upper"]]
+            if direction == "bull" and ("Entry long", _COLOR_LONG) not in legend:
+                legend.append(("Entry long", _COLOR_LONG))
+            if direction != "bull" and ("Entry short", _COLOR_SHORT) not in legend:
+                legend.append(("Entry short", _COLOR_SHORT))
 
     ax.set_xlim(-0.5, xr)
     hi = max(c.high for c in candles)
@@ -301,24 +339,18 @@ def render_ltf_chart(
     else:
         subtitle = f"LevelFrame · снимок {fmt_time_msk(now)}"
     if htf_far_note:
-        # §9.2: значения далёкого HTF-контекста — текстом, без сжатия свечей
+        # Далёкий HTF-контекст остаётся текстом и не растягивает ось.
         subtitle += f"\n{htf_far_note}"
+    if setup and setup.get("history"):
+        subtitle += "\nисторический снимок"
+    if setup and setup.get("pd_label"):
+        subtitle += f"\n{setup.get('label')} · {setup.get('pd_label')}"
     header_bottom = set_header(fig, title, subtitle)
     apply_layout(fig, ax, header_bottom, footer_lines=4)
     layout_price_labels(fig, ax, labels)
     set_footer(fig, f"Свечи {tf}, время открытия — МСК")
-    add_legend(
-        fig,
-        [
-            ("HTF-контекст", _COLOR_HTF),
-            ("BOS/SMS подтверждён", _COLOR_BOS),
-            ("BOS/SMS ожидаемый", _COLOR_BOS),
-            ("Диапазон P/D", _COLOR_RANGE),
-            ("Entry long", _COLOR_LONG),
-            ("Entry short", _COLOR_SHORT),
-        ],
-        dashed=("BOS/SMS ожидаемый",),
-    )
+    if legend:
+        add_legend(fig, legend, dashed=tuple(legend_dashed))
 
     fig.savefig(out, dpi=FIG_DPI)
     plt.close(fig)

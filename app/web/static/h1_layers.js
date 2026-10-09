@@ -319,6 +319,20 @@
     ].join('');
   }
 
+  function pdCaption(setup, fmtPrice) {
+    if (!setup) return '';
+    const fmt = fmtPrice || String;
+    if (setup.lower == null || setup.upper == null) {
+      return 'PD H1 текущего движения не построен: ' + (setup.reason || 'range_pending');
+    }
+    const history = setup.history ? ' · история' : '';
+    const end = setup.endpoint || {};
+    const origin = setup.origin_anchor || {};
+    return 'PD H1 текущего движения ' + fmt(origin.price) + ' → ' + fmt(end.price)
+      + ' · 50% ' + fmt(setup.eq) + ' · ' + (setup.pd_label || setup.range_status || '')
+      + history;
+  }
+
   function draw(overlay, ctx) {
     if (!overlay || !ctx || !ctx.layers) return;
     const layers = ctx.layers;
@@ -342,6 +356,39 @@
       overlay.appendChild(div);
       return div;
     };
+
+    const setup = layers.setup;
+    if (setup && setup.lower != null && setup.upper != null && typeof yOf === 'function') {
+      const originAt = setup.origin_anchor && setup.origin_anchor.at;
+      let x1 = originAt != null ? xOf(originAt) : 0;
+      if (x1 == null || x1 < 0) x1 = 0;
+      const provisional = setup.range_status !== 'confirmed';
+      const klass = 'h1-pd-line' + (provisional ? ' provisional' : ' confirmed');
+      const end = setup.endpoint || {};
+      const bull = setup.direction === 'bull';
+      const rows = [
+        [setup.upper, bull ? (provisional ? 'H потенц.' : 'H подтв.') : 'H'],
+        [setup.eq, '50%'],
+        [setup.lower, bull ? 'L' : (provisional ? 'L потенц.' : 'L подтв.')],
+      ];
+      rows.forEach(([price, text]) => {
+        const y = yOf(price);
+        if (y == null || y < -8 || y > height + 8 || paneRight <= x1) return;
+        const line = add(klass + (text === '50%' ? ' mid' : ''));
+        line.style.top = y + 'px';
+        line.style.left = x1 + 'px';
+        line.style.width = Math.max(4, paneRight - x1) + 'px';
+        line.title = (setup.label || 'PD H1') + ' · ' + text + ' ' + fmtPrice(price)
+          + (provisional ? ' · пунктир, предварительный PD' : ' · сплошная линия');
+        const span = doc.createElement('span');
+        span.className = 'h1-pd-label';
+        span.textContent = text;
+        line.appendChild(span);
+      });
+      if (end && end.price != null) {
+        /* подпись экстремума уже на границе PD */
+      }
+    }
 
     if (ctx.transitionEl) {
       const transition = layers.structure_transition;
@@ -603,8 +650,16 @@
         if (message.reset) actionButton(doc, ctx.statusEl, 'Сбросить фильтры', ctx.onResetFilters);
         if (message.showAll) actionButton(doc, ctx.statusEl, 'Показать все зоны H1', ctx.onShowAllZones);
       }
+      const setupCap = layers.setup;
+      if (setupCap && (setupCap.lower != null || setupCap.range_status)) {
+        ctx.statusEl.classList.remove('hidden');
+        const cap = doc.createElement('span');
+        cap.className = 'h1-reversal-caption';
+        cap.textContent = pdCaption(setupCap, fmtPrice);
+        ctx.statusEl.appendChild(cap);
+      }
       const rev = layers.reversal;
-      if (rev && rev.pd) {
+      if (!setupCap && rev && rev.pd) {
         ctx.statusEl.classList.remove('hidden');
         const cap = doc.createElement('span');
         cap.className = 'h1-reversal-caption';
@@ -706,6 +761,7 @@
     eventSource,
     eventCard,
     zoneCard,
+    pdCaption,
     selectedZones,
     ideaLabel,
     reasonText,

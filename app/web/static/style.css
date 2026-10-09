@@ -665,6 +665,25 @@ select, input, textarea {
   border-top: 1px dashed rgba(138, 148, 166, 0.5);
   height: 0;
 }
+.h1-pd-line {
+  height: 0;
+  border-top: 1px dashed #7aa2ff;
+  z-index: 4;
+  pointer-events: none;
+}
+.h1-pd-line.confirmed { border-top-style: solid; }
+.h1-pd-line.provisional { border-top-style: dashed; }
+.h1-pd-line.mid { border-top-style: dotted; }
+.h1-pd-label {
+  position: absolute;
+  left: 4px;
+  top: -13px;
+  font-size: 10px;
+  line-height: 12px;
+  color: var(--text-dim, #8b95a3);
+  white-space: nowrap;
+  pointer-events: none;
+}
 .ltf-range-mid { border-top-style: dotted; }
 .ltf-entry {
   border: 1px solid;

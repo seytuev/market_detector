@@ -1453,6 +1453,14 @@ def _expected_levels(db: Database, obs: LtfObservation, settings) -> dict[str, A
     return legacy_expected(conditions, obs.direction.value)
 
 
+def _local_setup(db, settings, instrument_id: int):
+    """Текущая нога инструмента. Не подменяет её последним сценарием наблюдения."""
+    from .h1_setup import project_setup
+    return project_setup(
+        db, settings.detector, instrument_id, now_ms(), mode="current",
+    )
+
+
 def observation_chart_layers(
     db: Database, settings, observation_id: int
 ) -> Optional[dict[str, Any]]:
@@ -1557,6 +1565,7 @@ def observation_chart_layers(
         "entries_excluded": entries_excluded,  # исключённые с reason (§10)
         "liquidity_tests": liquidity_tests,
         "expected": _expected_levels(db, obs, settings),
+        "setup": _local_setup(db, settings, obs.instrument_id),
     }
 
 
@@ -1655,6 +1664,8 @@ def instrument_structure(
         as_of=now, window_from=window_from, window_to=window_to,
         points=points, diagnostic=diagnostic, page=page, limit=limit,
         context_id=used_context, zone_history=zone_history,
+        # Заполненный now — не запрос прошлого кадра. История PD только у явного as_of.
+        setup_event=as_of is not None,
     )
     roles = extra.pop("roles_as_of", {})
     if as_of is not None:

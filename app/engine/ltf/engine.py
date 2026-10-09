@@ -122,6 +122,9 @@ class LtfEngine:
         # десятки часов и голодал веб/API (GIL + замок БД).
         self._ctx_sweep_cursor: dict[int, int] = {}
         self._bar_plan: Optional[dict] = None
+        # Инкрементальная локальная нога H1. Полный проход — один раз на пакет,
+        # дальше только новая свеча. События и уведомления отсюда не создаются.
+        self._h1_cursors: dict[int, Any] = {}
 
     # ------------------------------------------------------------------ #
     # Запуск наблюдения (§4)
@@ -274,6 +277,21 @@ class LtfEngine:
         # роли — из только что выполненного пересчёта (in-memory), а не из БД:
         # в replay роли в БД пишутся только на голове истории
         avail = sync.avail
+        # Локальная нога инструмента. Не создаёт событий и не выбирает PD сценария.
+        from ...services.h1_setup import H1LegCursor
+        batch = self._batch
+        gen = batch.structure_gen if batch is not None else 0
+        batch_id = id(batch) if batch is not None else 0
+        cursor = self._h1_cursors.get(instrument_id)
+        if cursor is None:
+            cursor = H1LegCursor(instrument_id, generation=gen, batch_id=batch_id)
+            self._h1_cursors[instrument_id] = cursor
+        else:
+            # Новый пакет начинает structure_gen с единицы. Это не смена ролей:
+            # машина ноги продолжает префикс. Смену роли видит сам курсор.
+            cursor.generation = gen
+            cursor.batch_id = batch_id
+        cursor.advance(self.db, avail, up_to, candle.close_time, self.cfg)
         from ...services.htf_context import apply_context_bar, plan_context_bar
         self._bar_plan = plan_context_bar(
             self.db, self.cfg, instrument_id, candle, avail, up_to, now,

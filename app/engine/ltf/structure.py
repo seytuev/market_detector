@@ -72,6 +72,7 @@ class StructureBatch:
         self._cursor_params: dict[tuple, tuple] = {}
         self.open_times: list[int] = []
         self.range_memo: dict[tuple, Any] = {}
+        self.structure_gen = 0
 
     # ---- pivots/avail/роли (инкрементально) ----
 
@@ -84,6 +85,7 @@ class StructureBatch:
         self.cursors.clear()
         self._cursor_params.clear()
         self.open_times = [c.open_time for c in self.closed]
+        self.structure_gen += 1
         self._fp = (left, right, len(self.closed),
                     self.closed[-1].open_time if self.closed else None)
 
@@ -148,6 +150,7 @@ class StructureBatch:
             self.cursors.clear()
             self._cursor_params.clear()
             self.range_memo.clear()
+            self.structure_gen += 1
         return res
 
     def existing_for(self, db: Database, instrument_id: int) -> dict:

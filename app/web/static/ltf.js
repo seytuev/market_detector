@@ -1555,8 +1555,20 @@ function drawLtfLayers() {
     const x = xOf(Math.min(...times));
     return (x === null || x < 0) ? 0 : x;
   };
+  const setup = layers.setup;
   const cur = (layers.ranges || []).find((r) => r.current);
-  if (cur) {
+  if (setup && setup.lower != null && setup.upper != null) {
+    const originAt = setup.origin_anchor && setup.origin_anchor.at;
+    const sx = originAt != null ? xOf(originAt) : 0;
+    const rx = (sx === null || sx < 0) ? 0 : sx;
+    const provisional = setup.range_status !== 'confirmed';
+    const cls = 'ltf-range-line' + (provisional ? ' ltf-range-provisional' : ' ltf-range-confirmed');
+    const title = (setup.history_label ? 'история · ' : '')
+      + (setup.label || 'PD H1 текущего движения') + ' · ' + (setup.pd_label || '');
+    hline(setup.upper, rx, paneRight, cls, title + ' · H ' + fmtPrice(setup.upper));
+    hline(setup.eq, rx, paneRight, cls + ' ltf-range-mid', title + ' · 50% ' + fmtPrice(setup.eq));
+    hline(setup.lower, rx, paneRight, cls, title + ' · L ' + fmtPrice(setup.lower));
+  } else if (cur) {
     const rx = rangeX1(cur);
     const pb = band(cur.upper, cur.mid, 'ltf-half-premium',
       `Premium [${fmtPrice(cur.mid)}; ${fmtPrice(cur.upper)}]`);

@@ -907,3 +907,49 @@ CREATE TABLE IF NOT EXISTS market_transition (
 );
 CREATE INDEX IF NOT EXISTS ix_market_transition_key
     ON market_transition(market_transition_key);
+
+-- Локальная нога H1 инструмента. Идентичность — первый BOS ноги,
+-- не scenario_id HTF-родителя. Старая нога не переписывается.
+CREATE TABLE IF NOT EXISTS h1_local_leg (
+    id INTEGER PRIMARY KEY,
+    instrument_id INTEGER NOT NULL,
+    direction TEXT NOT NULL,
+    origin_anchor_key TEXT,
+    origin_price REAL,
+    origin_at INTEGER,
+    origin_known_at INTEGER,
+    trigger_bos_key TEXT NOT NULL,
+    bos_at INTEGER NOT NULL,
+    broken_anchor_key TEXT,
+    state TEXT NOT NULL,
+    endpoint_price REAL,
+    endpoint_at INTEGER,
+    endpoint_status TEXT,
+    as_of INTEGER NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 1,
+    reason TEXT,
+    evidence TEXT NOT NULL DEFAULT '{}',
+    superseded_at INTEGER,
+    structure_epoch_id INTEGER NOT NULL DEFAULT 1,
+    UNIQUE(instrument_id, trigger_bos_key)
+);
+CREATE INDEX IF NOT EXISTS ix_h1_local_leg_instr
+    ON h1_local_leg(instrument_id, bos_at);
+
+-- Версия PD этой ноги. Предыдущая строка не обновляется.
+CREATE TABLE IF NOT EXISTS h1_local_leg_revision (
+    id INTEGER PRIMARY KEY,
+    leg_id INTEGER NOT NULL,
+    revision INTEGER NOT NULL,
+    lower REAL,
+    upper REAL,
+    eq REAL,
+    endpoint_price REAL,
+    endpoint_at INTEGER,
+    range_status TEXT NOT NULL,
+    as_of INTEGER NOT NULL,
+    reason TEXT,
+    UNIQUE(leg_id, revision)
+);
+CREATE INDEX IF NOT EXISTS ix_h1_local_leg_revision_asof
+    ON h1_local_leg_revision(leg_id, as_of);

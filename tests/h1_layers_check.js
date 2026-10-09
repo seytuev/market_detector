@@ -148,6 +148,26 @@ const legacy = {
 check('предварительный PD виден в фильтре допуска',
   H.selectedZones(legacy, Object.assign({}, H.DEFAULTS, { eligibleOnly: true })).map((z) => z.id).join(',') === '7');
 
+check('подпись PD экспортирована', typeof H.pdCaption === 'function');
+const pd = H.pdCaption({
+  lower: 80400, upper: 83400, eq: 81900, direction: 'bull',
+  range_status: 'provisional', pd_label: 'предварительный PD',
+  origin_anchor: { price: 80400 }, endpoint: { price: 83400 },
+}, (n) => String(n));
+check('подпись называет текущее движение', pd.includes('PD H1 текущего движения')
+  && pd.includes('80400') && pd.includes('81900') && pd.includes('предварительный PD'));
+check('исторический снимок помечен', H.pdCaption({
+  lower: 1, upper: 3, eq: 2, history: true, pd_label: 'PD подтверждён',
+  origin_anchor: { price: 1 }, endpoint: { price: 3 },
+}, String).includes('история'));
+check('непостроенный PD не подменяет старые числа',
+  H.pdCaption({ lower: null, reason: 'origin_unresolved' }, String)
+    .includes('origin_unresolved'));
+check('график H1 кадрирует ногу в секундах',
+  app.includes('function applyH1LegFrame') && app.includes('frame_from) / 1000'));
+check('страница LTF предпочитает снимок ноги',
+  ltf.indexOf('layers.setup') !== -1 && ltf.indexOf('layers.setup') < ltf.indexOf('const cur ='));
+
 if (failed) {
   console.error('failed', failed);
   process.exit(1);

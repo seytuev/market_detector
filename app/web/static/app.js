@@ -263,6 +263,7 @@ function initChart() {
   });
   // перерисовка зон при прокрутке/масштабировании по времени
   state.chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+    if (!state.h1ApplyingFrame && state.h1FrameKey) state.h1UserPanned = true;
     drawZones();
     scheduleH1HistoryReload();
   });
@@ -3084,7 +3085,31 @@ async function loadH1Markers() {
   }
   state.candleSeries.setMarkers(window.H1Layers.seriesMarkers(
     layers, state.h1SelectedEventId, structurePointColor));
+  applyH1LegFrame(layers);
   drawZones();
+}
+
+function applyH1LegFrame(layers) {
+  const setup = layers && layers.setup;
+  if (!setup || setup.frame_from == null || !state.chart || !state.candles.length) return;
+  if (state.h1FrameInstrument !== state.instrumentId) {
+    state.h1FrameInstrument = state.instrumentId;
+    state.h1UserPanned = false;
+    state.h1FrameKey = null;
+  }
+  if (state.h1UserPanned && state.h1FrameKey === setup.movement_id) return;
+  const from = Math.floor(Number(setup.frame_from) / 1000);
+  const first = state.candles[0].time;
+  const last = state.candles[state.candles.length - 1].time;
+  state.h1ApplyingFrame = true;
+  try {
+    state.chart.timeScale().setVisibleRange({
+      from: Math.max(first, from),
+      to: last + 4 * 3600,
+    });
+    state.h1FrameKey = setup.movement_id;
+  } catch (e) { /* шкала ещё не готова */ }
+  state.h1ApplyingFrame = false;
 }
 
 async function reloadAll() {

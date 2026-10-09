@@ -741,6 +741,7 @@ def assemble_h1_layers(
     limit: int = 500,
     context_id: Optional[int] = None,
     zone_history: bool = False,
+    setup_event: Optional[bool] = None,
 ) -> dict[str, Any]:
     """Аддитивные группы снимка. Повторный вызов строки не вставляет."""
     moment = as_of if as_of is not None else now_ms()
@@ -964,7 +965,21 @@ def assemble_h1_layers(
             },
         },
         "reversal": _reversal_view(db, instrument_id, moment, cfg),
+        "setup": _local_setup(
+            db, cfg, instrument_id, moment, candles, candidates,
+            as_of is not None if setup_event is None else setup_event,
+        ),
     }
+
+
+def _local_setup(db, cfg, instrument_id: int, moment: int, candles, pivots, event_frame: bool):
+    """Общий снимок ноги. event_frame — явный прошлый кадр, не заполненный сервером now."""
+    from .h1_setup import project_setup
+    return project_setup(
+        db, cfg, instrument_id, moment,
+        mode="event" if event_frame else "current",
+        candles=candles, pivots=pivots,
+    )
 
 
 def _reversal_view(db, instrument_id: int, as_of: int, cfg):
