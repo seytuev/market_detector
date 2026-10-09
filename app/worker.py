@@ -993,7 +993,26 @@ class Worker:
         if self.settings.quote_poll_seconds > 0:
             # F02: котировки — отдельным быстрым циклом
             loops.append(self.quote_loop())
+        loops.append(self.events_loop())
         await asyncio.gather(*loops)
+
+    async def events_loop(self) -> None:
+        """Coinglass и оценка событий. Сбой этого цикла не останавливает H1."""
+        while not self._stop.is_set():
+            try:
+                await asyncio.to_thread(self._events_once)
+            except Exception:
+                log.exception("events: цикл не удался, расчёт H1 не затронут")
+            try:
+                await asyncio.wait_for(
+                    self._stop.wait(), self.settings.events_poll_seconds,
+                )
+            except asyncio.TimeoutError:
+                pass
+
+    def _events_once(self) -> None:
+        from .events.runner import run_cycle
+        run_cycle(self.db, self.settings)
 
     async def _main_loop(self) -> None:
         while not self._stop.is_set():

@@ -178,7 +178,7 @@ class LtfDispatcher:
         )
 
     def _packet_events(self, members):
-        return [ev for m in members if (ev := self.db.get_ltf_event(m["event_id"])) is not None]
+        return [ev for m in members if not m["reason"] and (ev := self.db.get_ltf_event(m["event_id"])) is not None]
 
     def _validate_packet(self, row, members):
         events = self._packet_events(members)
@@ -191,7 +191,20 @@ class LtfDispatcher:
         return None
 
     def _finish_packet(self, event_id, status):
+        stored = self.db.get_ltf_event(event_id)
+        if stored is None or stored.delivered:
+            return
         self.db.mark_ltf_event_delivered(event_id)
+        if status == "sent":
+            import json
+            row = self.db.conn.execute(
+                "SELECT p.card FROM notification_packet p JOIN notification_member m ON m.packet_id=p.id "
+                "WHERE m.channel='ltf' AND m.event_id=? AND p.status='sent' ORDER BY p.id DESC LIMIT 1",
+                (event_id,)).fetchone()
+            if row:
+                card = json.loads(row["card"])
+                if card.get("image_path") or card.get("chart_pending"):
+                    self.db.update_ltf_event_chart(event_id, "sent" if card.get("image_path") else "failed")
 
     async def _render_packet(self, row, members):
         from .outbox import Card
@@ -221,7 +234,7 @@ class LtfDispatcher:
         import json
         old = json.loads(row["card"])
         path = old.get("image_path")
-        needs_chart = lead.kind in _CHART_KINDS or lead.kind == "entries_ready"
+        needs_chart = self.settings is not None and (lead.kind in _CHART_KINDS or lead.kind == "entries_ready")
         if needs_chart and path is None and row["status"] != "sent":
             try:
                 path = await self._render_event_chart(lead, ctx)
@@ -247,6 +260,13 @@ class LtfDispatcher:
                 continue
             ctx = self._load_context(ev)
             self.outbox.put("ltf", ltf_key(ev, ctx), Card(""), [ev.id], quiet=ev.kind == "range_ready")
+            if ev.kind != "range_ready" and ev.scenario_id:
+                self.db.conn.execute(
+                    "UPDATE notification_member SET reason='superseded' WHERE channel='ltf' AND event_id IN "
+                    "(SELECT id FROM ltf_event WHERE kind='range_ready' AND scenario_id=? AND occurred_at<=?) "
+                    "AND packet_id IN (SELECT id FROM notification_packet WHERE status IN ('pending','failed','bundled'))",
+                    (ev.scenario_id, ev.occurred_at))
+                self.db.conn.commit()
             pending.append(ev.id)
         await self.outbox.flush()
         return sum(bool(self.db.get_ltf_event(i).delivered) for i in pending)

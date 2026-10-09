@@ -663,6 +663,8 @@ def create_app(
 
     register_ltf_routes(app, db, settings, require_auth, ltf_engine)
     register_alt_routes(app, db, settings, require_auth, alt_runner)
+    from .events_api import register_events_routes
+    register_events_routes(app, db, settings, require_auth)
 
     # ------------------------- instruments -------------------------
 

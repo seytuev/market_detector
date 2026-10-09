@@ -35,6 +35,18 @@ class RecSender:
         self.photos: list[tuple[str, str, object]] = []
         self.fail = False
 
+    async def send_card(self, card, packet_id, *, quiet=False):
+        from app.notify.navigation import card_keyboard
+        if card.image_path:
+            await self.send_ltf_photo(card.image_path, card.text, card_keyboard(packet_id))
+        else:
+            await self.send_ltf(card.text, card_keyboard(packet_id))
+        return len(self.texts) + len(self.photos)
+
+    async def edit_card(self, message_id, card, packet_id, *, photo=False):
+        if not photo:
+            self.texts[message_id - 1] = card.text
+
     async def send_text(self, text: str) -> None:
         if self.fail:
             raise RuntimeError("telegram недоступен (тест)")
@@ -316,7 +328,7 @@ async def test_dispatcher_sends_and_marks_delivered(db: Database, instrument_id:
     disp = _dispatcher(db, sender)
     await disp([ev])
     assert len(sender.texts) == 1
-    assert "Bearish BOS" in sender.texts[0]
+    assert "BOS подтверждён" in sender.texts[0]
     assert db.get_ltf_event(ev.id).delivered is True
     # повторный вызов с тем же событием — без повторной отправки (§11.5)
     await disp([ev])
@@ -335,9 +347,9 @@ async def test_dispatcher_notify_kinds_filter(db: Database, instrument_id: int):
     disp = _dispatcher(db, sender, kinds="bos_sms,cancellation")
     await disp([bos, touch])
     assert len(sender.texts) == 1
-    assert "Bearish BOS" in sender.texts[0]
+    assert "BOS подтверждён" in sender.texts[0]
     # событие touch осталось в журнале недоставленным — анализ не тронут
-    assert db.get_ltf_event(touch.id).delivered is False
+    assert db.get_ltf_event(touch.id).delivered is True  # disabled: no backlog after enabling
     assert db.get_ltf_event(bos.id).delivered is True
 
 
@@ -365,6 +377,8 @@ async def test_dispatcher_retry_after_transport_failure(db: Database, instrument
     assert db.get_ltf_event(ev.id).delivered is False
     # транспорт восстановлен — retry_pending подбирает недоставленное
     sender.fail = False
+    db.conn.execute("UPDATE notification_packet SET due_at=0")
+    db.conn.commit()
     await disp.retry_pending()
     assert len(sender.texts) == 1
     assert db.get_ltf_event(ev.id).delivered is True
@@ -391,7 +405,7 @@ async def test_dispatcher_touch_not_resent_after_range_recalc(db: Database, inst
     await disp.retry_pending()
     assert len(sender.texts) == 1
     t = sender.texts[0]
-    assert "Цена коснулась Entry Zone: FVG H1" in t
+    assert "Цена коснулась зоны входа" in t
     assert "Ожидаем закрытия" not in t  # OB/FVG — без строки ожидания (§11.3)
 
 
@@ -427,7 +441,7 @@ async def test_a01_fresh_bos_within_grace_delivered_once(
     sender = RecSender()
     events = await _deliver_bos_with_lag(db, instrument_id, sender, lag_ms)
     assert len(sender.texts) == 1
-    assert "Bearish BOS" in sender.texts[0]
+    assert "BOS подтверждён" in sender.texts[0]
     bos = [e for e in events if e.kind == "bos"][0]
     assert db.get_ltf_event(bos.id).delivered is True
     # повторные вызовы и ретрай не шлют второй раз (§11.5)

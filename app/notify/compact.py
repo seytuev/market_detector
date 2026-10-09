@@ -47,7 +47,8 @@ def ltf_text(ev, ctx, contexts=1):
     direction = sc.direction.value if sc else p.get("direction", "")
     ru = {"bull": "бычий", "bear": "медвежий"}.get(direction, "")
     symbol = ctx.instrument.symbol if ctx.instrument else "Инструмент"
-    title = f"{direction_icon(direction)} {symbol} · H1" + (f" · {ru}" if ru else "")
+    subtype = (str(p["type"]) + " ") if p.get("type") else ""
+    title = f"{direction_icon(direction)} {symbol} · {subtype}H1" + (f" · {ru}" if ru else "")
     headline = {
         "bos": "✅ BOS подтверждён", "sms": "✅ SMS подтверждён",
         "entries_ready": "🎯 Новые зоны входа", "range_ready": "⏳ Диапазон готов · ждём зоны входа",

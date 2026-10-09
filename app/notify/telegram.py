@@ -267,7 +267,7 @@ class TelegramSender:
     async def send_card(self, card, packet_id, *, quiet=False):
         from .compact import notification_html
         from .navigation import card_keyboard
-        kwargs = dict(chat_id=self.chat_id, reply_markup=card_keyboard(packet_id),
+        kwargs = dict(chat_id=self.chat_id, reply_markup=card_keyboard(packet_id, card.targets),
                       disable_notification=quiet, parse_mode="HTML")
         if card.image_path:
             with open(card.image_path, "rb") as fh:
@@ -282,7 +282,7 @@ class TelegramSender:
         from .navigation import card_keyboard
         from telegram.error import BadRequest
         kwargs = dict(chat_id=self.chat_id, message_id=message_id,
-                      reply_markup=card_keyboard(packet_id), parse_mode="HTML")
+                      reply_markup=card_keyboard(packet_id, card.targets), parse_mode="HTML")
         try:
             if photo:
                 await self._bot.edit_message_caption(caption=notification_html(card.text, 1000), **kwargs)

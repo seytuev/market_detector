@@ -53,7 +53,7 @@ async def test_bos_delivered_with_own_chart(db, instrument_id, tmp_path):
     assert len(sender.photos) == 1
     path, caption, markup = sender.photos[0]
     assert Path(path).exists()
-    assert "Подтверждён Bearish BOS" in caption
+    assert "BOS подтверждён" in caption
     assert markup is not None
     assert sender.texts == []  # короткий текст — целиком в caption
     assert db.get_ltf_event(ev.id).chart_state == "sent"

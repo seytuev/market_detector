@@ -93,6 +93,11 @@ class Outbox:
         self.db.conn.commit()
 
     def _finish(self, row, status):
+        if row["channel"] == "chart" and status == "sent" and row["semantic_key"].startswith("media:"):
+            parent_id = int(row["semantic_key"].split(":")[1])
+            for member in self.members(parent_id):
+                if member["channel"] == "ltf":
+                    self.db.update_ltf_event_chart(member["event_id"], "sent")
         fn = self.finishers.get(row["channel"])
         if fn:
             for member in self.members(row["id"]):
@@ -125,6 +130,7 @@ class Outbox:
     async def flush(self):
         async with self.lock:
             stamp = now_ms()
+            self._recover_completed()
             self.db.conn.execute(
                 "UPDATE notification_packet SET status='uncertain',reason='send lease expired' "
                 "WHERE destination=? AND status='sending' AND lease_until<?", (self.destination, stamp))
@@ -178,6 +184,32 @@ class Outbox:
                         if validate and validate(r, self.members(r["id"])) is None:
                             selected[r["id"]] = r
                     await self._digest(list(selected.values()))
+
+    def _recover_completed(self):
+        # Crash after Telegram success was committed, before journal ack:
+        # finish locally, never send the packet again.
+        self.db.conn.execute(
+            "UPDATE notification_packet SET status='sent' WHERE status='bundled' AND parent_id IN "
+            "(SELECT id FROM notification_packet WHERE destination=? AND channel='digest' AND status='sent')",
+            (self.destination,))
+        self.db.conn.commit()
+        for channel, table in (("ltf", "ltf_event"), ("alt", "alt_event")):
+            if channel not in self.finishers:
+                continue
+            rows = self.db.conn.execute(
+                f"SELECT DISTINCT p.* FROM notification_packet p JOIN notification_member m ON m.packet_id=p.id "
+                f"JOIN {table} e ON e.id=m.event_id WHERE p.destination=? AND p.channel=? "
+                "AND p.status IN ('sent','suppressed') AND e.delivered=0", (self.destination, channel)).fetchall()
+            for row in rows:
+                self._finish(row, row["status"])
+        if "htf" in self.finishers:
+            rows = self.db.conn.execute(
+                "SELECT DISTINCT p.* FROM notification_packet p JOIN notification_member m ON m.packet_id=p.id "
+                "JOIN delivery d ON EXISTS (SELECT 1 FROM json_each(d.event_ids) j WHERE j.value=m.event_id) "
+                "WHERE p.destination=? AND p.channel='htf' AND p.status IN ('sent','suppressed') "
+                "AND d.status IN ('pending','failed')", (self.destination,)).fetchall()
+            for row in rows:
+                self._finish(row, row["status"])
 
     async def _send(self, row):
         # A single conditional UPDATE is the cross-process claim.

@@ -274,11 +274,19 @@ class EventDispatcher:
                    and not v.event.delayed]
         if not allowed:
             return "muted, historical or stale"
+        for view in views:
+            if view not in allowed:
+                self.db.conn.execute("UPDATE notification_member SET reason='muted or stale' WHERE packet_id=? AND event_id=?",
+                                     (row["id"], view.event.id))
+        self.db.conn.commit()
         return None
 
     def _finish_packet(self, event_id, status):
         ev = self.db.get_event(event_id)
         if ev is None:
+            return
+        existing = self.db.conn.execute("SELECT status FROM delivery WHERE idempotency_key=?", (ev.idempotency_key(self.user),)).fetchone()
+        if existing and existing["status"] in ("sent", "stale"):
             return
         self.db.conn.execute(
             "UPDATE delivery SET status=?,delivered_at=? WHERE idempotency_key=?",
@@ -312,6 +320,8 @@ class EventDispatcher:
         if not payload.image_path:
             await self._attach_image(payload)
         text = render_text(payload)
+        if self.charts_dir and not payload.image_path:
+            text += "\n📊 График временно недоступен"
         if len(visible) > 1 and payload.image_path:
             first = visible[0]
             text += f"\n📊 На графике: {first.zone.type.value} {first.zone.timeframe} · зона #{first.zone.id}"
@@ -327,12 +337,14 @@ class EventDispatcher:
             if urlparse(base).hostname not in {None, "localhost", "127.0.0.1", "0.0.0.0", "::1"}:
                 target["url"] = f"{base}/?zone={z.id}"
             targets.append(target)
-        details = "\n\n".join(_render_event_details(v, approach_pct=self.cfg.approach_pct) for v in views)
+        groups = self._group_members(views)
+        details = "\n\n".join(_render_event_details(v, groups.get(v.event.zone_id), approach_pct=self.cfg.approach_pct) for v in views)
         return Card(text, details, payload.image_path, targets, bool(self.charts_dir and not payload.image_path))
 
     async def dispatch(self, events: list[Event]) -> list[Delivery]:
         from .outbox import Card, fingerprint
         groups, ids = {}, []
+        important_zones = {e.zone_id for e in events if e.kind not in self._QUIET and not e.delayed}
         for event in events:
             view = self._load_view(event)
             if event.delayed or not self._passes_filters(view):
@@ -344,23 +356,38 @@ class EventDispatcher:
             if self._entry_stale(view) or self._bot_blocked(view):
                 self._finish_packet(event.id, "suppressed")
                 continue
-            quiet = event.kind in self._QUIET
+            quiet = event.kind in self._QUIET and event.zone_id not in important_zones
             ins = view.instrument.id if view.instrument else None
             tf = view.zone.timeframe if view.zone else ""
             groups.setdefault((ins, tf, quiet), []).append(view)
         for (iid, tf, quiet), views in groups.items():
-            facts = []
+            facts, fresh_views = [], []
             for v in views:
                 e, z = v.event, v.zone
                 # Terminal lifecycle events are unique per zone cycle regardless
                 # of detector re-evaluation time or quote jitter.
                 terminal = e.kind.value in {"fvg_filled", "ob_invalidated", "breaker_archived", "prb_archived", "level_taken"}
-                facts.append([z.type.value if z else "", z.direction.value if z else "",
+                fact = fingerprint([iid, tf, z.type.value if z else "", z.direction.value if z else "",
                               z.lower if z else None, z.upper if z else None,
                               z.formed_at if z else None, e.cycle_id, e.kind.value,
                               None if terminal else e.occurred_at])
-            key = fingerprint([iid, tf, sorted(facts, key=fingerprint)])
-            self.outbox.put("htf", key, Card(""), [v.event.id for v in views], quiet=quiet)
+                existing = self.db.conn.execute(
+                    "SELECT p.semantic_key FROM notification_fact f JOIN notification_packet p ON p.id=f.packet_id "
+                    "WHERE f.destination=? AND f.channel='htf' AND f.semantic_key=?",
+                    (self.outbox.destination, fact)).fetchone()
+                if existing:
+                    self.outbox.put("htf", existing["semantic_key"], Card(""), [e.id], quiet=quiet)
+                else:
+                    facts.append(fact)
+                    fresh_views.append(v)
+            if fresh_views:
+                key = fingerprint([iid, tf, sorted(set(facts))])
+                packet = self.outbox.put("htf", key, Card(""), [v.event.id for v in fresh_views], quiet=quiet)
+                for fact in facts:
+                    self.db.conn.execute(
+                        "INSERT OR IGNORE INTO notification_fact(destination,channel,semantic_key,packet_id) VALUES(?,'htf',?,?)",
+                        (self.outbox.destination, fact, packet))
+                self.db.conn.commit()
             if not quiet:
                 # Superseded digest entries stay in the journal, but never alert.
                 for v in views:

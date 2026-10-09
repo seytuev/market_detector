@@ -48,6 +48,16 @@ class RecAllSender:
         self.texts: list = []
         self.ltf: list = []
 
+    async def send_card(self, card, packet_id, *, quiet=False):
+        if card.targets:
+            self.payloads.append(card)
+        else:
+            self.texts.append(card.text)
+        return len(self.payloads) + len(self.texts)
+
+    async def edit_card(self, message_id, card, packet_id, *, photo=False):
+        pass
+
     async def send(self, payload) -> None:
         self.payloads.append(payload)
 
@@ -179,13 +189,13 @@ async def test_htf_mute_marks_delivered_no_resend(db, instrument_id):
     """Мьют инструмента: событие не отправляется, но помечается sent;
     после unmute retry_pending старое не шлёт, новое доставляется."""
     sender = RecAllSender()
-    disp = EventDispatcher(db, DetectorConfig(), sender, chat_id=CHAT_ID)
+    disp = EventDispatcher(db, DetectorConfig(notification_digest_seconds=0), sender, chat_id=CHAT_ID)
     db.set_mute_scope(CHAT_ID, "instrument", str(instrument_id),
                       now_ms() + 3_600_000)
     ev = _htf_event(db, instrument_id)
     deliveries = await disp.dispatch([ev])
     assert sender.payloads == []
-    assert deliveries[0].status == "sent"  # подавлено, но «доставлено»
+    assert deliveries[0].status == "stale"  # подавлено, но «доставлено»
     db.clear_mute_scope(CHAT_ID, "instrument", str(instrument_id))
     await disp.retry_pending()
     assert sender.payloads == []  # накопившееся не ушло
@@ -196,7 +206,7 @@ async def test_htf_mute_marks_delivered_no_resend(db, instrument_id):
 
 async def test_htf_global_pref_blocks_kind(db, instrument_id):
     sender = RecAllSender()
-    disp = EventDispatcher(db, DetectorConfig(), sender, chat_id=CHAT_ID)
+    disp = EventDispatcher(db, DetectorConfig(notification_digest_seconds=0), sender, chat_id=CHAT_ID)
     db.set_alert_pref(CHAT_ID, "global", "", "htf", "touch", False)
     await disp.dispatch([_htf_event(db, instrument_id, EventKind.TOUCH)])
     assert sender.payloads == []
@@ -208,17 +218,17 @@ async def test_htf_global_pref_blocks_kind(db, instrument_id):
 async def test_mute_all_keeps_service_messages(db, instrument_id):
     """/mute all глушит торговые, сервисные продолжают (ТЗ п.9)."""
     sender = RecAllSender()
-    disp = EventDispatcher(db, DetectorConfig(), sender, chat_id=CHAT_ID)
+    disp = EventDispatcher(db, DetectorConfig(notification_digest_seconds=0), sender, chat_id=CHAT_ID)
     db.set_mute_scope(CHAT_ID, "all", "", now_ms() + 3_600_000)
     await disp.dispatch([_htf_event(db, instrument_id)])
     assert sender.payloads == []
     await disp.notify_service("данные восстановлены")
-    assert sender.texts == ["данные восстановлены"]
+    assert len(sender.texts) == 1 and "данные восстановлены" in sender.texts[0]
 
 
 async def test_service_pref_blocks_service(db):
     sender = RecAllSender()
-    disp = EventDispatcher(db, DetectorConfig(), sender, chat_id=CHAT_ID)
+    disp = EventDispatcher(db, DetectorConfig(notification_digest_seconds=0), sender, chat_id=CHAT_ID)
     db.set_alert_pref(CHAT_ID, "global", "", "service", "service", False)
     await disp.notify_service("тихо")
     assert sender.texts == []
@@ -228,13 +238,13 @@ async def test_service_pref_blocks_service(db):
 
 async def test_watchlist_alerts_disabled_blocks(db, instrument_id):
     sender = RecAllSender()
-    disp = EventDispatcher(db, DetectorConfig(), sender, chat_id=CHAT_ID)
+    disp = EventDispatcher(db, DetectorConfig(notification_digest_seconds=0), sender, chat_id=CHAT_ID)
     db.watchlist_add(CHAT_ID, instrument_id)
     db.watchlist_set_alerts(CHAT_ID, instrument_id, False)
     await disp.dispatch([_htf_event(db, instrument_id)])
     assert sender.payloads == []
     await disp.notify_service("сервис")
-    assert sender.texts == ["сервис"]  # сервисные не зависят от watchlist
+    assert len(sender.texts) == 1 and "сервис" in sender.texts[0]  # сервисные не зависят от watchlist
 
 
 # ------------------------------ фильтрация доставки (LTF) ------------------------------

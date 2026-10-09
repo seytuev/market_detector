@@ -33,6 +33,14 @@ class _RecSender:
         self.ltf_texts: list[str] = []
         self.ltf_photos: list[tuple[str, str, object]] = []
 
+    async def send_card(self, card, packet_id, *, quiet=False):
+        await self.send(card)
+        self.ltf_texts.append(card.text)
+        return len(self.payloads)
+
+    async def edit_card(self, message_id, card, packet_id, *, photo=False):
+        pass
+
     async def send(self, payload: MessagePayload) -> None:
         self.payloads.append(payload)
 
@@ -129,6 +137,8 @@ async def test_htf_retry_skips_zone_that_became_taken():
     ev = _event(db, zid, EventKind.TOUCH, now_ms())
     await disp.dispatch([ev])  # упало в failed
     db.update_zone(zid, status=ZoneStatus.TAKEN, market_validity="invalid")
+    db.conn.execute("UPDATE notification_packet SET due_at=0")
+    db.conn.commit()
     await disp.retry_pending()
     statuses = {
         r["status"]

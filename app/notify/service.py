@@ -24,7 +24,10 @@ class ServiceNotifications:
         # One occurrence per digest interval, not per worker callback.
         period = max(1, getattr(self.outbox.cfg, "notification_digest_seconds", 900)) * 1000
         key = key or fingerprint([text, now_ms() // period])
-        return self.outbox.put("service", key, Card("ℹ️ " + text, text), [], quiet=True)
+        packet = self.outbox.put("service", key, Card("ℹ️ " + text, text), [], quiet=True)
+        if self.validate(None, None):
+            self.outbox.suppress(packet, "service disabled")
+        return packet
 
     def failed(self, ins, timeframes, reason="network"):
         stamp = now_ms()
@@ -42,7 +45,10 @@ class ServiceNotifications:
                     (incident["id"], ins.id, tf))
             self.db.conn.commit()
         packet = self.outbox.put("incident", f"down:{incident['id']}", Card(""), [incident["id"]], quiet=True)
+        if self.validate(None, None):
+            self.outbox.suppress(packet, "service disabled")
         self.db.conn.execute("UPDATE notification_incident SET packet_id=? WHERE id=?", (packet, incident["id"]))
+        self.db.conn.execute("UPDATE notification_packet SET dirty=1 WHERE id=? AND status='sent'", (packet,))
         self.db.conn.commit()
 
     def recovered(self, ins, tf):

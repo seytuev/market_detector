@@ -86,6 +86,30 @@
     };
   }
 
+  // Labels occupy separate lanes; thin zones keep their true price height.
+  function placeZoneLabel(box, occupied, paneRight, height) {
+    const width = Math.min(180, paneRight - box.left - 8);
+    if (width < 72 || height < 22) return null;
+    const preferred = box.bottom - box.top < 30 ? box.top - 23 : box.top + 5;
+    const candidates = [preferred];
+    if (box.bottom - box.top < 30) candidates.push(box.bottom + 4);
+    if (box.bottom - box.top >= 52) candidates.push(box.bottom - 23);
+    for (let lane = 0; lane < 3; lane += 1) {
+      const left = box.right - width - 8 - lane * (width + 8);
+      if (left < box.left + 4) continue;
+      for (const y of candidates) {
+        const top = Math.max(2, Math.min(height - 22, y));
+        const label = { left, top, right: left + width, bottom: top + 20, width };
+        if (!occupied.some((p) => label.left < p.right + 4 && label.right + 4 > p.left
+          && label.top < p.bottom + 4 && label.bottom + 4 > p.top)) {
+          occupied.push(label);
+          return label;
+        }
+      }
+    }
+    return null;
+  }
+
   function mergeCaption(events) {
     const unique = [];
     events.forEach((ev) => {
@@ -337,6 +361,51 @@
     });
 
     if (settings.zones) {
+      const fills = {};
+      const labels = [];
+      const labelGroups = {};
+      const decorate = (div, zone, adm, box, title, selected) => {
+        const groupKey = [zone.type, zone.direction, zone.lifecycle, zone.candidate,
+          box.left, box.right, box.top, box.bottom].join(':');
+        if (labelGroups[groupKey]) {
+          const group = labelGroups[groupKey];
+          group.count += 1;
+          group.name.textContent = group.caption + ' ×' + group.count;
+          group.tag.title = title + ' · Совпадающих зон: ' + group.count;
+          return;
+        }
+        const position = placeZoneLabel(box, labels, paneRight, height);
+        if (!position) return;
+        const tag = add('h1-zone-tag type-' + String(zone.type).toLowerCase()
+          + (selected ? ' selected' : '') + (zone.lifecycle === 'ended' ? ' historical' : ''));
+        tag.style.left = position.left + 'px';
+        tag.style.top = position.top + 'px';
+        tag.style.width = position.width + 'px';
+        tag.title = title;
+        if (position.bottom < box.top || position.top > box.bottom) {
+          const boundary = position.bottom < box.top ? box.top : box.bottom;
+          const labelEdge = position.bottom < box.top ? position.bottom : position.top;
+          const leader = add('h1-zone-leader type-' + String(zone.type).toLowerCase());
+          leader.style.left = (position.right - 12) + 'px';
+          leader.style.top = Math.min(boundary, labelEdge) + 'px';
+          leader.style.height = Math.abs(boundary - labelEdge) + 'px';
+        }
+        const name = doc.createElement('span');
+        name.className = 'h1-zone-name';
+        const isLevel = zonePlan(zone).shape === 'line';
+        name.textContent = zonePlan(zone).label + (isLevel ? '' : zone.direction === 'bull' ? ' ↑' : ' ↓');
+        const price = doc.createElement('span');
+        price.className = 'h1-zone-price';
+        price.textContent = (isLevel ? '' : '50% ') + fmtPrice(isLevel ? zone.lower : zone.mid != null ? zone.mid : (zone.lower + zone.upper) / 2);
+        tag.appendChild(name); tag.appendChild(price);
+        labelGroups[groupKey] = { tag, name, caption: name.textContent, count: 1 };
+        tag.onclick = () => ctx.onZone && ctx.onZone(zone, adm);
+        tag.onmouseenter = () => div.classList.add('highlighted');
+        tag.onmouseleave = () => div.classList.remove('highlighted');
+      };
+      // A selected zone receives the first label lane.
+      visible.sort((a, b) => Number(String(b.id) === String(ctx.selectedZoneId))
+        - Number(String(a.id) === String(ctx.selectedZoneId)));
       visible.forEach((zone) => {
         const plan = zonePlan(zone);
         const from = zone.display_from || zone.formed_at;
@@ -361,14 +430,14 @@
             outside.push(zone);
             return;
           }
-          const div = add('ltf-level ltf-entry ltf-entry-' + String(zone.type).toLowerCase()
+          const div = add('h1-liquidity ltf-level ltf-entry ltf-entry-' + String(zone.type).toLowerCase()
             + (zone.candidate ? ' status-candidate' : '') + (selected ? ' selected' : ''));
           div.style.top = y + 'px';
           div.style.left = x1 + 'px';
           div.style.width = Math.max(4, x2 - x1) + 'px';
           div.title = title;
-          div.textContent = plan.label;
           div.onclick = () => ctx.onZone && ctx.onZone(zone, adm);
+          decorate(div, zone, adm, { left: x1, right: x2, top: y, bottom: y }, title, selected);
         } else {
           const y1 = yOf(zone.upper);
           const y2 = yOf(zone.lower);
@@ -387,14 +456,44 @@
             + (zone.lifecycle === 'ended' ? ' status-completed' : '')
             + (selected ? ' selected' : ''));
           div.style.top = top + 'px';
-          div.style.height = Math.max(6, bottom - top) + 'px';
+          div.style.height = Math.max(1, bottom - top) + 'px';
           div.style.left = x1 + 'px';
           div.style.width = Math.max(8, x2 - x1) + 'px';
           div.title = title;
-          div.textContent = plan.label;
           div.onclick = () => ctx.onZone && ctx.onZone(zone, adm);
+          const color = zone.type === 'OB' ? 'rgba(76,141,255,0.075)' : 'rgba(38,166,154,0.075)';
+          const fillKey = zone.candidate || zone.lifecycle === 'ended' ? 'rgba(138,148,166,0.025)' : color;
+          if (!fills[fillKey]) fills[fillKey] = [];
+          fills[fillKey].push({ left: x1, top, width: x2 - x1, height: bottom - top });
+          const mid = yOf(zone.mid != null ? zone.mid : (zone.lower + zone.upper) / 2);
+          if (mid != null && mid > top + 8 && mid < bottom - 8) {
+            const line = doc.createElement('span');
+            line.className = 'h1-zone-mid';
+            line.style.top = (mid - top) + 'px';
+            div.appendChild(line);
+          }
+          decorate(div, zone, adm, { left: x1, right: x2, top, bottom }, title, selected);
         }
       });
+      // Fill each type once as a union: overlapping OBs never become opaque.
+      if (Object.keys(fills).length) {
+        const canvas = doc.createElement('canvas');
+        canvas.className = 'h1-zone-fills';
+        const ratio = root.devicePixelRatio || 1;
+        canvas.width = Math.ceil(paneRight * ratio);
+        canvas.height = Math.ceil(height * ratio);
+        canvas.style.width = paneRight + 'px'; canvas.style.height = height + 'px';
+        const paint = canvas.getContext('2d');
+        if (paint) {
+          paint.scale(ratio, ratio);
+          Object.keys(fills).forEach((color) => {
+            paint.beginPath();
+            fills[color].forEach((r) => paint.rect(r.left, r.top, r.width, r.height));
+            paint.fillStyle = color; paint.fill();
+          });
+        }
+        overlay.appendChild(canvas);
+      }
     }
 
     if (settings.breaks) {
@@ -588,6 +687,7 @@
     caption,
     breakPlan,
     zonePlan,
+    placeZoneLabel,
     mergeCaption,
     emptyZoneMessage,
     markerList,

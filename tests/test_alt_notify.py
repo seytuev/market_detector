@@ -43,6 +43,21 @@ class FakeSender:
         self.texts: list[str] = []
         self.fail = fail
 
+    async def send_card(self, card, packet_id, *, quiet=False):
+        if self.fail:
+            raise RuntimeError("transport unavailable")
+        if not hasattr(self, "details"):
+            self.details = []
+        self.details.append(card.details)
+        if card.text.startswith("🔕"):
+            self.texts.append(card.text)
+        else:
+            self.alt.append(card.text)
+        return len(self.alt) + len(self.texts)
+
+    async def edit_card(self, message_id, card, packet_id, *, photo=False):
+        self.alt[message_id - 1] = card.text
+
     async def send_alt(self, text: str) -> None:
         if self.fail:
             raise RuntimeError("telegram down")
@@ -401,6 +416,8 @@ async def test_dispatch_failure_leaves_pending_then_retry(db):
     assert await disp.dispatch_pending() == 0
     assert len(db.pending_alt_events()) == 1  # не доставлено — ретрай
     sender.fail = False
+    db.conn.execute("UPDATE notification_packet SET due_at=0")
+    db.conn.commit()
     assert await disp.retry_pending() == 1
     assert db.pending_alt_events() == []
     assert len(sender.alt) == 1
@@ -421,7 +438,7 @@ async def test_dispatch_combines_same_setup_same_run(db):
     assert sent == 3
     # три события одного сетапа одного run — ОДНО сообщение
     assert len(sender.alt) == 1
-    text = sender.alt[0]
+    text = sender.details[0]
     assert "Подтверждён bullish BOS" in text
     assert "Возможность A" in text
     assert "Достигнуты цели:" in text
@@ -451,7 +468,7 @@ async def test_dispatch_terminal_priority_in_one_batch(db):
     }, run_id=run.id)
     assert await disp.dispatch_pending() == 2
     assert len(sender.alt) == 1
-    text = sender.alt[0]
+    text = sender.details[0]
     assert text.index("Сетап отменён") < text.index("Контекст")
 
 
@@ -519,6 +536,9 @@ async def test_backfill_summary_fires_once(db):
     summary = {"processed": 1, "errors": 0, "per_asset": [],
                "backfill_event_ids": [1]}
     assert await disp.notify_backfill_summary(summary) is True
+    db.conn.execute("UPDATE notification_packet SET due_at=0")
+    db.conn.commit()
+    await disp.outbox.flush()
     assert len(sender.texts) == 1
     assert "первичная загрузка завершена" in sender.texts[0]
     # повтор — молчим: meta-флаг после успешной отправки
@@ -530,8 +550,12 @@ async def test_backfill_summary_fires_once(db):
         _seed(db2)
         failing = FakeSender(fail=True)
         disp2 = AltDispatcher(db2, _settings(), failing)
-        assert await disp2.notify_backfill_summary(summary) is False
+        assert await disp2.notify_backfill_summary(summary) is True  # durable enqueue before transport
         failing.fail = False
-        assert await disp2.notify_backfill_summary(summary) is True
+        assert await disp2.notify_backfill_summary(summary) is False
+        db2.conn.execute("UPDATE notification_packet SET due_at=0")
+        db2.conn.commit()
+        await disp2.outbox.flush()
+        assert len(failing.texts) == 1
     finally:
         db2.close()

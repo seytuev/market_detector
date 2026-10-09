@@ -807,6 +807,13 @@ CREATE TABLE IF NOT EXISTS notification_member (
     UNIQUE(packet_id,channel,event_id)
 );
 CREATE INDEX IF NOT EXISTS ix_notification_event ON notification_member(channel,event_id);
+CREATE TABLE IF NOT EXISTS notification_fact (
+    destination TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    semantic_key TEXT NOT NULL,
+    packet_id INTEGER NOT NULL REFERENCES notification_packet(id),
+    PRIMARY KEY(destination,channel,semantic_key)
+);
 CREATE TABLE IF NOT EXISTS notification_incident (
     id INTEGER PRIMARY KEY,
     venue TEXT NOT NULL,

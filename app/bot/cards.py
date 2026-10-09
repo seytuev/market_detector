@@ -645,7 +645,17 @@ def render_status(db: Database, settings) -> str:
     else:
         lines.append("✅ HTF-свечи свежие (D1/W1).")
 
-    if st["delivery_pending"]:
+    packets = {r["status"]: r["n"] for r in db.conn.execute(
+        "SELECT status,COUNT(*) AS n FROM notification_packet WHERE destination=? GROUP BY status",
+        (str(settings.telegram_chat_id or "owner"),))}
+    waiting = packets.get("pending", 0) + packets.get("failed", 0) + packets.get("sending", 0)
+    if packets:
+        lines.append(f"🔔 Очередь уведомлений: {waiting}; объединено в сводки: {packets.get('bundled', 0)}.")
+        if packets.get("uncertain", 0):
+            lines.append(f"⚠️ Результат отправки неизвестен: {packets['uncertain']}. Автоповтор остановлен, чтобы не дублировать сообщения.")
+        if packets.get("exhausted", 0):
+            lines.append(f"⚠️ Не удалось доставить: {packets['exhausted']}. Требуется проверка транспорта.")
+    elif st["delivery_pending"]:
         lines.append(
             f"⚠️ Неотправленных уведомлений: {st['delivery_pending']}."
         )

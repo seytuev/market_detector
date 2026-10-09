@@ -101,7 +101,7 @@ async def test_seed_instruments_from_catalog():
     await worker.seed_instruments()
     await worker.seed_instruments()
     instruments = db.get_instruments()
-    assert len(instruments) == len(SEED)
+    assert len(instruments) == sum(venue in worker.adapters for venue, _ in SEED)
     assert {i.symbol for i in instruments} == {s for _, s in SEED}
 
     # символа нет в каталоге — явное сервисное сообщение владельцу (без подмены)
@@ -153,9 +153,8 @@ async def test_poll_dispatches_market_event():
 
     await worker.poll_once()
 
-    assert len(sender.sent) == 1  # одно объединённое сообщение
-    kinds = [e.kind.value for e in sender.sent[0].events]
-    assert "touch" in kinds
+    assert len(sender.cards) == 1
+    assert "Цена коснулась зоны" in sender.cards[0][0].text
     market = [r for r in _deliveries(db) if r["event_ids"] != "[]"]
     assert len(market) == 1 and market[0]["status"] == "sent"
 
@@ -170,17 +169,20 @@ async def test_stale_and_recovery_service_messages():
     await worker.seed_instruments()
 
     await worker.poll_once()
-    assert len(_deliveries(db)) == len(SEED)  # одно сообщение на инструмент
-
-    await worker.poll_once()  # источник всё ещё лежит — тишина
-    assert len(_deliveries(db)) == len(SEED)
-
+    incidents = db.conn.execute("SELECT * FROM notification_incident").fetchall()
+    assert len(incidents) == 1  # one source-wide incident
+    assert incidents[0]["recovered_at"] is None
+    await worker.poll_once()
+    assert db.conn.execute("SELECT COUNT(*) FROM notification_incident").fetchone()[0] == 1
     adapter.fail = False
     adapter.candles = _fresh_candles()
     await worker.poll_once()
-    # + сообщения о восстановлении по каждому ТФ каждого инструмента
-    assert len(_deliveries(db)) == len(SEED) + 2 * len(SEED)
-    assert all(r["status"] == "sent" for r in _deliveries(db))
+    assert db.conn.execute("SELECT recovered_at FROM notification_incident").fetchone()[0] is not None
+    db.conn.execute("UPDATE notification_packet SET due_at=0")
+    db.conn.commit()
+    await worker.dispatcher.outbox.flush()
+    digests = db.conn.execute("SELECT * FROM notification_packet WHERE channel='digest'").fetchall()
+    assert len(digests) == 1 and digests[0]["status"] == "sent"
 
 
 async def test_backfill_extends_history_backwards():

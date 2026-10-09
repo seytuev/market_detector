@@ -7,15 +7,24 @@ from telegram import InlineKeyboardButton as Button, InlineKeyboardMarkup as Mar
 from telegram.error import BadRequest
 
 
-def card_keyboard(packet_id):
+def card_keyboard(packet_id, targets=None):
+    graph = Button("📊 График", callback_data=f"nf:g:{packet_id}")
+    if targets and len(targets) == 1:
+        if targets[0].get("chart"):
+            graph = Button("📊 График", callback_data=targets[0]["chart"])
+        elif targets[0].get("url"):
+            graph = Button("📊 График", url=targets[0]["url"])
     return Markup([
-        [Button("📊 График", callback_data=f"nf:g:{packet_id}"),
+        [graph,
          Button("🔎 Подробнее", callback_data=f"nf:d:{packet_id}:0")],
         [Button("⋯ Действия", callback_data=f"nf:a:{packet_id}")],
     ])
 
 
 async def reusable_panel(db, bot, chat_id, key, text, markup=None):
+    # Detail panels are paginated; current-state panels may still be verbose.
+    if len(text.encode("utf-16-le")) // 2 > 4000:
+        text = text.encode("utf-16-le")[:7800].decode("utf-16-le", errors="ignore") + "\n…"
     cache_key = f"notification:panel:{chat_id}:{key}"
     message_id = db.get_meta(cache_key)
     if message_id:

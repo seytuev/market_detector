@@ -254,6 +254,8 @@ class Database:
             self.conn.execute(
                 "INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,)
             )
+            from .events.schema import apply_events_schema
+            apply_events_schema(self.conn)
             self.conn.commit()
         else:
             # идемпотентные дополнения схемы для существующих БД
@@ -491,6 +493,8 @@ class Database:
                     self.conn.execute(
                         f"ALTER TABLE ltf_range ADD COLUMN {col} {ddl}"
                     )
+            from .events.schema import apply_events_schema
+            apply_events_schema(self.conn)
             self.conn.commit()
 
     def get_meta(self, key: str) -> Optional[str]:

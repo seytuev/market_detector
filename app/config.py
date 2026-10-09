@@ -448,6 +448,18 @@ class Settings:
         default_factory=lambda: _env("CMC_BASE_URL", "https://pro-api.coinmarketcap.com")
     )
     alt_config: AltConfig = field(default_factory=AltConfig)
+    # Модуль «События». Ключ только на сервере, в JSON клиента не попадает.
+    coinglass_api_key: str = field(default_factory=lambda: _env("COINGLASS_API", ""))
+    coinglass_base_url: str = field(default_factory=lambda: _env(
+        "COINGLASS_BASE_URL", "https://open-api-v4.coinglass.com"))
+    events_enabled: bool = field(
+        default_factory=lambda: parse_bool(_env("EVENTS_ENABLED", "1")))
+    events_notify_enabled: bool = field(
+        default_factory=lambda: parse_bool(_env("EVENTS_NOTIFY_ENABLED", "0")))
+    events_strategy_gate_enabled: bool = field(
+        default_factory=lambda: parse_bool(_env("EVENTS_STRATEGY_GATE_ENABLED", "1")))
+    events_poll_seconds: int = field(
+        default_factory=lambda: int(_env("EVENTS_POLL_SECONDS", "900")))
 
     def effective_base_url(self) -> str:
         """URL для внешних ссылок. Без HTF_PUBLIC_BASE_URL — локальный;
