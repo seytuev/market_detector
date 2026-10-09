@@ -112,7 +112,7 @@ def _reason(snap, event: Event, approach_pct: float) -> str:
     return _KIND_RU.get(raw, raw.value)
 
 
-def _render_event_block(view, group_members: Optional[list[Zone]] = None,
+def _render_event_details(view, group_members: Optional[list[Zone]] = None,
                         approach_pct: float = 0.02) -> str:
     """Один блок сообщения (ТЗ 07.10.2026 §5): строка бренда «LevelFrame ·
     символ · площадка рынок» (ребрендинг §8), заголовок «символ · тип ТФ ·
@@ -204,6 +204,32 @@ def _render_event_block(view, group_members: Optional[list[Zone]] = None,
     return "\n".join(lines)
 
 
+def _render_event_block(view, group_members=None, approach_pct=0.02) -> str:
+    from .compact import direction_icon
+    snap, event = htf_snapshot(view), view.event
+    direction = view.zone.direction.value if view.zone else ""
+    icon = "⚪" if snap.status_ru in {"снята", "архивирована"} else direction_icon(direction)
+    title = f"{icon} {snap.symbol} · {snap.type_ru} {snap.timeframe}"
+    if not snap.is_level:
+        title += f" · {snap.direction_ru}"
+    lines = [title, "🎯 " + _headline(snap, event)]
+    if view.zone:
+        lines.append(f"Уровень: {_fmt_price(snap.lower)}" if snap.is_level else
+                     f"Зона: {_fmt_price(snap.lower)}–{_fmt_price(snap.upper)}")
+    if snap.event_price is not None:
+        lines.append(f"Цена события: {_fmt_price(snap.event_price)}")
+    if snap.kind == NormalizedKind.APPROACH and snap.distance_pct is not None:
+        lines.append(f"До границы: {fmt_pct_ru(snap.distance_pct * 100)}")
+    if event.kind == EventKind.FVG_WEAKENED:
+        lines.append("⚠️ FVG ослаблен")
+    if event.kind == EventKind.LEVEL_TAKEN:
+        lines.append("Повторные входы по уровню отключены")
+    if event.delayed:
+        lines.append("⚠️ Историческое событие · доставлено с задержкой")
+    lines.append(f"🕒 {_fmt_time(event.occurred_at)}")
+    return "\n".join(lines)
+
+
 def render_text(payload: MessagePayload) -> str:
     """Текст сообщения. Пакет не скрывает второй актив (§9):
     каждое событие — отдельный блок со своим объектом и причиной."""
@@ -213,7 +239,7 @@ def render_text(payload: MessagePayload) -> str:
         for v in payload.views
     ]
     if len(blocks) > 1:
-        header = f"Несколько сигналов ({len(blocks)}):"
+        header = f"📌 Событий: {len(blocks)}"
         return header + "\n\n" + "\n\n".join(blocks)
     return blocks[0] if blocks else ""
 
@@ -237,6 +263,34 @@ class TelegramSender:
         self.chat_id = chat_id
         self.db = db
         self.site_base_url = site_base_url
+
+    async def send_card(self, card, packet_id, *, quiet=False):
+        from .compact import notification_html
+        from .navigation import card_keyboard
+        kwargs = dict(chat_id=self.chat_id, reply_markup=card_keyboard(packet_id),
+                      disable_notification=quiet, parse_mode="HTML")
+        if card.image_path:
+            with open(card.image_path, "rb") as fh:
+                msg = await self._bot.send_photo(photo=fh, caption=notification_html(card.text, 1000), **kwargs)
+        else:
+            msg = await self._bot.send_message(text=notification_html(card.text, 4000),
+                                                disable_web_page_preview=True, **kwargs)
+        return msg.message_id
+
+    async def edit_card(self, message_id, card, packet_id, *, photo=False):
+        from .compact import notification_html
+        from .navigation import card_keyboard
+        from telegram.error import BadRequest
+        kwargs = dict(chat_id=self.chat_id, message_id=message_id,
+                      reply_markup=card_keyboard(packet_id), parse_mode="HTML")
+        try:
+            if photo:
+                await self._bot.edit_message_caption(caption=notification_html(card.text, 1000), **kwargs)
+            else:
+                await self._bot.edit_message_text(text=notification_html(card.text, 4000), **kwargs)
+        except BadRequest as exc:
+            if "message is not modified" not in str(exc).lower():
+                raise
 
     def build_keyboard(self, payload: MessagePayload):
         """Inline-кнопки §9 + единый набор ТЗ бота п.10: «График» (рендер
@@ -368,6 +422,16 @@ class LogSender:
         self.sent_ltf: list[tuple[str, object]] = []
         self.sent_ltf_photos: list[tuple[str, str, object]] = []
         self.sent_alt: list[str] = []
+        self.cards: list = []
+        self.edits: list = []
+
+    async def send_card(self, card, packet_id, *, quiet=False):
+        self.cards.append((card, packet_id, quiet))
+        self._log.info("NOTIFY %s:\n%s", packet_id, card.text)
+        return len(self.cards)
+
+    async def edit_card(self, message_id, card, packet_id, *, photo=False):
+        self.edits.append((message_id, card, packet_id))
 
     async def send(self, payload: MessagePayload) -> None:
         text = render_text(payload)
@@ -504,5 +568,7 @@ def build_application(settings: Settings, db: Database):
     # callback ^htf: и ^nav: не пересекаются
     app.add_handler(CallbackQueryHandler(on_callback, pattern=r"^htf:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
+    from .navigation import register_notification_handlers
+    register_notification_handlers(app, db, settings)
     handle_menu_text = register_bot_handlers(app, settings, db)
     return app

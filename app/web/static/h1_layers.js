@@ -14,6 +14,7 @@
     bsl: true,
     ssl: true,
     eligibleOnly: false,
+    ideaId: '',
     candidates: false,
     historicalZones: false,
     htfContext: true,
@@ -106,7 +107,7 @@
     }
     if (info.eligibleOnly && !info.scenarioOpen) {
       return {
-        text: 'Выбран фильтр пригодности, но сценарий не открыт',
+        text: 'Нет действующих HTF-идей с подтверждёнными зонами',
         showAll: true,
       };
     }
@@ -134,8 +135,77 @@
   function passesFilters(zone, settings) {
     if (!settings.zones || !typeOn(settings, zone)) return false;
     if ((zone.candidate || zone.lifecycle === 'candidate') && !settings.candidates) return false;
-    if (zone.lifecycle === 'ended' && !zone.recently_taken && !settings.historicalZones) return false;
+    if (zone.lifecycle === 'ended' && !settings.historicalZones) return false;
     return true;
+  }
+
+  function selectedZones(layers, settings) {
+    const modern = Array.isArray(layers.htf_ideas);
+    return (layers.detected_zones || []).filter((zone) => {
+      if (!passesFilters(zone, settings)) return false;
+      if (!settings.eligibleOnly && !settings.ideaId) return true;
+      if (!modern) {
+        const adm = admissionOf(layers, zone);
+        return !!adm && adm.eligibility === 'eligible';
+      }
+      const links = (zone.idea_links || []).filter((link) =>
+        !settings.ideaId || String(link.scenario_id) === String(settings.ideaId));
+      if (settings.historicalZones) return links.length > 0;
+      return !!(zone.relevance && zone.relevance.relevant && links.some((link) => link.state === 'active'));
+    });
+  }
+
+  function ideaLabel(idea) {
+    return (idea.direction === 'bull' ? '↑ Покупки' : '↓ Продажи') + ' · '
+      + String(idea.parent_type || '').toUpperCase() + ' ' + idea.parent_timeframe
+      + ' #' + idea.parent_zone_id + ' · BOS/SMS ' + new Date(idea.trigger_at).toLocaleString('ru-RU');
+  }
+
+  function updateIdeaOptions(layers, settings) {
+    const select = root.document && root.document.getElementById('h1-idea');
+    if (!select || !Array.isArray(layers.htf_ideas)) return;
+    const choices = layers.htf_ideas.filter((i) => settings.historicalZones || i.state !== 'closed');
+    const signature = JSON.stringify(choices.map((i) => [i.scenario_id, i.state, i.trigger_at]));
+    if (select.dataset.ideas !== signature) {
+      select.replaceChildren();
+      const all = root.document.createElement('option');
+      all.value = ''; all.textContent = 'Все HTF-идеи'; select.appendChild(all);
+      choices.forEach((i) => {
+        const option = root.document.createElement('option');
+        option.value = String(i.scenario_id); option.textContent = ideaLabel(i);
+        select.appendChild(option);
+      });
+      select.dataset.ideas = signature;
+    }
+    if (settings.ideaId && !choices.some((i) => String(i.scenario_id) === String(settings.ideaId))) {
+      settings.ideaId = ''; saveSettings({ ideaId: '' });
+    }
+    select.value = settings.ideaId || '';
+    const close = root.document.getElementById('h1-close-idea');
+    const chosen = choices.find((i) => String(i.scenario_id) === String(settings.ideaId));
+    if (close) {
+      close.hidden = !chosen || chosen.state === 'closed';
+      close.disabled = !chosen || !chosen.id;
+      close.dataset.ideaId = chosen && chosen.id ? String(chosen.id) : '';
+    }
+  }
+
+  const REASONS = {
+    ok: 'Готова по правилам входа', structure_pending: 'Ждём подтверждения структуры',
+    range_pending: 'Диапазон ещё не подтверждён', outside_pd: 'Вне нужной половины диапазона',
+    data_gap: 'Недостаточно истории для проверки', invalid: 'Зона невалидна',
+    fvg_filled: 'FVG полностью перекрыт', tested_too_deep: 'Достигнут порог глубины теста',
+    swept_level: 'Ликвидность снята', level_broken: 'Уровень пробит',
+    parent_invalid: 'HTF-родитель невалиден', manual: 'Идея закрыта вручную',
+    zones_exhausted: 'Зоны исчерпаны', discovery_pending: 'Зоны ещё определяются',
+    origin_unresolved: 'Причинная связь не подтверждена', type_disabled: 'Тип зоны отключён',
+  };
+
+  function reasonText(reason) { return REASONS[reason] || reason || '—'; }
+
+  function relevanceText(fact) {
+    if (!fact) return 'Актуальность не оценивалась';
+    return fact.reason === 'ok' ? 'Актуальна' : reasonText(fact.reason);
   }
 
   function admissionOf(layers, zone) {
@@ -215,8 +285,12 @@
       '<p><b>' + (zone.type || '') + ' H1</b> · ' + (zone.direction || '') + '</p>',
       '<p>Подтверждение ' + shown(zone.confirmed_at, fmt.time, 'ещё нет') + '</p>',
       '<p>Состояние ' + (zone.lifecycle || '—') + (zone.level_state ? ' · ' + zone.level_state : '') + '</p>',
-      '<p>Пригодность: ' + (adm.eligibility || 'not_evaluated') + '</p>',
-      '<p>' + reason + '</p>',
+      '<p>Максимальная глубина теста: ' + Math.round((zone.max_test_depth || 0) * 100) + '%</p>',
+      zone.relevance ? '<p>Актуальность: ' + relevanceText(zone.relevance) + '</p>' : '',
+      zone.relevance && zone.relevance.excluded_at != null ? '<p>Исключена: ' + shown(zone.relevance.excluded_at, fmt.time, '—') + '</p>' : '',
+      (zone.idea_links || []).map((i) => '<p>' + ideaLabel(i) + '<br>' + reasonText(i.entry_reason) + '</p>').join(''),
+      zone.relevance ? ((zone.idea_links || []).length ? '' : '<p>Связь с HTF-идеей не подтверждена</p>')
+        : '<p>Пригодность: ' + (adm.eligibility || 'not_evaluated') + '</p><p>' + reason + '</p>',
       zone.display_window_label ? '<p>' + zone.display_window_label + '</p>' : '',
     ].join('');
   }
@@ -232,7 +306,10 @@
     const fmtPrice = ctx.fmtPrice || String;
     const fmtTime = ctx.fmtTime || String;
     const view = ctx.view || {};
-    const scenarioOpen = !!(layers.snapshot && layers.snapshot.scenario_open);
+    const scenarioOpen = Array.isArray(layers.htf_ideas)
+      ? layers.htf_ideas.some((i) => settings.historicalZones || i.state !== 'closed')
+      : !!(layers.snapshot && layers.snapshot.scenario_open);
+    updateIdeaOptions(layers, settings);
     const doc = overlay.ownerDocument || root.document;
 
     const add = (cls) => {
@@ -250,26 +327,8 @@
     }
 
     const allZones = layers.detected_zones || [];
-    let hiddenByFilter = 0;
-    const filtered = [];
-    if (!(settings.eligibleOnly && !scenarioOpen)) {
-      allZones.forEach((zone) => {
-        if (!passesFilters(zone, settings)) {
-          hiddenByFilter += 1;
-          return;
-        }
-        if (settings.eligibleOnly) {
-          const adm = admissionOf(layers, zone);
-          if (!adm || adm.eligibility !== 'eligible') {
-            hiddenByFilter += 1;
-            return;
-          }
-        }
-        filtered.push(zone);
-      });
-    } else {
-      hiddenByFilter = allZones.length;
-    }
+    const filtered = selectedZones(layers, settings);
+    const hiddenByFilter = allZones.length - filtered.length;
     const outside = [];
     const visible = [];
     filtered.forEach((zone) => {
@@ -465,10 +524,27 @@
     parent.appendChild(button);
   }
 
-  function bindControls(onChange) {
+  function bindControls(onChange, onCloseIdea) {
     const doc = root.document;
     if (!doc) return;
     const settings = loadSettings();
+    const close = doc.getElementById('h1-close-idea');
+    if (close) close.onclick = async () => {
+      if (!onCloseIdea || !close.dataset.ideaId) return;
+      close.disabled = true;
+      const error = doc.getElementById('h1-idea-error');
+      if (error) error.textContent = '';
+      try { await onCloseIdea(Number(close.dataset.ideaId)); }
+      catch (e) { if (error) error.textContent = 'Не удалось закрыть идею: ' + e.message; }
+      finally { close.disabled = false; }
+    };
+    const idea = doc.getElementById('h1-idea');
+    if (idea) idea.onchange = () => {
+      saveSettings({ ideaId: idea.value, eligibleOnly: true });
+      const flag = doc.getElementById('h1-eligible-only');
+      if (flag) flag.checked = true;
+      if (onChange) onChange(loadSettings());
+    };
     const points = doc.getElementById('h1-points');
     if (points) points.value = settings.points;
     const flags = {
@@ -519,6 +595,10 @@
     eventSource,
     eventCard,
     zoneCard,
+    selectedZones,
+    ideaLabel,
+    reasonText,
+    relevanceText,
     draw,
     bindControls,
   };

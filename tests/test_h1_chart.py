@@ -353,7 +353,8 @@ def test_t14_t15_admission_is_not_invented(db, instrument_id):
     adm = next(a for a in rated["scenario_admission"] if a["zone_id"] == zone.id)
     assert row["lower"] == 98 and row["upper"] == 102
     assert adm["eligibility"] == "excluded"
-    assert adm["reason"] == "outside_pd"
+    assert adm["reason"] == "data_gap"
+    assert row["relevance"]["data_quality"] == "gap"
 
 
 def test_t16_partial_fvg_stays_filled_fvg_ends_deep_ob_stays(db, instrument_id):
@@ -554,17 +555,19 @@ def test_t23_replay_does_not_insert_or_change_admission(db, instrument_id):
     ))
     before = _counts(db)
     first = assemble_h1_layers(
-        db, _Settings(), instrument_id, as_of=_t(30), context_id=obs.id,
+        db, _Settings(), instrument_id, as_of=_t(30), context_id=obs.id, zone_history=True,
     )
     second = assemble_h1_layers(
-        db, _Settings(), instrument_id, as_of=_t(30), context_id=obs.id,
+        db, _Settings(), instrument_id, as_of=_t(30), context_id=obs.id, zone_history=True,
     )
     assert _counts(db) == before
     assert [e["id"] for e in first["structural_events"]] == [
         e["id"] for e in second["structural_events"]
     ]
     adm = next(a for a in second["scenario_admission"] if a["zone_id"] == zone.id)
-    assert adm["eligibility"] == "eligible"
+    # A stale saved admission cannot resurrect an OB consumed by later bars.
+    assert adm["eligibility"] == "excluded"
+    assert adm["reason"] == "tested_too_deep"
     stored = db.list_ltf_scenario_entries(sc.id)[0]
     assert stored.eligible is True and stored.reason == "ok"
     assert len(first["pivot_markers"]) <= 20

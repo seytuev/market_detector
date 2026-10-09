@@ -74,7 +74,7 @@ check('нет данных называет причину', nodata.text.include
 const unrated = H.emptyZoneMessage({ state: 'calculated', total: 2 }, {
   eligibleOnly: true, scenarioOpen: false, visible: 0,
 });
-check('фильтр пригодности без сценария', unrated.text === 'Выбран фильтр пригодности, но сценарий не открыт' && unrated.showAll === true);
+check('фильтр идей без сценария', unrated.text === 'Нет действующих HTF-идей с подтверждёнными зонами' && unrated.showAll === true);
 const hidden = H.emptyZoneMessage({ state: 'calculated', total: 4 }, {
   hiddenByFilter: 4, visible: 0, scenarioOpen: true,
 });
@@ -109,6 +109,34 @@ const markers = H.markerList({
   anchor_refs: [{ id: 9, role: 'HL', pivot_at: 2, kind: 'low' }],
 }, 'e1');
 check('скрытые точки не возвращают двадцать, выбранная опора временная', markers.length === 1 && markers[0].temporary === true && markers[0].id === 9);
+
+const ideaLayers = {
+  htf_ideas: [{ scenario_id: 1, state: 'active' }, { scenario_id: 2, state: 'active' }],
+  snapshot: { scenario_open: false },
+  detected_zones: [
+    { id: 1, type: 'OB', lifecycle: 'active', relevance: { relevant: true }, idea_links: [
+      { scenario_id: 1, state: 'active', eligible_now: false },
+      { scenario_id: 2, state: 'active', eligible_now: true },
+    ] },
+    { id: 2, type: 'FVG', lifecycle: 'active', relevance: { relevant: true }, idea_links: [
+      { scenario_id: 2, state: 'active', eligible_now: false },
+    ] },
+    { id: 3, type: 'OB', lifecycle: 'ended', relevance: { relevant: false }, idea_links: [
+      { scenario_id: 1, state: 'closed' },
+    ] },
+    { id: 4, type: 'OB', lifecycle: 'active', relevance: { relevant: false }, idea_links: [
+      { scenario_id: 1, state: 'paused_data' },
+    ] },
+  ],
+};
+const allIdeas = Object.assign({}, H.DEFAULTS, { eligibleOnly: true });
+check('все идеи без текущей попытки, готовность входа не скрывает',
+  H.selectedZones(ideaLayers, allIdeas).map((z) => z.id).join(',') === '1,2');
+check('общая зона рисуется один раз', H.selectedZones(ideaLayers, allIdeas).filter((z) => z.id === 1).length === 1);
+check('выбор отдельной идеи', H.selectedZones(ideaLayers, Object.assign({}, allIdeas, { ideaId: '1' })).length === 1);
+check('история возвращает исчерпанную зону и непроверенную связь',
+  H.selectedZones(ideaLayers, Object.assign({}, allIdeas, { historicalZones: true })).length === 4);
+check('обычный график скрывает исчерпанные зоны', H.selectedZones(ideaLayers, H.DEFAULTS).every((z) => z.id !== 3));
 
 if (failed) {
   console.error('failed', failed);

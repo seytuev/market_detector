@@ -162,6 +162,9 @@ def zone_to_dict(z: Zone) -> dict[str, Any]:
         "created_at": z.created_at,
         # начало рисунка: display_from (FVG — средняя свеча) или formed_at
         "display_from": z.display_from or z.formed_at,
+        "extreme_at": z.evidence.get("extreme_at"),
+        "extreme_anchor_quality": z.evidence.get("extreme_anchor_quality"),
+        "group_extreme_at": z.evidence.get("group_extreme_at"),
         # конец рисунка: None — зона живая, рисуется до края графика
         "display_until": z.display_until,
         "end_reason": z.end_reason,

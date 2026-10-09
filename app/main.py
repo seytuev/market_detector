@@ -189,6 +189,7 @@ async def async_main() -> None:
         await asyncio.gather(
             server.serve(),
             worker.run(),
+            dispatcher.outbox.run(),
             run_bot_polling(settings, db),
         )
     finally:

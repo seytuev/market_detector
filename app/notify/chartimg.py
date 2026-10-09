@@ -58,8 +58,12 @@ def make_dark_style():
     return mpf.make_mpf_style(
         base_mpf_style="nightclouds",
         gridstyle=":",
-        facecolor="#12161c",
-        figcolor="#12161c",
+        facecolor="#111827",
+        figcolor="#111827",
+        marketcolors=mpf.make_marketcolors(up="#34d399", down="#f87171", inherit=True),
+        gridcolor="#334155",
+        rc={"text.color": "#f1f5f9", "axes.labelcolor": "#cbd5e1",
+            "xtick.color": "#cbd5e1", "ytick.color": "#cbd5e1"},
     )
 
 
@@ -106,18 +110,21 @@ def render_zone_chart(
     # Внутренняя ось X mplfinance — позиции свечей 0..n-1
     n = len(candles)
     # Прямоугольник зоны: от свечи формирования до правого края
-    x0 = sum(1 for c in candles if c.open_time < zone.formed_at) - 0.5
+    start = zone.display_from if zone.display_from is not None else zone.formed_at
+    x0 = sum(1 for c in candles if c.open_time < start) - 0.5
     x1 = n - 0.5
     # пустота справа после последней свечи — в неё уходят линии границ
     pad_right = max(16, int(n * 0.32))
     xr = x1 + pad_right
 
     type_ru = TYPE_RU.get(zone.type.value, zone.type.value)
-    zone_color = "#ffb74d"
+    zone_color = "#34d399" if zone.direction.value == "bull" else "#f87171"
+    if not zone.is_currently_relevant():
+        zone_color = "#94a3b8"
     labels: list[tuple[float, str, str]] = []
     if zone.is_level:
         # Уровень SSL/BSL — одна цена, с подписью (§9.6, §10.2)
-        ax.hlines(zone.lower, -0.5, xr, color=zone_color, linewidth=1.5, zorder=4)
+        ax.hlines(zone.lower, max(x0, -0.5), xr, color=zone_color, linewidth=1.5, zorder=4)
         labels.append(
             (zone.lower, f"{type_ru} {zone.timeframe} "
              f"{fmt_price_ru(zone.lower)}", zone_color)

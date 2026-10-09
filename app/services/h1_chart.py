@@ -674,7 +674,7 @@ def _scan_zones(pivots, candles, events, cfg, as_of: int, index: _CandleIndex) -
 def _chart_zone(zone: dict[str, Any], historical: bool) -> bool:
     if zone.get("candidate") or zone.get("lifecycle") == "candidate":
         return True
-    if zone.get("lifecycle") == "ended" and not zone.get("recently_taken"):
+    if zone.get("lifecycle") == "ended":
         return historical
     return True
 
@@ -683,7 +683,7 @@ def _default_shown(zone: dict[str, Any], as_of: int) -> bool:
     if zone.get("candidate") or zone.get("lifecycle") == "candidate":
         return False
     if zone.get("lifecycle") == "ended":
-        return bool(zone.get("recently_taken"))
+        return False
     return True
 
 
@@ -780,10 +780,16 @@ def assemble_h1_layers(
         z for z in db.list_ltf_entry_zones(instrument_id=instrument_id)
         if _stored_zone_visible(z, moment)
     ]
+    from .htf_ideas import project_ideas
+    lifecycle_candles = db.get_candles(instrument_id, "H1", end_ms=moment)
+    ideas, idea_links, lifecycle_facts = project_ideas(
+        db, instrument_id, cfg, moment, zones=stored, candles=lifecycle_candles,
+    )
     index = _lifecycle_index(db, instrument_id, candles, stored, moment, load_from)
     zones: list[dict[str, Any]] = []
     seen = set()
     for zone in stored:
+        zone, fact = lifecycle_facts[zone.id]
         first, depth, extreme = _clip_tests(zone, moment)
         key = _geometry_key(zone.type, zone.direction.value, zone.formed_at, zone.lower, zone.upper)
         seen.add(key)
@@ -796,6 +802,9 @@ def assemble_h1_layers(
             rule_version=zone.rule_version, index=index, as_of=moment,
             candidate=zone.confirmed_at is None,
         ))
+        zones[-1].update(relevance=fact, idea_links=idea_links.get(zone.id, []))
+        if fact["reason"] not in ("ok", "data_gap", "unconfirmed"):
+            zones[-1].update(lifecycle="ended", display_until=fact["excluded_at"], recently_taken=False)
     if candles:
         for extra in _scan_zones(candidates, candles, events, cfg, moment, index):
             key = _geometry_key(
@@ -805,12 +814,27 @@ def assemble_h1_layers(
             if key in seen:
                 continue
             seen.add(key)
+            from ..engine.ltf.relevance import zone_at
+            ghost = LtfEntryZone(
+                id=None, instrument_id=instrument_id, type=extra["type"],
+                direction=Direction(extra["direction"]), lower=extra["lower"], upper=extra["upper"],
+                formed_at=extra["formed_at"], confirmed_at=extra["confirmed_at"],
+            )
+            rebuilt, fact = zone_at(ghost, lifecycle_candles, moment, cfg)
+            extra.update(relevance=fact, idea_links=[], max_test_depth=rebuilt.max_test_depth,
+                         first_test_at=rebuilt.first_test_at, validity=rebuilt.validity)
+            if fact["reason"] not in ("ok", "data_gap", "unconfirmed"):
+                extra.update(lifecycle="ended", display_until=fact["excluded_at"], recently_taken=False)
             zones.append(extra)
     zones.sort(key=lambda z: (z["formed_at"], str(z["id"])))
 
     admission = _admission(db, instrument_id, context_id, zones, stored)
+    for row in admission:
+        fact = lifecycle_facts.get(row["zone_id"])
+        if fact and not fact[1]["relevant"] and row["eligibility"] != "not_evaluated":
+            row.update(eligibility="excluded", reason=fact[1]["reason"])
     # По умолчанию на график не попадает вся история завершённых зон.
-    # Действующие, кандидаты и уровни, снятые за последние 7 суток, остаются.
+    # Завершённые зоны и снятая ликвидность доступны только в истории.
     # «Исторические зоны» возвращает завершённые объекты выбранного интервала.
     chart_zones = [
         z for z in zones
@@ -867,6 +891,7 @@ def assemble_h1_layers(
         "expected_structure": expected,
         "detected_zones": zones,
         "scenario_admission": admission,
+        "htf_ideas": ideas,
         "roles_as_of": role_by_id,
         "layer_status": {
             "pivots": {

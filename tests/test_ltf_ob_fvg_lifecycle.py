@@ -163,8 +163,9 @@ def test_fvg_filled_before_activation_born_filled(db: Database, cfg,
         zone = zones[(bounds[0], bounds[1], formed)]
         assert zone.validity == "tested"                 # не fresh-void
         assert zone.max_test_depth == 1.0
-        # живое касание idx26 (§9: first_test_at — close_time свечи)
-        assert zone.first_test_at == candles[26].close_time
+        # Independent lifecycle also sees the gap through the zone at idx25,
+        # before the active entry-selection flow touches it at idx26.
+        assert zone.first_test_at == candles[25].close_time
         entries = [e for e in db.list_ltf_scenario_entries(sc.id)
                    if e.entry_zone_id == zone.id]
         assert entries and all(e.reason == REASON_FVG_FILLED for e in entries)

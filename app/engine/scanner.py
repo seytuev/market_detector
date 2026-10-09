@@ -439,6 +439,9 @@ class Scanner:
             self._insert_zone(z)
         self._recluster_levels(iid)
 
+        from ..services.liquidity_anchors import refresh_liquidity_anchors
+        refresh_liquidity_anchors(self.db, iid)
+
     def _recluster_levels(self, iid: int) -> None:
         """Перестраивает группы экстремумов (§7) и обновляет качественный
         контекст «часть группы снята» — без баллов (§7). Снятые участники

@@ -64,6 +64,9 @@ class LtfDispatcher:
         self.sender = sender
         # Settings — для URL-кнопки «Открыть приложение»; None — без неё
         self.settings = settings
+        from .outbox import get_outbox
+        self.outbox = get_outbox(db, sender, cfg)
+        self.outbox.register("ltf", self._validate_packet, self._finish_packet, self._render_packet)
 
     def _group_enabled(self, kind: str) -> bool:
         """§14: выключение доставки группы не меняет рыночный анализ —
@@ -174,103 +177,79 @@ class LtfDispatcher:
             settings=self.settings, now=ev.occurred_at, end_ms=end,
         )
 
-    async def _send_event(self, ev: LtfEvent, ctx: LtfContext,
-                          texts: list[str], markup) -> None:
-        """Отправка одного события: фото с подписью, когда график готов и
-        текст помещается в caption; иначе текст (+ фото отдельным сообщением
-        при длинном тексте). Исключение транспорта пробрасывается — ретрай."""
-        chart_path: Optional[str] = None
-        if ev.kind in _CHART_KINDS:
-            try:
-                chart_path = await self._render_event_chart(ev, ctx)
-            except Exception:  # noqa: BLE001 — ошибка рендера ≠ ошибка события
-                log.warning("LTF: не удалось сгенерировать график события %s",
-                            ev.id, exc_info=True)
-        chart_failed = ev.kind in _CHART_KINDS and chart_path is None
-        if chart_failed:
-            # §7: текст без изображения — НЕ успешная доставка графика;
-            # картинку дошлём retry_charts без повторного уведомления
-            texts = list(texts)
-            texts[-1] += "\n📊 График временно недоступен — пришлём отдельно."
+    def _packet_events(self, members):
+        return [ev for m in members if (ev := self.db.get_ltf_event(m["event_id"])) is not None]
 
-        if (
-            chart_path is not None
-            and len(texts) == 1
-            and len(texts[0]) <= _CAPTION_LIMIT
-        ):
-            await self.sender.send_ltf_photo(
-                chart_path, caption=texts[0], reply_markup=markup
-            )
-        else:
-            if chart_path is not None:
-                head = texts[0].split("\n", 1)[0]
-                await self.sender.send_ltf_photo(
-                    chart_path,
-                    caption=(
-                        f"📊 {head} · снимок {fmt_time_msk(ev.occurred_at)}"
-                    ),
-                    reply_markup=None,
-                )
-            for i, text in enumerate(texts):
-                # кнопки — на завершающей части (там футер со временем)
-                await self.sender.send_ltf(
-                    text,
-                    reply_markup=markup if i == len(texts) - 1 else None,
-                )
-        # состояние графика — только после успешной отправки (§7)
-        if ev.id is not None and ev.kind in _CHART_KINDS:
-            self.db.update_ltf_event_chart(
-                ev.id, "failed" if chart_failed else "sent",
-                bump_attempts=chart_failed,
-            )
+    def _validate_packet(self, row, members):
+        events = self._packet_events(members)
+        active = [e for e in events if not e.delayed and self._group_enabled(e.kind)
+                  and not self._bot_blocked(e) and not self._event_stale(e)]
+        if not active:
+            return "muted, historical or stale"
+        if all(self._delivery_blocked(e) for e in active):
+            return "wait"
+        return None
+
+    def _finish_packet(self, event_id, status):
+        self.db.mark_ltf_event_delivered(event_id)
+
+    async def _render_packet(self, row, members):
+        from .outbox import Card
+        from .compact import ltf_text
+        from .telegram import tradingview_url
+        events = self._packet_events(members)
+        active = [e for e in events if not self._event_stale(e) and not self._bot_blocked(e)
+                  and not self._delivery_blocked(e)]
+        lead = active[0] if active else events[0]
+        ctx = self._load_context(lead)
+        targets, details = [], []
+        for ev in events:
+            c = self._load_context(ev)
+            details.extend(render_ltf_messages(ev, c))
+            if c.instrument and c.zone and c.observation:
+                target = dict(label=f"{c.instrument.symbol} · {c.zone.type.value} {c.zone.timeframe} · сценарий #{ev.scenario_id}",
+                              instrument_id=c.instrument.id, zone_id=c.zone.id,
+                              cycle_id=c.observation.cycle_id, kind="touch",
+                              chart=f"nav:charto:{c.instrument.id}:{c.observation.id}", tv=tradingview_url(c.instrument))
+                if self.settings:
+                    from urllib.parse import urlparse
+                    base = self.settings.effective_base_url()
+                    if urlparse(base).hostname not in {None, "localhost", "127.0.0.1", "0.0.0.0", "::1"}:
+                        target["url"] = f"{base}/?zone={c.zone.id}"
+                if target not in targets:
+                    targets.append(target)
+        import json
+        old = json.loads(row["card"])
+        path = old.get("image_path")
+        needs_chart = lead.kind in _CHART_KINDS or lead.kind == "entries_ready"
+        if needs_chart and path is None and row["status"] != "sent":
+            try:
+                path = await self._render_event_chart(lead, ctx)
+            except Exception:
+                log.warning("LTF chart unavailable", exc_info=True)
+        text = ltf_text(lead, ctx, len({e.observation_id for e in events}))
+        if needs_chart and not path:
+            text += "\n📊 График временно недоступен"
+        if len(targets) > 1 and path:
+            text += f"\n📊 График контекста #{lead.observation_id}; остальные — по кнопке"
+        return Card(text, "\n\n".join(details), path, targets, needs_chart and not path)
 
     async def deliver(self, events: list[LtfEvent]) -> int:
-        """Отправляет события списка; возвращает число доставленных.
-
-        Идемпотентность: delivered=True пропускаются; дубли событий не
-        возникают благодаря UNIQUE(dedupe_key) на вставке (§11.5).
-        """
-        sent = 0
+        from .outbox import Card
+        from .compact import ltf_key
+        pending = []
         for ev in events:
-            if ev.delayed:
-                continue
-            # свежее состояние из БД: повторный вызов с тем же объектом
-            # после mark_ltf_event_delivered не должен отправить дважды
             stored = self.db.get_ltf_event(ev.id) if ev.id is not None else None
-            if stored is None or stored.delivered:
+            if stored is None or stored.delivered or ev.delayed:
                 continue
-            if not self._group_enabled(ev.kind):
-                continue
-            if self._delivery_blocked(ev):
-                log.info("LTF: доставка %s отложена — данные инструмента "
-                         "не свежи (D02)", ev.kind)
-                continue
-            if self._event_stale(ev):
-                # §13.6: просроченный вход не уходит и не копится к ретраю —
-                # событие остаётся фактом в журнале, доставка закрывается
-                log.info("LTF: доставка %s пропущена — вход просрочен (§13.6)",
-                         ev.kind)
-                self.db.mark_ltf_event_delivered(ev.id)
-                continue
-            if self._bot_blocked(ev):
-                # мьют/настройки бота (ТЗ п.9): только доставка останавливается;
-                # событие помечается доставленным — после unmute не уйдёт
+            if not self._group_enabled(ev.kind) or self._event_stale(ev) or self._bot_blocked(ev):
                 self.db.mark_ltf_event_delivered(ev.id)
                 continue
             ctx = self._load_context(ev)
-            texts = render_ltf_messages(ev, ctx)
-            if not texts:
-                continue
-            markup = self._keyboard(ev, ctx)
-            try:
-                await self._send_event(ev, ctx, texts, markup)
-            except Exception:  # noqa: BLE001 — любая ошибка транспорта = ретрай
-                log.warning("LTF: доставка события %s не удалась, будет ретрай",
-                            ev.id, exc_info=True)
-                continue
-            self.db.mark_ltf_event_delivered(ev.id)
-            sent += 1
-        return sent
+            self.outbox.put("ltf", ltf_key(ev, ctx), Card(""), [ev.id], quiet=ev.kind == "range_ready")
+            pending.append(ev.id)
+        await self.outbox.flush()
+        return sum(bool(self.db.get_ltf_event(i).delivered) for i in pending)
 
     def _keyboard(self, ev: LtfEvent, ctx: LtfContext):
         """Единый набор кнопок под сигналом (ТЗ бота п.10)."""
@@ -311,32 +290,9 @@ class LtfDispatcher:
         return await self.deliver(self.db.pending_ltf_events())
 
     async def retry_charts(self) -> int:
-        """§7 ТЗ 07.10.2026: повторная генерация графиков к уже доставленным
-        событиям — досылает картинку без повторного рыночного уведомления."""
-        sent = 0
-        for ev in self.db.pending_ltf_charts():
-            ctx = self._load_context(ev)
-            try:
-                path = await self._render_event_chart(ev, ctx)
-            except Exception:  # noqa: BLE001
-                path = None
-            if path is None:
-                self.db.update_ltf_event_chart(ev.id, "failed",
-                                               bump_attempts=True)
-                continue
-            markup = self._keyboard(ev, ctx)
-            caption = f"📊 График к событию от {fmt_time_msk(ev.occurred_at)}"
-            try:
-                await self.sender.send_ltf_photo(
-                    path, caption=caption, reply_markup=markup
-                )
-            except Exception:  # noqa: BLE001
-                self.db.update_ltf_event_chart(ev.id, "failed",
-                                               bump_attempts=True)
-                continue
-            self.db.update_ltf_event_chart(ev.id, "sent")
-            sent += 1
-        return sent
+        queued = await self.outbox.retry_media()
+        await self.outbox.flush()
+        return queued
 
     async def __call__(self, events: list[LtfEvent]) -> None:
         await self.deliver(events)

@@ -87,6 +87,10 @@ class MessagePayload:
 class Sender(Protocol):
     """Транспорт доставки. Исключение из send = неуспешная доставка (ретрай)."""
 
+    async def send_card(self, card, packet_id: int, *, quiet: bool = False) -> int: ...
+
+    async def edit_card(self, message_id: int, card, packet_id: int, *, photo: bool = False) -> None: ...
+
     async def send(self, payload: MessagePayload) -> None: ...
 
     async def send_text(self, text: str) -> None:
@@ -128,6 +132,11 @@ class EventDispatcher:
         # Владелец бота для настроек доставки (ТЗ п.9: мьют/группы/watchlist);
         # None — фильтры бота не применяются (старое поведение)
         self.chat_id = chat_id
+        from .outbox import get_outbox
+        self.outbox = get_outbox(db, sender, cfg)
+        self.outbox.register("htf", self._validate_packet, self._finish_packet, self._render_packet)
+        from .service import ServiceNotifications
+        self.services = ServiceNotifications(self.outbox, chat_id)
 
     # ---------- внутреннее ----------
 
@@ -247,171 +256,146 @@ class EventDispatcher:
 
     # ---------- публичное API ----------
 
-    async def dispatch(self, events: list[Event]) -> list[Delivery]:
-        """Доставляет события одного вызова одним объединённым сообщением.
+    _QUIET = {EventKind.APPROACH, EventKind.DEPTH_50, EventKind.DEPTH_90,
+              EventKind.FVG_WEAKENED, EventKind.ALREADY_IN_ZONE}
 
-        Возвращает доставки, зафиксированные этим вызовом (по одной на каждое
-        событие пакета — §9: пакет не скрывает отдельные объекты/причины).
-        """
-        views: list[EventView] = []
-        delivery_ids: list[int] = []
-        blocked: list[tuple[EventView, int]] = []
-        stale: list[tuple[EventView, int]] = []
+    def _packet_views(self, members):
+        return [self._load_view(e) for m in members
+                if (e := self.db.get_event(m["event_id"])) is not None]
+
+    def _active_views(self, members):
+        return self._packet_views([m for m in members if not m["reason"]])
+
+    def _validate_packet(self, row, members):
+        views = self._active_views(members)
+        if not views:
+            return "missing events"
+        allowed = [v for v in views if not self._bot_blocked(v) and not self._entry_stale(v)
+                   and not v.event.delayed]
+        if not allowed:
+            return "muted, historical or stale"
+        return None
+
+    def _finish_packet(self, event_id, status):
+        ev = self.db.get_event(event_id)
+        if ev is None:
+            return
+        self.db.conn.execute(
+            "UPDATE delivery SET status=?,delivered_at=? WHERE idempotency_key=?",
+            ("sent" if status == "sent" else "stale", now_ms(), ev.idempotency_key(self.user)))
+        self.db.conn.commit()
+        if status == "sent":
+            mark_delivered(self.db, ev, now_ms(), self.user)
+
+    async def _render_packet(self, row, members):
+        from .outbox import Card
+        from .telegram import render_text, _render_event_details, tradingview_url
+        from urllib.parse import urlparse
+        views = self._packet_views(members)
+        allowed = [v for v in self._active_views(members) if not self._bot_blocked(v) and not self._entry_stale(v)]
+        # Keep every fact in Details; show only the furthest state of a zone.
+        ranks = {"approach": 0, "already_in_zone": 1, "touch": 2,
+                 "depth_50": 3, "fvg_weakened": 3, "depth_90": 4}
+        lead = {}
+        for view in allowed:
+            key = view.event.zone_id
+            prev = lead.get(key)
+            if prev is None or ranks.get(view.event.kind.value, 5) >= ranks.get(prev.event.kind.value, 5):
+                lead[key] = view
+        visible = list(lead.values())
+        payload = MessagePayload(events=[v.event for v in visible], zones=[v.zone for v in visible if v.zone],
+                                 views=visible, approach_pct=self.cfg.approach_pct)
+        # Multiple objects: graph explicitly depicts the first, named on image;
+        # every other object is selectable in the packet's graph menu.
+        import json
+        payload.image_path = json.loads(row["card"]).get("image_path")
+        if not payload.image_path:
+            await self._attach_image(payload)
+        text = render_text(payload)
+        if len(visible) > 1 and payload.image_path:
+            first = visible[0]
+            text += f"\n📊 На графике: {first.zone.type.value} {first.zone.timeframe} · зона #{first.zone.id}"
+        targets = []
+        base = getattr(self.sender, "site_base_url", "")
+        for v in visible:
+            if not v.zone or not v.instrument:
+                continue
+            z, ins = v.zone, v.instrument
+            target = dict(label=f"{ins.symbol} · {z.type.value} {z.timeframe} · #{z.id}",
+                          zone_id=z.id, instrument_id=ins.id, cycle_id=v.event.cycle_id,
+                          kind=v.event.kind.value, chart=f"nav:chartz:{z.id}", tv=tradingview_url(ins))
+            if urlparse(base).hostname not in {None, "localhost", "127.0.0.1", "0.0.0.0", "::1"}:
+                target["url"] = f"{base}/?zone={z.id}"
+            targets.append(target)
+        details = "\n\n".join(_render_event_details(v, approach_pct=self.cfg.approach_pct) for v in views)
+        return Card(text, details, payload.image_path, targets, bool(self.charts_dir and not payload.image_path))
+
+    async def dispatch(self, events: list[Event]) -> list[Delivery]:
+        from .outbox import Card, fingerprint
+        groups, ids = {}, []
         for event in events:
             view = self._load_view(event)
-            if not self._passes_filters(view):
+            if event.delayed or not self._passes_filters(view):
                 continue
             delivery_id = self._record_pending(event)
             if delivery_id is None:
-                continue  # идемпотентность: такая доставка уже есть
-            if self._entry_stale(view):
-                stale.append((view, delivery_id))
                 continue
-            if self._bot_blocked(view):
-                blocked.append((view, delivery_id))
+            ids.append(delivery_id)
+            if self._entry_stale(view) or self._bot_blocked(view):
+                self._finish_packet(event.id, "suppressed")
                 continue
-            views.append(view)
-            delivery_ids.append(delivery_id)
-
-        delivered_at = now_ms()
-        if stale:
-            # §13.6: просроченный вход не отправляется и не ретраится —
-            # доставка закрывается статусом stale, рыночный факт события
-            # остаётся в журнале event
-            for _, delivery_id in stale:
-                self.db.update_delivery(delivery_id, "stale", delivered_at=delivered_at)
-        if blocked:
-            # мьют/выключение останавливает ТОЛЬКО доставку: событие
-            # помечается доставленным, чтобы после unmute старые события
-            # не ушли (ТЗ п.9 «не рассылать накопившиеся»)
-            for view, delivery_id in blocked:
-                self.db.update_delivery(delivery_id, "sent", delivered_at=delivered_at)
-                mark_delivered(self.db, view.event, delivered_at, self.user)
-
-        if not views:
-            return self._deliveries_by_ids(
-                delivery_ids + [d for _, d in blocked] + [d for _, d in stale]
-            )
-
-        payload = MessagePayload(
-            events=[v.event for v in views],
-            zones=[v.zone for v in views if v.zone is not None],
-            views=views,
-            user=self.user,
-            group_members=self._group_members(views),
-            approach_pct=self.cfg.approach_pct,
-        )
-        await self._attach_image(payload)
-        try:
-            await self.sender.send(payload)
-        except Exception as exc:  # noqa: BLE001 — любая ошибка транспорта = ретрай
-            error = f"{type(exc).__name__}: {exc}"
-            for delivery_id in delivery_ids:
-                self.db.update_delivery(delivery_id, "failed", error=error)
-            return self._deliveries_by_ids(
-                delivery_ids + [d for _, d in blocked] + [d for _, d in stale]
-            )
-
-        for view, delivery_id in zip(views, delivery_ids):
-            self.db.update_delivery(delivery_id, "sent", delivered_at=delivered_at)
-            mark_delivered(self.db, view.event, delivered_at, self.user)
-        return self._deliveries_by_ids(
-            delivery_ids + [d for _, d in blocked] + [d for _, d in stale]
-        )
+            quiet = event.kind in self._QUIET
+            ins = view.instrument.id if view.instrument else None
+            tf = view.zone.timeframe if view.zone else ""
+            groups.setdefault((ins, tf, quiet), []).append(view)
+        for (iid, tf, quiet), views in groups.items():
+            facts = []
+            for v in views:
+                e, z = v.event, v.zone
+                # Terminal lifecycle events are unique per zone cycle regardless
+                # of detector re-evaluation time or quote jitter.
+                terminal = e.kind.value in {"fvg_filled", "ob_invalidated", "breaker_archived", "prb_archived", "level_taken"}
+                facts.append([z.type.value if z else "", z.direction.value if z else "",
+                              z.lower if z else None, z.upper if z else None,
+                              z.formed_at if z else None, e.cycle_id, e.kind.value,
+                              None if terminal else e.occurred_at])
+            key = fingerprint([iid, tf, sorted(facts, key=fingerprint)])
+            self.outbox.put("htf", key, Card(""), [v.event.id for v in views], quiet=quiet)
+            if not quiet:
+                # Superseded digest entries stay in the journal, but never alert.
+                for v in views:
+                    pending = self.db.conn.execute(
+                        "SELECT m.id,m.event_id FROM notification_packet p JOIN notification_member m ON m.packet_id=p.id "
+                        "JOIN event e ON e.id=m.event_id WHERE p.channel='htf' AND p.quiet=1 "
+                        "AND p.status IN ('pending','failed','bundled') AND e.zone_id=? AND e.cycle_id=? AND e.occurred_at<=?",
+                        (v.event.zone_id, v.event.cycle_id, v.event.occurred_at)).fetchall()
+                    for old in pending:
+                        self.db.conn.execute("UPDATE notification_member SET reason='superseded' WHERE id=?", (old["id"],))
+                        self._finish_packet(old["event_id"], "suppressed")
+                    self.db.conn.commit()
+        await self.outbox.flush()
+        return self._deliveries_by_ids(ids)
 
     async def notify_service(self, text: str) -> None:
-        """Сервисное уведомление владельцу (§11): не рыночное событие,
-        но идёт общим транспортом и пишется в журнал delivery (event_ids=[]).
-        Неуспешные сервисные доставки не ретраятся — текст не хранится."""
-        log.warning("SERVICE: %s", text)
-        # ключ включает текст: разные сообщения в одну миллисекунду —
-        # разные записи журнала (ретрая сервисных доставок нет, дедуп не нужен)
-        delivery_id = self.db.record_delivery(
-            Delivery(
-                id=None,
-                event_ids=[],
-                destination=self.destination,
-                status="pending",
-                idempotency_key=f"service:{self.user}:{now_ms()}:{text}",
-            )
-        )
-        # ТЗ п.9: выключенная группа «Сервис» глушит сервисные сообщения
-        # (мьют /mute all на них НЕ действует — только торговые события);
-        # подавленное помечается доставленным — после включения не уйдёт
-        if bot_delivery_blocked(
-            self.db, self.chat_id, grp=BOT_GRP_SERVICE, kind="service"
-        ):
-            if delivery_id is not None:
-                self.db.update_delivery(delivery_id, "sent", delivered_at=now_ms())
-            return
-        try:
-            await self.sender.send_text(text)
-        except Exception as exc:  # noqa: BLE001 — журналируем сбой, не роняем воркер
-            if delivery_id is not None:
-                self.db.update_delivery(
-                    delivery_id, "failed", error=f"{type(exc).__name__}: {exc}"
-                )
-            return
-        if delivery_id is not None:
-            self.db.update_delivery(delivery_id, "sent", delivered_at=now_ms())
+        self.services.note(text)
+        await self.outbox.flush()
 
     async def retry_pending(self) -> list[Delivery]:
-        """Повторяет pending/failed доставки (§11 п.5).
-
-        Берёт только недоставленные записи, поэтому sent не дублируется.
-        Сами рыночные события не пересоздаются — повторяется только доставка.
-        """
-        pending = self.db.pending_deliveries()
-        if not pending:
-            return []
-        events_by_id = {e.id: e for e in self.db.get_events(limit=10000)}
-        done: list[Delivery] = []
-        for delivery in pending:
-            if not delivery.event_ids:
-                # сервисные сообщения (notify_service) не ретраятся —
-                # их текст не хранится в БД
-                continue
-            events = [events_by_id[i] for i in delivery.event_ids
-                      if i in events_by_id]
-            if not events:
-                self.db.update_delivery(
-                    delivery.id, "failed", error="события не найдены в БД"
-                )
-                done.append(delivery)
-                continue
-            views = [self._load_view(e) for e in events]
-            # §13.6: входовое событие могло просрочиться, пока ждало ретрая
-            stale_views = [v for v in views if self._entry_stale(v)]
-            if stale_views:
-                self.db.update_delivery(
-                    delivery.id, "stale", delivered_at=now_ms()
-                )
-                done.append(delivery)
-                continue
-            payload = MessagePayload(
-                events=events,
-                zones=[v.zone for v in views if v.zone is not None],
-                views=views,
-                user=self.user,
-                group_members=self._group_members(views),
-                approach_pct=self.cfg.approach_pct,
-            )
-            await self._attach_image(payload)
-            try:
-                await self.sender.send(payload)
-            except Exception as exc:  # noqa: BLE001
-                self.db.update_delivery(
-                    delivery.id, "failed", error=f"{type(exc).__name__}: {exc}"
-                )
-            else:
-                delivered_at = now_ms()
-                self.db.update_delivery(
-                    delivery.id, "sent", delivered_at=delivered_at
-                )
-                for event in events:
-                    mark_delivered(self.db, event, delivered_at, self.user)
-            done.append(delivery)
-        return done
+        # Adopt legacy unsent rows once; never touch successful history.
+        for delivery in self.db.pending_deliveries():
+            for event_id in delivery.event_ids:
+                exists = self.db.conn.execute(
+                    "SELECT 1 FROM notification_member WHERE channel='htf' AND event_id=?", (event_id,)).fetchone()
+                ev = self.db.get_event(event_id)
+                if exists or ev is None:
+                    continue
+                if ev.delayed or self._entry_stale(self._load_view(ev)):
+                    self._finish_packet(event_id, "suppressed")
+                    continue
+                from .outbox import Card
+                self.outbox.put("htf", f"legacy:{event_id}", Card(""), [event_id], quiet=True)
+        await self.outbox.flush()
+        return self.db.pending_deliveries()
 
     def _deliveries_by_ids(self, ids: list[int]) -> list[Delivery]:
         if not ids:

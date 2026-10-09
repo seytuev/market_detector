@@ -71,6 +71,7 @@ class DetectorConfig:
     lookback_days_d1: int = 365              # §1: глубина истории D1 — год
     lookback_days_w1: int = 730              # §1: глубина истории W1 — 2 года
     suppress_hours: int = 120                # §8: 5 дней = 120 часов
+    notification_digest_seconds: int = 900  # тихая сводка, сохраняется в outbox
     approach_pct: float = 0.02               # §9: приближение на 2%
     cluster_tolerance_pct: float = 0.02      # §7: допуск объединения экстремумов 2%
     depth_mid: float = 0.5                   # §2/§3: 50%
@@ -192,7 +193,7 @@ DETECTOR_DEPRECATED_FIELDS = {"ltf_range_right"}
 DETECTOR_FIELD_GROUPS: dict[str, str] = {
     **{n: "delivery" for n in (
         "suppress_hours", "delivery_target_seconds", "notify_only_reviewed",
-        "ltf_notify_kinds",
+        "ltf_notify_kinds", "notification_digest_seconds",
     )},
     **{n: "experimental" for n in (
         "uncalibrated_cluster_denominator",
@@ -216,6 +217,7 @@ _NUMERIC_RANGES: dict[str, tuple[float, float]] = {
     "lookback_days_d1": (1, 3650),
     "lookback_days_w1": (1, 7300),
     "suppress_hours": (0, 8784),
+    "notification_digest_seconds": (0, 86400),
     "approach_pct": (0.0001, 0.5),
     "cluster_tolerance_pct": (0.0001, 0.5),
     "depth_mid": (0.0, 1.0),

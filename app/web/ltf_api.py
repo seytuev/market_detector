@@ -472,6 +472,17 @@ def register_ltf_routes(app, db: Database, settings, require_auth, ltf_engine=No
 
     # ------------------------- ручное завершение (§12) -------------------------
 
+    @app.post("/api/ltf/ideas/{idea_id}/close", dependencies=[Depends(require_auth)])
+    def htf_idea_close(idea_id: int) -> dict[str, Any]:
+        row = db.conn.execute("SELECT instrument_id,scenario_id FROM htf_idea WHERE id=?", (idea_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="HTF-идея не найдена")
+        db.close_htf_idea(idea_id, now_ms())
+        from ..engine.ltf.engine import LtfEngine
+        engine = ltf_engine or LtfEngine(db, settings.detector)
+        engine.close_scenario_manually(row["scenario_id"])
+        return {"id": idea_id, "state": "closed", "reason": "manual"}
+
     @app.post("/api/ltf/scenarios/{scenario_id}/close",
               dependencies=[Depends(require_auth)])
     def ltf_scenario_close(scenario_id: int) -> dict[str, Any]:

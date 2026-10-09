@@ -32,6 +32,7 @@ from ...models import Direction
 from ...models_ltf import LtfEntryZone, LtfLiquidityTest, LtfMovement, LtfScenarioEntry
 from .entries import classify_entry, entry_reusable, fvg_filled
 from .ranges import RangeDraft
+from .relevance import relevance_reason
 
 # Стабильные reason-коды (ТЗ §10/§12: фильтры истории по причине исключения)
 REASON_OK = "ok"                        # подходит: все условия выполнены
@@ -88,6 +89,9 @@ def evaluate_entry(
     eligible, overlap = classify_entry(
         zone.lower, zone.upper, zone.is_level, rng, direction
     )
+    ban = relevance_reason(zone, cfg, liquidity_tests or ())
+    if ban:
+        return EligibilityResult(ban, "invalid" if ban == REASON_INVALID else "tested", eligible, overlap)
     # 1) рыночная актуальность: invalid не переводится обратно в fresh
     if zone.validity == "invalid":
         return EligibilityResult(REASON_INVALID, "invalid", eligible, overlap)
@@ -227,7 +231,7 @@ def evaluate_final(
     терминальный объект.
     """
     cfg = cfg or DetectorConfig()
-    ban = _terminal_reason(zone, liquidity_tests)
+    ban = relevance_reason(zone, cfg, liquidity_tests or ())
     if ban is None and zone.type in ("BSL", "SSL") and entry.state == "tested":
         if not _tests_of(zone, liquidity_tests):
             # Явный swept_level без строки теста остаётся снятием.

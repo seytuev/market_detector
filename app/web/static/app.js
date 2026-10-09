@@ -699,9 +699,9 @@ function resetH1ZoneFilters() {
   if (!window.H1Layers) return;
   window.H1Layers.saveSettings({
     zones: true, ob: true, fvg: true, bsl: true, ssl: true,
-    eligibleOnly: false, candidates: false, historicalZones: false,
+    eligibleOnly: false, ideaId: '', candidates: false, historicalZones: false,
   });
-  window.H1Layers.bindControls(onH1LayersChange);
+  window.H1Layers.bindControls(onH1LayersChange, closeSelectedHtfIdea);
   state.h1Settings = window.H1Layers.loadSettings();
   drawZones();
 }
@@ -745,6 +745,13 @@ function onH1LayersChange(settings) {
       state.h1Layers, state.h1SelectedEventId, structurePointColor));
   }
   drawZones();
+  renderDeskEntries();
+}
+
+async function closeSelectedHtfIdea(ideaId) {
+  await api(`/api/ltf/ideas/${ideaId}/close`, { method: 'POST' });
+  await loadH1Markers();
+  await loadDeskExtras();
 }
 
 function drawH1Breaks(overlay, ts, paneRight, height) {
@@ -2707,6 +2714,19 @@ async function toggleDeskWatch() {
 function renderDeskEntries() {
   const el = $('desk-entries');
   if (!el) return;
+  if (state.chartMode === 'h1' && state.h1Layers && window.H1Layers) {
+    const H = window.H1Layers;
+    const entries = H.selectedZones(state.h1Layers, H.loadSettings());
+    el.classList.remove('hidden');
+    el.innerHTML = `<div class="desk-entries-head"><h2>Зоны H1 / ${entries.length}</h2>` +
+      '<span class="muted">Тот же отбор, что на графике · обе стороны</span></div>' +
+      entries.map((z) => `<div class="desk-entry"><span>${esc(z.type)} H1 · ${z.direction === 'bull' ? '↑' : '↓'}</span>` +
+        `<span>${fmtPrice(z.lower)} — ${fmtPrice(z.upper)}</span><span>` +
+        (z.idea_links || []).map((i) => esc(H.ideaLabel(i)) + '<br>' + esc(H.reasonText(i.entry_reason))).join('<br>') +
+        `</span><span>Тест ${Math.round((z.max_test_depth || 0) * 100)}% · ${esc(H.relevanceText(z.relevance))}</span></div>`).join('') +
+      (entries.length ? '' : '<div class="ltf-empty">Нет зон для выбранного отбора.</div>');
+    return;
+  }
   const v = deskData.current;
   if (!v) {
     el.classList.add('hidden');
@@ -2944,6 +2964,7 @@ async function loadH1Markers() {
     if (token !== state.h1Req || id !== state.instrumentId || state.chartMode !== mode) return;
     state.h1LoadError = false;
     state.h1Layers = layers;
+    renderDeskEntries();
   } catch (e) {
     if (token !== state.h1Req || id !== state.instrumentId || state.chartMode !== mode) return;
     state.h1LoadError = true;
@@ -3029,7 +3050,7 @@ async function main() {
   updateLayers();
   if (window.H1Layers) {
     state.h1Settings = window.H1Layers.loadSettings();
-    window.H1Layers.bindControls(onH1LayersChange);
+    window.H1Layers.bindControls(onH1LayersChange, closeSelectedHtfIdea);
   }
   $('zone-status-filter').onchange = (e) => { state.zoneStatusFilter = e.target.value; renderZonesTable(); };
   $('zone-type-filter').onchange = (e) => { state.zoneTypeFilter = e.target.value || null; renderZonesTable(); };

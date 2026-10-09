@@ -816,13 +816,12 @@ def register_bot_handlers(app, settings, db: Database):
                 await edit(render_ltf(db, settings, iid), ltf_inline(db, iid))
                 await query.answer("Контекст выбран.")
             elif kind == "refresh":
-                # «🔄 Обновить» под сигналом: текущая карточка НОВЫМ
-                # сообщением — исторический текст сигнала не редактируется
+                from ..notify.navigation import reusable_panel
+                from ..notify.formatting import fmt_time_msk
                 iid = int(parts[2])
-                await query.message.reply_text(
-                    render_asset(db, settings, iid),
-                    reply_markup=asset_inline(db, settings, iid),
-                )
+                await reusable_panel(db, context.bot, _chat_id(update), f"current:{iid}",
+                    f"🔄 Текущее состояние · {fmt_time_msk(now_ms())}\n\n" + render_asset(db, settings, iid),
+                    asset_inline(db, settings, iid))
                 await query.answer()
             elif kind == "chart":
                 iid = int(parts[2])

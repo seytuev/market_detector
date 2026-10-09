@@ -28,19 +28,19 @@ def set_header(fig, title: str, subtitle: str | None = None) -> float:
     """
     y = 0.985
     for ln in textwrap.wrap(title, 78) or [""]:
-        fig.text(0.008, y, ln, va="top", ha="left", fontsize=12,
+        fig.text(0.008, y, ln, va="top", ha="left", fontsize=16,
                  color=_COLOR_TEXT, fontweight="bold")
-        y -= 0.034
+        y -= 0.045
     if subtitle:
         for ln in textwrap.wrap(subtitle, 110):
-            fig.text(0.008, y, ln, va="top", ha="left", fontsize=9,
+            fig.text(0.008, y, ln, va="top", ha="left", fontsize=11,
                      color=_COLOR_MUTED)
-            y -= 0.027
+            y -= 0.033
     return y
 
 
 def apply_layout(fig, ax, header_bottom: float, footer_lines: int = 1,
-                 right_margin: float = 0.13) -> None:
+                 right_margin: float = 0.20) -> None:
     """Позиционирует ось: сверху — заголовок, снизу — футер, справа —
     колонка ценовых подписей (свечи не сжимаются подписи ради, §10.3)."""
     top = max(header_bottom - 0.012, 0.5)
@@ -70,7 +70,7 @@ def _spread_positions(ys: list[float], line_h: float) -> list[float]:
 
 
 def layout_price_labels(fig, ax, items: list[tuple[float, str, str]],
-                        fontsize: int = 8) -> list:
+                        fontsize: int = 11) -> list:
     """Подписи уровней в правой колонке без наложений (§10.2).
 
     items — [(price, text, color)], порядок по цене сохраняется. Точное

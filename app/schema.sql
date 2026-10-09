@@ -248,6 +248,18 @@ CREATE TABLE IF NOT EXISTS ltf_scenario (
 );
 CREATE INDEX IF NOT EXISTS ix_ltf_scenario_obs ON ltf_scenario (observation_id, state);
 
+-- Durable HTF theses, independent of the current LTF entry attempt.
+-- The source scenario is immutable provenance, not the thesis lifecycle.
+CREATE TABLE IF NOT EXISTS htf_idea (
+    id INTEGER PRIMARY KEY,
+    instrument_id INTEGER NOT NULL REFERENCES instrument(id),
+    scenario_id INTEGER NOT NULL UNIQUE REFERENCES ltf_scenario(id) ON DELETE CASCADE,
+    rule_version TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    manual_closed_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS ix_htf_idea_instrument ON htf_idea(instrument_id);
+
 -- Локальные экстремумы H1 и структурные роли (§5.1, §5.2)
 CREATE TABLE IF NOT EXISTS ltf_pivot (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -763,3 +775,52 @@ CREATE TABLE IF NOT EXISTS alt_range_revision (
 );
 CREATE INDEX IF NOT EXISTS ix_alt_range_revision_active
     ON alt_range_revision(subject_kind, subject_id, active);
+
+-- Presentation outbox: additive migration, never replays delivered history.
+CREATE TABLE IF NOT EXISTS notification_packet (
+    id INTEGER PRIMARY KEY,
+    destination TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    semantic_key TEXT NOT NULL,
+    card TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    quiet INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    due_at INTEGER NOT NULL,
+    sent_at INTEGER,
+    message_id INTEGER,
+    photo INTEGER NOT NULL DEFAULT 0,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    lease_until INTEGER NOT NULL DEFAULT 0,
+    dirty INTEGER NOT NULL DEFAULT 0,
+    reason TEXT,
+    parent_id INTEGER REFERENCES notification_packet(id),
+    UNIQUE(destination, channel, semantic_key)
+);
+CREATE INDEX IF NOT EXISTS ix_notification_due ON notification_packet(destination,status,due_at);
+CREATE TABLE IF NOT EXISTS notification_member (
+    id INTEGER PRIMARY KEY,
+    packet_id INTEGER NOT NULL REFERENCES notification_packet(id),
+    channel TEXT NOT NULL,
+    event_id INTEGER NOT NULL,
+    reason TEXT,
+    UNIQUE(packet_id,channel,event_id)
+);
+CREATE INDEX IF NOT EXISTS ix_notification_event ON notification_member(channel,event_id);
+CREATE TABLE IF NOT EXISTS notification_incident (
+    id INTEGER PRIMARY KEY,
+    venue TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    started_at INTEGER NOT NULL,
+    recovered_at INTEGER,
+    packet_id INTEGER REFERENCES notification_packet(id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_notification_incident_open
+    ON notification_incident(venue,reason) WHERE recovered_at IS NULL;
+CREATE TABLE IF NOT EXISTS notification_incident_stream (
+    incident_id INTEGER NOT NULL REFERENCES notification_incident(id),
+    instrument_id INTEGER NOT NULL,
+    timeframe TEXT NOT NULL,
+    recovered INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(incident_id,instrument_id,timeframe)
+);

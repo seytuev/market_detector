@@ -1429,13 +1429,18 @@ function onH1LayersChange(settings) {
   drawLtfLayers();
 }
 
+async function closeSelectedHtfIdea(ideaId) {
+  await api(`/api/ltf/ideas/${ideaId}/close`, { method: 'POST' });
+  await loadH1Structure();
+}
+
 function resetH1ZoneFilters() {
   if (!window.H1Layers) return;
   window.H1Layers.saveSettings({
     zones: true, ob: true, fvg: true, bsl: true, ssl: true,
-    eligibleOnly: false, candidates: false, historicalZones: false,
+    eligibleOnly: false, ideaId: '', candidates: false, historicalZones: false,
   });
-  window.H1Layers.bindControls(onH1LayersChange);
+  window.H1Layers.bindControls(onH1LayersChange, closeSelectedHtfIdea);
   state.h1Settings = window.H1Layers.loadSettings();
   drawLtfLayers();
 }
@@ -1955,7 +1960,7 @@ function setupLtfWorkspace() {
   $('ltf-mode-history').onclick = () => setMode('history');
   if (window.H1Layers) {
     state.h1Settings = window.H1Layers.loadSettings();
-    window.H1Layers.bindControls(onH1LayersChange);
+    window.H1Layers.bindControls(onH1LayersChange, closeSelectedHtfIdea);
   }
   document.querySelectorAll('#ltf-layer-toggles input').forEach((cb) => {
     cb.onchange = () => {

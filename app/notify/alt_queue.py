@@ -43,6 +43,13 @@ class AltDispatcher:
         # Settings — для chat_id владельца (фильтры бота) и публичного URL
         # ссылки на график; None — без фильтров и без ссылки (dev/тесты)
         self.settings = settings
+        from ..config import DetectorConfig
+        from .outbox import get_outbox
+        cfg = settings.detector if settings is not None else DetectorConfig()
+        self.outbox = get_outbox(db, sender, cfg)
+        self.outbox.register("alt", self._validate_packet, self._finish_packet, self._render_packet)
+        from .service import ServiceNotifications
+        self.services = ServiceNotifications(self.outbox, self._chat_id(None))
         self.sender = sender
 
     # ---------- контекст ----------
@@ -82,14 +89,61 @@ class AltDispatcher:
             self.db, chat_id, grp=BOT_GRP_ALT, kind=ev.event_type
         )
 
+    def _events(self, members):
+        return [e for m in members if (e := self.db.get_alt_event(m["event_id"])) is not None]
+
+    def _validate_packet(self, row, members):
+        events = self._events(members)
+        if not events or all(self._bot_blocked(e, self._chat_id(None)) for e in events):
+            return "muted or missing"
+        ctx = self._load_context(events[0])
+        if ctx.setup is None or ctx.asset is None:
+            return "missing setup"
+        from .alt_templates import _ENTRY_TYPES, _TERMINAL_TYPES
+        if ctx.setup.state in {"cancelled", "expired_no_retest", "targets_completed"}:
+            if all(e.event_type in _ENTRY_TYPES for e in events):
+                return "stale entry"
+        return None
+
+    def _finish_packet(self, event_id, status):
+        self.db.mark_alt_event_delivered(event_id)
+
+    async def _render_packet(self, row, members):
+        import asyncio
+        import json
+        from pathlib import Path
+        from .outbox import Card
+        from .alt_templates import _render_block, _TERMINAL_TYPES, _chart_url, _footer
+        from .formatting import fmt_time_msk, fmt_price_ru
+        events = self._events(members)
+        ctx = self._load_context(events[0])
+        lead = next((e for e in events if e.event_type in _TERMINAL_TYPES), events[0])
+        lines = [f"{'⚪' if lead.event_type in _TERMINAL_TYPES else '🟢'} {ctx.asset.symbol} · Накопление D1"]
+        lines.extend(_render_block(lead, ctx)[:2])
+        if ctx.frozen:
+            lines.append(f"Диапазон: {fmt_price_ru(ctx.frozen.lower)}–{fmt_price_ru(ctx.frozen.upper)}")
+        if any(e.event_type in {"entry_a", "entry_b", "retest"} for e in events) and lead.event_type not in _TERMINAL_TYPES:
+            lines.append("⚠️ Возможность входа · ордер не исполнен автоматически")
+        # Keep warnings about uncertain candle ordering and stale data visible.
+        lines.extend(line for line in _footer(events, ctx) if line.startswith("⚠"))
+        lines.append(f"🕒 {fmt_time_msk(lead.event_time_ms)}")
+        url = _chart_url(ctx)
+        targets = [dict(label=f"{ctx.asset.symbol} · сетап #{ctx.setup.id}", url=url)] if url else []
+        old = json.loads(row["card"])
+        path = old.get("image_path")
+        if not path and self.settings and row["status"] != "sent":
+            try:
+                from .alt_chart import render_alt_chart
+                path = await asyncio.to_thread(render_alt_chart, self.db, ctx, lead,
+                    Path(self.settings.db_path).parent / "charts" / f"alt_notify_{row['id']}.png")
+            except Exception:
+                log.warning("ALT chart unavailable", exc_info=True)
+        return Card("\n".join(lines), render_alt_message(events, ctx), path, targets, bool(self.settings and not path))
+
     async def _deliver_group(self, events: list[AltEvent], ctx: AltContext,
                              chat_id: Optional[str]) -> int:
-        """Одна пачка (setup_id, run_id) → одно сообщение.
-
-        Возвращает число доставленных событий. Подавленные настройками бота
-        помечаются доставленными без отправки (накопившееся после unmute
-        не уходит); неуспешная отправка оставляет события pending — ретрай."""
-        allowed: list[AltEvent] = []
+        from .outbox import Card
+        allowed = []
         for ev in events:
             if self._bot_blocked(ev, chat_id):
                 self.db.mark_alt_event_delivered(ev.id)
@@ -97,18 +151,11 @@ class AltDispatcher:
                 allowed.append(ev)
         if not allowed:
             return 0
-        text = render_alt_message(allowed, ctx)
-        try:
-            await self.sender.send_alt(text)
-        except Exception:  # noqa: BLE001 — любая ошибка транспорта = ретрай
-            log.warning(
-                "ALT: доставка событий %s не удалась, будет ретрай",
-                [e.id for e in allowed], exc_info=True,
-            )
-            return 0
-        for ev in allowed:
-            self.db.mark_alt_event_delivered(ev.id)
-        return len(allowed)
+        quiet = all(e.event_type in {"forming_started", "data_stale"} for e in allowed)
+        self.outbox.put("alt", f"{allowed[0].setup_id}:{allowed[0].run_id}", Card(""),
+                        [e.id for e in allowed], quiet=quiet)
+        await self.outbox.flush()
+        return sum(bool(self.db.get_alt_event(e.id).delivered) for e in allowed)
 
     async def dispatch_pending(self, chat_id: Optional[str] = None) -> int:
         """Отправляет недоставленные события; возвращает число доставленных.
@@ -160,11 +207,8 @@ class AltDispatcher:
         if self.db.get_meta(BACKFILL_SUMMARY_META):
             return False
         text = render_backfill_summary(summary, self._setups_by_state())
-        try:
-            await self.sender.send_text(text)
-        except Exception:  # noqa: BLE001 — сводка не рыночное событие
-            log.warning("ALT: сводка первичной загрузки не отправлена",
-                        exc_info=True)
-            return False
+        self.services.note(text, key="alt:backfill-summary")
+        # Enqueue is durable; no historical event replay on the next run.
         self.db.set_meta(BACKFILL_SUMMARY_META, str(now_ms()))
+        await self.outbox.flush()
         return True

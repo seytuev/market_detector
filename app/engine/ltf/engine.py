@@ -183,6 +183,10 @@ class LtfEngine:
                 self.db.set_meta(key, str(c.close_time))
         finally:
             self._batch = None
+        from ...services.htf_ideas import reconcile_ideas
+        reconcile_ideas(self.db, instrument_id, self.cfg, now)
+        from ...services.liquidity_anchors import refresh_liquidity_anchors
+        refresh_liquidity_anchors(self.db, instrument_id)
         return result
 
     def replay_observation(self, observation_id: int) -> LtfTickResult:
@@ -221,6 +225,10 @@ class LtfEngine:
             self.db.set_meta(
                 f"ltf:h1:last_close:{obs.instrument_id}", str(closed[-1].close_time)
             )
+            from ...services.htf_ideas import reconcile_ideas
+            reconcile_ideas(self.db, obs.instrument_id, self.cfg, closed[-1].close_time)
+            from ...services.liquidity_anchors import refresh_liquidity_anchors
+            refresh_liquidity_anchors(self.db, obs.instrument_id)
         return result
 
     def _process_candle(
@@ -1277,6 +1285,8 @@ class LtfEngine:
                 state=ev.state, reason=ev.reason, added_at=now, updated_at=now,
             ))
 
+        self.db.set_meta(f"htf_idea:discovered:{sc.id}", str(main.occurred_at))
+
     # ------------------------------------------------------------------ #
     # (6) События LtfEvent (§11)
     # ------------------------------------------------------------------ #
@@ -1525,7 +1535,16 @@ class LtfEngine:
         candidates = self.db.list_stale_ltf_observations(
             _STALE_ARCHIVABLE_STATES, cutoff
         )
+        from ...services.htf_ideas import project_ideas
+        idea_cache = {}
         for obs in candidates:
+            if obs.instrument_id not in idea_cache:
+                idea_cache[obs.instrument_id] = project_ideas(
+                    self.db, obs.instrument_id, self.cfg, now,
+                )[0]
+            if any(i["observation_id"] == obs.id and i["state"] != "closed"
+                   for i in idea_cache[obs.instrument_id]):
+                continue
             sc = self.db.get_active_ltf_scenario(obs.id)
             if sc is not None:
                 events = self.db.list_ltf_structure_events(sc.id)

@@ -44,11 +44,11 @@ for _bit in LAYER_BITS.values():
 # Свечей на графике для старших ТФ (period_days на них не действует)
 _TF_CANDLE_LIMIT = {"D1": 120, "W1": 52}
 
-_COLOR_HTF = "#ffb74d"     # как прямоугольник зоны в chartimg
-_COLOR_BOS = "#ffee58"     # уровни слома структуры
-_COLOR_RANGE = "#64b5f6"   # диапазон Premium/Discount
-_COLOR_LONG = "#26a69a"    # entry-зоны бычьего сценария
-_COLOR_SHORT = "#ef5350"   # entry-зоны медвежьего сценария
+_COLOR_HTF = "#fbbf24"     # старший контекст
+_COLOR_BOS = "#fbbf24"     # уровни слома структуры
+_COLOR_RANGE = "#60a5fa"   # диапазон Premium/Discount
+_COLOR_LONG = "#34d399"    # entry-зоны бычьего сценария
+_COLOR_SHORT = "#f87171"   # entry-зоны медвежьего сценария
 
 
 def layers_from_mask(mask: int) -> tuple[str, ...]:

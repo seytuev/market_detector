@@ -1242,6 +1242,15 @@ class Database:
             for r in self.conn.execute(q, args).fetchall()
         ]
 
+    def get_event(self, event_id: int) -> Optional[Event]:
+        row = self.conn.execute("SELECT * FROM event WHERE id=?", (event_id,)).fetchone()
+        if row is None:
+            return None
+        return Event(id=row["id"], zone_id=row["zone_id"], cycle_id=row["cycle_id"],
+                     kind=EventKind(row["kind"]), occurred_at=row["occurred_at"],
+                     detected_at=row["detected_at"], price=row["price"], depth=row["depth"],
+                     delayed=bool(row["delayed"]), evidence=json.loads(row["evidence"] or "{}"))
+
     def list_events_for_instrument(
         self, instrument_id: int, since_ms: Optional[int] = None, limit: int = 100
     ) -> list[Event]:
@@ -1620,6 +1629,34 @@ class Database:
         self._bump_ltf_cache()
 
     # ---------- LTF: observations ----------
+
+    def list_htf_ideas(self, instrument_id: int) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM htf_idea WHERE instrument_id=? ORDER BY id", (instrument_id,)
+        ).fetchall()
+        return [{**json.loads(r["payload"]), "id": r["id"],
+                 "manual_closed_at": r["manual_closed_at"]} for r in rows]
+
+    def save_htf_idea(self, payload: dict[str, Any]) -> None:
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        row = self.conn.execute("SELECT payload FROM htf_idea WHERE scenario_id=?",
+                                (payload["scenario_id"],)).fetchone()
+        if row and row["payload"] == encoded:
+            return
+        self.conn.execute(
+            """INSERT INTO htf_idea(instrument_id,scenario_id,rule_version,payload)
+               VALUES(?,?,?,?) ON CONFLICT(scenario_id) DO UPDATE SET
+               rule_version=excluded.rule_version,payload=excluded.payload""",
+            (payload["instrument_id"], payload["scenario_id"], payload["rule_version"], encoded),
+        )
+        self._commit()
+        self._bump_ltf_cache()
+
+    def close_htf_idea(self, idea_id: int, closed_at: int) -> None:
+        self.conn.execute("UPDATE htf_idea SET manual_closed_at=COALESCE(manual_closed_at,?) WHERE id=?",
+                          (closed_at, idea_id))
+        self._commit()
+        self._bump_ltf_cache()
 
     def insert_ltf_observation(self, o: LtfObservation) -> LtfObservation:
         """Идемпотентно по UNIQUE(zone_id, cycle_id): повторное HTF-событие
