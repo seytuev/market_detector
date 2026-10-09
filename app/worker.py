@@ -34,12 +34,14 @@ from .notify.queue import EventDispatcher
 
 log = logging.getLogger(__name__)
 
-# Стартовые активы §1: BTC, ETH, SOL, спот. Символ проверяется по каталогу
+# Стартовые активы: BTC, ETH, SOL, ZEC, HYPE, спот. Символ проверяется по каталогу
 # источника; несуществующий инструмент — явная ошибка, без подмены (§1).
 SEED = [
     ("binance", "BTCUSDT"),
     ("binance", "ETHUSDT"),
     ("binance", "SOLUSDT"),
+    ("binance", "ZECUSDT"),
+    ("binance", "HYPEUSDT"),
 ]
 DEFAULT_TIMEFRAMES = ("D1", "W1")  # запасной вариант, если scan_timeframes пуст
                                    # (§1: H1/H4 убраны по решению пользователя)
