@@ -34,14 +34,16 @@ from .notify.queue import EventDispatcher
 
 log = logging.getLogger(__name__)
 
-# Стартовые активы: BTC, ETH, SOL, ZEC, HYPE, спот. Символ проверяется по каталогу
+# Стартовые активы: BTC, ETH, SOL, ZEC на Binance Spot и HYPE на Hyperliquid Spot.
+# Символ проверяется по каталогу источника
 # источника; несуществующий инструмент — явная ошибка, без подмены (§1).
 SEED = [
     ("binance", "BTCUSDT"),
     ("binance", "ETHUSDT"),
     ("binance", "SOLUSDT"),
     ("binance", "ZECUSDT"),
-    ("binance", "HYPEUSDT"),
+    # Hyperliquid: HYPE/USDT0, spotMeta identifier @207.
+    ("hyperliquid", "@207"),
 ]
 DEFAULT_TIMEFRAMES = ("D1", "W1")  # запасной вариант, если scan_timeframes пуст
                                    # (§1: H1/H4 убраны по решению пользователя)
