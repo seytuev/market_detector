@@ -514,8 +514,15 @@ def _post_high(price, liq, legs5) -> dict:
     return {"active": False}
 
 
-def _align_ok(price_t: set, other_t: int) -> bool:
-    return other_t in price_t
+def _aligned(bars, day_t: int):
+    """Точное совпадение границы. Чужой timestamp внутри тех же суток — несовместимое окно."""
+    exact = _by_t(bars).get(day_t)
+    if exact is not None:
+        return exact, True
+    for bar in bars:
+        if bar.t // DAY_MS == day_t // DAY_MS:
+            return bar, False
+    return None, True
 
 
 def week_of_month(day: datetime) -> int:
@@ -586,31 +593,38 @@ def evaluate(inp: EvaluationInput) -> dict:
     streak = streak_of(price)
     last_closed = next((b for b in reversed(price) if b.closed), None)
     last_t = last_closed.t if last_closed else None
+    # Производные не пропадают, если ценового ряда ещё нет: берём последний закрытый день ликвидаций.
+    deriv_t = last_t
+    if deriv_t is None:
+        closed_liq = sorted((bar for bar in inp.liq if bar.closed), key=lambda bar: bar.t)
+        deriv_t = closed_liq[-1].t if closed_liq else None
 
-    liq_today = _liq_stats(inp.liq, last_t) if last_t else {"quality": "gap"}
+    liq_today = _liq_stats(inp.liq, deriv_t) if deriv_t else {"quality": "gap"}
     coin_today = None
     usd_today = None
-    if last_t is not None:
-        coin_bar = _by_t(inp.oi_coin).get(last_t)
-        usd_bar = _by_t(inp.oi_usd).get(last_t)
-        if coin_bar and not _align_ok(price_t, coin_bar.t):
+    if deriv_t is not None:
+        coin_bar, coin_aligned = _aligned(inp.oi_coin, deriv_t)
+        usd_bar, _usd_aligned = _aligned(inp.oi_usd, deriv_t)
+        if coin_bar is not None and not coin_aligned:
             coin_today = {"quality": "unknown", "reason": "window_mismatch"}
         elif coin_bar:
             coin_today = oi_direction(coin_bar)
             coin_today["closed"] = coin_bar.closed
         else:
             coin_today = {"quality": "gap"}
-        if usd_bar:
+        if usd_bar is not None and not _usd_aligned:
+            usd_today = {"quality": "unknown", "reason": "window_mismatch"}
+        elif usd_bar:
             usd_today = oi_direction(usd_bar)
         else:
             usd_today = {"quality": "gap"}
     fund_bar = None
-    if last_t is not None:
-        fund_bar = _by_t(inp.funding).get(last_t)
-        if fund_bar and fund_bar.t not in price_t and price_t:
+    if deriv_t is not None:
+        fund_bar = _by_t(inp.funding).get(deriv_t)
+        if fund_bar and price_t and fund_bar.t not in price_t:
             fund_bar = None
     fund = funding_view(fund_bar, inp.funding_unit, inp.rate_kind)
-    rng30 = oi_range30(inp.oi_coin, last_t) if last_t else {"quality": "gap"}
+    rng30 = oi_range30(inp.oi_coin, deriv_t) if deriv_t else {"quality": "gap"}
     wide = _wide(price, last_t) if last_t else {"status": "unknown"}
     oi02 = _oi02_episode(inp.liq, inp.oi_coin, inp.h1_hold if inp.h1_available else None,
                          inp.now_ms, inp.data_stale)
@@ -862,8 +876,11 @@ def _gate_a(inp, d0, cascade_day, coin_today, oi02, rng30, fund, legs) -> dict:
     if cascade_day is None:
         checks.append(_check("oi", "OI в монетах того же дня снижается", "na"))
     else:
-        coin = _by_t(inp.oi_coin).get(cascade_day["t"])
-        if coin is None:
+        coin, aligned = _aligned(inp.oi_coin, cascade_day["t"])
+        if coin is not None and not aligned:
+            unknown.append("oi_window")
+            checks.append(_check("oi", "OI в монетах того же дня снижается", "unknown"))
+        elif coin is None:
             unknown.append("oi_coin")
             checks.append(_check("oi", "OI в монетах того же дня снижается", "unknown"))
         else:
@@ -907,7 +924,7 @@ def _gate_a(inp, d0, cascade_day, coin_today, oi02, rng30, fund, legs) -> dict:
                        checks=checks, advisories=advisories)
     if gate["status"] == "passed":
         gate["state"] = "watch_matched"
-        gate["title"] = "Условия наблюдения А совпали. Это не разрешение на сделку."
+        gate["title"] = "Условия наблюдения А совпали. Это не допуск к сделке."
     return gate
 
 
@@ -917,7 +934,7 @@ def _gate_b(inp, last_closed, wide, oi02, fund, coin_today) -> dict:
     if last_closed is None or color_of(last_closed) != "red" or not wide.get("wide"):
         return _gate_shell("B", not_applicable=True)
     blocking = []
-    unknown = []
+    unknown = ["wide_experimental"]
     advisories = ["wide_day_experimental"]
     if oi02.get("active"):
         blocking.append("CASCADE_OI_RISING")
@@ -955,6 +972,8 @@ def _gate_v(inp, streak, oi02, fund) -> dict:
     advisories = []
     if oi02.get("active"):
         blocking.append("CASCADE_OI_RISING")
+    if oi02.get("stale_expiry"):
+        unknown.append("oi02_expiry_stale")
     if fund.get("sign") == "negative":
         advisories.append("funding_negative_amplifier")
     if inp.rate_kind == "settled" and fund.get("above_high"):
@@ -978,6 +997,8 @@ def _gate_g(inp, fund, liq_today, coin_today, oi02) -> dict:
         return _gate_shell("G", not_applicable=True,
                            checks=[_check("sign", "Наблюдаемая ставка отрицательна", "unmet")])
     unknown = ["h1_bull_confirmation"]
+    if oi02.get("stale_expiry"):
+        unknown.append("oi02_expiry_stale")
     if liq_today.get("quality") in {None, "gap"} or coin_today is None or coin_today.get("quality") == "gap":
         unknown.append("liq_or_oi")
     if oi02.get("active"):

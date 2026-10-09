@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LevelFrame · События</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <script>(function(){try{var c=localStorage.getItem('lf:theme');var l=window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches;document.documentElement.dataset.theme=(c==='dark'||c==='light')?c:(l?'light':'dark');}catch(e){document.documentElement.dataset.theme='dark';}})();</script>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="app-body">
+  <header class="app-nav" aria-label="Основная навигация">
+    <a class="brand" href="/#now"><span>LevelFrame</span></a>
+    <nav class="app-tabs">
+      <a href="/#now" class="app-tab">Сейчас</a>
+      <a href="/#review" class="app-tab">Проверка</a>
+      <a href="/#journal" class="app-tab">Журнал</a>
+      <a href="/events.html" class="app-tab current" aria-current="page">События</a>
+      <a href="/#settings" class="app-tab">Настройки</a>
+      <a href="/?mode=h1#desk" class="app-tab">Структура H1</a>
+      <a href="/alt.html" class="app-tab">Альткоины</a>
+    </nav>
+  </header>
+  <main class="events-page" id="events-root">
+    <p class="now-over">Наблюдение, без заявок</p>
+    <h1 class="now-title">События</h1>
+    <div class="events-modes" role="tablist">
+      <button type="button" class="btn small" data-mode="now">Сейчас</button>
+      <button type="button" class="btn small" data-mode="feed">Лента</button>
+      <button type="button" class="btn small" data-mode="calendar">Календарь</button>
+      <button type="button" class="btn small" data-mode="rules">Правила</button>
+    </div>
+    <div id="events-body"></div>
+  </main>
+  <script src="/common.js"></script>
+  <script src="/events.js"></script>
+</body>
+</html>
