@@ -25,19 +25,29 @@ window.LFCopy = (() => {
     return text;
   }
 
-  function card(p, opts) {
-    if (!p) return '';
-    opts = opts || {};
-    const headline = (p.headline && p.headline.headline) || '—';
-    const detail = (p.headline && p.headline.detail) || '';
+  function assetDetails(asset) {
+    const d = (asset && asset.details) || {};
     let html = '';
-    if (p.instrument_line) {
-      html += `<div class="now-card-head"><span>${esc(p.instrument_line)}</span></div>`;
+    (d.grounds || []).forEach((line) => { html += block('Основание', line); });
+    if ((d.zones || []).length) {
+      const rows = d.zones.map((line) => esc(line)).join('<br>');
+      html += `<div class="msg-block"><div class="msg-k">Зоны входа</div><div class="msg-v">${rows}</div></div>`;
     }
-    html += `<h3>${esc(headline)}</h3>`;
-    if (detail && detail !== headline) {
-      html += `<p class="now-card-lead">${esc(detail)}</p>`;
+    (d.other_contexts || []).forEach((line) => { html += block('Другой контекст', line); });
+    if ((d.liquidity || []).length) {
+      const rows = d.liquidity.map((line) => esc(line)).join('<br>');
+      html += `<div class="msg-block"><div class="msg-k">Ликвидность</div><div class="msg-v">${rows}</div></div>`;
     }
+    (d.history || []).forEach((line) => { html += block('История', line); });
+    const diag = (d.diagnostics || []).join('\n');
+    if (diag) {
+      html += `<details class="asset-diag"><summary>Диагностика</summary><div class="msg-v">${esc(diag)}</div></details>`;
+    }
+    return html;
+  }
+
+  function legacyBlocks(p, opts, headline, detail) {
+    let html = '';
     (p.data_issues || []).forEach((issue) => {
       const text = [issue.headline, issue.detail].filter(Boolean).join('. ');
       if (text && text !== headline) html += `<p class="msg-issue">${esc(text)}</p>`;
@@ -54,11 +64,13 @@ window.LFCopy = (() => {
     (p.notes || []).forEach((note) => {
       html += block(note.headline || 'Зона', note.detail || note.headline);
     });
-    if (p.structure && p.structure.text && p.structure.text !== headline && p.structure.text !== detail) {
+    const proven = p.asset && p.asset.structure && p.asset.structure.proven;
+    if (!proven && p.structure && p.structure.text && p.structure.text !== headline && p.structure.text !== detail) {
       html += block('H1', p.structure.text);
     }
     (p.next_conditions || []).forEach((cond) => {
       if (!cond.text || cond.text === detail) return;
+      if (proven && (cond.kind === 'BOS' || cond.kind === 'SMS' || cond.kind === 'bos' || cond.kind === 'sms')) return;
       const title = cond.kind === 'either' ? 'Что откроет сценарий' : `Условие ${cond.kind || ''}`.trim();
       html += block(title, cond.text);
     });
@@ -72,11 +84,13 @@ window.LFCopy = (() => {
       if (text) html += block(z.blocking ? 'Нужна сверка' : 'Другая зона', text);
     });
     if (zones.more > 0) html += block('Другие зоны', `Ещё ${zones.more}`);
-    (p.liquidity_facts || []).forEach((fact) => {
-      const text = [fact.headline, fact.detail].filter(Boolean).join('. ');
-      if (text) html += block('Ликвидность', text);
-    });
-    if (p.liquidity_more > 0) html += block('Ликвидность', `Ещё ${p.liquidity_more}`);
+    if (!(p.asset && p.asset.governs)) {
+      (p.liquidity_facts || []).forEach((fact) => {
+        const text = [fact.headline, fact.detail].filter(Boolean).join('. ');
+        if (text) html += block('Ликвидность', text);
+      });
+      if (p.liquidity_more > 0) html += block('Ликвидность', `Ещё ${p.liquidity_more}`);
+    }
     if (p.review && p.review.count > 0 && p.review.text) {
       html += `<div class="msg-block"><a class="review-badge" href="#review">${esc(p.review.text)}</a>` +
         `<div class="msg-v">По этому активу. Общий счётчик — «По всем активам».</div></div>`;
@@ -95,6 +109,40 @@ window.LFCopy = (() => {
       });
       html += '</div>';
     }
+    return html;
+  }
+
+  function card(p, opts) {
+    if (!p) return '';
+    opts = opts || {};
+    const asset = p.asset;
+    if (asset && asset.governs && asset.asset_state && asset.asset_state.title) {
+      const title = asset.asset_state.title;
+      let html = '';
+      if (p.instrument_line) {
+        html += `<div class="now-card-head"><span>${esc(p.instrument_line)}</span></div>`;
+      }
+      html += `<h3 class="asset-status">${esc(title)}</h3>`;
+      (asset.compact || []).slice(0, 5).forEach((line) => {
+        html += `<p class="asset-line">${esc(line)}</p>`;
+      });
+      html += '<details class="asset-more"><summary>Подробнее</summary>';
+      html += assetDetails(asset);
+      html += '</details>';
+      if (opts.extraHtml) html += opts.extraHtml;
+      return html;
+    }
+    const headline = (p.headline && p.headline.headline) || '—';
+    const detail = (p.headline && p.headline.detail) || '';
+    let html = '';
+    if (p.instrument_line) {
+      html += `<div class="now-card-head"><span>${esc(p.instrument_line)}</span></div>`;
+    }
+    html += `<h3>${esc(headline)}</h3>`;
+    if (detail && detail !== headline) {
+      html += `<p class="now-card-lead">${esc(detail)}</p>`;
+    }
+    html += legacyBlocks(p, opts, headline, detail);
     if (opts.extraHtml) html += opts.extraHtml;
     return html;
   }

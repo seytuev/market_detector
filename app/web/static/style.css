@@ -1799,6 +1799,10 @@ input[type="checkbox"] { min-height: auto; accent-color: var(--accent); }
 .dir-badge.bull { color: var(--lf-positive); border-color: var(--lf-positive); }
 .dir-badge.bear { color: var(--lf-negative); border-color: var(--lf-negative); }
 .now-card h3 { margin: 12px 0 6px; font-size: 18px; }
+.asset-line { margin: 6px 0 0; font-size: 14px; line-height: 1.45; }
+.asset-more { margin-top: 12px; }
+.asset-more summary, .asset-diag summary { cursor: pointer; color: var(--lf-text2); font-size: 13px; }
+.asset-diag { margin-top: 8px; }
 .now-card-lead { margin: 0 0 16px; color: var(--lf-text2); font-size: 13px; line-height: 1.45; }
 .now-qa { margin: 0 0 16px; }
 .now-qa .qa-q { color: var(--lf-text2); font-size: 12px; margin-top: 10px; }

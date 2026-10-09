@@ -1051,11 +1051,16 @@ def _conflict(contexts, selected, basis: Optional[str]) -> Optional[dict[str, st
     other = "альтернативный контекст"
     if selected is not None:
         chosen_dir = selected.direction.value
-        chosen = "контекст вверх" if chosen_dir == "bull" else "контекст вниз"
+        chosen = "вверх" if chosen_dir == "bull" else "вниз"
         other_dir = "bear" if chosen_dir == "bull" else "bull"
         other_ctx = dirs.get(other_dir) or {}
-        other = "контекст вниз" if other_dir == "bear" else "контекст вверх"
-        stage = (other_ctx.get("state") or "активен")
+        other = "вниз" if other_dir == "bear" else "вверх"
+        raw_stage = other_ctx.get("state") or ""
+        stage = {
+            "active": "активен",
+            "waiting_structure": "ждёт структуру H1",
+            "paused_data": "данные на паузе",
+        }.get(raw_stage, "активен")
     else:
         stage = "активен"
     return {

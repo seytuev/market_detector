@@ -2573,6 +2573,11 @@ function deskDirBadge(d) {
 // Короткая подпись состояния в списке активов (макет §6.B):
 // Сценарий / Конфликт / В зоне / Проверка / Ожидание
 function deskAssetState(r) {
+  if (r.asset && r.asset.governs && r.market_stage) {
+    const code = r.asset.asset_state && r.asset.asset_state.code;
+    const dot = code === 'data_incomplete' || code === 'state_inconsistent' ? 'dot-warning' : 'dot-muted';
+    return { label: r.market_stage, dot };
+  }
   if (r.direction === 'mixed') return { label: 'Конфликт', dot: 'dot-warning' };
   switch (r.attention) {
     case 'eligible': return { label: 'Сценарий', dot: 'dot-positive' };

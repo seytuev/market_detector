@@ -399,6 +399,11 @@ def render_ltf(db: Database, settings, instrument_id: int) -> str:
         return "Инструмент не найден."
     ins = cur["instrument"]
     lines = [f"LTF: {ins['symbol']} · {ins['venue']} · {ins['market_type']}"]
+    asset = (cur.get("presentation") or {}).get("asset") or cur.get("asset")
+    proven = (asset or {}).get("structure") or {}
+    transition = proven.get("last_transition") if proven.get("proven") else None
+    if asset and asset.get("governs") and (asset.get("asset_state") or {}).get("title"):
+        lines.append(asset["asset_state"]["title"])
 
     ctx = _selected_context(cur)
     if ctx is not None and ctx.get("parent_zone"):
@@ -412,7 +417,11 @@ def render_ltf(db: Database, settings, instrument_id: int) -> str:
         lines.append("HTF-контекст не выбран — ждём касания HTF-зоны.")
 
     sc = cur["current_scenario"]
-    if sc is not None and sc.get("break_level") is not None:
+    if transition and transition.get("break_level") is not None:
+        lines.append(
+            f"{transition['kind']} подтверждён: уровень {_fmt_price(transition['break_level'])}."
+        )
+    elif sc is not None and sc.get("break_level") is not None:
         lines.append(
             f"{sc['trigger']} подтверждён: уровень {_fmt_price(sc['break_level'])}."
         )
@@ -493,6 +502,12 @@ def render_why(db: Database, settings, instrument_id: int) -> str:
     if cur is None:
         return "Инструмент не найден."
     ins = cur["instrument"]
+    asset = (cur.get("presentation") or {}).get("asset") or cur.get("asset")
+    if asset and asset.get("governs") and (asset.get("asset_state") or {}).get("title"):
+        lines = [f"Почему этот сценарий: {ins['symbol']} · {ins['venue']}"]
+        lines.append(asset["asset_state"]["title"])
+        lines.extend(asset.get("compact") or [])
+        return "\n".join(lines)
     lines = [f"Почему этот сценарий: {ins['symbol']} · {ins['venue']}"]
     ctx = _selected_context(cur)
     if ctx is not None and ctx.get("parent_zone"):
@@ -573,14 +588,23 @@ def render_chart_caption(
     if cur["price"] is not None:
         lines.append(f"Цена: {_fmt_price(cur['price'])}")
     lines.append(f"Этап: {cur['stage']}")
+    asset = (cur.get("presentation") or {}).get("asset") or cur.get("asset")
+    structure = (asset or {}).get("structure") or {}
+    transition = structure.get("last_transition") if structure.get("proven") else None
     sc = cur["current_scenario"]
-    if sc is not None and sc.get("break_level") is not None:
+    if transition and transition.get("break_level") is not None:
+        lines.append(
+            f"{transition['kind']} подтверждён: уровень {_fmt_price(transition['break_level'])}"
+        )
+    elif sc is not None and sc.get("break_level") is not None:
         lines.append(
             f"{sc['trigger']} подтверждён: уровень {_fmt_price(sc['break_level'])}"
         )
     elif cur["selected_context_id"] is not None:
         lines.append("BOS/SMS ещё не подтверждён (ожидаемый — пунктиром)")
     lines.append(f"Текущая ситуация: {_fmt_time(now)}")
+    if asset and asset.get("governs") and (asset.get("asset_state") or {}).get("title"):
+        lines.append(asset["asset_state"]["title"])
     lines.append("LevelFrame · Рынок в контексте.")
     return "\n".join(lines)
 

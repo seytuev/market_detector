@@ -112,7 +112,8 @@
 
   function rowStateHtml(r) {
     const ds = r.data_state || {};
-    if (ds.state && ds.state !== 'ok') {
+    const governed = r.asset && r.asset.governs && r.market_stage;
+    if (!governed && ds.state && ds.state !== 'ok') {
       return `<span class="state-dot dot-warning"></span>Данные задерживаются` +
         `<div class="state-sub">${esc(DATA_STATE_REASON_RU[ds.reason] || ds.reason || '—')}</div>`;
     }
@@ -125,7 +126,9 @@
     const review = (r.review_state && r.review_state.needed)
       ? `<div class="state-sub"><a href="#review">Нужна проверка · ${r.review_state.count}</a></div>`
       : '';
-    return `<span class="state-dot ${dot}"></span>${esc(main)}` + review;
+    const known = governed && ds.state && ds.state !== 'ok' ? DATA_STATE_REASON_RU[ds.reason] : '';
+    const dataNote = known ? `<div class="state-sub">${esc(known)}</div>` : '';
+    return `<span class="state-dot ${dot}"></span>${esc(main)}` + dataNote + review;
   }
 
   function rowHtml(r) {
@@ -269,11 +272,12 @@
     const snapshotQuote = pres && pres.location ? pres.location.quote : null;
     const suppress = !!(p && snapshotQuote != null && Number(p.price) !== Number(snapshotQuote));
     if (pres && window.LFCopy) {
+      const governed = pres.asset && pres.asset.governs;
       const arrow = v.direction === 'bull' ? '↑' : (v.direction === 'bear' ? '↓' : '');
       el.innerHTML = LFCopy.card(pres, {
         suppressLocation: suppress,
         extraHtml:
-          `${arrow ? `<div class="msg-v">${esc(arrow)} ${esc(v.direction === 'bull' ? 'рост' : v.direction === 'bear' ? 'снижение' : 'разные направления')}</div>` : ''}` +
+          `${!governed && arrow ? `<div class="msg-v">${esc(arrow)} ${esc(v.direction === 'bull' ? 'рост' : v.direction === 'bear' ? 'снижение' : 'разные направления')}</div>` : ''}` +
           `<button type="button" class="btn primary now-open-desk" data-iid="${ins.id}">Открыть рабочее место</button>` +
           `<div class="now-card-foot">Котировка · <span class="price-age">${esc(p ? ageText(p.at) : '—')}</span></div>`,
       });

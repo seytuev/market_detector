@@ -21,6 +21,7 @@ from ..engine.ltf.breaks import (
     expected_reverse_condition,
     expected_structure_conditions,
 )
+from .asset_state import project_asset
 from .presentation import build_presentation, legacy_expected
 from ..engine.ltf.pivots import PivotCandidate
 from ..engine.ltf.ranges import provisional_range, zone_half
@@ -1117,6 +1118,34 @@ def _presentation(
     )
 
 
+def _with_asset(
+    db, instrument_id: int, now: int, presentation: dict[str, Any],
+    selected, basis, price, data_state, direction,
+) -> tuple[str, Any, dict[str, Any]]:
+    """Строка актива и направление — из структуры, не из выбранной зоны.
+
+    Поля навигации (selected_context_id, headline code) не переписываются.
+    """
+    asset = project_asset(
+        db, instrument_id, now,
+        navigation={
+            "selected_context_id": selected.id if selected is not None else None,
+            "selection_basis": basis,
+        },
+        price=price,
+        data_state=data_state,
+    )
+    presentation["asset"] = asset
+    market_stage = presentation["headline"]["headline"]
+    title = (asset.get("asset_state") or {}).get("title")
+    if asset.get("governs") and title:
+        market_stage = title
+    structure = asset.get("structure") or {}
+    if structure.get("proven") and asset.get("data_quality") == "ok":
+        direction = structure.get("direction") or direction
+    return market_stage, direction, asset
+
+
 def instruments_overview(db: Database, settings) -> list[dict[str, Any]]:
     """Левая панель «Активы» (§4.2): одна строка на instrument_id
     (symbol/venue/market), сколько бы Observation ни было у инструмента.
@@ -1183,7 +1212,9 @@ def instruments_overview(db: Database, settings) -> list[dict[str, Any]]:
             data_version=db.get_state_seq(),
             wait=wait,
         )
-        market_stage = presentation["headline"]["headline"]
+        market_stage, direction, asset = _with_asset(
+            db, iid, now, presentation, selected, basis, price, ds, direction,
+        )
         htf_context = None
         if zone is not None:
             htf_context = {
@@ -1203,6 +1234,7 @@ def instruments_overview(db: Database, settings) -> list[dict[str, Any]]:
             "stage": stage,
             "market_stage": market_stage,
             "presentation": presentation,
+            "asset": asset,
             "direction": direction,
             "direction_conflict": _direction_conflict(obs_list),
             "htf_context": htf_context,
@@ -1333,7 +1365,9 @@ def instrument_current(
         contexts=contexts,
         cancel=cancel,
     )
-    market_stage = presentation["headline"]["headline"]
+    market_stage, direction, asset = _with_asset(
+        db, instrument_id, now, presentation, selected, basis, price, ds, direction,
+    )
     return {
         "instrument": _instrument_brief(db, instrument_id),
         # §13: идентичность снимка — все панели интерфейса читают один
@@ -1360,6 +1394,7 @@ def instrument_current(
         "stage": stage,
         "market_stage": market_stage,
         "presentation": presentation,
+        "asset": asset,
         "direction": direction,
         "direction_conflict": _direction_conflict(observations),
         "wait": wait,

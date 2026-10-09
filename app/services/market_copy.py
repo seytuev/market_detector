@@ -73,7 +73,7 @@ _CATALOG: dict[str, tuple[str, str]] = {
     ),
     "C16": (
         "Есть контексты вверх и вниз",
-        "Выбран {chosen}: {reason}. Контекст {other}: {stage}",
+        "Выбран {chosen}: {reason}. Другой {other}: {stage}",
     ),
     "C17": (
         "Контекст изменён: {before} → {after}",
