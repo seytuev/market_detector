@@ -302,14 +302,11 @@ def register_bot_handlers(app, settings, db: Database):
         _, outside = _auto_days(obs_id, now)
         if tf == "H1" and outside:
             caption += "\nНачало движения вне окна — полное движение доступно в приложении."
-        with open(path, "rb") as fh:
-            await message.reply_photo(
-                photo=fh, caption=caption,
-                reply_markup=chart_result_inline(
-                    instrument_id, tf, days, mask,
-                    settings=settings, instrument=ins,
-                ),
-            )
+        from ..notify.navigation import reusable_photo
+        await reusable_photo(db, app.bot, settings.telegram_chat_id,
+            f"ltf:{instrument_id}:{obs_id}", path, caption,
+            chart_result_inline(instrument_id, tf, days, mask, settings=settings, instrument=ins),
+            message.reply_photo)
 
     async def _send_zone_snapshot(message, zone) -> None:
         """Fallback nav:chartz без LTF-наблюдения: снимок самой HTF-зоны
@@ -329,8 +326,11 @@ def register_bot_handlers(app, settings, db: Database):
         path = await asyncio.to_thread(
             render_zone_chart, candles, zone, out, source
         )
-        with open(path, "rb") as fh:
-            await message.reply_photo(photo=fh, reply_markup=zone_inline(zone))
+        from ..notify.navigation import reusable_photo
+        from ..notify.formatting import fmt_time_msk
+        await reusable_photo(db, app.bot, settings.telegram_chat_id,
+            f"zone:{zone.id}", path, f"🔄 Текущий график · {fmt_time_msk(now_ms())}",
+            zone_inline(zone), message.reply_photo)
 
     async def cmd_chart(update, context) -> None:
         if not is_owner(update):

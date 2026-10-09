@@ -670,6 +670,9 @@ def create_app(
 
     @app.get("/api/instruments", dependencies=[Depends(require_auth)])
     def list_instruments() -> list[dict[str, Any]]:
+        # @207 и HYPE — один спот. Схлопывание здесь, чтобы список
+        # был одним инструментом ещё до прохода воркера.
+        db.collapse_hyperliquid_hype()
         return [instrument_to_dict(i) for i in db.get_instruments()]
 
     @app.post("/api/instruments", status_code=201, dependencies=[Depends(require_auth)])

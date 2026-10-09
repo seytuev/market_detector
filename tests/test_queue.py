@@ -285,7 +285,7 @@ async def test_chart_image_uses_current_forming_close(tmp_path, monkeypatch):
     ])
     captured: dict = {}
 
-    def fake_render(candles, zone_, out, source):
+    def fake_render(candles, zone_, out, source, **kwargs):
         captured["last"] = candles[-1]
         Path(out).parent.mkdir(parents=True, exist_ok=True)
         Path(out).write_bytes(b"\x89PNG\r\n\x1a\nfake")
@@ -319,10 +319,10 @@ async def test_notification_marks_visually_merged_zone():
     db, z = _make_db()
     t0 = now_ms()
     btc_zone = db.get_zone(z["btc_zone"])
-    # вторая актуальная ACTIVE-зона того же инструмента и ТОГО ЖЕ типа,
-    # пересекающаяся с исходной OB W1 65000–66000 (разнотипные не сливаются)
+    # вторая актуальная ACTIVE-зона того же инструмента, типа и ТФ,
+    # пересекающаяся с исходной OB W1 65000–66000 (другой ТФ не сливается)
     db.insert_zone(
-        Zone(None, btc_zone.instrument_id, ZoneType.OB, Direction.BULL, "D1",
+        Zone(None, btc_zone.instrument_id, ZoneType.OB, Direction.BULL, "W1",
              lower=65500.0, upper=66500.0, formed_at=t0 - 8_000,
              confirmed_at=t0 - 7_000, status=ZoneStatus.ACTIVE, created_at=t0)
     )
@@ -334,7 +334,28 @@ async def test_notification_marks_visually_merged_zone():
     assert len(sender.cards) == 1
     text = sender.cards[0][0].details
     assert "Визуально объединена с" in text
-    assert "Orderblock D1" in text and "65 500,00" in text  # тип/ТФ и граница участника (ru-формат)
+    assert "Orderblock W1" in text and "65 500,00" in text  # тип/ТФ и граница участника (ru-формат)
+
+
+async def test_notification_does_not_merge_different_timeframes():
+    """D1 и W1 одного типа пересекаются по цене, но в тексте не сливаются."""
+    db, z = _make_db()
+    t0 = now_ms()
+    btc_zone = db.get_zone(z["btc_zone"])
+    db.insert_zone(
+        Zone(None, btc_zone.instrument_id, ZoneType.OB, Direction.BULL, "D1",
+             lower=65500.0, upper=66500.0, formed_at=t0 - 8_000,
+             confirmed_at=t0 - 7_000, status=ZoneStatus.ACTIVE, created_at=t0)
+    )
+    sender = LogSender()
+    disp = EventDispatcher(db, DetectorConfig(notification_digest_seconds=0), sender)
+    await disp.dispatch(
+        [_new_event(db, z["btc_zone"], EventKind.TOUCH, 65600.0, t0)]
+    )
+    text = sender.cards[0][0].details or ""
+    body = sender.cards[0][0].text or ""
+    assert "Визуально объединена" not in text
+    assert "Визуально объединена" not in body
 
 
 async def test_notification_without_group_has_no_merge_mark():

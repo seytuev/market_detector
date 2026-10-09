@@ -132,7 +132,7 @@ async def test_unknown_timeout_never_blindly_retried(db):
     assert len(sender.cards) == 1
 
 
-async def test_rate_limit_respects_retry_after(db):
+async def test_rate_limit_respects_retry_after(db, monkeypatch):
     from telegram.error import RetryAfter
     class Limited(LogSender):
         fail = True
@@ -147,6 +147,8 @@ async def test_rate_limit_respects_retry_after(db):
     sender.fail = False
     await box.flush()
     assert not sender.cards
+    future = now_ms() + 121_000
+    monkeypatch.setattr("app.notify.outbox.now_ms", lambda: future)
     due(db)
     await box.flush()
     assert len(sender.cards) == 1
@@ -233,3 +235,79 @@ async def test_panels_reused_without_overwriting_signal(db):
     await reusable_panel(db, bot, "1", "packet:1", "More details")
     assert len(bot.sends) == 1 and len(bot.edits) == 1
     assert bot.edits[0]["message_id"] == 42
+
+
+async def test_terminal_htf_duplicate_even_after_mixed_packet(db, instrument_id):
+    from tests.test_bot_alerts import _htf_event
+    sender = LogSender()
+    disp = EventDispatcher(db, DetectorConfig(), sender)
+    ev = _htf_event(db, instrument_id, EventKind.FVG_FILLED)
+    another = _htf_event(db, instrument_id, EventKind.TOUCH)
+    await disp.dispatch([ev, another])
+    duplicate = replace(ev, id=None, occurred_at=ev.occurred_at + 1000, price=ev.price - .01)
+    eid = db.insert_event(duplicate)
+    await disp.dispatch([db.get_event(eid)])
+    assert len(sender.cards) == 1
+    assert len(sender.edits) == 1
+    assert db.conn.execute("SELECT COUNT(*) FROM event").fetchone()[0] == 3
+
+
+async def test_superseding_one_zone_does_not_lose_other_zone(db, instrument_id):
+    from tests.test_bot_alerts import _htf_event
+    sender = LogSender()
+    disp = EventDispatcher(db, DetectorConfig(), sender)
+    a = _htf_event(db, instrument_id, EventKind.APPROACH)
+    b = _htf_event(db, instrument_id, EventKind.APPROACH)
+    await disp.dispatch([a, b])
+    touch_id = db.insert_event(replace(a, id=None, kind=EventKind.TOUCH, occurred_at=a.occurred_at + 1))
+    await disp.dispatch([db.get_event(touch_id)])
+    assert len(sender.cards) == 1
+    due(db)
+    await disp.outbox.flush()
+    assert len(sender.cards) == 2
+    digest = sender.cards[1][0]
+    assert len(digest.targets) == 1 and digest.targets[0]["zone_id"] == b.zone_id
+
+
+async def test_finalized_packet_repairs_journal_after_crash(db, instrument_id):
+    _, obs, sc = _setup(db, instrument_id)
+    ev = _event(db, obs, sc, "bos", BOS_PAYLOAD, "crash")
+    sender = LogSender()
+    disp = LtfDispatcher(db, DetectorConfig(), sender)
+    await disp.deliver([ev])
+    db.conn.execute("UPDATE ltf_event SET delivered=0 WHERE id=?", (ev.id,))
+    db.conn.commit()
+    await disp.outbox.flush()
+    assert db.get_ltf_event(ev.id).delivered
+    assert len(sender.cards) == 1
+
+
+async def test_expired_send_lease_requires_review(db):
+    box, sender = make_box(db)
+    pid = box.put("test", "lease", Card("A"), [1])
+    db.conn.execute("UPDATE notification_packet SET status='sending',lease_until=0 WHERE id=?", (pid,))
+    db.conn.commit()
+    await box.flush()
+    assert box.get(pid)["status"] == "uncertain" and not sender.cards
+
+
+def test_migration_preserves_delivered_history(tmp_path):
+    path = str(tmp_path / "old.sqlite")
+    db = Database(path)
+    db.conn.execute("INSERT INTO notification_packet(destination,channel,semantic_key,card,status,created_at,due_at) "
+                    "VALUES('owner','test','old','{}','sent',1,1)")
+    db.conn.execute("ALTER TABLE notification_member DROP COLUMN reason")
+    db.conn.commit()
+    db.close()
+    db = Database(path)
+    assert "reason" in {r["name"] for r in db.conn.execute("PRAGMA table_info(notification_member)")}
+    assert db.conn.execute("SELECT status FROM notification_packet").fetchone()[0] == "sent"
+    db.close()
+
+
+def test_group_buttons_never_target_first_object():
+    from app.notify.navigation import card_keyboard
+    targets = [dict(chart="nav:chartz:1"), dict(chart="nav:chartz:2")]
+    keyboard = card_keyboard(7, targets)
+    assert keyboard.inline_keyboard[0][0].callback_data == "nf:g:7"
+    assert sum(len(row) for row in keyboard.inline_keyboard) == 3

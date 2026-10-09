@@ -90,12 +90,17 @@ class AltDispatcher:
         )
 
     def _events(self, members):
-        return [e for m in members if (e := self.db.get_alt_event(m["event_id"])) is not None]
+        return [e for m in members if not m["reason"] and (e := self.db.get_alt_event(m["event_id"])) is not None]
 
     def _validate_packet(self, row, members):
         events = self._events(members)
         if not events or all(self._bot_blocked(e, self._chat_id(None)) for e in events):
             return "muted or missing"
+        for event in events:
+            if self._bot_blocked(event, self._chat_id(None)):
+                self.db.conn.execute("UPDATE notification_member SET reason='muted' WHERE packet_id=? AND event_id=?",
+                                     (row["id"], event.id))
+        self.db.conn.commit()
         ctx = self._load_context(events[0])
         if ctx.setup is None or ctx.asset is None:
             return "missing setup"
@@ -117,9 +122,13 @@ class AltDispatcher:
         from .formatting import fmt_time_msk, fmt_price_ru
         events = self._events(members)
         ctx = self._load_context(events[0])
-        lead = next((e for e in events if e.event_type in _TERMINAL_TYPES), events[0])
+        ranks = {"target_hit": 60, "entry_a": 50, "entry_b": 50, "bos_confirmed": 40,
+                 "sms_confirmed": 40, "retest": 30, "mature_frozen": 20, "forming_started": 0}
+        lead = max(events, key=lambda e: (100 if e.event_type in _TERMINAL_TYPES else ranks.get(e.event_type, 10), e.event_time_ms))
         lines = [f"{'⚪' if lead.event_type in _TERMINAL_TYPES else '🟢'} {ctx.asset.symbol} · Накопление D1"]
         lines.extend(_render_block(lead, ctx)[:2])
+        if len(events) > 1:
+            lines.append(f"Ещё событий: {len(events) - 1} · в подробностях")
         if ctx.frozen:
             lines.append(f"Диапазон: {fmt_price_ru(ctx.frozen.lower)}–{fmt_price_ru(ctx.frozen.upper)}")
         if any(e.event_type in {"entry_a", "entry_b", "retest"} for e in events) and lead.event_type not in _TERMINAL_TYPES:

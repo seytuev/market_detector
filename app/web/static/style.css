@@ -228,6 +228,17 @@ select, input, textarea {
   background: rgba(89, 133, 255, 0.14);
 }
 
+/* Чужой ТФ на графике (D1/W1 на H1 и наоборот): полоса остаётся,
+   но не заливает свечи. Выбранная зона читается поверх этого слоя. */
+.zone-rect.tf-context.z-fvg { background: rgba(69, 185, 165, 0.07); border-color: rgba(69, 185, 165, 0.45); }
+.zone-rect.tf-context.z-ob { background: rgba(91, 141, 239, 0.08); border-color: rgba(91, 141, 239, 0.5); }
+.zone-rect.tf-context.z-prb { background: rgba(168, 137, 229, 0.05); border-color: rgba(168, 137, 229, 0.4); }
+.zone-rect.tf-context.z-breaker { background: rgba(230, 184, 106, 0.05); border-color: rgba(230, 184, 106, 0.4); }
+.zone-rect.tf-context.z-ssl { background: rgba(239, 117, 115, 0.05); border-color: rgba(239, 117, 115, 0.4); }
+.zone-rect.tf-context.z-bsl { background: rgba(69, 185, 165, 0.05); border-color: rgba(69, 185, 165, 0.4); }
+.zone-rect.tf-context.z-manual { background: rgba(230, 184, 106, 0.05); border-color: rgba(230, 184, 106, 0.4); }
+.zone-rect.tf-context.selected { background: rgba(89, 133, 255, 0.14); }
+
 .review-block {
   margin-top: 12px;
   padding: 10px;
@@ -291,6 +302,10 @@ select, input, textarea {
   border-radius: 4px;
   background: rgba(255, 255, 255, 0.04);
   cursor: pointer;
+}
+.zone-group.tf-context {
+  background: rgba(255, 255, 255, 0.02);
+  border-color: rgba(255, 255, 255, 0.28);
 }
 .zone-group-badge {
   position: absolute;

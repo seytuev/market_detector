@@ -131,19 +131,19 @@ async def test_ltf_keyboard_per_kind(db, instrument_id):
     _make_live(db, instrument_id)
 
     cases = {
-        "bos": (BOS_PAYLOAD, "nav:entries:"),
-        "entries_ready": ({
+        "bos": BOS_PAYLOAD,
+        "entries_ready": {
             "range": {"lower": 90.0, "upper": 110.0, "mid": 100.0, "version": 1},
             "entries": [{"entry_zone_id": 3, "type": "BSL", "lower": 115.0,
                          "upper": 115.0, "mid": 115.0, "overlap": "full"}],
-        }, "nav:entries:"),
-        "touch": ({
+        },
+        "touch": {
             "entry_zone_id": 3, "type": "BSL", "lower": 115.0, "upper": 115.0,
             "mid": 115.0, "candle_open_time": T0,
-        }, "nav:why:"),
-        "cancellation": ({"reason": "reverse_bos"}, "nav:why:"),
+        },
+        "cancellation": {"reason": "reverse_bos"},
     }
-    for kind, (payload, context_cb) in cases.items():
+    for kind, payload in cases.items():
         sender.texts.clear()
         sender.markups.clear()
         ev = _event(db, obs, sc, kind, payload, f"{kind}:kb:1")
@@ -153,16 +153,11 @@ async def test_ltf_keyboard_per_kind(db, instrument_id):
         assert markup is not None, kind
         cbs = _callbacks(markup)
         iid = instrument_id
-        # единый набор: График (контекст ЭТОГО сообщения, §8)/Подробнее/
-        # Обновить/Заглушить (по зоне контекста)
+        # Карточка: график этого наблюдения, подробности и действия.
+        # Обновить и заглушить открываются из «Действия», не с первой клавиатуры.
         assert f"nav:charto:{iid}:{obs.id}" in cbs
-        assert f"nav:asset:{iid}" in cbs
-        assert f"nav:refresh:{iid}" in cbs
-        assert f"nav:zm:{zone.id}" in cbs
-        # контекстная кнопка вида события
-        assert any(cb.startswith(context_cb) for cb in cbs), kind
-        # URL «Открыть приложение» — окно LTF с токеном
-        assert any("ltf.html" in u and "token=" in u for u in _urls(markup))
+        assert any(cb.startswith("nf:d:") for cb in cbs), kind
+        assert any(cb.startswith("nf:a:") for cb in cbs), kind
 
 
 async def test_ltf_dispatcher_uses_send_ltf_and_logsender_journals(db, instrument_id):
@@ -171,10 +166,13 @@ async def test_ltf_dispatcher_uses_send_ltf_and_logsender_journals(db, instrumen
     sender = LogSender()
     disp = LtfDispatcher(db, DetectorConfig(), sender, settings=_settings())
     await disp([ev])
-    assert len(sender.sent_ltf) == 1
-    text, markup = sender.sent_ltf[0]
-    assert "Bearish BOS" in text and markup is not None
-    # длинный список: кнопки только на последней части
+    assert len(sender.cards) == 1
+    card, packet_id, _quiet = sender.cards[0]
+    assert "BOS подтверждён" in card.text
+    from app.notify.navigation import card_keyboard
+    assert card_keyboard(packet_id, card.targets) is not None
+    # Длинный список зон остаётся одной карточкой: подробности за кнопкой,
+    # а не пачкой сообщений.
     entries = [
         {"entry_zone_id": i, "type": "FVG", "lower": 100.0 + i,
          "upper": 101.0 + i, "mid": 100.5 + i, "overlap": "full"}
@@ -183,10 +181,8 @@ async def test_ltf_dispatcher_uses_send_ltf_and_logsender_journals(db, instrumen
     ev2 = _event(db, obs, sc, "bos", dict(BOS_PAYLOAD, entries=entries),
                  "bos:log:2")
     await disp([ev2])
-    parts = sender.sent_ltf[1:]
-    assert len(parts) > 1
-    assert all(m is None for _, m in parts[:-1])
-    assert parts[-1][1] is not None
+    assert len(sender.cards) == 2
+    assert sender.cards[1][0].details
 
 
 # ------------------------------ «Обновить» ------------------------------
@@ -208,6 +204,12 @@ async def test_nav_refresh_sends_new_message(db, seeded):
     async def reply_text(t, reply_markup=None):
         replies.append((t, reply_markup))
 
+    sent: list = []
+
+    async def send_message(chat_id, text, reply_markup=None, disable_web_page_preview=None):
+        sent.append((chat_id, text, reply_markup))
+        return SimpleNamespace(message_id=77)
+
     update = SimpleNamespace(
         effective_chat=SimpleNamespace(id=int(CHAT_ID)),
         callback_query=SimpleNamespace(
@@ -216,10 +218,13 @@ async def test_nav_refresh_sends_new_message(db, seeded):
             message=SimpleNamespace(reply_text=reply_text),
         ),
     )
-    await _nav_callback(app)(update, _context())
-    assert edits == []  # исторический сигнал не тронут
-    assert len(replies) == 1
-    assert "ETHUSDT · binance · spot" in replies[0][0]
+    context = _context()
+    context.bot = SimpleNamespace(send_message=send_message)
+    await _nav_callback(app)(update, context)
+    assert edits == []  # исторический сигнал не редактируется
+    assert replies == []
+    assert len(sent) == 1
+    assert "ETHUSDT" in sent[0][1]
     assert answers == [None]
 
 
@@ -252,8 +257,20 @@ async def test_range_ready_not_resent_on_recalc(db, instrument_id):
     sender = RecSender()
     disp = _dispatcher(db, sender)
     await disp([ev1])
-    await disp([ev1])          # повторный вызов — delivered=True отсекает
-    await disp.retry_pending()  # и ретрай не дублирует
+    await disp([ev1])          # тот же ключ не создаёт второй пакет
+    await disp.retry_pending()
+    packets = db.conn.execute(
+        "SELECT id FROM notification_packet WHERE channel='ltf'"
+    ).fetchall()
+    assert len(packets) == 1
+    assert sender.texts == []  # range_ready тихий и ждёт сводку
+    db.conn.execute(
+        "UPDATE notification_packet SET due_at=0 WHERE channel='ltf' AND status='pending'"
+    )
+    db.conn.commit()
+    await disp.outbox.flush()
+    assert len(sender.texts) == 1
+    await disp.outbox.flush()
     assert len(sender.texts) == 1
 
     # entries_ready с тем же составом зон — тот же ключ, тоже без дубля

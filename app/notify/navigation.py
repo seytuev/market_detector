@@ -43,6 +43,30 @@ async def reusable_panel(db, bot, chat_id, key, text, markup=None):
     return msg.message_id
 
 
+async def reusable_photo(db, bot, chat_id, key, path, caption, markup, reply_photo):
+    """Keep interactive chart refreshes separate from immutable signal photos."""
+    from telegram import InputMediaPhoto
+    cache_key = f"notification:chart:{chat_id}:{key}"
+    message_id = db.get_meta(cache_key)
+    if len(caption.encode("utf-16-le")) // 2 > 1000:
+        caption = caption.encode("utf-16-le")[:1960].decode("utf-16-le", errors="ignore") + "\n…"
+    with open(path, "rb") as fh:
+        if message_id:
+            try:
+                await bot.edit_message_media(chat_id=chat_id, message_id=int(message_id),
+                    media=InputMediaPhoto(fh, caption=caption), reply_markup=markup)
+                return
+            except BadRequest as exc:
+                if "message is not modified" in str(exc).lower():
+                    return
+                if not any(term in str(exc).lower() for term in ("message to edit not found", "message can't be edited")):
+                    raise
+                fh.seek(0)
+        msg = await reply_photo(photo=fh, caption=caption, reply_markup=markup)
+    if msg is not None:
+        db.set_meta(cache_key, str(msg.message_id))
+
+
 def register_notification_handlers(app, db, settings):
     from telegram.ext import CallbackQueryHandler
     from ..bot.access import make_owner_guard

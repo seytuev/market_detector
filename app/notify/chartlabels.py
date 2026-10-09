@@ -27,15 +27,15 @@ def set_header(fig, title: str, subtitle: str | None = None) -> float:
     позиции за пределами изображения (§10.1).
     """
     y = 0.985
-    for ln in textwrap.wrap(title, 78) or [""]:
-        fig.text(0.008, y, ln, va="top", ha="left", fontsize=16,
+    for ln in textwrap.wrap(title, 62) or [""]:
+        fig.text(0.008, y, ln, va="top", ha="left", fontsize=22,
                  color=_COLOR_TEXT, fontweight="bold")
-        y -= 0.045
+        y -= 0.057
     if subtitle:
-        for ln in textwrap.wrap(subtitle, 110):
-            fig.text(0.008, y, ln, va="top", ha="left", fontsize=11,
+        for ln in textwrap.wrap(subtitle, 95):
+            fig.text(0.008, y, ln, va="top", ha="left", fontsize=13,
                      color=_COLOR_MUTED)
-            y -= 0.033
+            y -= 0.039
     return y
 
 
@@ -70,7 +70,7 @@ def _spread_positions(ys: list[float], line_h: float) -> list[float]:
 
 
 def layout_price_labels(fig, ax, items: list[tuple[float, str, str]],
-                        fontsize: int = 11) -> list:
+                        fontsize: int = 16) -> list:
     """Подписи уровней в правой колонке без наложений (§10.2).
 
     items — [(price, text, color)], порядок по цене сохраняется. Точное
@@ -128,7 +128,6 @@ def add_legend(fig, entries: list[tuple[str, str]], dashed: tuple[str, ...] = ()
         for label, color in entries
     ]
     fig.legend(
-        handles=handles, loc="lower right", bbox_to_anchor=(0.855, 0.02),
-        fontsize=7, framealpha=0.25, facecolor="#12161c",
-        edgecolor="#3a4250", labelcolor=_COLOR_TEXT,
+        handles=handles, loc="lower left", bbox_to_anchor=(0.05, 0.033),
+        ncol=3, fontsize=10, frameon=False, labelcolor=_COLOR_TEXT,
     )

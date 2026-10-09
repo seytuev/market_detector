@@ -8,8 +8,8 @@ from app.services.zone_groups import group_members_by_zone, union_find_groups
 
 
 def _zone(zid: int, lower: float, upper: float,
-          ztype: ZoneType = ZoneType.OB) -> Zone:
-    return Zone(zid, 1, ztype, Direction.BULL, "D1", lower=lower, upper=upper,
+          ztype: ZoneType = ZoneType.OB, timeframe: str = "D1") -> Zone:
+    return Zone(zid, 1, ztype, Direction.BULL, timeframe, lower=lower, upper=upper,
                 formed_at=0, confirmed_at=0, status=ZoneStatus.ACTIVE,
                 created_at=0)
 
@@ -43,6 +43,23 @@ def test_different_types_never_merge():
              _zone(2, 150, 220, ZoneType.FVG),
              _zone(3, 210, 300, ZoneType.OB)]
     assert group_members_by_zone(zones) == {}
+
+
+def test_same_type_different_timeframe_does_not_merge():
+    # D1 и W1 одного типа пересекаются по цене, но остаются разными полосами
+    zones = [_zone(1, 100, 200, timeframe="D1"),
+             _zone(2, 150, 250, timeframe="W1")]
+    assert group_members_by_zone(zones) == {}
+    groups = union_find_groups(zones)
+    assert len(groups) == 2
+    assert {z.timeframe for g in groups for z in g} == {"D1", "W1"}
+
+
+def test_same_timeframe_overlap_still_merges():
+    zones = [_zone(1, 100, 200, timeframe="W1"),
+             _zone(2, 180, 260, timeframe="W1")]
+    members = group_members_by_zone(zones)
+    assert set(members) == {1, 2}
 
 
 def test_same_type_chain_still_merges():

@@ -36,6 +36,16 @@ def ltf_key(ev, ctx):
     # Cancellations of unrelated parent contexts are not equivalent.
     if ev.kind == "cancellation":
         actual["observation"] = ev.observation_id
+    def canonical(value):
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
+        if isinstance(value, dict):
+            return {k: canonical(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [canonical(v) for v in value]
+        return value
+    actual = canonical(actual)
+    actual["entries"].sort(key=fingerprint)
     return fingerprint([ins.id if ins else ev.observation_id,
                         ins.venue if ins else None, ins.market_type if ins else None,
                         sc.direction.value if sc else p.get("direction"),

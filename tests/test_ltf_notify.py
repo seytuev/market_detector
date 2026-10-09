@@ -37,10 +37,11 @@ class RecSender:
 
     async def send_card(self, card, packet_id, *, quiet=False):
         from app.notify.navigation import card_keyboard
+        keyboard = card_keyboard(packet_id, getattr(card, "targets", None))
         if card.image_path:
-            await self.send_ltf_photo(card.image_path, card.text, card_keyboard(packet_id))
+            await self.send_ltf_photo(card.image_path, card.text, keyboard)
         else:
-            await self.send_ltf(card.text, card_keyboard(packet_id))
+            await self.send_ltf(card.text, keyboard)
         return len(self.texts) + len(self.photos)
 
     async def edit_card(self, message_id, card, packet_id, *, photo=False):

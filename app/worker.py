@@ -150,21 +150,9 @@ class Worker:
         for old in self.db.get_instruments():
             if old.venue == "binance" and old.symbol == "HYPEUSDT":
                 self.db.set_instrument_enabled(old.id, False)
-            elif old.venue == "hyperliquid" and old.symbol == "@207":
-                # Ранее в базе сохранялся технический alias. Переименовываем
-                # строку на публичное имя, сохраняя instrument_id и историю.
-                duplicate = next(
-                    (i for i in self.db.get_instruments()
-                     if i.venue == "hyperliquid" and i.symbol == "HYPE"),
-                    None,
-                )
-                if duplicate is not None and duplicate.id != old.id:
-                    self.db.delete_empty_instrument(duplicate.id)
-                if not any(
-                    i.venue == "hyperliquid" and i.symbol == "HYPE"
-                    for i in self.db.get_instruments()
-                ):
-                    self.db.rename_instrument_symbol(old.id, "HYPE")
+        # @207 и повторный HYPE — один и тот же спот. Пустой дубль
+        # удаляется, дубль с историей скрывается. Публичное имя одно.
+        self.db.collapse_hyperliquid_hype()
         for venue, symbol in SEED:
             adapter = self.adapters.get(venue)
             if adapter is None:
@@ -811,7 +799,15 @@ class Worker:
                 continue
             self._set_replaying(ins.id, True)
             try:
+                cursor_raw = self.db.get_meta(f"ltf:h1:last_close:{ins.id}")
                 last = self.db.last_candle(ins.id, "H1")
+                # Курсор уже на последней закрытой H1 — полный прогон
+                # десятков тысяч свечей не нужен. Сравнение до вставки хвоста.
+                caught_up = (
+                    cursor_raw is not None
+                    and last is not None
+                    and int(cursor_raw) >= last.close_time
+                )
                 start = (
                     min(o.activated_at for o in observations)
                     - self.cfg.ltf_history_days * 86_400_000
@@ -826,17 +822,25 @@ class Worker:
                         c.instrument_id = ins.id
                     if candles:
                         self.db.insert_candles(candles)
-                # Один replay на инструмент, а не на каждое наблюдение:
-                # replay_observation за один проход обрабатывает ВСЕ открытые
-                # наблюдения инструмента (работа зависит только от
-                # instrument_id) и идемпотентен — 12 наблюдений на одном
-                # инструменте раньше давали 12 одинаковых прогонов всей
-                # H1-истории (restore шёл часами)
-                await asyncio.to_thread(
-                    self.ltf_engine.replay_observation, observations[0].id
-                )
-                log.info("LTF %s: восстановлено наблюдений: %d",
-                         ins.symbol, len(observations))
+                if caught_up:
+                    # Хвост, если он вставился, проходит инкрементально.
+                    # Из restore не доставляем: retry заберёт только
+                    # не-delayed события внутри grace.
+                    await asyncio.to_thread(
+                        self.ltf_engine.process_h1_close, ins.id
+                    )
+                    log.info(
+                        "LTF %s: курсор H1 актуален, полный replay пропущен (%d)",
+                        ins.symbol, len(observations),
+                    )
+                else:
+                    # Один replay на инструмент, а не на каждое наблюдение.
+                    # Курсор пуст или отстаёт — история должна остаться delayed.
+                    await asyncio.to_thread(
+                        self.ltf_engine.replay_observation, observations[0].id
+                    )
+                    log.info("LTF %s: восстановлено наблюдений: %d",
+                             ins.symbol, len(observations))
             except AdapterError as exc:
                 log.warning("LTF %s: восстановление пропущено: %s", ins.symbol, exc)
             except Exception:

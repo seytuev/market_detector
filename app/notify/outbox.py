@@ -62,6 +62,8 @@ class Outbox:
 
     def put(self, channel, key, card, members, *, quiet=False):
         """Idempotent enqueue; late equivalent contexts update a sent card."""
+        if any(event_id is None for event_id in members):
+            raise ValueError("Notification members must reference persisted event IDs")
         stamp = now_ms()
         due = stamp + int(getattr(self.cfg, "notification_digest_seconds", 900)) * 1000 if quiet else stamp
         encoded = json.dumps(asdict(card), ensure_ascii=False)
@@ -79,7 +81,13 @@ class Outbox:
                     "INSERT OR IGNORE INTO notification_member(packet_id,channel,event_id) VALUES(?,?,?)",
                     (row["id"], channel, event_id))
                 added |= cur.rowcount > 0
-            if added and row["status"] in ("sent", "sending"):
+            if not quiet and row["quiet"] and row["status"] in ("pending", "failed", "bundled"):
+                parent = self.get(row["parent_id"]) if row["parent_id"] else None
+                if parent is None or parent["status"] in ("pending", "failed"):
+                    self.db.conn.execute(
+                        "UPDATE notification_packet SET quiet=0,due_at=?,status='pending',parent_id=NULL WHERE id=?",
+                        (stamp, row["id"]))
+            if added and row["status"] in ("sent", "sending", "bundled"):
                 self.db.conn.execute("UPDATE notification_packet SET dirty=1 WHERE id=?", (row["id"],))
                 if row["parent_id"]:
                     self.db.conn.execute("UPDATE notification_packet SET dirty=1 WHERE id=?", (row["parent_id"],))
@@ -116,6 +124,7 @@ class Outbox:
         if retry is not None:
             seconds = retry.total_seconds() if hasattr(retry, "total_seconds") else float(retry)
             status, delay = "failed", max(1, seconds)
+            self.db.set_meta(f"notification:backoff:{self.destination}", str(now_ms() + int(delay * 1000)))
         elif isinstance(exc, (TimeoutError, ConnectionError)) or type(exc).__name__ in {"TimedOut", "NetworkError"}:
             status, delay = "uncertain", 0
         else:
@@ -145,15 +154,27 @@ class Outbox:
                 if row["channel"] not in self.validators and row["channel"] != "digest":
                     continue  # dispatcher not registered yet
                 if row["status"] == "sent":
+                    edit_key = f"notification:edit:{row['id']}"
+                    edit_state = json.loads(self.db.get_meta(edit_key) or "{}")
+                    if edit_state.get("due_at", 0) > stamp:
+                        continue
                     try:
                         card = await self._card(row)
                         if row["message_id"]:
                             await self.sender.edit_card(row["message_id"], card, row["id"], photo=bool(row["photo"]))
                         self.db.conn.execute("UPDATE notification_packet SET dirty=0 WHERE id=?", (row["id"],))
                         self.db.conn.commit()
+                        self.db.set_meta(edit_key, "{}")
                         self._finish(row, "sent")
-                    except Exception:
-                        log.warning("Unable to update notification %s", row["id"], exc_info=True)
+                    except Exception as exc:
+                        attempts = edit_state.get("attempts", 0) + 1
+                        wait = getattr(exc, "retry_after", 30 * 2 ** attempts)
+                        seconds = wait.total_seconds() if hasattr(wait, "total_seconds") else float(wait)
+                        self.db.set_meta(edit_key, json.dumps({"attempts": attempts, "due_at": stamp + int(seconds * 1000)}))
+                        if attempts >= 5:
+                            self.db.conn.execute("UPDATE notification_packet SET dirty=0,reason='edit attempts exhausted' WHERE id=?", (row["id"],))
+                            self.db.conn.commit()
+                        log.warning("Unable to update notification %s: %s", row["id"], type(exc).__name__)
                     continue
                 verdict = self.validators.get(row["channel"], lambda r, m: None)(row, self.members(row["id"]))
                 if verdict == "wait":
@@ -212,6 +233,9 @@ class Outbox:
                 self._finish(row, row["status"])
 
     async def _send(self, row):
+        cooldown = int(self.db.get_meta(f"notification:backoff:{self.destination}") or 0)
+        if cooldown > now_ms():
+            return
         # A single conditional UPDATE is the cross-process claim.
         cur = self.db.conn.execute(
             "UPDATE notification_packet SET status='sending',attempts=attempts+1,lease_until=? "
@@ -249,14 +273,22 @@ class Outbox:
 
     async def _digest(self, rows):
         # Freeze membership before sending. Retry uses this very same packet.
-        key = fingerprint([r["id"] for r in rows])
-        packet_id = self.put("digest", key, Card("🔕 Сводка LevelFrame"), [], quiet=False)
+        key = fingerprint(sorted(r["id"] for r in rows))
         with self.db.conn._lock:
+            # Packet creation and child assignment commit together: another
+            # process must never see an empty, sendable digest between them.
+            stamp = now_ms()
+            self.db.conn.execute(
+                "INSERT OR IGNORE INTO notification_packet "
+                "(destination,channel,semantic_key,card,quiet,created_at,due_at) VALUES(?,'digest',?,?,1,?,?)",
+                (self.destination, key, json.dumps(asdict(Card("🔕 Сводка LevelFrame")), ensure_ascii=False), stamp, stamp))
+            packet_id = self.db.conn.execute(
+                "SELECT id FROM notification_packet WHERE destination=? AND channel='digest' AND semantic_key=?",
+                (self.destination, key)).fetchone()[0]
             for row in rows:
                 self.db.conn.execute(
                     "UPDATE notification_packet SET parent_id=?,status='bundled' WHERE id=? AND status IN ('pending','failed')",
                     (packet_id, row["id"]))
-            self.db.conn.execute("UPDATE notification_packet SET quiet=1 WHERE id=?", (packet_id,))
             self.db.conn.commit()
         await self._send(self.get(packet_id))
 

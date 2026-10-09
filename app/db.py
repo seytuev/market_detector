@@ -501,6 +501,17 @@ class Database:
         r = self.conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
         return r["value"] if r else None
 
+    def meta_prefix(self, prefix: str) -> dict[str, str]:
+        """Все meta-ключи с этим префиксом. Префикс — литерал, не шаблон."""
+        like = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        return {
+            r["key"]: r["value"]
+            for r in self.conn.execute(
+                "SELECT key, value FROM meta WHERE key LIKE ? ESCAPE '\\'",
+                (like,),
+            ).fetchall()
+        }
+
     def set_meta(self, key: str, value: str) -> None:
         self.conn.execute(
             "INSERT INTO meta (key, value) VALUES (?,?) "
@@ -567,11 +578,16 @@ class Database:
         ).fetchone()
         return int(row["id"])
 
-    def get_instruments(self, enabled_only: bool = False) -> list[Instrument]:
+    def get_instruments(
+        self, enabled_only: bool = False, include_retired: bool = False,
+    ) -> list[Instrument]:
         q = "SELECT * FROM instrument"
         if enabled_only:
             q += " WHERE enabled=1"
-        return [self._to_instrument(r) for r in self.conn.execute(q).fetchall()]
+        rows = [self._to_instrument(r) for r in self.conn.execute(q).fetchall()]
+        if include_retired:
+            return rows
+        return [i for i in rows if "#retired-" not in (i.symbol or "")]
 
     def get_instrument(self, instrument_id: int) -> Optional[Instrument]:
         r = self.conn.execute(
@@ -602,16 +618,70 @@ class Database:
 
     def delete_empty_instrument(self, instrument_id: int) -> bool:
         """Удаляет дубликат инструмента только если у него нет рыночных данных."""
-        refs = self.conn.execute(
-            "SELECT (SELECT COUNT(*) FROM candle WHERE instrument_id=?), "
-            "(SELECT COUNT(*) FROM zone WHERE instrument_id=?)",
-            (instrument_id, instrument_id),
-        ).fetchone()
-        if refs[0] or refs[1]:
+        if any(self._instrument_data_counts(instrument_id)):
             return False
         self.conn.execute("DELETE FROM instrument WHERE id=?", (instrument_id,))
         self._commit()
         return True
+
+    def _instrument_data_counts(self, instrument_id: int) -> tuple[int, int, int, int]:
+        """Свечи, зоны, наблюдения и зоны входа. Пустая четвёрка — строку можно убрать."""
+        row = self.conn.execute(
+            "SELECT "
+            "(SELECT COUNT(*) FROM candle WHERE instrument_id=?), "
+            "(SELECT COUNT(*) FROM zone WHERE instrument_id=?), "
+            "(SELECT COUNT(*) FROM ltf_observation WHERE instrument_id=?), "
+            "(SELECT COUNT(*) FROM ltf_entry_zone WHERE instrument_id=?)",
+            (instrument_id, instrument_id, instrument_id, instrument_id),
+        ).fetchone()
+        return tuple(int(v or 0) for v in row)
+
+    def collapse_hyperliquid_hype(self) -> None:
+        """Один публичный инструмент Hyperliquid HYPE.
+
+        Технический alias @207 и повторный HYPE — один и тот же спот.
+        Остаётся строка с большей историей (при равенстве — уже названная
+        HYPE). Её id не меняется. Пустой дубль удаляется. Дубль с данными
+        выключается и переименовывается в ``…#retired-<id>``, чтобы не
+        светиться в списке и не качать тот же рынок второй раз.
+        """
+        rows = [
+            i for i in self.get_instruments(include_retired=True)
+            if i.venue == "hyperliquid" and i.symbol in ("HYPE", "@207")
+        ]
+        grouped: dict[str, list] = {}
+        for ins in rows:
+            grouped.setdefault(ins.market_type, []).append(ins)
+        for contenders in grouped.values():
+            self._collapse_hype_group(contenders)
+
+    def _collapse_hype_group(self, contenders: list) -> None:
+        if not contenders:
+            return
+        if len(contenders) == 1:
+            only = contenders[0]
+            if only.symbol == "@207":
+                self.rename_instrument_symbol(only.id, "HYPE")
+            return
+        def score(ins) -> tuple:
+            candles, zones, obs, entries = self._instrument_data_counts(ins.id)
+            return (candles, zones, obs, entries, 1 if ins.symbol == "HYPE" else 0, -ins.id)
+        winner = max(contenders, key=score)
+        any_enabled = any(i.enabled for i in contenders)
+        for loser in contenders:
+            if loser.id == winner.id:
+                continue
+            if not any(self._instrument_data_counts(loser.id)):
+                self.delete_empty_instrument(loser.id)
+                continue
+            self.set_instrument_enabled(loser.id, False)
+            retired = f"{loser.symbol}#retired-{loser.id}"
+            if loser.symbol != retired:
+                self.rename_instrument_symbol(loser.id, retired)
+        if winner.symbol != "HYPE":
+            self.rename_instrument_symbol(winner.id, "HYPE")
+        if any_enabled and not winner.enabled:
+            self.set_instrument_enabled(winner.id, True)
 
     def set_instrument_ltf_analyze(self, instrument_id: int, analyze: bool) -> None:
         self.conn.execute(
@@ -1845,6 +1915,125 @@ class Database:
             return self._to_ltf_scenario(r) if r else None
         return self._ltf_cached(("ltf_sc_active", observation_id), load)
 
+    def list_ltf_scenarios_for_instrument(self, instrument_id: int) -> list[LtfScenario]:
+        """Сценарии инструмента в порядке наблюдений, затем id сценария."""
+        def load() -> list[LtfScenario]:
+            rows = self.conn.execute(
+                """SELECT s.* FROM ltf_scenario s
+                   JOIN ltf_observation o ON o.id = s.observation_id
+                   WHERE o.instrument_id=?
+                   ORDER BY o.updated_at DESC, o.id DESC, s.id""",
+                (instrument_id,),
+            ).fetchall()
+            return [self._to_ltf_scenario(r) for r in rows]
+        return self._ltf_cached(("ltf_sc_ins", instrument_id), load)
+
+    def ltf_projection_bundle(self, instrument_id: int) -> dict[str, Any]:
+        """Дети сценариев инструмента одним проходом на таблицу.
+
+        Порядок внутри списков совпадает с list_ltf_*: события структуры
+        по occurred_at, движения по start_at, привязки по added_at,
+        диапазоны по version, тесты по touch_at. Журнал ltf_event — не
+        больше 1000 последних на сценарий, свежие первыми: context_flags
+        оставляет последнюю запись htf_fvg50 из этого окна.
+        """
+        def load() -> dict[str, Any]:
+            scenarios = self.list_ltf_scenarios_for_instrument(instrument_id)
+            by_obs: dict[int, list[LtfScenario]] = {}
+            for sc in scenarios:
+                by_obs.setdefault(sc.observation_id, []).append(sc)
+            structure_events = self._bundle_by_scenario(
+                instrument_id,
+                """SELECT e.* FROM ltf_structure_event e
+                   JOIN ltf_scenario s ON s.id = e.scenario_id
+                   JOIN ltf_observation o ON o.id = s.observation_id
+                   WHERE o.instrument_id=?
+                   ORDER BY e.occurred_at, e.id""",
+                self._to_ltf_structure_event,
+            )
+            movements = self._bundle_by_scenario(
+                instrument_id,
+                """SELECT m.* FROM ltf_movement m
+                   JOIN ltf_scenario s ON s.id = m.scenario_id
+                   JOIN ltf_observation o ON o.id = s.observation_id
+                   WHERE o.instrument_id=?
+                   ORDER BY m.start_at, m.id""",
+                self._to_ltf_movement,
+            )
+            entries = self._bundle_by_scenario(
+                instrument_id,
+                """SELECT e.* FROM ltf_scenario_entry e
+                   JOIN ltf_scenario s ON s.id = e.scenario_id
+                   JOIN ltf_observation o ON o.id = s.observation_id
+                   WHERE o.instrument_id=?
+                   ORDER BY e.added_at, e.id""",
+                self._to_ltf_scenario_entry,
+            )
+            ranges = self._bundle_by_scenario(
+                instrument_id,
+                """SELECT r.* FROM ltf_range r
+                   JOIN ltf_scenario s ON s.id = r.scenario_id
+                   JOIN ltf_observation o ON o.id = s.observation_id
+                   WHERE o.instrument_id=?
+                   ORDER BY r.version""",
+                self._to_ltf_range,
+            )
+            tests = self._bundle_by_scenario(
+                instrument_id,
+                """SELECT t.* FROM ltf_liquidity_test t
+                   JOIN ltf_scenario s ON s.id = t.scenario_id
+                   JOIN ltf_observation o ON o.id = s.observation_id
+                   WHERE o.instrument_id=?
+                   ORDER BY t.touch_at, t.id""",
+                self._to_ltf_liquidity_test,
+            )
+            ltf_events = self._bundle_by_scenario(
+                instrument_id,
+                """SELECT * FROM (
+                     SELECT e.*, ROW_NUMBER() OVER (
+                       PARTITION BY e.scenario_id
+                       ORDER BY e.occurred_at DESC, e.id DESC
+                     ) AS _rn
+                     FROM ltf_event e
+                     JOIN ltf_scenario s ON s.id = e.scenario_id
+                     JOIN ltf_observation o ON o.id = s.observation_id
+                     WHERE o.instrument_id=?
+                   ) ranked
+                   WHERE _rn <= 1000
+                   ORDER BY occurred_at DESC, id DESC""",
+                self._to_ltf_event,
+            )
+            movements_by_id = {
+                m.id: m for rows in movements.values() for m in rows if m.id is not None
+            }
+            prefix = "htf_idea:discovered:"
+            discovered: dict[int, str] = {}
+            for key, value in self.meta_prefix(prefix).items():
+                tail = key[len(prefix):]
+                if tail.isdigit():
+                    discovered[int(tail)] = value
+            return {
+                "scenarios_by_obs": by_obs,
+                "structure_events": structure_events,
+                "movements": movements,
+                "movements_by_id": movements_by_id,
+                "entries": entries,
+                "ranges": ranges,
+                "tests": tests,
+                "ltf_events": ltf_events,
+                "discovered": discovered,
+            }
+        return self._ltf_cached(("ltf_proj", instrument_id), load)
+
+    def _bundle_by_scenario(self, instrument_id: int, sql: str, convert) -> dict[int, list]:
+        grouped: dict[int, list] = {}
+        for row in self.conn.execute(sql, (instrument_id,)).fetchall():
+            item = convert(row)
+            if item.scenario_id is None:
+                continue
+            grouped.setdefault(item.scenario_id, []).append(item)
+        return grouped
+
     @staticmethod
     def _to_ltf_scenario(r: sqlite3.Row) -> LtfScenario:
         return LtfScenario(
@@ -2127,6 +2316,26 @@ class Database:
                 ).fetchall()
             ]
         return self._ltf_cached(("ltf_se_list", scenario_id), load)
+
+    def list_ltf_structure_links(self, instrument_id: int) -> list[tuple]:
+        """(level_key, kind, stage, occurred_at, scenario_id) одним запросом.
+
+        Порядок сценариев совпадает с обходом наблюдений в _scenario_index.
+        """
+        rows = self.conn.execute(
+            """SELECT e.level_key AS level_key, e.kind AS kind, e.stage AS stage,
+                      e.occurred_at AS occurred_at, s.id AS scenario_id
+               FROM ltf_structure_event e
+               JOIN ltf_scenario s ON s.id = e.scenario_id
+               JOIN ltf_observation o ON o.id = s.observation_id
+               WHERE o.instrument_id=?
+               ORDER BY o.updated_at DESC, o.id DESC, s.id, e.occurred_at, e.id""",
+            (instrument_id,),
+        ).fetchall()
+        return [
+            (r["level_key"], r["kind"], r["stage"], r["occurred_at"], int(r["scenario_id"]))
+            for r in rows
+        ]
 
     @staticmethod
     def _to_ltf_structure_event(r: sqlite3.Row) -> LtfStructureEvent:

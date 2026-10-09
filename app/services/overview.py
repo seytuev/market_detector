@@ -1217,6 +1217,8 @@ def instruments_overview(db: Database, settings) -> list[dict[str, Any]]:
                 1 for o in obs_list if o.state in _ACTIVE_STATES
             ),
             "data_state": ds,
+            "price": price,
+            "quote_at": quote[1] if quote else None,
             # L06: приоритет внимания — код группы (ATTENTION_ORDER) и
             # краткая причина; НЕ оценка прибыльности сетапа
             "attention": attention,

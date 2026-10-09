@@ -434,19 +434,22 @@ function drawZones() {
     pool = [];
   }
 
-  // Группы с 2+ участниками в пуле рисуются одной объединённой полосой —
-  // их зоны по отдельности не рисуем. При выбранной зоне (клик) показываем
-  // только её, без объединения.
-  const mergedGroups = new Map(); // group.id -> [zones from pool]
+  // Группы с 2+ участниками одного ТФ в пуле рисуются одной полосой.
+  // D1 и W1 не смешиваются, даже если сервер когда-то отдал их одной группой.
+  // При выбранной зоне (клик) показываем только её, без объединения.
+  const nativeTf = state.chartMode === 'h1' ? 'H1' : state.timeframe;
+  const foreignTf = (z) => z.timeframe !== nativeTf;
+  const mergedGroups = new Map(); // `${group.id}:${tf}` -> [zones from pool]
   if (!state.selectedZoneId) {
     for (const z of pool) {
       const g = groupByZone.get(z.id);
       if (!g) continue;
-      if (!mergedGroups.has(g.id)) mergedGroups.set(g.id, []);
-      mergedGroups.get(g.id).push(z);
+      const key = `${g.id}:${z.timeframe}`;
+      if (!mergedGroups.has(key)) mergedGroups.set(key, []);
+      mergedGroups.get(key).push(z);
     }
-    for (const [gid, members] of mergedGroups) {
-      if (members.length < 2) mergedGroups.delete(gid);
+    for (const [key, members] of mergedGroups) {
+      if (members.length < 2) mergedGroups.delete(key);
     }
   }
   const mergedIds = new Set();
@@ -467,27 +470,36 @@ function drawZones() {
     }
     return out;
   };
-  const clipItems = []; // {key, lower, upper}
+  const clipItems = []; // {key, lower, upper, tf}
   for (const z of pool) {
     if (mergedIds.has(z.id) || z.is_level) continue;
-    clipItems.push({ key: z.id, lower: z.lower, upper: z.upper });
+    clipItems.push({ key: z.id, lower: z.lower, upper: z.upper, tf: z.timeframe });
   }
-  for (const [gid, members] of mergedGroups) {
+  for (const [key, members] of mergedGroups) {
     clipItems.push({
-      key: 'g' + gid,
+      key,
+      tf: members[0].timeframe,
       lower: Math.min(...members.map((z) => z.lower)),
       upper: Math.max(...members.map((z) => z.upper)),
     });
   }
-  // приоритет — более узкая полоса: она остаётся целой и режет широкие
-  clipItems.sort((a, b) => (a.upper - a.lower) - (b.upper - b.lower));
+  // Обрезка только внутри одного ТФ: D1 не вырезает W1 и наоборот.
+  // Внутри ТФ приоритет у более узкой полосы — она остаётся целой.
   const segsByKey = new Map();
-  const taken = []; // интервалы более приоритетных (узких) полос
+  const byTf = new Map();
   for (const it of clipItems) {
-    let segs = [[it.lower, it.upper]];
-    for (const [lo, hi] of taken) segs = subtractSegs(segs, lo, hi);
-    segsByKey.set(it.key, segs);
-    taken.push([it.lower, it.upper]);
+    if (!byTf.has(it.tf)) byTf.set(it.tf, []);
+    byTf.get(it.tf).push(it);
+  }
+  for (const items of byTf.values()) {
+    items.sort((a, b) => (a.upper - a.lower) - (b.upper - b.lower));
+    const taken = [];
+    for (const it of items) {
+      let segs = [[it.lower, it.upper]];
+      for (const [lo, hi] of taken) segs = subtractSegs(segs, lo, hi);
+      segsByKey.set(it.key, segs);
+      taken.push([it.lower, it.upper]);
+    }
   }
 
   for (const z of pool) {
@@ -519,6 +531,7 @@ function drawZones() {
     const cls = `zone-rect z-${z.type} status-${z.status}` +
       (completed ? ' status-completed' : '') +
       (keptLevel ? ' level-kept' : '') +
+      (foreignTf(z) ? ' tf-context' : '') +
       (state.selectedZoneId === z.id ? ' selected' : '');
     const labelText =
       `${z.type.toUpperCase()} ${z.timeframe} · ${STATUS_RU[z.status] || z.status}` +
@@ -564,7 +577,7 @@ function drawZones() {
   // клик открывает первую зону группы (исходные зоны доступны и в таблице
   // ниже). Границы — по видимым участникам; полоса тоже обрезается более
   // узкими разнотипными соседями (сегменты из segsByKey).
-  for (const [gid, members] of mergedGroups) {
+  for (const [key, members] of mergedGroups) {
     // начало полосы — самое раннее формирование участников
     let x1 = null;
     for (const z of members) {
@@ -579,9 +592,10 @@ function drawZones() {
     const title = ordered.map((z) =>
       `${z.type.toUpperCase()} ${z.timeframe} · ${fmtPrice(z.lower)}–${fmtPrice(z.upper)}` +
       ` · ${STATUS_RU[z.status] || z.status}`).join('\n');
+    const groupCls = 'zone-group' + (members.every(foreignTf) ? ' tf-context' : '');
     let badgePlaced = false;
-    for (const [lo, hi] of (segsByKey.get('g' + gid) || [])) {
-      const div = makeBand(hi, lo, 'zone-group');
+    for (const [lo, hi] of (segsByKey.get(key) || [])) {
+      const div = makeBand(hi, lo, groupCls);
       if (!div) continue;
       div.style.left = x1 + 'px';
       div.style.width = Math.max(8, paneRight - x1) + 'px';
@@ -593,7 +607,7 @@ function drawZones() {
         badgePlaced = true;
       }
       div.title = title;
-      div.onclick = () => openZoneDetail(gid);
+      div.onclick = () => openZoneDetail(ordered[0].id);
       overlay.appendChild(div);
     }
   }
@@ -2616,7 +2630,7 @@ function renderDeskAssets() {
     const cur = deskData.currents.get(ins.id);
     const price = (ins.id === state.instrumentId && state.lastPrice != null)
       ? state.lastPrice
-      : (cur && cur.price != null ? cur.price : null);
+      : (r.price != null ? r.price : (cur && cur.price != null ? cur.price : null));
     const st8 = deskAssetState(r);
     const sel = ins.id === state.instrumentId ? ' selected' : '';
     return `<button type="button" class="desk-asset${sel}" data-iid="${ins.id}">` +
@@ -2811,18 +2825,6 @@ async function loadDeskExtras() {
     loadH1Markers().catch((e) => console.warn('h1 markers:', e));
   }
   renderDeskExtras();
-  const others = deskData.assets.filter((r) => r.instrument.id !== id);
-  if (!others.length) return;
-  const currents = await Promise.all(others.map((r) =>
-    api(`/api/ltf/instruments/${r.instrument.id}/current`).catch(() => null)));
-  if (req !== deskData.reqSeq || id !== state.instrumentId) return;
-  deskData.currents = new Map();
-  others.forEach((r, i) => {
-    if (currents[i] && currents[i].state_version === currentVersion) {
-      deskData.currents.set(r.instrument.id, currents[i]);
-    }
-  });
-  renderDeskAssets();
 }
 
 function scheduleDeskRefresh() {

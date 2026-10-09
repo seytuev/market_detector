@@ -239,8 +239,24 @@ def render_text(payload: MessagePayload) -> str:
         for v in payload.views
     ]
     if len(blocks) > 1:
-        header = f"📌 Событий: {len(blocks)}"
-        return header + "\n\n" + "\n\n".join(blocks)
+        from .compact import direction_icon
+        snapshots = [htf_snapshot(v) for v in payload.views]
+        shared = len({(s.symbol, s.timeframe) for s in snapshots}) == 1
+        header = (f"📌 {snapshots[0].symbol} · {snapshots[0].timeframe}" if shared else "📌 События")
+        lines = [f"{header} · {len(blocks)}"]
+        for view, snap in list(zip(payload.views, snapshots))[:4]:
+            direction = view.zone.direction.value if view.zone else ""
+            prefix = "" if shared else f"{snap.symbol} · {snap.timeframe} · "
+            lines.append(f"{direction_icon(direction)} {prefix}{snap.type_ru} · {_headline(snap, view.event)}")
+            price = f"уровень {_fmt_price(snap.lower)}" if snap.is_level else f"{_fmt_price(snap.lower)}–{_fmt_price(snap.upper)}"
+            if snap.event_price is not None:
+                price += f" · цена {_fmt_price(snap.event_price)}"
+            lines.append(price)
+        if len(blocks) > 4:
+            lines.append(f"Ещё событий: {len(blocks) - 4} · в подробностях")
+        latest = max(v.event.occurred_at for v in payload.views)
+        lines.append(f"🕒 {_fmt_time(latest)}")
+        return "\n".join(lines)
     return blocks[0] if blocks else ""
 
 

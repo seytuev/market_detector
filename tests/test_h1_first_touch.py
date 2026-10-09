@@ -9,7 +9,7 @@ import asyncio
 import pytest
 
 from app.engine.scanner import Scanner
-from app.models import Direction, EventKind, TIMEFRAME_MINUTES, Zone, ZoneStatus, ZoneType
+from app.models import now_ms, Direction, EventKind, TIMEFRAME_MINUTES, Zone, ZoneStatus, ZoneType
 from app.notify.queue import EventDispatcher
 from app.notify.telegram import LogSender
 
@@ -34,7 +34,7 @@ def test_h1_first_touch_keeps_zone_active(db, cfg, instrument_id):
     # подход издалека — без касания событий глубины нет
     scanner.on_price(instrument_id, 120.0, T0 + H1_MS)
     # первое касание (бычья зона, возврат сверху)
-    events = scanner.on_price(instrument_id, 110.0, T0 + 2 * H1_MS)
+    events = scanner.on_price(instrument_id, 110.0, now_ms())
     kinds = [e.kind for e in events]
     assert EventKind.TOUCH in kinds
     after = db.get_zone(z.id)
@@ -85,14 +85,14 @@ def test_h1_no_repeat_deliveries(db, cfg, instrument_id):
     sender = LogSender()
     dispatcher = EventDispatcher(db, cfg, sender)
 
-    events = scanner.on_price(instrument_id, 110.0, T0 + 2 * H1_MS)
+    events = scanner.on_price(instrument_id, 110.0, now_ms())
     asyncio.run(dispatcher.dispatch(events))
-    assert len(sender.sent) == 1
+    assert len(sender.cards) == 1
     # через 120+ часов всё ещё у той же границы — ни событий, ни доставок
     events2 = scanner.on_price(instrument_id, 109.5, T0 + 2 * H1_MS + 121 * 3600_000)
     asyncio.run(dispatcher.dispatch(events2))
     assert events2 == []
-    assert len(sender.sent) == 1
+    assert len(sender.cards) == 1
 
 
 def test_d1_zone_same_lifecycle_as_h1(db, cfg, instrument_id):
@@ -107,7 +107,7 @@ def test_d1_zone_same_lifecycle_as_h1(db, cfg, instrument_id):
         )
         zones[tf] = db.insert_zone(z)
     scanner = Scanner(db, cfg)
-    events = scanner.on_price(instrument_id, 110.0, T0 + 2 * H1_MS)
+    events = scanner.on_price(instrument_id, 110.0, now_ms())
     for tf, zid in zones.items():
         kinds = [e.kind for e in events if e.zone_id == zid]
         assert kinds == [EventKind.TOUCH], tf

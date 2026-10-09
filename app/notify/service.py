@@ -31,6 +31,7 @@ class ServiceNotifications:
 
     def failed(self, ins, timeframes, reason="network"):
         stamp = now_ms()
+        changed = False
         with self.db.conn._lock:
             self.db.conn.execute(
                 "INSERT OR IGNORE INTO notification_incident(venue,reason,started_at) VALUES(?,?,?)",
@@ -39,16 +40,18 @@ class ServiceNotifications:
                 "SELECT * FROM notification_incident WHERE venue=? AND reason=? AND recovered_at IS NULL",
                 (ins.venue, reason)).fetchone()
             for tf in timeframes:
-                self.db.conn.execute(
+                cur = self.db.conn.execute(
                     "INSERT INTO notification_incident_stream(incident_id,instrument_id,timeframe,recovered) "
-                    "VALUES(?,?,?,0) ON CONFLICT(incident_id,instrument_id,timeframe) DO UPDATE SET recovered=0",
+                    "VALUES(?,?,?,0) ON CONFLICT(incident_id,instrument_id,timeframe) DO UPDATE SET recovered=0 WHERE recovered<>0",
                     (incident["id"], ins.id, tf))
+                changed |= cur.rowcount > 0
             self.db.conn.commit()
         packet = self.outbox.put("incident", f"down:{incident['id']}", Card(""), [incident["id"]], quiet=True)
         if self.validate(None, None):
             self.outbox.suppress(packet, "service disabled")
         self.db.conn.execute("UPDATE notification_incident SET packet_id=? WHERE id=?", (packet, incident["id"]))
-        self.db.conn.execute("UPDATE notification_packet SET dirty=1 WHERE id=? AND status='sent'", (packet,))
+        if changed:
+            self.db.conn.execute("UPDATE notification_packet SET dirty=1 WHERE id=? AND status='sent'", (packet,))
         self.db.conn.commit()
 
     def recovered(self, ins, tf):

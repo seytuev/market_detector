@@ -32,6 +32,9 @@ def screenshot_candles(
     closed = db.get_candles(
         instrument_id, timeframe, start_ms=start_ms, end_ms=end_ms,
     )
+    if end_ms is not None:
+        # A candle known today may still have been open at the event time.
+        closed = [c for c in closed if c.close_time <= end_ms]
     if end_ms is None:
         latest = db.last_candle(instrument_id, timeframe, closed_only=False)
         if (

@@ -131,6 +131,11 @@ class LtfDispatcher:
         )
         if sc is None or sc.state in ("cancelled", "closed"):
             return True
+        if ev.kind == "entries_ready" and ev.payload.get("entries"):
+            entries = ev.payload["entries"]
+            known = [self.db.get_ltf_entry_zone(e.get("entry_zone_id")) for e in entries]
+            if all(z is not None and z.validity == "invalid" for z in known):
+                return True
         if ev.kind == "touch":
             zone_id = ev.payload.get("entry_zone_id")
             zone = (
@@ -165,7 +170,7 @@ class LtfDispatcher:
             if obs.activated_at else 0
         )
         days = 3 if elapsed_days <= 3 else (7 if elapsed_days <= 7 else 14)
-        end = ev.occurred_at + 3_600_000  # закрытие свечи события + шаг H1
+        end = ev.occurred_at  # no candle closed after the event may leak into its snapshot
         out = (
             Path(self.settings.db_path).parent / "charts"
             / f"ltf_event_{ev.id}_{now_ms()}.png"
@@ -218,9 +223,13 @@ class LtfDispatcher:
         targets, details = [], []
         for ev in events:
             c = self._load_context(ev)
+            if c.instrument:
+                details.append(f"Контекст #{ev.observation_id} · сценарий #{ev.scenario_id}\n"
+                               f"Источник: {c.instrument.venue} {c.instrument.market_type} / {c.instrument.symbol}")
             details.extend(render_ltf_messages(ev, c))
             if c.instrument and c.zone and c.observation:
-                target = dict(label=f"{c.instrument.symbol} · {c.zone.type.value} {c.zone.timeframe} · сценарий #{ev.scenario_id}",
+                from .formatting import fmt_price_ru
+                target = dict(label=f"{c.zone.type.value} {c.zone.timeframe} · {fmt_price_ru(c.zone.lower)}–{fmt_price_ru(c.zone.upper)}",
                               instrument_id=c.instrument.id, zone_id=c.zone.id,
                               cycle_id=c.observation.cycle_id, kind="touch",
                               chart=f"nav:charto:{c.instrument.id}:{c.observation.id}", tv=tradingview_url(c.instrument))
@@ -241,10 +250,15 @@ class LtfDispatcher:
             except Exception:
                 log.warning("LTF chart unavailable", exc_info=True)
         text = ltf_text(lead, ctx, len({e.observation_id for e in events}))
+        if lead.kind not in ("entries_ready", "range_ready", "touch"):
+            from dataclasses import replace
+            if self._delivery_blocked(replace(lead, kind="entries_ready")):
+                text += "\n⚠️ Данные сейчас неактуальны · показан факт на время события"
         if needs_chart and not path:
             text += "\n📊 График временно недоступен"
         if len(targets) > 1 and path:
-            text += f"\n📊 График контекста #{lead.observation_id}; остальные — по кнопке"
+            label = f"{ctx.zone.type.value} {ctx.zone.timeframe}" if ctx.zone else "H1"
+            text += f"\n📊 Контекст графика: {label}; остальные — по кнопке"
         return Card(text, "\n\n".join(details), path, targets, needs_chart and not path)
 
     async def deliver(self, events: list[LtfEvent]) -> int:
@@ -259,7 +273,26 @@ class LtfDispatcher:
                 self.db.mark_ltf_event_delivered(ev.id)
                 continue
             ctx = self._load_context(ev)
-            self.outbox.put("ltf", ltf_key(ev, ctx), Card(""), [ev.id], quiet=ev.kind == "range_ready")
+            key = ltf_key(ev, ctx)
+            existing = self.db.conn.execute(
+                "SELECT id FROM notification_packet WHERE channel='ltf' AND destination=? AND semantic_key=?",
+                (self.outbox.destination, key)).fetchone()
+            historic_match = False
+            if not existing and ctx.instrument:
+                rows = self.db.conn.execute(
+                    "SELECT e.id FROM ltf_event e JOIN ltf_observation o ON o.id=e.observation_id "
+                    "WHERE o.instrument_id=? AND e.kind=? AND e.occurred_at=? AND e.delivered=1 AND e.delayed=0",
+                    (ctx.instrument.id, ev.kind, ev.occurred_at)).fetchall()
+                for prior in rows:
+                    old = self.db.get_ltf_event(prior["id"])
+                    if ltf_key(old, self._load_context(old)) == key:
+                        historic_match = True
+                        break
+            packet_id = self.outbox.put("ltf", key, Card(""), [ev.id], quiet=ev.kind == "range_ready")
+            if historic_match:
+                self.outbox.suppress(packet_id, "equivalent delivered before outbox migration")
+                self.db.mark_ltf_event_delivered(ev.id)
+                continue
             if ev.kind != "range_ready" and ev.scenario_id:
                 self.db.conn.execute(
                     "UPDATE notification_member SET reason='superseded' WHERE channel='ltf' AND event_id IN "

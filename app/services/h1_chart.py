@@ -343,14 +343,38 @@ def _scenario_index(db: Database, instrument_id: int) -> dict[tuple, list[int]]:
     """Связь старых событий сценария с фактом машины. Цена сама по себе
     ключом не является: совпадают level_key, kind, stage и occurred_at."""
     index: dict[tuple, list[int]] = {}
-    for obs in db.list_ltf_observations(instrument_id=instrument_id):
-        for sc in db.list_ltf_scenarios(observation_id=obs.id):
-            for ev in db.list_ltf_structure_events(sc.id):
-                key = (ev.level_key, ev.kind, ev.stage, ev.occurred_at)
-                bucket = index.setdefault(key, [])
-                if sc.id not in bucket:
-                    bucket.append(sc.id)
+    for level_key, kind, stage, occurred_at, scenario_id in db.list_ltf_structure_links(
+        instrument_id
+    ):
+        key = (level_key, kind, stage, occurred_at)
+        bucket = index.setdefault(key, [])
+        if scenario_id not in bucket:
+            bucket.append(scenario_id)
     return index
+
+
+# Живой снимок идей. Исторический as_of сюда не кладётся: прошлый момент
+# должен остаться активным, даже если сейчас идея уже закрыта.
+_LIVE_PROJECTION: dict[tuple, tuple] = {}
+
+
+def _project_for_chart(db, instrument_id, cfg, moment, zones, candles, *, live: bool):
+    from .htf_ideas import project_ideas
+    from ..engine.ltf.relevance import VERSION
+    last = db.last_candle(instrument_id, "H1")
+    cacheable = live and last is not None and moment >= last.close_time
+    seq = db.get_state_seq() if cacheable else None
+    key = (id(db), instrument_id)
+    if cacheable:
+        hit = _LIVE_PROJECTION.get(key)
+        if hit is not None and hit[0] == seq and hit[1] == VERSION:
+            return hit[2]
+    result = project_ideas(
+        db, instrument_id, cfg, moment, zones=zones, candles=candles,
+    )
+    if cacheable:
+        _LIVE_PROJECTION[key] = (seq, VERSION, result)
+    return result
 
 
 def _geometry_key(type_: str, direction: str, formed_at: int, lower: float, upper: float):
@@ -780,10 +804,19 @@ def assemble_h1_layers(
         z for z in db.list_ltf_entry_zones(instrument_id=instrument_id)
         if _stored_zone_visible(z, moment)
     ]
-    from .htf_ideas import project_ideas
-    lifecycle_candles = db.get_candles(instrument_id, "H1", end_ms=moment)
-    ideas, idea_links, lifecycle_facts = project_ideas(
-        db, instrument_id, cfg, moment, zones=stored, candles=lifecycle_candles,
+    life_from = load_from
+    if stored:
+        earliest = min(
+            z.formed_at if z.confirmed_at is None else min(z.formed_at, z.confirmed_at)
+            for z in stored
+        )
+        life_from = min(life_from, earliest)
+    lifecycle_candles = db.get_candles(
+        instrument_id, "H1", start_ms=life_from, end_ms=moment,
+    )
+    ideas, idea_links, lifecycle_facts = _project_for_chart(
+        db, instrument_id, cfg, moment, stored, lifecycle_candles,
+        live=as_of is None,
     )
     index = _lifecycle_index(db, instrument_id, candles, stored, moment, load_from)
     zones: list[dict[str, Any]] = []

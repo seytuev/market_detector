@@ -217,6 +217,49 @@ async def test_restart_restore_no_duplicates():
     assert after == before
 
 
+async def test_restore_skips_replay_when_cursor_is_current_and_applies_tail():
+    """Курсор уже на последней закрытой H1 — полный replay не вызывается.
+    Новая свеча хвоста всё равно обрабатывается."""
+    db = Database(":memory:")
+    adapter = FakeAdapter()
+    start = now_ms() - 6 * H1_MS
+    bars = make_h1_candles(
+        [(10, 12, 9, 11), (11, 13, 10, 12), (12, 14, 11, 13), (11, 13, 10, 12)],
+        start,
+    )
+    adapter.candles = list(bars)
+    worker, engine = _make_worker(db, adapter)
+    await worker.seed_instruments()
+    ins = next(i for i in db.get_instruments() if i.symbol == "BTCUSDT")
+    for candle in bars:
+        candle.instrument_id = ins.id
+    db.insert_candles(bars)
+    zone = _parent_zone(db, ins.id)
+    engine.on_htf_zone_touched(ins.id, zone, bars[0].open_time)
+    engine.process_h1_close(ins.id)
+    assert db.get_meta(f"ltf:h1:last_close:{ins.id}") == str(bars[-1].close_time)
+
+    extra = make_candle(
+        bars[-1].open_time + H1_MS, 12, 14, 11, 13, "H1", ins.id,
+    )
+    adapter.candles.append(extra)
+    calls: list[int] = []
+    orig = engine.replay_observation
+
+    def spy(observation_id: int):
+        calls.append(observation_id)
+        return orig(observation_id)
+
+    engine.replay_observation = spy
+    try:
+        await worker._ltf_restore_all()
+    finally:
+        engine.replay_observation = orig
+    assert calls == []
+    assert db.get_meta(f"ltf:h1:last_close:{ins.id}") == str(extra.close_time)
+    assert any(c.open_time == extra.open_time for c in db.get_candles(ins.id, "H1"))
+
+
 async def test_ltf_opens_when_price_already_inside_parent():
     """Цена внутри активного OB D1 — наблюдение открывается без галочки
     и без нового HTF-события в текущем poll."""

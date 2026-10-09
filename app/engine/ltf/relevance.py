@@ -51,7 +51,15 @@ def zone_at(zone, candles, as_of, cfg):
     gap = False
     excluded_at = None
     reason = None
-    for c in candles:
+    # Свечи отсортированы по open_time. Префикс до старта зоны на скан не влияет.
+    lo, hi = 0, len(candles)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if candles[mid].open_time < start:
+            lo = mid + 1
+        else:
+            hi = mid
+    for c in candles[lo:]:
         if not c.closed or c.open_time < start or c.close_time > as_of:
             continue
         if c.open_time != expected:

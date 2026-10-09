@@ -73,6 +73,7 @@ def render_zone_chart(
     out_path: str | Path,
     source_label: str,
     symbol: str | None = None,
+    *, event_at: int | None = None, event_price: float | None = None,
 ) -> str:
     """Рисует свечи (mplfinance, тёмная тема), прямоугольник зоны [L, U]
     и линию середины M. Возвращает путь к PNG.
@@ -156,6 +157,10 @@ def render_zone_chart(
             (zone.lower, fmt_price_ru(zone.lower), zone_color),
         ]
 
+    if event_price is not None:
+        ax.axhline(event_price, color="#60a5fa", linewidth=1.1, linestyle=":")
+        labels.append((event_price, f"Цена {fmt_price_ru(event_price)}", "#60a5fa"))
+
     # Воздух вокруг данных: пустота справа после последней свечи и отступ
     # сверху (линия границы/хай не упирается в край), небольшой снизу
     ax.set_xlim(-0.5, xr)
@@ -163,6 +168,8 @@ def render_zone_chart(
     lo = min(c.low for c in candles)
     hi = max(hi, zone.lower if zone.is_level else zone.upper)
     lo = min(lo, zone.lower)
+    if event_price is not None:
+        hi, lo = max(hi, event_price), min(lo, event_price)
     span = (hi - lo) or 1.0
     ax.set_ylim(lo - span * 0.04, hi + span * 0.10)
 
@@ -174,7 +181,7 @@ def render_zone_chart(
             f" · {DIRECTION_RU.get(zone.direction.value, zone.direction.value)}"
         )
     status_ru = STATUS_RU.get(zone.status.value, zone.status.value)
-    subtitle = f"LevelFrame · {status_ru} · снимок {fmt_time_msk(now_ms())}"
+    subtitle = f"LevelFrame · {status_ru} · снимок {fmt_time_msk(event_at if event_at is not None else now_ms())}"
     header_bottom = set_header(fig, title, subtitle)
     apply_layout(fig, ax, header_bottom)
     layout_price_labels(fig, ax, labels)

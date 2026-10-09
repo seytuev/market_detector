@@ -304,7 +304,7 @@ def render_ltf_chart(
         # §9.2: значения далёкого HTF-контекста — текстом, без сжатия свечей
         subtitle += f"\n{htf_far_note}"
     header_bottom = set_header(fig, title, subtitle)
-    apply_layout(fig, ax, header_bottom)
+    apply_layout(fig, ax, header_bottom, footer_lines=4)
     layout_price_labels(fig, ax, labels)
     set_footer(fig, f"Свечи {tf}, время открытия — МСК")
     add_legend(

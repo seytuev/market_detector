@@ -157,12 +157,27 @@ class LtfEngine:
         (инкрементально, через meta-курсор — перезапуск ничего не дублирует)."""
         now = now_ms if now_ms is not None else _real_now_ms()
         grace_ms = self.cfg.ltf_live_grace_seconds * 1000
+        key = f"ltf:h1:last_close:{instrument_id}"
+        last_done = int(self.db.get_meta(key) or 0)
+        last = self.db.last_candle(instrument_id, "H1")
+        if last is None:
+            return LtfTickResult()
+        from ...services.htf_ideas import (
+            ideas_checkpoint_fresh, mark_ideas_checkpoint, reconcile_ideas,
+        )
+        if last.close_time <= last_done:
+            # Новых закрытий нет. Идеи пересчитываем только если снимок
+            # устарел; серию H1 заново не читаем.
+            if not ideas_checkpoint_fresh(self.db, instrument_id):
+                reconcile_ideas(self.db, instrument_id, self.cfg, now)
+                from ...services.liquidity_anchors import refresh_liquidity_anchors
+                refresh_liquidity_anchors(self.db, instrument_id)
+                mark_ideas_checkpoint(self.db, instrument_id)
+            return LtfTickResult()
         closed = self.db.get_candles(instrument_id, "H1")
         result = LtfTickResult()
         if not closed:
             return result
-        key = f"ltf:h1:last_close:{instrument_id}"
-        last_done = int(self.db.get_meta(key) or 0)
         self._batch = StructureBatch() if self.scan_cursors else None
         try:
             for idx, c in enumerate(closed):
@@ -183,10 +198,10 @@ class LtfEngine:
                 self.db.set_meta(key, str(c.close_time))
         finally:
             self._batch = None
-        from ...services.htf_ideas import reconcile_ideas
         reconcile_ideas(self.db, instrument_id, self.cfg, now)
         from ...services.liquidity_anchors import refresh_liquidity_anchors
         refresh_liquidity_anchors(self.db, instrument_id)
+        mark_ideas_checkpoint(self.db, instrument_id)
         return result
 
     def replay_observation(self, observation_id: int) -> LtfTickResult:
@@ -225,10 +240,11 @@ class LtfEngine:
             self.db.set_meta(
                 f"ltf:h1:last_close:{obs.instrument_id}", str(closed[-1].close_time)
             )
-            from ...services.htf_ideas import reconcile_ideas
+            from ...services.htf_ideas import mark_ideas_checkpoint, reconcile_ideas
             reconcile_ideas(self.db, obs.instrument_id, self.cfg, closed[-1].close_time)
             from ...services.liquidity_anchors import refresh_liquidity_anchors
             refresh_liquidity_anchors(self.db, obs.instrument_id)
+            mark_ideas_checkpoint(self.db, obs.instrument_id)
         return result
 
     def _process_candle(

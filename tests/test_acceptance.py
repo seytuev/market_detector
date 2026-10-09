@@ -196,14 +196,21 @@ async def test_n12_restart_preserves_state(tmp_path, cfg):
     assert events1, "первый replay должен создать события"
     dispatcher1 = EventDispatcher(db1, cfg, LogSender())
     deliveries1 = await dispatcher1.dispatch(events1)
-    assert deliveries1, "события должны быть доставлены"
+    assert deliveries1 == []  # historical replay never floods Telegram
+    stamp = now_ms()
+    zid = db1.insert_zone(Zone(None, iid, ZoneType.OB, Direction.BULL, "D1",
+        lower=65000, upper=66000, formed_at=stamp, confirmed_at=stamp,
+        status=ZoneStatus.ACTIVE, source="manual"))
+    live = Event(None, zid, 1, EventKind.TOUCH, stamp, stamp, 66000)
+    live.id = db1.insert_event(live)
+    assert await dispatcher1.dispatch([live])
 
     n_zones = len(db1.get_zones(iid))
     n_events = len(db1.get_events(limit=10000))
     n_deliveries = db1.conn.execute("SELECT COUNT(*) c FROM delivery").fetchone()["c"]
     # сроки подавления зафиксированы (§8)
-    approach = next(e for e in events1 if e.kind == EventKind.APPROACH)
-    st = db1.get_alert_state(approach.zone_id, approach.cycle_id, "approach")
+    approach = live
+    st = db1.get_alert_state(approach.zone_id, approach.cycle_id, "touch")
     assert st is not None and st.last_delivered_at > 0
     db1.close()
 
@@ -222,7 +229,7 @@ async def test_n12_restart_preserves_state(tmp_path, cfg):
     assert n_deliveries2 == n_deliveries
 
     # сроки подавления пережили перезапуск (§8/§13.12)
-    st2 = db2.get_alert_state(approach.zone_id, approach.cycle_id, "approach")
+    st2 = db2.get_alert_state(approach.zone_id, approach.cycle_id, "touch")
     assert st2 is not None and st2.last_delivered_at == st.last_delivered_at
     db2.close()
 
@@ -267,7 +274,9 @@ def test_n13_render_text_marks_delayed_event(db, instrument_id):
     view = _sample_view(db, instrument_id, delayed=True)
     text = render_text(MessagePayload(events=[view.event], zones=[view.zone], views=[view]))
     assert "задержкой" in text
-    assert "исходное время" in text and "обнаружено" in text
+    from app.notify.telegram import _render_event_details
+    details = _render_event_details(view)
+    assert "исходное время" in details and "обнаружено" in details
     # исходное время события, а не подмена текущим (§11); формат МСК (§6 ТЗ 07.10.2026)
     assert "МСК" in text and "UTC" not in text
 
@@ -283,16 +292,16 @@ def test_n14_render_text_message_content(db, instrument_id):
     # §5.1: строки «Источник» нет; площадка/рынок — только в строке бренда
     # первой строкой (ребрендинг LevelFrame §8)
     assert "Источник" not in text
-    assert text.splitlines()[0] == "LevelFrame · BTCUSDT · binance spot"
+    assert text.splitlines()[0] == "🟢 BTCUSDT · Orderblock W1 · бычий"
     assert "TradingView" not in text
     assert "W1" in text                                   # таймфрейм
     assert "Orderblock" in text and "бычий" in text       # тип и направление
     assert "65 000,00" in text and "66 000,00" in text    # границы (ru-формат)
-    assert "65 500,00" in text                            # середина
+    assert "65 500,00" not in text                            # середина
     assert "65 900,00" in text                            # цена события
-    assert "касание ближайшей границы" in text            # причина
+    assert "Цена коснулась зоны" in text            # причина
     assert "МСК" in text and "UTC" not in text            # время МСК (§6)
-    assert "активна" in text                              # статус
+    assert "Статус:" not in text                              # статус
 
 
 # ------------------------------------------------------------------
@@ -308,12 +317,12 @@ async def test_n18_silence_without_new_event(db, cfg, instrument_id):
     scanner = Scanner(db, cfg)
     sender = LogSender()
     dispatcher = EventDispatcher(db, cfg, sender)
-    t = T0 + H4_MS
+    t = now_ms()
 
     touch = scanner.on_price(instrument_id, 109.0, t)
     assert [e.kind for e in touch] == [EventKind.TOUCH]
     deliveries = await dispatcher.dispatch(touch)
-    assert len(deliveries) == 1 and len(sender.sent) == 1
+    assert len(deliveries) == 1 and len(sender.cards) == 1
     n_events = len(db.get_events(zid))
 
     # цена постоянно внутри зоны, в том числе «на следующий день» — без новых
@@ -328,7 +337,7 @@ async def test_n18_silence_without_new_event(db, cfg, instrument_id):
     assert await dispatcher.dispatch(touch) == []
     n_deliveries = db.conn.execute("SELECT COUNT(*) c FROM delivery").fetchone()["c"]
     assert n_deliveries == 1
-    assert len(sender.sent) == 1
+    assert len(sender.cards) == 1
 
 
 # ------------------------------------------------------------------

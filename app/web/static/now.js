@@ -46,6 +46,8 @@
     filter: 'all',
     selectedId: null,
     reqSeq: 0,           // поздний ответ старого запроса экран не перезаписывает
+    cardSeq: 0,          // поздний снимок чужой строки карточку не перезаписывает
+    cardLoading: false,
     refreshTimer: null,
     ageTimer: null,
   };
@@ -76,6 +78,8 @@
     if (ws && ws.price) return ws;
     const cur = st.currents.get(iid);
     if (cur && cur.price != null) return { price: cur.price, at: cur.quote_at };
+    const row = st.rows.find((r) => r.instrument.id === iid);
+    if (row && row.price != null) return { price: row.price, at: row.quote_at };
     return null;
   }
 
@@ -247,7 +251,14 @@
     const [base, quote] = baseQuote(ins.symbol || '');
     const pair = quote ? `${base} / ${quote}` : (base || '—');
     if (!v) {
-      el.innerHTML = `<div class="now-card-head"><span>${esc(pair)} · ${esc(tf)}</span></div>` +
+      const head = `<div class="now-card-head"><span>${esc(pair)} · ${esc(tf)}</span></div>`;
+      if (st.cardLoading) {
+        el.innerHTML = head +
+          '<h3>Читаем карточку</h3>' +
+          '<p class="now-empty">Снимок выбранного актива ещё загружается.</p>';
+        return;
+      }
+      el.innerHTML = head +
         '<h3>Ошибка чтения снимка</h3>' +
         '<p class="now-empty">Карточка не скрыта: снимок актива не прочитан.</p>';
       return;
@@ -337,17 +348,11 @@
       if (seq !== st.reqSeq) return;
       st.rows = (ov && ov.instruments) || [];
       st.candidates = ((cands || []).filter((z) => HTF_TFS.has(z.timeframe))).length;
-      // снимки /current — цена, возраст котировки и данные карточки;
-      // список наблюдения мал, запрашиваем для всех строк параллельно
-      const currents = await Promise.all(st.rows.map((r) =>
-        api(`/api/ltf/instruments/${r.instrument.id}/current`).catch(() => null)));
-      if (seq !== st.reqSeq) return;
-      st.currents = new Map();
-      st.rows.forEach((r, i) => {
-        if (currents[i]) st.currents.set(r.instrument.id, currents[i]);
-      });
+      // Цена строки уже в обзоре. Полный снимок H1 нужен только карточке
+      // выбранного актива, а не каждому инструменту списка.
       pickSelected();
       render();
+      await loadCurrent(st.selectedId, seq);
     } catch (e) {
       console.warn('now refresh:', e);
     }
@@ -401,12 +406,36 @@
     });
   });
 
+  async function loadCurrent(id, seq) {
+    if (!id) return;
+    const my = ++st.cardSeq;
+    if (!st.currents.has(id)) {
+      st.cardLoading = true;
+      renderCard();
+    }
+    let cur = null;
+    try {
+      cur = await api(`/api/ltf/instruments/${id}/current`);
+    } catch (e) {
+      cur = null;
+    }
+    if (seq !== st.reqSeq || my !== st.cardSeq || st.selectedId !== id) {
+      if (my === st.cardSeq) st.cardLoading = false;
+      return;
+    }
+    if (cur) st.currents.set(id, cur);
+    else st.currents.delete(id);
+    st.cardLoading = false;
+    renderCard();
+  }
+
   function selectRow(tr) {
     if (!tr) return;
     st.selectedId = Number(tr.dataset.iid);
     document.querySelectorAll('#now-tbody tr').forEach((el) =>
       el.classList.toggle('selected', el === tr));
-    renderCard();
+    if (st.currents.has(st.selectedId)) renderCard();
+    else loadCurrent(st.selectedId, st.reqSeq);
   }
 
   $('now-tbody').addEventListener('click', (e) => selectRow(e.target.closest('tr')));

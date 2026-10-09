@@ -233,8 +233,10 @@ class EventDispatcher:
         zone, ins = view.zone, view.instrument
         if zone is None or zone.id is None or ins is None:
             return
+        live = 0 <= now_ms() - view.event.occurred_at <= self.cfg.delivery_target_seconds * 1000
         candles = screenshot_candles(
             self.db, zone.instrument_id, zone.timeframe, limit=CHART_CANDLES,
+            end_ms=None if live else view.event.occurred_at,
         )
         if not candles:
             return
@@ -247,7 +249,8 @@ class EventDispatcher:
             from .chartimg import render_zone_chart  # тяжёлый импорт — лениво
 
             payload.image_path = await asyncio.to_thread(
-                render_zone_chart, candles, zone, out, source
+                render_zone_chart, candles, zone, out, source,
+                event_at=view.event.occurred_at, event_price=view.event.price,
             )
         except Exception:
             log.warning(
@@ -303,14 +306,16 @@ class EventDispatcher:
         allowed = [v for v in self._active_views(members) if not self._bot_blocked(v) and not self._entry_stale(v)]
         # Keep every fact in Details; show only the furthest state of a zone.
         ranks = {"approach": 0, "already_in_zone": 1, "touch": 2,
-                 "depth_50": 3, "fvg_weakened": 3, "depth_90": 4}
+                 "depth_50": 3, "fvg_weakened": 3, "depth_90": 4,
+                 "fvg_filled": 100, "ob_invalidated": 100, "breaker_archived": 100,
+                 "prb_archived": 100, "level_taken": 100}
         lead = {}
         for view in allowed:
             key = view.event.zone_id
             prev = lead.get(key)
             if prev is None or ranks.get(view.event.kind.value, 5) >= ranks.get(prev.event.kind.value, 5):
                 lead[key] = view
-        visible = list(lead.values())
+        visible = sorted(lead.values(), key=lambda v: -ranks.get(v.event.kind.value, 5))
         payload = MessagePayload(events=[v.event for v in visible], zones=[v.zone for v in visible if v.zone],
                                  views=visible, approach_pct=self.cfg.approach_pct)
         # Multiple objects: graph explicitly depicts the first, named on image;
@@ -324,14 +329,17 @@ class EventDispatcher:
             text += "\n📊 График временно недоступен"
         if len(visible) > 1 and payload.image_path:
             first = visible[0]
-            text += f"\n📊 На графике: {first.zone.type.value} {first.zone.timeframe} · зона #{first.zone.id}"
+            from .formatting import fmt_price_ru
+            text += f"\n📊 На графике: {first.zone.type.value} {first.zone.timeframe} · {fmt_price_ru(first.zone.lower)}–{fmt_price_ru(first.zone.upper)}"
         targets = []
         base = getattr(self.sender, "site_base_url", "")
         for v in visible:
             if not v.zone or not v.instrument:
                 continue
             z, ins = v.zone, v.instrument
-            target = dict(label=f"{ins.symbol} · {z.type.value} {z.timeframe} · #{z.id}",
+            from .formatting import fmt_price_ru
+            prices = fmt_price_ru(z.lower) if z.is_level else f"{fmt_price_ru(z.lower)}–{fmt_price_ru(z.upper)}"
+            target = dict(label=f"{ins.symbol} · {z.type.value} {z.timeframe} · {prices}",
                           zone_id=z.id, instrument_id=ins.id, cycle_id=v.event.cycle_id,
                           kind=v.event.kind.value, chart=f"nav:chartz:{z.id}", tv=tradingview_url(ins))
             if urlparse(base).hostname not in {None, "localhost", "127.0.0.1", "0.0.0.0", "::1"}:
@@ -346,6 +354,16 @@ class EventDispatcher:
         groups, ids = {}, []
         important_zones = {e.zone_id for e in events if e.kind not in self._QUIET and not e.delayed}
         for event in events:
+            # Scanner returns its original dataclass after inserting the row;
+            # that object can still have id=None. Resolve the persisted fact.
+            if event.id is None:
+                stored = self.db.conn.execute(
+                    "SELECT id FROM event WHERE zone_id=? AND cycle_id=? AND kind=? AND occurred_at=?",
+                    (event.zone_id, event.cycle_id, event.kind.value, event.occurred_at)).fetchone()
+                if stored is None:
+                    log.warning("Notification event is not in the journal: %s", event.idempotency_key(self.user))
+                    continue
+                event = self.db.get_event(stored["id"])
             view = self._load_view(event)
             if event.delayed or not self._passes_filters(view):
                 continue
@@ -378,6 +396,12 @@ class EventDispatcher:
                 if existing:
                     self.outbox.put("htf", existing["semantic_key"], Card(""), [e.id], quiet=quiet)
                 else:
+                    previous = self.db.get_alert_state(e.zone_id, e.cycle_id, e.kind.value, self.user) if terminal else None
+                    if previous and previous.last_delivered_at:
+                        packet = self.outbox.put("htf", f"legacy-terminal:{fact}", Card(""), [e.id])
+                        self.outbox.suppress(packet, "terminal fact delivered before outbox migration")
+                        self._finish_packet(e.id, "suppressed")
+                        continue
                     facts.append(fact)
                     fresh_views.append(v)
             if fresh_views:
@@ -410,6 +434,20 @@ class EventDispatcher:
     async def retry_pending(self) -> list[Delivery]:
         # Adopt legacy unsent rows once; never touch successful history.
         for delivery in self.db.pending_deliveries():
+            if None in delivery.event_ids:
+                # Older deliveries could contain [null] for scanner objects.
+                # The natural idempotency key still identifies the journal row.
+                parts = delivery.idempotency_key.rsplit(":", 4)
+                if len(parts) == 5:
+                    stored = self.db.conn.execute(
+                        "SELECT id FROM event WHERE zone_id=? AND cycle_id=? AND kind=? AND occurred_at=?",
+                        tuple(parts[1:])).fetchone()
+                    if stored:
+                        import json
+                        delivery.event_ids = [stored["id"]]
+                        self.db.conn.execute("UPDATE delivery SET event_ids=? WHERE id=?",
+                                             (json.dumps(delivery.event_ids), delivery.id))
+                        self.db.conn.commit()
             for event_id in delivery.event_ids:
                 exists = self.db.conn.execute(
                     "SELECT 1 FROM notification_member WHERE channel='htf' AND event_id=?", (event_id,)).fetchone()

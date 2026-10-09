@@ -102,16 +102,16 @@ async def test_seed_instruments_from_catalog():
     await worker.seed_instruments()
     instruments = db.get_instruments()
     assert len(instruments) == sum(venue in worker.adapters for venue, _ in SEED)
-    assert {i.symbol for i in instruments} == {s for _, s in SEED}
+    assert {i.symbol for i in instruments} == {s for venue, s in SEED if venue in worker.adapters}
 
     # символа нет в каталоге — явное сервисное сообщение владельцу (без подмены)
     db2 = Database(":memory:")
     worker2, _ = _make_worker(db2, FakeAdapter(symbols=["BTCUSDT"]))
     await worker2.seed_instruments()
-    missing = [s for _, s in SEED if s != "BTCUSDT"]
-    rows = _deliveries(db2)
+    missing = [s for venue, s in SEED if venue in worker2.adapters and s != "BTCUSDT"]
+    rows = db2.conn.execute("SELECT * FROM notification_packet WHERE channel='service'").fetchall()
     assert len(rows) == len(missing)
-    assert all(r["status"] == "sent" and r["event_ids"] == "[]" for r in rows)
+    assert all(r["status"] == "pending" and r["quiet"] for r in rows)
 
 
 async def test_backfill_loads_history_and_marks_replay_done():
