@@ -42,8 +42,8 @@ SEED = [
     ("binance", "ETHUSDT"),
     ("binance", "SOLUSDT"),
     ("binance", "ZECUSDT"),
-    # Hyperliquid: HYPE/USDT0, spotMeta identifier @207.
-    ("hyperliquid", "@207"),
+    # Hyperliquid: HYPE/USDT0 (API alias @207).
+    ("hyperliquid", "HYPE"),
 ]
 DEFAULT_TIMEFRAMES = ("D1", "W1")  # запасной вариант, если scan_timeframes пуст
                                    # (§1: H1/H4 убраны по решению пользователя)
@@ -145,6 +145,11 @@ class Worker:
 
     async def seed_instruments(self) -> None:
         """Заводит стартовые инструменты по проверенному каталогу источника (§1)."""
+        # Удалённый из стартового списка Binance-инструмент не должен
+        # оставаться активным после обновления существующей базы.
+        for old in self.db.get_instruments():
+            if old.venue == "binance" and old.symbol == "HYPEUSDT":
+                self.db.set_instrument_enabled(old.id, False)
         for venue, symbol in SEED:
             adapter = self.adapters.get(venue)
             if adapter is None:
@@ -887,15 +892,11 @@ class Worker:
         key = (ins.id, tf)
         was = self._stale.get(key, False)
         if stale and not was:
-            await self._service_message(
-                f"Проблема данных: {ins.venue}:{ins.symbol} {tf} — последняя закрытая "
-                f"свеча устарела, сигналы по этому инструменту могут запаздывать."
-            )
-        elif not stale and was:
-            await self._service_message(
-                f"Данные восстановлены: {ins.venue}:{ins.symbol} {tf} — "
-                f"свечи снова поступают."
-            )
+            self.dispatcher.services.failed(ins, [tf], "stale")
+        elif not stale:
+            # Persistent incidents survive process restart; in-memory `was`
+            # alone cannot decide whether a recovery is owed.
+            self.dispatcher.services.recovered(ins, tf)
         self._stale[key] = stale
 
     def _stale_limit_ms(self, tf: str) -> int:
@@ -915,10 +916,8 @@ class Worker:
     async def _mark_stale(self, ins: Instrument, reason: str) -> None:
         """Источник недоступен целиком: одно сообщение на инструмент,
         флаги stale — на все ТФ (восстановление отслеживается по каждому)."""
-        if any(not self._stale.get((ins.id, tf), False) for tf in self.scan_tfs):
-            await self._service_message(
-                f"Источник {ins.venue}:{ins.symbol} недоступен: {reason}"
-            )
+        log.warning("Source %s:%s unavailable: %s", ins.venue, ins.symbol, reason)
+        self.dispatcher.services.failed(ins, self.scan_tfs, "network")
         for tf in self.scan_tfs:
             self._stale[(ins.id, tf)] = True
             self.db.set_meta(f"stale:{ins.id}:{tf}", "1")

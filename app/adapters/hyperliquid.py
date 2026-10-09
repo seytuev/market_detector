@@ -42,6 +42,10 @@ INTERVAL_MAP = {"H1": "1h", "H4": "4h", "D1": "1d", "W1": "1w"}
 
 _PAGE_CAP = 5000  # предел свечей candleSnapshot за один запрос
 
+# Удобные публичные имена для инструментов, у которых Hyperliquid использует
+# технический alias в spotMeta/candleSnapshot.
+SPOT_SYMBOL_ALIASES = {"HYPE": "@207"}
+
 
 class HyperliquidSpotAdapter:
     """Спотовый адаптер Hyperliquid. venue='hyperliquid', market_type='spot'."""
@@ -103,7 +107,7 @@ class HyperliquidSpotAdapter:
                     asset=base_tok["name"],
                     venue=self.venue,
                     market_type="spot",
-                    symbol=u["name"],
+                    symbol=("HYPE" if u["name"] == "@207" else u["name"]),
                     quote_asset=quote_tok["name"],
                     # spotMeta не отдаёт tick size; берём szDecimals базового
                     # токена как ближайшую доступную точность (ограничение API)
@@ -124,6 +128,7 @@ class HyperliquidSpotAdapter:
         if timeframe not in INTERVAL_MAP:
             raise AdapterError(f"hyperliquid: неизвестный таймфрейм {timeframe!r}")
         interval = INTERVAL_MAP[timeframe]
+        api_symbol = SPOT_SYMBOL_ALIASES.get(symbol, symbol)
         interval_ms = TIMEFRAME_MS[timeframe]
 
         raw: list[dict] = []
@@ -133,7 +138,7 @@ class HyperliquidSpotAdapter:
                 {
                     "type": "candleSnapshot",
                     "req": {
-                        "coin": symbol,
+                        "coin": api_symbol,
                         "interval": interval,
                         "startTime": cursor,
                         "endTime": end_ms,
@@ -184,11 +189,12 @@ class HyperliquidSpotAdapter:
         resp = await self._post({"type": "allMids"})
         ts = now_ms()
         mids = resp.json()
-        if not isinstance(mids, dict) or symbol not in mids:
+        api_symbol = SPOT_SYMBOL_ALIASES.get(symbol, symbol)
+        if not isinstance(mids, dict) or api_symbol not in mids:
             raise AdapterError(
                 f"hyperliquid: нет mid-цены для {symbol} в allMids"
             )
-        return float(mids[symbol]), ts
+        return float(mids[api_symbol]), ts
 
     async def status(self) -> dict:
         """Состояние подключения: доступность /info (spotMeta) + время отклика."""
