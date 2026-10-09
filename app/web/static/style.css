@@ -2274,6 +2274,19 @@ input[type="checkbox"] { min-height: auto; accent-color: var(--accent); }
   .workbar select, .workbar .btn, .workbar .layer-menu, #btn-new-zone {
     flex: 0 0 auto; width: auto; max-width: 100%;
   }
+  /* На узкой строке кнопка «Слои» уже не у левого края. Панель от left:0
+     уезжает вправо за вьюпорт, а список H1 не помещается вниз. */
+  .workbar .layer-options {
+    position: fixed;
+    left: 12px;
+    right: 12px;
+    top: auto;
+    bottom: 72px;
+    width: auto;
+    max-width: none;
+    max-height: min(70dvh, calc(100dvh - 9rem));
+    z-index: 60;
+  }
 }
 .rv-facts dd { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 

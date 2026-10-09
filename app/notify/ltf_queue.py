@@ -213,7 +213,6 @@ class LtfDispatcher:
 
     async def _render_packet(self, row, members):
         from .outbox import Card
-        from .compact import ltf_text
         from .telegram import tradingview_url
         events = self._packet_events(members)
         active = [e for e in events if not self._event_stale(e) and not self._bot_blocked(e)
@@ -249,7 +248,7 @@ class LtfDispatcher:
                 path = await self._render_event_chart(lead, ctx)
             except Exception:
                 log.warning("LTF chart unavailable", exc_info=True)
-        text = ltf_text(lead, ctx, len({e.observation_id for e in events}))
+        text = self._packet_text(events, lead, ctx)
         if lead.kind not in ("entries_ready", "range_ready", "touch"):
             from dataclasses import replace
             if self._delivery_blocked(replace(lead, kind="entries_ready")):
@@ -261,13 +260,33 @@ class LtfDispatcher:
             text += f"\n📊 Контекст графика: {label}; остальные — по кнопке"
         return Card(text, "\n\n".join(details), path, targets, needs_chart and not path)
 
+    def _packet_text(self, events, lead, ctx):
+        """Обычный BOS остаётся прежним текстом. Карточка перехода — когда
+        один слом отменяет сценарии или подтверждает разворот."""
+        from .compact import ltf_text
+        shared = [e for e in events if (e.payload or {}).get("market_transition_key")]
+        use_transition = (
+            len(shared) > 1
+            or any(e.kind == "cancellation" and (e.payload or {}).get("market_transition_key") for e in shared)
+            or any((e.payload or {}).get("reversal_confirmed") for e in events)
+        )
+        if not use_transition:
+            return ltf_text(lead, ctx, len({e.observation_id for e in events}))
+        from ..services.htf_context import reversal_projection, transition_card_text
+        view = None
+        if ctx.observation is not None:
+            view = reversal_projection(
+                self.db, ctx.observation.instrument_id, lead.occurred_at, self.cfg,
+            )
+        return transition_card_text(events, ctx, view)
+
     async def deliver(self, events: list[LtfEvent]) -> int:
         from .outbox import Card
         from .compact import ltf_key
         pending = []
         for ev in events:
             stored = self.db.get_ltf_event(ev.id) if ev.id is not None else None
-            if stored is None or stored.delivered or ev.delayed:
+            if stored is None or ev.delayed:
                 continue
             if not self._group_enabled(ev.kind) or self._event_stale(ev) or self._bot_blocked(ev):
                 self.db.mark_ltf_event_delivered(ev.id)
@@ -277,6 +296,9 @@ class LtfDispatcher:
             existing = self.db.conn.execute(
                 "SELECT id FROM notification_packet WHERE channel='ltf' AND destination=? AND semantic_key=?",
                 (self.outbox.destination, key)).fetchone()
+            # Журнальный delivered общий. Другой получатель всё равно ставит свой пакет.
+            if stored.delivered and existing:
+                continue
             historic_match = False
             if not existing and ctx.instrument:
                 rows = self.db.conn.execute(
@@ -285,7 +307,22 @@ class LtfDispatcher:
                     (ctx.instrument.id, ev.kind, ev.occurred_at)).fetchall()
                 for prior in rows:
                     old = self.db.get_ltf_event(prior["id"])
-                    if ltf_key(old, self._load_context(old)) == key:
+                    if old.id == ev.id or ltf_key(old, self._load_context(old)) != key:
+                        continue
+                    owned = self.db.conn.execute(
+                        """SELECT 1 FROM notification_member m
+                           JOIN notification_packet p ON p.id=m.packet_id
+                           WHERE m.event_id=? AND p.destination=? AND p.channel='ltf'
+                             AND p.status IN ('sent','suppressed')""",
+                        (old.id, self.outbox.destination),
+                    ).fetchone()
+                    any_packet = self.db.conn.execute(
+                        "SELECT 1 FROM notification_member WHERE event_id=?",
+                        (old.id,),
+                    ).fetchone()
+                    # До outbox событие уже ушло одному владельцу: повторно не шлём.
+                    # Пакет другого получателя этот адрес не закрывает.
+                    if owned or any_packet is None:
                         historic_match = True
                         break
             packet_id = self.outbox.put("ltf", key, Card(""), [ev.id], quiet=ev.kind == "range_ready")

@@ -21,8 +21,19 @@ def bounds(data, label="Зона"):
 def ltf_key(ev, ctx):
     # Whitelist actual market facts. Scenario-local IDs and range versions
     # are bookkeeping, not distinct opportunities. Preserve eligibility flags.
-    p = ev.payload
+    p = ev.payload or {}
     ins, sc = ctx.instrument, ctx.scenario
+    # Один рыночный слом — одна карточка, даже если отменены несколько сценариев.
+    # Ключ не включает observation, range_version и время опроса.
+    transition = p.get("market_transition_key")
+    if transition:
+        return fingerprint([
+            ins.venue if ins else None,
+            ins.market_type if ins else None,
+            ins.id if ins else ev.observation_id,
+            transition,
+            "market_transition",
+        ])
     entries = [{k: e.get(k) for k in (
         "type", "lower", "upper", "mid", "overlap", "outside_premium", "context"
     )} for e in p.get("entries", [])]

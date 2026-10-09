@@ -831,3 +831,79 @@ CREATE TABLE IF NOT EXISTS notification_incident_stream (
     recovered INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY(incident_id,instrument_id,timeframe)
 );
+
+-- Эпизод HTF-контекста живёт отдельно от lifecycle зоны.
+-- Отработка FVG и снятие уровня эпизод не закрывают.
+CREATE TABLE IF NOT EXISTS htf_context_episode (
+    id INTEGER PRIMARY KEY,
+    instrument_id INTEGER NOT NULL,
+    started_at INTEGER NOT NULL,
+    last_distinct_interaction_at INTEGER NOT NULL,
+    candidate_direction TEXT NOT NULL,
+    basis TEXT NOT NULL DEFAULT '',
+    state TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    invalidated_at INTEGER,
+    invalid_reason TEXT,
+    confirmed_scenario_id INTEGER,
+    confirmed_at INTEGER,
+    protected_price REAL,
+    protected_candle_open INTEGER,
+    protected_pivot_ref INTEGER,
+    protected_kind TEXT,
+    intrabar_order_unknown INTEGER NOT NULL DEFAULT 0,
+    rule_version TEXT NOT NULL,
+    evidence TEXT NOT NULL DEFAULT '{}',
+    closed_at INTEGER,
+    close_reason TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_htf_context_episode_instr
+    ON htf_context_episode(instrument_id, state);
+
+CREATE TABLE IF NOT EXISTS htf_context_source (
+    id INTEGER PRIMARY KEY,
+    episode_id INTEGER NOT NULL,
+    zone_id INTEGER,
+    zone_version INTEGER,
+    interaction TEXT NOT NULL,
+    interaction_at INTEGER NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
+    evidence TEXT NOT NULL DEFAULT '{}',
+    UNIQUE(episode_id, zone_id, interaction, interaction_at)
+);
+CREATE INDEX IF NOT EXISTS ix_htf_context_source_episode
+    ON htf_context_source(episode_id);
+
+-- Версии ноги LL → наблюдаемый high. Старая версия не переписывается,
+-- поэтому исторический as_of не видит будущий максимум.
+CREATE TABLE IF NOT EXISTS htf_context_leg (
+    id INTEGER PRIMARY KEY,
+    episode_id INTEGER NOT NULL,
+    version INTEGER NOT NULL,
+    low REAL NOT NULL,
+    high REAL NOT NULL,
+    eq REAL NOT NULL,
+    status TEXT NOT NULL,
+    as_of INTEGER NOT NULL,
+    high_candle_open INTEGER,
+    frozen INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(episode_id, version)
+);
+
+-- Факт слома опоры. Карточка группируется по market_transition_key,
+-- а не по этой строке: один бар может сломать несколько опор.
+CREATE TABLE IF NOT EXISTS market_transition (
+    id INTEGER PRIMARY KEY,
+    instrument_id INTEGER NOT NULL,
+    market_break_key TEXT NOT NULL,
+    market_transition_key TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    break_candle_open_time INTEGER NOT NULL,
+    anchor_key TEXT NOT NULL,
+    notification_kind TEXT NOT NULL DEFAULT 'market_transition',
+    payload TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL,
+    UNIQUE(market_break_key, notification_kind)
+);
+CREATE INDEX IF NOT EXISTS ix_market_transition_key
+    ON market_transition(market_transition_key);

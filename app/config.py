@@ -123,6 +123,14 @@ class DetectorConfig:
     # PRB/Breaker/BSL/SSL триггерами не являются (для уровней нужны отдельные
     # направление ожидания и условие активации). Допустимые значения: OB, FVG.
     htf_context_types: str = "OB,FVG"
+    # Продуктовый default, не число со скриншота: сколько часов хранить
+    # эпизод HTF-контекста от последнего отдельного взаимодействия до
+    # подтверждения H1. 0 в поле ТФ — брать общий срок. Повтор того же
+    # события срок не продлевает. После подтверждения сценарий живёт
+    # своим структурным уровнем и этим окном больше не отменяется.
+    htf_context_wait_hours: int = 168
+    htf_context_wait_hours_d1: int = 0
+    htf_context_wait_hours_w1: int = 0
     # ТЗ §16.2 (предлагаемый режим, выключен по умолчанию): «Предварительный
     # диапазон» — read-only слой временного конца текущего движения до
     # подтверждения опор тремя правыми свечами. На подтверждённые диапазоны,
@@ -239,6 +247,9 @@ _NUMERIC_RANGES: dict[str, tuple[float, float]] = {
     "ltf_live_grace_seconds": (0, 86400),
     "ltf_history_days": (1, 365),
     "ltf_observation_stale_days": (0, 365),
+    "htf_context_wait_hours": (1, 8760),
+    "htf_context_wait_hours_d1": (0, 8760),
+    "htf_context_wait_hours_w1": (0, 8760),
     "stale_quote_seconds": (0, 86400),
     "stale_h1_intervals": (1, 100),
     "stale_d1_intervals": (1, 100),

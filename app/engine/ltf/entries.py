@@ -101,6 +101,7 @@ def build_movement(
     event: StructureEventDraft,
     direction: Direction,
     lookback_ms: int,
+    start_pivot: Optional[PivotCandidate] = None,
 ) -> Optional[MovementDraft]:
     """Нога, приведшая к слому: для bear — от последнего high-pivot до свечи
     слома (LL/свеча слома как конец, §8.1), для bull — зеркально.
@@ -111,9 +112,14 @@ def build_movement(
     kind_start = "high" if direction == Direction.BEAR else "low"
     kind_end = "low" if direction == Direction.BEAR else "high"
     starts = [p for p in pivots if p.kind == kind_start and p.pivot_at <= break_t]
-    if not starts:
-        return None
-    start = max(starts, key=lambda p: p.pivot_at)
+    if start_pivot is not None:
+        # Разворотная нога: исходный LL/HH, а не последний локальный HL/LH.
+        # Обычный вызов без start_pivot сохраняет прежний выбор.
+        start = start_pivot
+    else:
+        if not starts:
+            return None
+        start = max(starts, key=lambda p: p.pivot_at)
     ends = [p for p in pivots if p.kind == kind_end and p.pivot_at <= break_t]
     end = max(ends, key=lambda p: p.pivot_at) if ends else start
     source = [

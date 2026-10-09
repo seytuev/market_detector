@@ -121,6 +121,7 @@ class LtfEngine:
         # гасятся дедупом событий. Без курсора replay всей H1-истории шёл
         # десятки часов и голодал веб/API (GIL + замок БД).
         self._ctx_sweep_cursor: dict[int, int] = {}
+        self._bar_plan: Optional[dict] = None
 
     # ------------------------------------------------------------------ #
     # Запуск наблюдения (§4)
@@ -134,7 +135,7 @@ class LtfEngine:
         Идемпотентно по UNIQUE(zone_id, cycle_id): повторное HTF-событие
         и подавление Telegram не влияют на наблюдение (§4).
         """
-        return self.db.insert_ltf_observation(LtfObservation(
+        obs = self.db.insert_ltf_observation(LtfObservation(
             id=None, instrument_id=instrument_id, zone_id=zone.id,
             zone_version=int(zone.evidence.get("boundary_version", 1)),
             cycle_id=zone.cycle_id, direction=zone.direction,
@@ -145,6 +146,9 @@ class LtfEngine:
                 "zone_lower": zone.lower, "zone_upper": zone.upper,
             },
         ))
+        from ...services.htf_context import record_interaction
+        record_interaction(self.db, self.cfg, instrument_id, zone, occurred_at)
+        return obs
 
     # ------------------------------------------------------------------ #
     # Обработка закрытий H1 (§13)
@@ -270,20 +274,31 @@ class LtfEngine:
         # роли — из только что выполненного пересчёта (in-memory), а не из БД:
         # в replay роли в БД пишутся только на голове истории
         avail = sync.avail
-        for obs in self.db.list_ltf_observations(instrument_id=instrument_id):
-            if obs.state not in ("waiting_structure", "active"):
-                continue
-            if obs.activated_at > candle.close_time:
-                continue  # наблюдение начнётся позже этой свечи (§4)
-            sc = self.db.get_active_ltf_scenario(obs.id)
-            if sc is None:
-                self._maybe_open_scenario(obs, avail, up_to, candle, now,
-                                          processing_mode, detection_lag_ms,
-                                          result)
-            else:
-                self._process_active_scenario(obs, sc, sync, avail, up_to,
-                                              candle, now, processing_mode,
-                                              detection_lag_ms, result)
+        from ...services.htf_context import apply_context_bar, plan_context_bar
+        self._bar_plan = plan_context_bar(
+            self.db, self.cfg, instrument_id, candle, avail, up_to, now,
+        )
+        try:
+            for obs in self.db.list_ltf_observations(instrument_id=instrument_id):
+                if obs.state not in ("waiting_structure", "active"):
+                    continue
+                if obs.activated_at > candle.close_time:
+                    continue  # наблюдение начнётся позже этой свечи (§4)
+                sc = self.db.get_active_ltf_scenario(obs.id)
+                if sc is None:
+                    self._maybe_open_scenario(obs, avail, up_to, candle, now,
+                                              processing_mode, detection_lag_ms,
+                                              result)
+                else:
+                    self._process_active_scenario(obs, sc, sync, avail, up_to,
+                                                  candle, now, processing_mode,
+                                                  detection_lag_ms, result)
+            apply_context_bar(
+                self, instrument_id, candle, avail, up_to, now,
+                processing_mode, detection_lag_ms, result, self._bar_plan,
+            )
+        finally:
+            self._bar_plan = None
 
     def _scenario_start(self, sc) -> int:
         """Рыночное время старта сценария: occurred_at триггера (fallback —
@@ -333,6 +348,10 @@ class LtfEngine:
                     and entry_reason(e) == REASON_OUTSIDE_PD
                 ]
             tests = self.db.list_ltf_liquidity_tests(scenario_id=sc.id)
+            if (obs.evidence or {}).get("reversal_episode_id"):
+                self._scan_reversal_visits(
+                    obs, sc, candle, now, processing_mode, detection_lag_ms, result,
+                )
             for entry in entries:
                 zone = self.db.get_ltf_entry_zone(entry.entry_zone_id)
                 if zone is None:
@@ -343,6 +362,8 @@ class LtfEngine:
                 # иначе позднее созданная зона ловила бы ложные «исторические»
                 # касания (§13: восстановление не меняет прошлое)
                 if zone.confirmed_at and zone.confirmed_at > candle.close_time:
+                    continue
+                if (obs.evidence or {}).get("reversal_episode_id") and not zone.is_level:
                     continue
                 # §8.5: касание проверяется по полному диапазону зоны;
                 # §9 (Этап 5): закрытие за уровнем БЕЗ касания (ценовой разрыв
@@ -417,10 +438,9 @@ class LtfEngine:
         # обработан до обновления пригодности следующего входа
         cur = self.db.get_current_ltf_range(sc.id)
         rng_draft = self._row_to_draft(cur, sc.direction) if cur else None
-        ev = evaluate_entry(
-            zone, sc.direction, self.cfg, rng_draft,
-            movements=self.db.list_ltf_movements(sc.id),
-            liquidity_tests=tests,
+        ev = self._evaluate_zone(
+            obs, sc, zone, rng_draft,
+            self.db.list_ltf_movements(sc.id), tests,
         )
         self.db.upsert_ltf_scenario_entry(LtfScenarioEntry(
             id=None, scenario_id=sc.id, entry_zone_id=zone.id,
@@ -770,16 +790,25 @@ class LtfEngine:
             )
             self.db.update_ltf_observation(obs.id, state="waiting_structure",
                                            updated_at=now)
-            # §11.5: scenario_id + cancellation_event_id (level_key слома)
-            self._emit(obs.id, sc.id, "cancellation", {
+            # §11.5: scenario_id + cancellation_event_id (level_key слома).
+            # Журнал остаётся по сценарию. Карточка склеивается ключом перехода.
+            cancel_payload = {
                 "scenario_id": sc.id, "reason": cancel.pattern,
                 "break_level": rev.break_level,
                 "break_candle_open_time": rev.break_candle_open_time,
                 "reverse_break_pivot_id": rev_pivot_id,
                 "reverse_break_confirmed_at": rev_confirmed_at,
-            }, rev.occurred_at, now, f"cancellation:{sc.id}:{rev.level_key}",
-                processing_mode, detection_lag_ms, result)
+            }
+            cancel_payload.update(self._market_transition_fields(obs, rev))
+            self._emit(obs.id, sc.id, "cancellation", cancel_payload,
+                       rev.occurred_at, now, f"cancellation:{sc.id}:{rev.level_key}",
+                       processing_mode, detection_lag_ms, result)
             result.cancellations.append(sc.id)
+            return
+
+        if self._cancel_on_protected_level(
+            obs, sc, candle, now, processing_mode, detection_lag_ms, result,
+        ):
             return
 
         self.db.update_ltf_scenario(
@@ -804,6 +833,10 @@ class LtfEngine:
         self._update_scenario_context(obs, sc, avail, up_to, now,
                                       processing_mode, detection_lag_ms,
                                       result)
+        self._extend_reversal_zones(
+            obs, sc, avail, up_to, candle, now, result,
+            processing_mode, detection_lag_ms,
+        )
         # §11.5: дополнение — только при ещё не сообщённых свежих зонах,
         # не при каждом изменении M
         self._maybe_entries_ready(obs, sc, candle.close_time, now,
@@ -1141,10 +1174,7 @@ class LtfEngine:
                     zone.first_test_at = zone.first_test_at or first_test
                     zone.max_test_depth = 1.0
                     zone.test_extreme = extreme
-            ev = evaluate_entry(
-                zone, sc.direction, self.cfg, draft,
-                movements=movements, liquidity_tests=tests,
-            )
+            ev = self._evaluate_zone(obs, sc, zone, draft, movements, tests)
             self.db.upsert_ltf_scenario_entry(LtfScenarioEntry(
                 id=None, scenario_id=sc.id, entry_zone_id=zid,
                 range_version=(prev.version + 1) if prev else 1,
@@ -1217,6 +1247,250 @@ class LtfEngine:
             for e in self.db.list_ltf_scenario_entries(scenario_id)
         }
 
+    def _market_transition_fields(self, obs, rev) -> dict[str, Any]:
+        """Один слом — один ключ карточки. Журнал сценария остаётся своим."""
+        instrument = self.db.get_instrument(obs.instrument_id)
+        if instrument is None:
+            return {}
+        from ...services.htf_context import anchor_key, remember_break, transition_key
+        anchor = anchor_key(
+            rev.evidence.get("broken_pivot_id"), rev.evidence.get("role_at_event"),
+        )
+        direction = rev.direction.value
+        key = transition_key(instrument, rev.break_candle_open_time, direction)
+        fields = {
+            "market_transition_key": key,
+            "market_break_key": key + "|" + anchor,
+            "anchor_key": anchor,
+            "break_direction": direction,
+        }
+        plan = self._bar_plan or {}
+        if plan.get("transition_key") == key and plan.get("wait_reason") and not plan.get("confirm"):
+            fields["long_wait_reason"] = plan["wait_reason"]
+        remember_break(
+            self.db, instrument, rev, anchor, rev.occurred_at,
+            {"anchor": anchor, "scenario_observation": obs.id},
+        )
+        return fields
+
+    def _annotate_reversal_event(self, obs, sc, event, payload: dict[str, Any]) -> None:
+        from ...services.htf_context import reversal_projection
+        plan = self._bar_plan or {}
+        payload["reversal_confirmed"] = True
+        payload["break_direction"] = sc.direction.value
+        if plan.get("transition_key") and plan.get("direction") == sc.direction.value:
+            payload["market_transition_key"] = plan["transition_key"]
+        view = reversal_projection(
+            self.db, obs.instrument_id, event.occurred_at, self.cfg,
+        )
+        if view and view.get("pd"):
+            pd = view["pd"]
+            payload["pd"] = pd
+            payload["range"] = {
+                "lower": pd["L"], "upper": pd["H"], "mid": pd["EQ"],
+                "version": pd["version"], "kind": "reversal_leg",
+            }
+            payload["range_pending"] = False
+        payload["htf_sources"] = (view or {}).get("sources") or []
+
+    def _evaluate_zone(self, obs, sc, zone, draft, movements, tests):
+        from ...services.htf_context import reversal_range_for
+        rng, status = reversal_range_for(self.db, obs, draft, sc.direction)
+        return evaluate_entry(
+            zone, sc.direction, self.cfg, rng,
+            movements=movements, liquidity_tests=tests, pd_status=status,
+        )
+
+    def _reversal_start_pivot(self, obs, avail: list[PivotCandidate]):
+        evidence = obs.evidence or {}
+        ref = evidence.get("protected_pivot_ref")
+        opened = evidence.get("protected_candle_open")
+        kind = "low" if obs.direction == Direction.BULL else "high"
+        for pivot in avail:
+            if ref is not None and (pivot.pivot_id == ref or pivot.pivot_at == ref):
+                return pivot
+        for pivot in avail:
+            if pivot.kind == kind and opened is not None and pivot.pivot_at == opened:
+                return pivot
+        return None
+
+    def _cancel_on_protected_level(
+        self, obs, sc, candle, now, processing_mode, detection_lag_ms, result,
+    ) -> bool:
+        """Закрытие за исходным LL/HH отменяет один раз. Фитиль только пишется."""
+        if not (obs.evidence or {}).get("reversal_episode_id"):
+            return False
+        from ...services.htf_context import load_episode
+        episode = load_episode(self.db, int(obs.evidence["reversal_episode_id"]))
+        if episode is None or episode.get("protected_price") is None:
+            return False
+        price = float(episode["protected_price"])
+        kind = episode.get("protected_kind")
+        if sc.direction == Direction.BULL and kind == "ll":
+            breached = candle.close < price
+            wicked = candle.low < price and not breached
+            reason = "protected_ll"
+        elif sc.direction == Direction.BEAR and kind == "hh":
+            breached = candle.close > price
+            wicked = candle.high > price and not breached
+            reason = "protected_hh"
+        else:
+            return False
+        if wicked:
+            self._emit(
+                obs.id, sc.id, "context_update",
+                {"kind": "protected_wick", "price": price, "candle_open_time": candle.open_time},
+                candle.close_time, now,
+                f"wick-protected:{sc.id}:{candle.open_time}",
+                processing_mode, detection_lag_ms, result,
+            )
+            return False
+        if not breached:
+            return False
+        self.db.update_ltf_scenario(
+            sc.id, state="cancelled", cancellation_reason=reason,
+            cancelled_at=now, updated_at=now,
+            reverse_break_level_price=price,
+            last_processed_close=candle.close_time,
+        )
+        self.db.update_ltf_observation(obs.id, state="waiting_structure", updated_at=now)
+        self._emit(
+            obs.id, sc.id, "cancellation",
+            {"scenario_id": sc.id, "reason": reason, "break_level": price,
+             "break_candle_open_time": candle.open_time},
+            candle.close_time, now, f"cancellation:{sc.id}:{reason}",
+            processing_mode, detection_lag_ms, result,
+        )
+        result.cancellations.append(sc.id)
+        return True
+
+    def _extend_reversal_zones(
+        self, obs, sc, avail, up_to, candle, now, result,
+        processing_mode, detection_lag_ms,
+    ) -> None:
+        """После BOS нога ещё растёт до подтверждения верхней опоры."""
+        if sc.state in ("cancelled", "closed"):
+            return
+        if not (obs.evidence or {}).get("reversal_episode_id"):
+            return
+        from ...services.htf_context import latest_leg, refresh_reversal_leg
+        refresh_reversal_leg(self.db, self.cfg, obs, avail, up_to, candle)
+        leg = latest_leg(self.db, int(obs.evidence["reversal_episode_id"]))
+        if leg is not None and int(leg["frozen"]):
+            return
+        start = self._reversal_start_pivot(obs, avail)
+        if start is None:
+            return
+        lookback = (self.cfg.uncalibrated_consolidation_max_candles + 5) * H1_MS
+        fake = StructureEventDraft(
+            kind="BOS", stage="primary", direction=sc.direction,
+            break_level=candle.close, break_candle_open_time=candle.open_time,
+            occurred_at=candle.close_time, detected_at=now, level_key="reversal-extend",
+        )
+        mv = build_movement(
+            sc.id, avail, up_to, fake, sc.direction, lookback, start_pivot=start,
+        )
+        if mv is None:
+            return
+        det = detect_entry_zones(up_to, mv, avail, sc.direction, self.cfg)
+        movements = self.db.list_ltf_movements(sc.id)
+        movement_id = movements[-1].id if movements else 0
+        rng = self.db.get_current_ltf_range(sc.id)
+        ver = rng.version if rng else 0
+        tests = self.db.list_ltf_liquidity_tests(scenario_id=sc.id)
+        existing = {}
+        for zid in self._scenario_zone_ids(sc.id):
+            z0 = self.db.get_ltf_entry_zone(zid)
+            if z0 is not None:
+                existing[(z0.type, z0.lower, z0.upper)] = zid
+        for z in det.zones:
+            if (z.type, z.lower, z.upper) in existing:
+                continue
+            ez = self.db.insert_ltf_entry_zone(LtfEntryZone(
+                id=None, instrument_id=obs.instrument_id, type=z.type,
+                direction=z.direction, lower=z.lower, upper=z.upper,
+                formed_at=z.formed_at, confirmed_at=z.confirmed_at,
+                movement_id=movement_id, first_test_at=z.first_test_at,
+                validity=z.validity, max_test_depth=z.max_test_depth,
+                test_extreme=z.test_extreme, evidence=z.evidence,
+            ))
+            existing[(ez.type, ez.lower, ez.upper)] = ez.id
+            result.entry_zones_processed.append(ez.id)
+            ev = self._evaluate_zone(obs, sc, ez, None, movements, tests)
+            self.db.upsert_ltf_scenario_entry(LtfScenarioEntry(
+                id=None, scenario_id=sc.id, entry_zone_id=ez.id,
+                range_version=ver, eligible=ev.eligible, overlap=ev.overlap,
+                state=ev.state, reason=ev.reason, added_at=now, updated_at=now,
+            ))
+
+    def _scan_reversal_visits(
+        self, obs, sc, candle, now, processing_mode, detection_lag_ms, result,
+    ) -> None:
+        """Один алерт на непрерывный визит в допустимый участок discount."""
+        import json
+        from ...services.htf_context import (
+            _premium_segment, entry_segment, latest_leg, tick_size,
+        )
+        leg = latest_leg(self.db, int(obs.evidence["reversal_episode_id"]))
+        if leg is None or sc.direction not in (Direction.BULL, Direction.BEAR):
+            return
+        instrument = self.db.get_instrument(obs.instrument_id)
+        tick = tick_size(instrument) if instrument is not None else 0
+        cur = self.db.get_current_ltf_range(sc.id)
+        ver = cur.version if cur is not None else 0
+        for entry in self.db.list_ltf_scenario_entries(sc.id):
+            if entry.range_version != ver:
+                continue
+            if entry.reason not in ("ok", "eligible_provisional"):
+                continue
+            zone = self.db.get_ltf_entry_zone(entry.entry_zone_id)
+            if zone is None or zone.is_level:
+                continue
+            if zone.confirmed_at and zone.confirmed_at > candle.close_time:
+                continue
+            if sc.direction == Direction.BULL:
+                segment = entry_segment(zone.lower, zone.upper, leg["low"], leg["eq"], tick=tick)
+            else:
+                segment = _premium_segment(zone.lower, zone.upper, leg["eq"], leg["high"], tick)
+            if segment is None:
+                continue
+            lo, hi = segment
+            key = f"htf_ctx:visit:{sc.id}:{zone.id}"
+            state = json.loads(self.db.get_meta(key) or '{"inside": false, "n": 0}')
+            outside = candle.high < lo or candle.low > hi
+            hits = candle.high >= lo and candle.low <= hi
+            if outside or not hits:
+                if state.get("inside"):
+                    state["inside"] = False
+                    self.db.set_meta(key, json.dumps(state))
+                continue
+            if state.get("inside"):
+                continue
+            from .entries import entry_reusable
+            if zone.validity == "tested" and not entry_reusable(zone, self.cfg):
+                state["inside"] = True
+                self.db.set_meta(key, json.dumps(state))
+                continue
+            n = int(state.get("n") or 0) + 1
+            state["inside"] = True
+            state["n"] = n
+            self.db.set_meta(key, json.dumps(state))
+            self.db.update_ltf_entry_zone(
+                zone.id, first_test_at=zone.first_test_at or candle.close_time,
+                validity="tested",
+            )
+            self._accumulate_test_depth(zone, candle)
+            self._emit(
+                obs.id, sc.id, "touch",
+                {"entry_zone_id": zone.id, "scenario_id": sc.id, "type": zone.type,
+                 "lower": lo, "upper": hi, "zone_lower": zone.lower, "zone_upper": zone.upper,
+                 "candle_open_time": candle.open_time, "visit": n,
+                 "admissible": True},
+                candle.close_time, now, f"touch:{zone.id}:{sc.id}:visit:{n}",
+                processing_mode, detection_lag_ms, result,
+            )
+            result.touches.append(zone.id)
+
     # ------------------------------------------------------------------ #
     # (5) Entry Zones причинного движения (§8, §9)
     # ------------------------------------------------------------------ #
@@ -1232,7 +1506,12 @@ class LtfEngine:
         if sc.state in ("cancelled", "closed"):
             return
         lookback = (self.cfg.uncalibrated_consolidation_max_candles + 5) * H1_MS
-        mv = build_movement(sc.id, avail, up_to, main, sc.direction, lookback)
+        start_pivot = None
+        if (obs.evidence or {}).get("reversal_episode_id"):
+            start_pivot = self._reversal_start_pivot(obs, avail)
+        mv = build_movement(
+            sc.id, avail, up_to, main, sc.direction, lookback, start_pivot=start_pivot,
+        )
         if mv is None:
             return
         movement_id = self.db.insert_ltf_movement(LtfMovement(
@@ -1291,10 +1570,7 @@ class LtfEngine:
             # ТЗ §10: пригодность — конъюнкция evaluate_entry (тип, sweep,
             # движение, глубина тестов, половина диапазона); протестированная
             # зона с глубиной СТРОГО < 90% допускается к повторному выбору
-            ev = evaluate_entry(
-                ez, sc.direction, self.cfg, rng_draft,
-                movements=movements, liquidity_tests=tests,
-            )
+            ev = self._evaluate_zone(obs, sc, ez, rng_draft, movements, tests)
             self.db.upsert_ltf_scenario_entry(LtfScenarioEntry(
                 id=None, scenario_id=sc.id, entry_zone_id=ez.id,
                 range_version=ver, eligible=ev.eligible, overlap=ev.overlap,
@@ -1406,7 +1682,8 @@ class LtfEngine:
         """Событие bos/sms (§11.1/§11.2). При готовых диапазоне и зонах —
         одно объединённое сообщение (приёмка п.18)."""
         rng = self.db.get_current_ltf_range(sc.id)
-        fresh = self._entry_candidates(sc) if rng is not None else []
+        reversal = bool((obs.evidence or {}).get("reversal_episode_id"))
+        fresh = self._entry_candidates(sc) if (rng is not None or reversal) else []
         flags = self._scenario_context(sc.id)
         payload: dict[str, Any] = {
             "scenario_id": sc.id, "structure_event_id": se_id,
@@ -1425,6 +1702,8 @@ class LtfEngine:
                 for en, z, out in fresh
             ],
         }
+        if reversal:
+            self._annotate_reversal_event(obs, sc, e, payload)
         # §11.5: scenario_id + structure_event_id
         self._emit(obs.id, sc.id, e.kind.lower(), payload, e.occurred_at, now,
                    f"{e.kind.lower()}:{sc.id}:{se_id}",
@@ -1507,6 +1786,8 @@ class LtfEngine:
                 "live", 0, LtfTickResult())
         self.db.update_ltf_observation(obs.id, state="closed_by_parent",
                                        updated_at=now)
+        from ...services.htf_context import note_source_outcome
+        note_source_outcome(self.db, zone, now)
         return True
 
     def close_scenario_manually(self, scenario_id: int) -> None:
@@ -1526,6 +1807,8 @@ class LtfEngine:
         self._emit(sc.observation_id, sc.id, "cancellation", {
             "scenario_id": sc.id, "reason": "manual",
         }, now, now, f"cancellation:{sc.id}:manual", "live", 0, LtfTickResult())
+        from ...services.htf_context import close_episodes_for_scenario
+        close_episodes_for_scenario(self.db, scenario_id, now)
 
     # ------------------------------------------------------------------ #
     # Автоархивация неактивных наблюдений и resync pivots
@@ -1609,10 +1892,7 @@ class LtfEngine:
                 zone = self.db.get_ltf_entry_zone(e.entry_zone_id)
                 if zone is None:
                     continue
-                ev = evaluate_entry(
-                    zone, sc.direction, self.cfg, rng_draft,
-                    movements=movements, liquidity_tests=tests,
-                )
+                ev = self._evaluate_zone(obs, sc, zone, rng_draft, movements, tests)
                 if (ev.reason, ev.state, ev.eligible, ev.overlap) == (
                     e.reason, e.state, e.eligible, e.overlap
                 ):

@@ -45,6 +45,9 @@ REASON_LEVEL_BROKEN = "level_broken"    # уровень пройден закр
 REASON_FVG_FILLED = "fvg_filled"        # FVG перекрыт полностью (§10, Этап 6)
 REASON_ORIGIN_UNRESOLVED = "origin_unresolved"  # принадлежность движению не доказана
 REASON_RANGE_PENDING = "range_pending"  # диапазон ещё не подтверждён — кандидат
+# Предварительный допуск отката, пока верхняя опора ноги не подтверждена.
+# Это не подтверждённый pivot и не вход по рынку.
+REASON_PROVISIONAL = "eligible_provisional"
 
 ELIGIBILITY_REASONS = (
     REASON_OK,
@@ -57,6 +60,7 @@ ELIGIBILITY_REASONS = (
     REASON_FVG_FILLED,
     REASON_ORIGIN_UNRESOLVED,
     REASON_RANGE_PENDING,
+    REASON_PROVISIONAL,
 )
 
 
@@ -78,6 +82,7 @@ def evaluate_entry(
     *,
     movements: Optional[list[LtfMovement]] = None,
     liquidity_tests: Optional[list[LtfLiquidityTest]] = None,
+    pd_status: Optional[str] = None,
 ) -> EligibilityResult:
     """eligible_now зоны для сценария: конъюнкция условий §10.
 
@@ -135,6 +140,8 @@ def evaluate_entry(
     # 7) пересечение нужной половины диапазона (частичного достаточно)
     if not eligible:
         return EligibilityResult(REASON_OUTSIDE_PD, "out_of_range", False, overlap)
+    if pd_status == "provisional":
+        return EligibilityResult(REASON_PROVISIONAL, "fresh", True, overlap)
     return EligibilityResult(REASON_OK, "fresh", True, overlap)
 
 
@@ -267,6 +274,12 @@ def evaluate_final(
         return FinalEligibility(
             eligible_now=True, blocking_reasons=(),
             admission_basis=ADMISSION_RULE, **base,
+        )
+    if (entry.eligible and reason == REASON_PROVISIONAL
+            and entry.state in ("fresh", "tested")):
+        return FinalEligibility(
+            eligible_now=True, blocking_reasons=(),
+            admission_basis="provisional_pd", **base,
         )
     if allow_outside and reason == REASON_OUTSIDE_PD and zone.type == "FVG":
         return FinalEligibility(

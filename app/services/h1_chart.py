@@ -963,7 +963,14 @@ def assemble_h1_layers(
                 "structure_last_processed_h1": int(cursors_raw) if cursors_raw else None,
             },
         },
+        "reversal": _reversal_view(db, instrument_id, moment, cfg),
     }
+
+
+def _reversal_view(db, instrument_id: int, as_of: int, cfg):
+    """Та же проекция, что у карточки и бота. Нет эпизода — ключ пустой."""
+    from .htf_context import reversal_projection
+    return reversal_projection(db, instrument_id, as_of, cfg)
 
 
 def _scenario_is_open(db: Database, instrument_id: int, context_id: Optional[int]) -> bool:
@@ -1051,6 +1058,11 @@ def _admission(db, instrument_id, context_id, zones, stored_zones) -> list[dict[
             reason = ADMISSION_UNRATED
             scenario_id = scenario.id if scenario is not None else None
             range_version = version
+        elif entry.reason == "eligible_provisional":
+            eligibility = "eligible_provisional"
+            reason = entry.reason
+            scenario_id = scenario.id
+            range_version = entry.range_version
         elif entry.eligible and entry.reason in ("", "ok"):
             eligibility = "eligible"
             reason = entry.reason or "ok"

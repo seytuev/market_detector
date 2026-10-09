@@ -323,3 +323,9 @@ def render_ltf_chart(
     fig.savefig(out, dpi=FIG_DPI)
     plt.close(fig)
     return str(out)
+
+
+def bot_reversal_view(db, instrument_id: int, as_of: int, cfg=None):
+    """Проекция разворота для подписи бота. Та же функция, что у графика и API."""
+    from ..services.htf_context import reversal_projection
+    return reversal_projection(db, instrument_id, as_of, cfg)

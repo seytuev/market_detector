@@ -138,6 +138,16 @@ check('история возвращает исчерпанную зону и н
   H.selectedZones(ideaLayers, Object.assign({}, allIdeas, { historicalZones: true })).length === 4);
 check('обычный график скрывает исчерпанные зоны', H.selectedZones(ideaLayers, H.DEFAULTS).every((z) => z.id !== 3));
 
+const legacy = {
+  scenario_admission: [{ zone_id: 7, eligibility: 'eligible_provisional', reason: 'eligible_provisional' }],
+  detected_zones: [
+    { id: 7, type: 'FVG', lifecycle: 'active' },
+    { id: 8, type: 'OB', lifecycle: 'active' },
+  ],
+};
+check('предварительный PD виден в фильтре допуска',
+  H.selectedZones(legacy, Object.assign({}, H.DEFAULTS, { eligibleOnly: true })).map((z) => z.id).join(',') === '7');
+
 if (failed) {
   console.error('failed', failed);
   process.exit(1);

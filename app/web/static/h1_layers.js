@@ -170,7 +170,7 @@
       if (!settings.eligibleOnly && !settings.ideaId) return true;
       if (!modern) {
         const adm = admissionOf(layers, zone);
-        return !!adm && adm.eligibility === 'eligible';
+        return !!adm && (adm.eligibility === 'eligible' || adm.eligibility === 'eligible_provisional');
       }
       const links = (zone.idea_links || []).filter((link) =>
         !settings.ideaId || String(link.scenario_id) === String(settings.ideaId));
@@ -602,6 +602,17 @@
         if (message.retry) actionButton(doc, ctx.statusEl, 'Повторить', ctx.onRetry);
         if (message.reset) actionButton(doc, ctx.statusEl, 'Сбросить фильтры', ctx.onResetFilters);
         if (message.showAll) actionButton(doc, ctx.statusEl, 'Показать все зоны H1', ctx.onShowAllZones);
+      }
+      const rev = layers.reversal;
+      if (rev && rev.pd) {
+        ctx.statusEl.classList.remove('hidden');
+        const cap = doc.createElement('span');
+        cap.className = 'h1-reversal-caption';
+        const allowed = (rev.zones || []).filter((z) => z.allowed);
+        cap.textContent = 'PD LL ' + fmtPrice(rev.pd.L) + ' → high ' + fmtPrice(rev.pd.H)
+          + ' · 50% ' + fmtPrice(rev.pd.EQ) + ' · ' + (rev.pd.label || rev.pd.status)
+          + (allowed.length ? ' · допущенных зон ' + allowed.length : '');
+        ctx.statusEl.appendChild(cap);
       }
     }
     if (ctx.offscreenEl) {

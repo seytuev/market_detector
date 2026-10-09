@@ -75,7 +75,7 @@ def test_reason_codes_stable():
     assert ELIGIBILITY_REASONS == (
         "ok", "outside_pd", "tested_too_deep", "type_disabled", "invalid",
         "swept_level", "level_broken", "fvg_filled", "origin_unresolved",
-        "range_pending",
+        "range_pending", "eligible_provisional",
     )
 
 
