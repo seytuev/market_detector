@@ -332,3 +332,53 @@ window.HTF = (() => {
     initLayoutSplitters();
   }
 })();
+
+/* Панель «Слои» не должна вылезать за низ окна и за нижнюю навигацию.
+   Горизонтальный сдвиг — если кнопка прижата к краю экрана. */
+(() => {
+  function fitLayerMenus() {
+    const nav = document.querySelector('.mobile-nav');
+    let limit = window.innerHeight - 8;
+    if (nav && getComputedStyle(nav).display !== 'none') {
+      const top = nav.getBoundingClientRect().top;
+      if (top > 80 && top < limit) limit = top - 8;
+    }
+    document.querySelectorAll('details.layer-menu').forEach((menu) => {
+      const panel = menu.querySelector(':scope > .layer-options');
+      if (!panel) return;
+      if (!menu.open) {
+        panel.style.maxHeight = '';
+        panel.style.transform = '';
+        return;
+      }
+      panel.style.transform = '';
+      const top = panel.getBoundingClientRect().top;
+      const room = Math.floor(limit - top);
+      const cap = Math.min(room, Math.floor(window.innerHeight * 0.7));
+      panel.style.maxHeight = cap >= 120 ? cap + 'px' : '';
+      const box = panel.getBoundingClientRect();
+      let shift = 0;
+      if (box.right > window.innerWidth - 8) shift -= box.right - (window.innerWidth - 8);
+      if (box.left + shift < 8) shift += 8 - (box.left + shift);
+      panel.style.transform = shift ? 'translateX(' + Math.round(shift) + 'px)' : '';
+    });
+  }
+
+  function bind() {
+    document.querySelectorAll('details.layer-menu').forEach((menu) => {
+      if (menu.dataset.layerFit) return;
+      menu.dataset.layerFit = '1';
+      new ResizeObserver(() => { if (menu.open) fitLayerMenus(); }).observe(menu);
+    });
+    fitLayerMenus();
+  }
+
+  document.addEventListener('toggle', (event) => {
+    const menu = event.target;
+    if (!menu || !menu.classList || !menu.classList.contains('layer-menu')) return;
+    requestAnimationFrame(fitLayerMenus);
+  }, true);
+  window.addEventListener('resize', fitLayerMenus);
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bind);
+  else bind();
+})();

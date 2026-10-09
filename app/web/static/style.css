@@ -888,10 +888,32 @@ input[type="checkbox"] { min-height: auto; accent-color: var(--accent); }
 .layer-menu { position: relative; z-index: 50; }
 .layer-menu summary { list-style: none; cursor: pointer; }
 .layer-menu summary::-webkit-details-marker { display: none; }
-.layer-options { position: absolute; right: 0; top: calc(100% + 7px); min-width: 260px; max-height: 70vh; overflow: auto; padding: 8px; display: grid; gap: 3px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 12px 30px #0008; z-index: 30; }
-.layer-options label { padding: 6px; display: flex; align-items: center; gap: 8px; cursor: pointer; }
-.h1-layer-controls { display: grid; gap: 2px; margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border); }
-.h1-layer-controls select { width: 100%; min-height: 30px; }
+/* display:grid перекрывает UA-правило закрытого details, и панель висит
+   на странице всегда. Пока меню закрыто — её нет. Ширина фиксирована:
+   длинные подписи HTF-идей не раздвигают окно за край экрана. */
+.layer-options {
+  position: absolute; right: 0; top: calc(100% + 7px);
+  width: min(320px, calc(100vw - 24px));
+  max-width: min(320px, calc(100vw - 24px));
+  min-width: 0;
+  max-height: min(70vh, calc(100dvh - 8rem));
+  overflow: auto; overscroll-behavior: contain;
+  padding: 8px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 3px;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 12px 30px #0008; z-index: 30;
+}
+.layer-menu:not([open]) > .layer-options { display: none; }
+/* Кнопка «Слои» в рабочей строке стоит слева. При right:0 панель шире кнопки
+   и уходит за левый край; подпись «· Все ТФ» ещё и сдвигает этот край. */
+.workbar .layer-options { left: 0; right: auto; }
+/* «· Все ТФ» меняет ширину кнопки. На узкой строке кнопка из-за этого
+   перескакивает на другой ряд, и привязанная панель уезжает из-под курсора. */
+.workbar .layer-menu summary { min-width: 8rem; justify-content: flex-start; }
+.layer-options label { padding: 6px; display: flex; align-items: center; gap: 8px; cursor: pointer; min-width: 0; }
+.layer-options label:has(select) { flex-direction: column; align-items: stretch; }
+.layer-options select { max-width: 100%; min-width: 0; }
+.h1-layer-controls { display: grid; gap: 2px; margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border); min-width: 0; }
+.h1-layer-controls select { width: 100%; min-height: 30px; min-width: 0; max-width: 100%; }
 .ltf-layout .h1-layer-menu { position: relative; }
 .ltf-layout .h1-layer-controls { margin-top: 0; padding-top: 0; border-top: 0; }
 .layer-options label:hover { background: var(--lf-bg); }
