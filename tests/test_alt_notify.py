@@ -408,6 +408,36 @@ async def test_dispatch_marks_delivered_and_dedup(db):
     assert ev.id is not None
 
 
+async def test_disabled_alt_asset_is_not_sent(db):
+    """Выключенный альткоин не получает карточку и не остаётся в очереди."""
+    asset, _src, _frozen, setup = _seed(db)
+    sender = FakeSender()
+    disp = AltDispatcher(db, _settings(), sender)
+    _event(db, setup.id, "ssl_taken", {"level_price": 1.1, "close": 1.2})
+    asset.enabled = False
+    db.upsert_alt_asset(asset)
+    assert await disp.dispatch_pending() == 0
+    assert sender.alt == []
+    assert db.pending_alt_events() == []
+
+
+async def test_queued_alt_is_dropped_when_asset_turns_off(db):
+    """Пакет, не ушедший до выключения альткоина, после выключения не уходит."""
+    asset, _src, _frozen, setup = _seed(db)
+    sender = FakeSender(fail=True)
+    disp = AltDispatcher(db, _settings(), sender)
+    _event(db, setup.id, "ssl_taken", {"level_price": 1.1, "close": 1.2})
+    assert await disp.dispatch_pending() == 0
+    asset.enabled = False
+    db.upsert_alt_asset(asset)
+    sender.fail = False
+    db.conn.execute("UPDATE notification_packet SET due_at=0")
+    db.conn.commit()
+    assert await disp.dispatch_pending() == 0
+    assert sender.alt == []
+    assert db.pending_alt_events() == []
+
+
 async def test_dispatch_failure_leaves_pending_then_retry(db):
     _seed(db)
     sender = FakeSender(fail=True)

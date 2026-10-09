@@ -158,6 +158,13 @@ class EventDispatcher:
             return False
         return should_notify(self.db, view.event, self.cfg, self.user)
 
+    def _asset_off(self, view: EventView) -> bool:
+        """Выключенный актив не получает карточку, включая уже поставленную."""
+        from .suppress import instrument_off
+
+        ins = view.instrument
+        return ins is not None and instrument_off(self.db, ins.id)
+
     def _bot_blocked(self, view: EventView) -> bool:
         """Настройки бота владельца (ТЗ п.9): мьют/группы/watchlist.
         Подавленное событие помечается доставленным без отправки — после
@@ -274,7 +281,9 @@ class EventDispatcher:
         if not views:
             return "missing events"
         allowed = [v for v in views if not self._bot_blocked(v) and not self._entry_stale(v)
-                   and not v.event.delayed]
+                   and not v.event.delayed and not self._asset_off(v)]
+        if views and all(self._asset_off(v) for v in views):
+            return "asset disabled"
         if not allowed:
             return "muted, historical or stale"
         for view in views:
@@ -371,7 +380,7 @@ class EventDispatcher:
             if delivery_id is None:
                 continue
             ids.append(delivery_id)
-            if self._entry_stale(view) or self._bot_blocked(view):
+            if self._entry_stale(view) or self._bot_blocked(view) or self._asset_off(view):
                 self._finish_packet(event.id, "suppressed")
                 continue
             quiet = event.kind in self._QUIET and event.zone_id not in important_zones
@@ -454,7 +463,8 @@ class EventDispatcher:
                 ev = self.db.get_event(event_id)
                 if exists or ev is None:
                     continue
-                if ev.delayed or self._entry_stale(self._load_view(ev)):
+                view = self._load_view(ev)
+                if ev.delayed or self._entry_stale(view) or self._asset_off(view):
                     self._finish_packet(event_id, "suppressed")
                     continue
                 from .outbox import Card

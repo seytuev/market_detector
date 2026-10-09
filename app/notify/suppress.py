@@ -63,6 +63,18 @@ def bot_group_for_alt_kind(kind: str) -> str:
     return BOT_GRP_ALT
 
 
+def instrument_off(db: Database, instrument_id: Optional[int]) -> bool:
+    """Выключенный актив не получает рыночные уведомления.
+
+    ``enabled=0`` — выключатель актива и прежний toggle. Строка без
+    инструмента не глушится: у старого события может не быть привязки.
+    """
+    if instrument_id is None:
+        return False
+    ins = db.get_instrument(int(instrument_id))
+    return ins is not None and not ins.enabled
+
+
 def bot_delivery_blocked(
     db: Database,
     chat_id: Optional[str],

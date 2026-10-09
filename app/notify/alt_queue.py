@@ -102,6 +102,8 @@ class AltDispatcher:
                                      (row["id"], event.id))
         self.db.conn.commit()
         ctx = self._load_context(events[0])
+        if ctx.asset is not None and not ctx.asset.enabled:
+            return "asset disabled"
         if ctx.setup is None or ctx.asset is None:
             return "missing setup"
         from .alt_templates import _ENTRY_TYPES, _TERMINAL_TYPES
@@ -152,6 +154,11 @@ class AltDispatcher:
     async def _deliver_group(self, events: list[AltEvent], ctx: AltContext,
                              chat_id: Optional[str]) -> int:
         from .outbox import Card
+        if ctx.asset is not None and not ctx.asset.enabled:
+            for ev in events:
+                self.db.mark_alt_event_delivered(ev.id)
+            await self.outbox.flush()
+            return 0
         allowed = []
         for ev in events:
             if self._bot_blocked(ev, chat_id):

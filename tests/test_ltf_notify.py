@@ -354,6 +354,39 @@ async def test_dispatcher_notify_kinds_filter(db: Database, instrument_id: int):
     assert db.get_ltf_event(bos.id).delivered is True
 
 
+async def test_disabled_asset_is_not_notified(db: Database, instrument_id: int):
+    """Выключенный актив не получает LTF-карточку. Повтор очереди тоже молчит."""
+    zone, obs, sc = _setup(db, instrument_id)
+    ev = _event(db, obs, sc, "bos", BOS_PAYLOAD, "bos:off:1")
+    db.set_instrument_active(instrument_id, False)
+    sender = RecSender()
+    disp = _dispatcher(db, sender)
+    await disp([ev])
+    assert sender.texts == []
+    assert db.get_ltf_event(ev.id).delivered is True
+    await disp.retry_pending()
+    assert sender.texts == []
+
+
+async def test_queued_ltf_is_dropped_when_asset_turns_off(db: Database, instrument_id: int):
+    """Пакет, не ушедший до выключения, после выключения не отправляется."""
+    zone, obs, sc = _setup(db, instrument_id)
+    ev = _event(db, obs, sc, "bos", BOS_PAYLOAD, "bos:off:2")
+    sender = RecSender()
+    disp = _dispatcher(db, sender)
+    sender.fail = True
+    await disp([ev])
+    assert sender.texts == []
+    assert db.get_ltf_event(ev.id).delivered is False
+    db.set_instrument_active(instrument_id, False)
+    sender.fail = False
+    db.conn.execute("UPDATE notification_packet SET due_at=0")
+    db.conn.commit()
+    await disp.retry_pending()
+    assert sender.texts == []
+    assert db.get_ltf_event(ev.id).delivered is True
+
+
 async def test_dispatcher_skips_delayed(db: Database, instrument_id: int):
     """§13: восстановленные replay-события не доставляются как текущие."""
     zone, obs, sc = _setup(db, instrument_id)

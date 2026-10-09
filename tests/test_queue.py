@@ -104,6 +104,44 @@ async def test_separate_assets_have_separate_cards():
     assert all(d.status == "sent" for d in deliveries)
 
 
+async def test_disabled_asset_is_omitted_from_notifications():
+    """Выключенный актив не попадает в карточку. Соседний актив остаётся."""
+    db, z = _make_db()
+    eth = db.get_zone(z["eth_zone"])
+    db.set_instrument_active(eth.instrument_id, False)
+    sender = LogSender()
+    disp = EventDispatcher(db, DetectorConfig(notification_digest_seconds=0), sender)
+    t = now_ms()
+    await disp.dispatch([
+        _new_event(db, z["btc_zone"], EventKind.TOUCH, 65500.0, t),
+        _new_event(db, z["eth_zone"], EventKind.TOUCH, 3050.0, t),
+    ])
+    text = "\n".join(card.text for card, _, _ in sender.cards)
+    assert len(sender.cards) == 1
+    assert "BTC" in text
+    assert "ETH" not in text
+    assert db.pending_deliveries() == []
+
+
+async def test_failed_htf_card_is_not_sent_after_asset_off():
+    """Недоставленный пакет выключенного актива ретрай не отправляет."""
+    db, z = _make_db()
+    t = now_ms()
+    events = [_new_event(db, z["btc_zone"], EventKind.TOUCH, 65500.0, t)]
+    failing = FailingSender()
+    failed = EventDispatcher(db, DetectorConfig(notification_digest_seconds=0), failing)
+    await failed.dispatch(events)
+    zone = db.get_zone(z["btc_zone"])
+    db.set_instrument_active(zone.instrument_id, False)
+    sender = LogSender()
+    disp = EventDispatcher(db, DetectorConfig(notification_digest_seconds=0), sender)
+    db.conn.execute("UPDATE notification_packet SET due_at=0")
+    db.conn.commit()
+    await disp.retry_pending()
+    assert sender.cards == []
+    assert db.pending_deliveries() == []
+
+
 async def test_redispatch_same_events_no_second_delivery():
     """Идемпотентность: повторный dispatch тех же событий не дублирует delivery."""
     db, z = _make_db()

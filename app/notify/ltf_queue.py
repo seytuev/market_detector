@@ -77,6 +77,15 @@ class LtfDispatcher:
         enabled = {s.strip() for s in self.cfg.ltf_notify_kinds.split(",")}
         return group in enabled
 
+    def _asset_off(self, ev: LtfEvent) -> bool:
+        """Выключенный актив не уведомляем, даже если событие уже в очереди."""
+        from .suppress import instrument_off
+
+        obs = self.db.get_ltf_observation(ev.observation_id)
+        if obs is None:
+            return False
+        return instrument_off(self.db, obs.instrument_id)
+
     def _load_context(self, ev: LtfEvent) -> LtfContext:
         """Обогащение из БД: инструмент, родительская HTF-зона, сценарий."""
         obs = self.db.get_ltf_observation(ev.observation_id)
@@ -193,8 +202,20 @@ class LtfDispatcher:
 
     def _validate_packet(self, row, members):
         events = self._packet_events(members)
+        off = [e for e in events if self._asset_off(e)]
+        if off and len(off) == len(events):
+            return "asset disabled"
+        for ev in off:
+            self.db.conn.execute(
+                "UPDATE notification_member SET reason='asset disabled' "
+                "WHERE packet_id=? AND event_id=?",
+                (row["id"], ev.id),
+            )
+        if off:
+            self.db.conn.commit()
         active = [e for e in events if not e.delayed and self._group_enabled(e.kind)
-                  and not self._bot_blocked(e) and not self._event_stale(e)]
+                  and not self._bot_blocked(e) and not self._event_stale(e)
+                  and not self._asset_off(e)]
         if not active:
             return "muted, historical or stale"
         if all(self._delivery_blocked(e) for e in active):
@@ -304,7 +325,8 @@ class LtfDispatcher:
             stored = self.db.get_ltf_event(ev.id) if ev.id is not None else None
             if stored is None or ev.delayed:
                 continue
-            if not self._group_enabled(ev.kind) or self._event_stale(ev) or self._bot_blocked(ev):
+            if (not self._group_enabled(ev.kind) or self._event_stale(ev)
+                    or self._bot_blocked(ev) or self._asset_off(ev)):
                 self.db.mark_ltf_event_delivered(ev.id)
                 continue
             ctx = self._load_context(ev)
