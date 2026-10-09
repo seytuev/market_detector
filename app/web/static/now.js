@@ -139,7 +139,8 @@
       `<td data-label="Состояние">${rowStateHtml(r)}</td>` +
       `<td data-label="Цена, USDT" class="num">` +
       `<span class="price-val">${p ? esc(fmtPrice(p.price)) : '—'}</span>` +
-      `<div class="price-age">${p ? esc(ageText(p.at)) : ''}</div></td></tr>`;
+      `<div class="price-age">${p ? esc(ageText(p.at)) : ''}</div>` +
+      `<button type="button" class="btn small asset-off" data-off="${ins.id}">Выключить</button></td></tr>`;
   }
 
   function visibleRows() {
@@ -438,8 +439,20 @@
     else loadCurrent(st.selectedId, st.reqSeq);
   }
 
-  $('now-tbody').addEventListener('click', (e) => selectRow(e.target.closest('tr')));
+  $('now-tbody').addEventListener('click', (e) => {
+    const off = e.target.closest('.asset-off');
+    if (off) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (window.LFInstruments) {
+        window.LFInstruments.setActive(Number(off.dataset.off), false);
+      }
+      return;
+    }
+    selectRow(e.target.closest('tr'));
+  });
   $('now-tbody').addEventListener('keydown', (e) => {
+    if (e.target.closest('.asset-off')) return;
     if (e.key !== 'Enter' && e.key !== ' ') return;
     const tr = e.target.closest('tr');
     if (tr) { e.preventDefault(); selectRow(tr); }

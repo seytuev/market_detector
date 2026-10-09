@@ -128,6 +128,41 @@ def test_instruments_crud(seeded, client):
     assert resp.json()["enabled"] is True
 
 
+def test_instrument_active_stops_procedures_and_overview(seeded, client):
+    """Одна команда гасит опрос и расчёт. Обзор перестаёт считать актив."""
+    ins_id = seeded["ins1"]
+    other = seeded["ins2"]
+    resp = client.post(
+        f"/api/instruments/{ins_id}/active", headers=AUTH, json={"active": False},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["enabled"] is False
+    assert body["ltf_analyze"] is False
+
+    rows = client.get("/api/ltf/instruments", headers=AUTH).json()["instruments"]
+    ids = [row["instrument"]["id"] for row in rows]
+    assert ins_id not in ids
+    assert other in ids
+
+    listed = client.get("/api/instruments", headers=AUTH).json()
+    saved = next(i for i in listed if i["id"] == ins_id)
+    assert saved["enabled"] is False and saved["ltf_analyze"] is False
+
+    back = client.post(
+        f"/api/instruments/{ins_id}/active", headers=AUTH, json={"active": True},
+    )
+    assert back.json()["enabled"] is True
+    assert back.json()["ltf_analyze"] is True
+    rows = client.get("/api/ltf/instruments", headers=AUTH).json()["instruments"]
+    assert ins_id in [row["instrument"]["id"] for row in rows]
+
+    missing = client.post(
+        "/api/instruments/999999/active", headers=AUTH, json={"active": False},
+    )
+    assert missing.status_code == 404
+
+
 # ---------------------------------------------------------------------------
 # Ручные зоны (§10)
 # ---------------------------------------------------------------------------

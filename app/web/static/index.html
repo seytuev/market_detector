@@ -106,6 +106,7 @@
     </div>
     <div class="workbar">
       <select id="instrument-select" title="Инструмент"></select>
+      <button type="button" id="asset-active-btn" class="btn small">Выключить актив</button>
       <span id="instrument-meta" class="work-meta">—</span>
       <span id="last-price" class="last-price">—</span>
       <span id="price-change" class="price-change"></span>
@@ -291,6 +292,13 @@
           <p class="review-sub">Наблюдение, правила анализа и отображение.</p>
         </div>
       </header>
+      <section class="lf-panel settings-assets-panel" aria-labelledby="set-assets-title">
+        <div class="lf-panel-head">
+          <h2 id="set-assets-title">Активы</h2>
+        </div>
+        <p class="field-desc">Одна кнопка останавливает свечи, котировки и расчёт по активу. История остаётся в базе, включение возвращает процедуры.</p>
+        <div id="settings-assets" class="settings-assets"></div>
+      </section>
       <div class="settings-grid">
         <section class="lf-panel" aria-labelledby="set-notify-title">
           <div class="lf-panel-head">

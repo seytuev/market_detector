@@ -609,6 +609,20 @@ class Database:
         )
         self._commit()
 
+    def set_instrument_active(self, instrument_id: int, active: bool) -> None:
+        """Один выключатель актива: опрос и расчёт вместе.
+
+        ``enabled`` останавливает свечи, котировки, LTF и события.
+        ``ltf_analyze`` останавливает открытие наблюдений. История
+        зон и сценариев не удаляется.
+        """
+        flag = int(bool(active))
+        self.conn.execute(
+            "UPDATE instrument SET enabled=?, ltf_analyze=? WHERE id=?",
+            (flag, flag, instrument_id),
+        )
+        self._commit()
+
     def rename_instrument_symbol(self, instrument_id: int, symbol: str) -> None:
         """Обновляет внешний идентификатор инструмента при миграции адаптера."""
         self.conn.execute(

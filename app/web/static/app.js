@@ -2126,7 +2126,84 @@ function recalcNote(recalc) {
   return 'Изменение правил требует пересчёта. Действующая версия остаётся доступной до публикации новой.';
 }
 
+function renderAssetActiveButton() {
+  const btn = $('asset-active-btn');
+  if (!btn) return;
+  const ins = state.instruments.find((i) => i.id === state.instrumentId);
+  if (!ins) {
+    btn.hidden = true;
+    return;
+  }
+  btn.hidden = false;
+  const on = !!ins.enabled;
+  btn.textContent = on ? 'Выключить актив' : 'Включить актив';
+  btn.classList.toggle('primary', !on);
+}
+
+function renderSettingsAssets() {
+  const box = $('settings-assets');
+  if (!box) return;
+  if (!state.instruments.length) {
+    box.innerHTML = '<p class="field-desc">Активов нет.</p>';
+    return;
+  }
+  box.innerHTML = state.instruments.map((ins) => {
+    const on = !!ins.enabled;
+    return `<div class="asset-switch">` +
+      `<div><div class="asset-sym">${esc(displayPair(ins.symbol))}</div>` +
+      `<div class="asset-sub">${esc(ins.venue)} · ${esc(ins.market_type || 'spot')}` +
+      `${on ? '' : ' · выключен'}</div></div>` +
+      `<button type="button" class="btn small${on ? '' : ' primary'}" data-active-id="${ins.id}" data-next="${on ? '0' : '1'}">` +
+      `${on ? 'Выключить' : 'Включить'}</button></div>`;
+  }).join('');
+  box.querySelectorAll('[data-active-id]').forEach((btn) => {
+    btn.onclick = () => setInstrumentActive(
+      Number(btn.dataset.activeId), btn.dataset.next === '1',
+    );
+  });
+}
+
+async function setInstrumentActive(id, active) {
+  const ins = state.instruments.find((i) => i.id === id);
+  if (!ins || !!ins.enabled === !!active) return;
+  if (!active) {
+    const name = displayPair(ins.symbol);
+    const ok = window.confirm(
+      `Выключить ${name}? Свечи, котировки и расчёт по этому активу остановятся. История сохранится.`,
+    );
+    if (!ok) return;
+  }
+  let res;
+  try {
+    res = await api(`/api/instruments/${id}/active`, {
+      method: 'POST', body: JSON.stringify({ active: !!active }),
+    });
+  } catch (e) {
+    console.warn('asset active:', e);
+    return;
+  }
+  ins.enabled = !!(res && res.enabled);
+  ins.ltf_analyze = !!(res && res.ltf_analyze);
+  if (!ins.enabled && state.instrumentId === id) {
+    const next = state.instruments.find((i) => i.enabled);
+    state.instrumentId = next ? next.id : null;
+  }
+  fillInstrumentSelect();
+  renderAssetActiveButton();
+  renderSettingsAssets();
+  if (state.instrumentId) syncInstrumentContext();
+  if (window.LFNow && window.LFNow.refresh) window.LFNow.refresh();
+  loadDeskExtras().catch((e) => console.warn('desk extras:', e));
+  if (state.instrumentId) reloadAll().catch((e) => console.warn('reload:', e));
+}
+
+window.LFInstruments = { setActive: setInstrumentActive };
+
 async function openSettings() {
+  if (!state.instruments.length) {
+    try { state.instruments = await api('/api/instruments'); } catch (e) { /* список ниже */ }
+  }
+  renderSettingsAssets();
   const data = await api('/api/settings');
   const notify = $('settings-notify');
   const rules = $('settings-rules');
@@ -2363,12 +2440,16 @@ function connectWs() {
 const INSTRUMENT_KEY = 'htf:instrument';
 
 function resolveInitialInstrument() {
+  if (!state.instruments.length) return null;
   const ids = new Set(state.instruments.map((i) => i.id));
   const fromUrl = Number(new URLSearchParams(location.search).get('instrument'));
+  // Явный адрес открывает и выключенный актив: это уже один выбранный график.
   if (fromUrl && ids.has(fromUrl)) return fromUrl;
+  const enabled = state.instruments.filter((i) => i.enabled);
+  const pool = enabled.length ? enabled : state.instruments;
   const saved = Number(localStorage.getItem(INSTRUMENT_KEY));
-  if (saved && ids.has(saved)) return saved;
-  return state.instruments[0].id;
+  if (saved && pool.some((i) => i.id === saved)) return saved;
+  return pool[0].id;
 }
 
 function updateLtfLinks() {
@@ -2383,6 +2464,7 @@ function updateLtfLinks() {
 function syncInstrumentContext() {
   // выбор инструмента разделяется со страницей LTF: localStorage + ?instrument=
   // (history.replaceState, без перезагрузки; hash вкладки сохраняется)
+  if (!state.instrumentId) return;
   localStorage.setItem(INSTRUMENT_KEY, String(state.instrumentId));
   const url = new URL(location.href);
   url.searchParams.set('instrument', String(state.instrumentId));
@@ -2633,14 +2715,24 @@ function renderDeskAssets() {
       : (r.price != null ? r.price : (cur && cur.price != null ? cur.price : null));
     const st8 = deskAssetState(r);
     const sel = ins.id === state.instrumentId ? ' selected' : '';
-    return `<button type="button" class="desk-asset${sel}" data-iid="${ins.id}">` +
+    return `<div class="desk-asset-row">` +
+      `<button type="button" class="desk-asset${sel}" data-iid="${ins.id}">` +
       `<span class="desk-asset-sym">${esc(displayPair(ins.symbol))}</span>` +
       `<span class="desk-asset-price">${price != null ? esc(fmtPrice(price)) : '—'}</span>` +
       `<span class="desk-asset-state"><span class="state-dot ${st8.dot}"></span>${esc(st8.label)}</span>` +
-      '</button>';
+      `</button>` +
+      `<button type="button" class="btn small desk-asset-off" data-off="${ins.id}">Выкл</button>` +
+      `</div>`;
   }).join('');
   el.querySelectorAll('.desk-asset').forEach((btn) => {
     btn.onclick = () => window.LFDesk.openInstrument(Number(btn.dataset.iid));
+  });
+  el.querySelectorAll('.desk-asset-off').forEach((btn) => {
+    btn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setInstrumentActive(Number(btn.dataset.off), false);
+    };
   });
 }
 
@@ -2862,20 +2954,24 @@ function deskOnWs(data) {
   }
 }
 
-async function loadInstruments() {
-  state.instruments = await api('/api/instruments');
+function fillInstrumentSelect() {
   const sel = $('instrument-select');
+  if (!sel) return;
   sel.innerHTML = '';
   for (const ins of state.instruments) {
     const opt = document.createElement('option');
     opt.value = ins.id;
-    opt.textContent = displayPair(ins.symbol) + (ins.enabled ? '' : ' (откл.)');
+    opt.textContent = displayPair(ins.symbol) + (ins.enabled ? '' : ' (выкл.)');
     sel.appendChild(opt);
   }
-  if (state.instruments.length && !state.instrumentId) {
-    state.instrumentId = resolveInitialInstrument();
-    sel.value = state.instrumentId;
-  }
+  if (state.instrumentId) sel.value = String(state.instrumentId);
+  renderAssetActiveButton();
+}
+
+async function loadInstruments() {
+  state.instruments = await api('/api/instruments');
+  if (!state.instrumentId) state.instrumentId = resolveInitialInstrument();
+  fillInstrumentSelect();
 }
 
 // updateLayers объявлен внутри main(); смена режима зовёт его после чекбоксов.
@@ -3005,8 +3101,16 @@ async function main() {
     showInspector(false);
     clearZoneSelection();
   };
+  const assetBtn = $('asset-active-btn');
+  if (assetBtn) {
+    assetBtn.onclick = () => {
+      const ins = state.instruments.find((i) => i.id === state.instrumentId);
+      if (ins) setInstrumentActive(ins.id, !ins.enabled);
+    };
+  }
   $('instrument-select').onchange = (e) => {
     state.instrumentId = Number(e.target.value);
+    renderAssetActiveButton();
     state.h1SelectedEventId = null;
     state.h1SelectedZoneId = null;
     state.h1PriceFocus = null;

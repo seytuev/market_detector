@@ -432,6 +432,11 @@ class LtfAnalyzeIn(BaseModel):
     analyze: bool
 
 
+class InstrumentActiveIn(BaseModel):
+    """Один выключатель актива: опрос свечей, котировки и расчёт."""
+    active: bool
+
+
 class ReviewIn(BaseModel):
     """Решение ревью (§15.3, R13).
 
@@ -692,6 +697,23 @@ def create_app(
         if ins is None:
             raise HTTPException(status_code=404, detail="Инструмент не найден")
         db.set_instrument_enabled(instrument_id, not ins.enabled)
+        return instrument_to_dict(db.get_instrument(instrument_id))
+
+    @app.post("/api/instruments/{instrument_id}/active",
+              dependencies=[Depends(require_auth)])
+    def set_instrument_active(
+        instrument_id: int, payload: InstrumentActiveIn
+    ) -> dict[str, Any]:
+        """Выключает актив и все его процедуры одной командой.
+
+        Снимаются и опрос (свечи, котировки, LTF, события), и открытие
+        наблюдений. Строки истории остаются. Включение возвращает оба
+        флага сразу.
+        """
+        ins = db.get_instrument(instrument_id)
+        if ins is None:
+            raise HTTPException(status_code=404, detail="Инструмент не найден")
+        db.set_instrument_active(instrument_id, payload.active)
         return instrument_to_dict(db.get_instrument(instrument_id))
 
     @app.post("/api/instruments/{instrument_id}/ltf-analyze",
@@ -1108,8 +1130,13 @@ def create_app(
         """Очередь ручной проверки (§10): кандидаты без ревью, с объяснением
         обнаружения из evidence. Проверенные зоны (решение зафиксировано
         в review) из очереди уходят, даже если статус остался candidate."""
+        enabled_ids = None
+        if instrument_id is None:
+            enabled_ids = {i.id for i in db.get_instruments(enabled_only=True)}
         out = []
         for z in db.get_unreviewed_candidates(instrument_id=instrument_id):
+            if enabled_ids is not None and z.instrument_id not in enabled_ids:
+                continue
             ins = db.get_instrument(z.instrument_id)
             out.append({
                 **zone_to_dict(z),

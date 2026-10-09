@@ -1124,13 +1124,16 @@ def instruments_overview(db: Database, settings) -> list[dict[str, Any]]:
     снимок /current выбранного контекста (§13: один снимок); последние
     события и счётчики кандидатов — агрегатными запросами."""
     now = now_ms()
+    # Выключенный актив не считается: страница не строит по нему снимок.
+    instruments = {i.id: i for i in db.get_instruments() if i.enabled}
     by_instrument: dict[int, list[LtfObservation]] = {}
     for o in db.list_ltf_observations():
+        if o.instrument_id not in instruments:
+            continue
         by_instrument.setdefault(o.instrument_id, []).append(o)
-    instruments = {i.id: i for i in db.get_instruments()}
     for ins in instruments.values():
         # «Анализировать» без наблюдений — тоже строка («Ждём HTF-зону»)
-        if ins.enabled and ins.ltf_analyze:
+        if ins.ltf_analyze:
             by_instrument.setdefault(ins.id, [])
     quotes = db.get_all_quotes()
     last_event = db.get_ltf_last_event_at()
