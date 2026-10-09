@@ -150,6 +150,21 @@ class Worker:
         for old in self.db.get_instruments():
             if old.venue == "binance" and old.symbol == "HYPEUSDT":
                 self.db.set_instrument_enabled(old.id, False)
+            elif old.venue == "hyperliquid" and old.symbol == "@207":
+                # Ранее в базе сохранялся технический alias. Переименовываем
+                # строку на публичное имя, сохраняя instrument_id и историю.
+                duplicate = next(
+                    (i for i in self.db.get_instruments()
+                     if i.venue == "hyperliquid" and i.symbol == "HYPE"),
+                    None,
+                )
+                if duplicate is not None and duplicate.id != old.id:
+                    self.db.delete_empty_instrument(duplicate.id)
+                if not any(
+                    i.venue == "hyperliquid" and i.symbol == "HYPE"
+                    for i in self.db.get_instruments()
+                ):
+                    self.db.rename_instrument_symbol(old.id, "HYPE")
         for venue, symbol in SEED:
             adapter = self.adapters.get(venue)
             if adapter is None:

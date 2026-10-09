@@ -379,6 +379,9 @@ class Database:
             # недостающие (включая ltf_* в старых БД).
             self.conn.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
             # ТЗ «Единый движок» §3: история глубины тестов Entry Zone —
+            notification_cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(notification_member)")}
+            if "reason" not in notification_cols:
+                self.conn.execute("ALTER TABLE notification_member ADD COLUMN reason TEXT")
             # CREATE IF NOT EXISTS не добавляет колонки в существующие таблицы
             ltf_ez_cols = {
                 r["name"]
@@ -585,6 +588,26 @@ class Database:
             "UPDATE instrument SET enabled=? WHERE id=?", (int(enabled), instrument_id)
         )
         self._commit()
+
+    def rename_instrument_symbol(self, instrument_id: int, symbol: str) -> None:
+        """Обновляет внешний идентификатор инструмента при миграции адаптера."""
+        self.conn.execute(
+            "UPDATE instrument SET symbol=? WHERE id=?", (symbol, instrument_id)
+        )
+        self._commit()
+
+    def delete_empty_instrument(self, instrument_id: int) -> bool:
+        """Удаляет дубликат инструмента только если у него нет рыночных данных."""
+        refs = self.conn.execute(
+            "SELECT (SELECT COUNT(*) FROM candle WHERE instrument_id=?), "
+            "(SELECT COUNT(*) FROM zone WHERE instrument_id=?)",
+            (instrument_id, instrument_id),
+        ).fetchone()
+        if refs[0] or refs[1]:
+            return False
+        self.conn.execute("DELETE FROM instrument WHERE id=?", (instrument_id,))
+        self._commit()
+        return True
 
     def set_instrument_ltf_analyze(self, instrument_id: int, analyze: bool) -> None:
         self.conn.execute(
