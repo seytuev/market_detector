@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException
 
-from ..events.evaluate import RULES, relation_to_h1
+from ..events.evaluate import RULES, market_direction, relation_to_h1
 from ..events.mathutil import RULE_VERSION
 from ..events.runner import run_cycle
 from ..events.store import (
@@ -29,6 +29,7 @@ def register_events_routes(app: FastAPI, db, settings, require_auth) -> None:
                 "empty_reason": "Оценка ещё не выполнялась",
                 "market_line": "Оценка ещё не выполнялась",
                 "service_line": _service_from_health(health),
+                "direction_note": market_direction(None),
                 "strategy_gates": [],
                 "situations": [],
                 "health": health,
@@ -164,6 +165,8 @@ def _public(snap: dict, health: dict) -> dict:
         "price_source": snap.get("price_source"),
         "market_line": snap.get("market_line"),
         "service_line": snap.get("service_line"),
+        # сторона контекста событий — отдельно от направления графика
+        "direction_note": market_direction(snap),
         "calendar": snap.get("calendar"),
         "streak": snap.get("streak"),
         "liquidation": snap.get("liquidation"),

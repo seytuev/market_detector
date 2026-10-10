@@ -115,6 +115,7 @@ window.LFCopy = (() => {
   function card(p, opts) {
     if (!p) return '';
     opts = opts || {};
+    const visual = typeof opts.visualHtml === 'function' ? opts.visualHtml() : (opts.visualHtml || '');
     const asset = p.asset;
     if (asset && asset.governs && asset.asset_state && asset.asset_state.title) {
       const title = asset.asset_state.title;
@@ -123,6 +124,7 @@ window.LFCopy = (() => {
         html += `<div class="now-card-head"><span>${esc(p.instrument_line)}</span></div>`;
       }
       html += `<h3 class="asset-status">${esc(title)}</h3>`;
+      html += visual;
       (asset.compact || []).slice(0, 5).forEach((line) => {
         html += `<p class="asset-line">${esc(line)}</p>`;
       });
@@ -142,6 +144,7 @@ window.LFCopy = (() => {
     if (detail && detail !== headline) {
       html += `<p class="now-card-lead">${esc(detail)}</p>`;
     }
+    html += visual;
     html += legacyBlocks(p, opts, headline, detail);
     if (opts.extraHtml) html += opts.extraHtml;
     return html;

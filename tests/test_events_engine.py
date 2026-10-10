@@ -17,6 +17,7 @@ from app.events.evaluate import (
     PriceBar,
     _liq_stats,
     evaluate,
+    market_direction,
     median,
 )
 from app.events.mathutil import DAY_MS, percentile
@@ -387,3 +388,31 @@ def test_runner_is_idempotent_and_api_hides_the_key(tmp_path):
         headers={"Authorization": f"Bearer {TOKEN}"},
     )
     assert missing.status_code == 404
+
+
+def test_market_direction_priorities():
+    # каскад/запрет разворота — давление вниз, наблюдения отскока — вверх
+    assert market_direction({})["side"] is None
+    assert market_direction({"post_high": {"active": True}})["side"] == "short"
+    assert market_direction({"oi02": {"active": True}})["side"] == "short"
+    assert market_direction({"liquidation": {"cascade": True}})["side"] == "short"
+    # пост-высокий сильнее каскадной ситуации OI
+    both_down = market_direction({"post_high": {"active": True},
+                                  "oi02": {"active": True}})
+    assert both_down["rule_id"] == "POST_HIGH_LONG_CASCADE"
+    # наблюдения отскока — сторона лонга
+    streak = market_direction({
+        "situations": [{"rule_id": "RED_STREAK_REBOUND_WATCH"}],
+        "streak": {"length": 5},
+    })
+    assert streak["side"] == "long"
+    assert streak["text"].startswith("Серия снижения: 5")
+    assert market_direction({
+        "situations": [{"rule_id": "RED_WIDE_DAY_REBOUND_WATCH"}],
+    })["side"] == "long"
+    assert market_direction({
+        "situations": [{"rule_id": "FUNDING_REBOUND_WATCH"}],
+    })["side"] == "long"
+    # направление событий не зависит от направления графика: поля H1 не читаются
+    chart_says_bull = {"direction": "bull", "market_stage": "LONG · ждёт откат"}
+    assert market_direction(chart_says_bull)["side"] is None

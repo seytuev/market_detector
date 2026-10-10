@@ -36,6 +36,10 @@ def _pid_alive(pid: int) -> bool:
         os.kill(pid, 0)
     except OSError:
         return False
+    except SystemError:
+        # Windows: os.kill(0) по освободившемуся pid может вернуть
+        # SystemError вместо OSError — такой владелец тоже мёртв.
+        return False
     return True
 
 

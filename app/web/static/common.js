@@ -227,23 +227,8 @@ window.HTF = (() => {
   };
 })();
 
-/* Часы МСК и панель «Ещё». Общие для страниц со shell. */
+/* Панель «Ещё» мобильной навигации. Общая для страниц со shell. */
 (() => {
-  const clock = document.getElementById('shell-clock');
-  if (clock) {
-    const tick = () => {
-      const now = new Date();
-      const date = now.toLocaleDateString('ru-RU', {
-        day: 'numeric', month: 'short', timeZone: 'Europe/Moscow',
-      }).replace('.', '');
-      const time = now.toLocaleTimeString('ru-RU', {
-        hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Moscow',
-      });
-      clock.textContent = `${date} · ${time} МСК`;
-    };
-    tick();
-    setInterval(tick, 30000);
-  }
   const btn = document.getElementById('nav-more');
   const panel = document.getElementById('nav-more-panel');
   if (!btn || !panel) return;
@@ -260,6 +245,30 @@ window.HTF = (() => {
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') close();
   });
+})();
+
+/* Кнопка сворачивания бокового меню. Выбор хранится в lf:sidebar и
+   применяется до загрузки стилей inline-скриптом в <head>. */
+(() => {
+  const btn = document.getElementById('sidebar-toggle');
+  if (!btn) return;
+  const apply = (state) => {
+    if (state === 'collapsed') document.documentElement.dataset.sidebar = 'collapsed';
+    else document.documentElement.dataset.sidebar = 'expanded';
+    localStorage.setItem('lf:sidebar', state);
+    const collapsed = state === 'collapsed';
+    btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    btn.title = collapsed ? 'Развернуть меню' : 'Свернуть меню';
+    btn.setAttribute('aria-label', btn.title);
+  };
+  btn.addEventListener('click', () => {
+    apply(document.documentElement.dataset.sidebar === 'collapsed' ? 'expanded' : 'collapsed');
+  });
+  if (document.documentElement.dataset.sidebar === 'collapsed') {
+    btn.setAttribute('aria-expanded', 'false');
+    btn.title = 'Развернуть меню';
+    btn.setAttribute('aria-label', btn.title);
+  }
 })();
 
 /* Сплиттеры: перетаскивание границы меняет ширину правой панели и высоту
@@ -354,8 +363,10 @@ window.HTF = (() => {
 
     const overview = document.querySelector('.overview-layout');
     if (overview) {
+      // меряем объединённую панель «Актив / Зоны»: zone-rail скрыт,
+      // когда активна вкладка сценария
       makeSplitter({
-        layout: overview, panel: overview.querySelector('#zone-rail'), axis: 'x', prop: 'gridTemplateColumns',
+        layout: overview, panel: overview.querySelector('#desk-panel'), axis: 'x', prop: 'gridTemplateColumns',
         min: 280, max: () => innerX(overview) - gapX(overview) - 480,
         apply: (w) => { overview.style.gridTemplateColumns = `minmax(0,1fr) ${w}px`; },
         enabled: () => window.matchMedia('(min-width: 1200px)').matches,

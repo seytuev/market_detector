@@ -1036,6 +1036,39 @@ def relation_to_h1(snapshot: dict, direction: Optional[str]) -> str:
     return "недостаточно данных"
 
 
+def market_direction(snapshot: dict) -> dict:
+    """Сторона контекста «Событий и времени» по правилам наблюдения.
+
+    Это состояние производных данных, не направление графика и не сигнал
+    сделки: предупреждения о каскаде лонг-ликвидаций — давление вниз,
+    наблюдения отскока — попытка разворота вверх. Приоритет эпизодов —
+    как у _market_line.
+    """
+    if not snapshot:
+        return {"side": None, "rule_id": None, "text": "Оценка ещё не выполнялась"}
+    if snapshot.get("post_high", {}).get("active"):
+        return {"side": "short", "rule_id": "POST_HIGH_LONG_CASCADE",
+                "text": "Риск каскада лонг-ликвидаций после максимума"}
+    if snapshot.get("oi02", {}).get("active"):
+        return {"side": "short", "rule_id": "CASCADE_OI_RISING_RISK",
+                "text": "Каскад при росте OI, разворотное наблюдение заблокировано"}
+    if (snapshot.get("liquidation") or {}).get("cascade"):
+        return {"side": "short", "rule_id": "LIQ_CASCADE",
+                "text": "Каскад лонг-ликвидаций в последнем закрытом дне"}
+    rules = {s.get("rule_id") for s in (snapshot.get("situations") or [])}
+    if "RED_STREAK_REBOUND_WATCH" in rules:
+        length = (snapshot.get("streak") or {}).get("length")
+        return {"side": "long", "rule_id": "RED_STREAK_REBOUND_WATCH",
+                "text": f"Серия снижения: {length} закрытых дней, наблюдение отскока"}
+    if "RED_WIDE_DAY_REBOUND_WATCH" in rules:
+        return {"side": "long", "rule_id": "RED_WIDE_DAY_REBOUND_WATCH",
+                "text": "Красный широкий день, наблюдение отскока"}
+    if "FUNDING_REBOUND_WATCH" in rules:
+        return {"side": "long", "rule_id": "FUNDING_REBOUND_WATCH",
+                "text": "Шорты платят по наблюдаемой ставке, наблюдение отскока"}
+    return {"side": None, "rule_id": None, "text": "Направленного эпизода в контексте нет"}
+
+
 RULES = [
     {
         "id": "LIQ01",

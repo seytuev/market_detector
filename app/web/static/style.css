@@ -1196,12 +1196,17 @@ input[type="checkbox"] { min-height: auto; accent-color: var(--accent); }
   background: var(--bg-panel); border: 1px solid var(--border); border-radius: 8px;
   display: flex; flex-direction: column; min-height: 0; overflow: hidden;
 }
-.rail-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 12px 8px; }
+.rail-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px 6px; }
 .rail-head h2 { margin: 0; font-size: 16px; font-weight: 600; }
-.rail-tabs { display: flex; gap: 4px; padding: 0 12px 4px; }
+.rail-tabs {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px;
+  padding: 0 12px 6px;
+}
 .rail-tab {
-  flex: 1; min-width: 0; height: 36px; border: 0; border-radius: var(--lf-radius-ctrl);
-  background: transparent; color: var(--text-dim); cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  min-width: 0; min-height: 46px; padding: 5px 4px; border: 0; border-radius: var(--lf-radius-ctrl);
+  background: transparent; color: var(--lf-text-dim, var(--text-dim)); cursor: pointer;
+  font: inherit; font-size: 12px; line-height: 1.2;
 }
 .rail-global-note {
   margin: 0; padding: 0 12px 8px; font-size: 12px; color: var(--lf-text2);
@@ -1210,15 +1215,15 @@ input[type="checkbox"] { min-height: auto; accent-color: var(--accent); }
 .rail-tab.active { background: var(--accent); color: var(--lf-accent-ink); }
 .zone-cards { overflow: auto; padding: 0 12px 12px; display: flex; flex-direction: column; gap: 8px; }
 .zone-card {
-  display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 8px 10px; align-items: start;
-  min-height: 76px; padding: 10px 12px; border: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 10px 12px; border: 1px solid var(--border);
   border-radius: var(--lf-radius-ctrl); background: var(--bg-card); cursor: pointer;
   text-align: left; width: 100%; font: inherit; color: inherit;
 }
-.zone-card .range { overflow-wrap: anywhere; }
+.zone-card .range, .zone-card .zc-range { overflow-wrap: anywhere; }
 .zone-card:hover { border-color: var(--accent); }
 .zone-card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-.zone-card .swatch { width: 14px; height: 14px; border-radius: 3px; border: 1px solid; }
+.zone-card .swatch { width: 14px; height: 14px; border-radius: 3px; border: 1px solid; flex: none; }
 .swatch.z-ob { background: rgba(89,133,255,.35); border-color: #5985FF; }
 .swatch.z-fvg { background: rgba(85,181,162,.35); border-color: #55B5A2; }
 .swatch.z-bsl, .swatch.z-ssl { background: transparent; border-color: var(--text-dim); }
@@ -1228,6 +1233,40 @@ input[type="checkbox"] { min-height: auto; accent-color: var(--accent); }
 .zone-card .title { font-weight: 600; }
 .zone-card .role { color: var(--text-dim); font-size: 12px; }
 .zone-card .range { font-variant-numeric: tabular-nums; font-size: 13px; }
+/* карточка зоны: тип/статус, диапазон, положение цены, роль */
+.zone-card .zc-top {
+  display: flex; align-items: center; gap: 8px; min-width: 0;
+}
+.zone-card .zc-type { font-weight: 600; font-size: 13px; white-space: nowrap; }
+.zone-card .dir { font-size: 13px; flex: none; }
+.zone-card .zc-status {
+  margin-left: auto; flex: none; max-width: 60%;
+  font-size: 11px; color: var(--lf-text2); text-align: right;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.zone-card .zc-range {
+  font-variant-numeric: tabular-nums; font-size: 13px; font-weight: 500;
+}
+.zone-card .zc-bottom {
+  display: flex; align-items: center; gap: 8px; min-width: 0;
+}
+.zone-card .zc-bottom .role { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.zone-card .zc-bottom .rel-chip { flex: none; }
+.zpos {
+  position: relative; display: block; height: 8px; border-radius: 4px;
+  background: var(--lf-raised, rgba(127,145,165,.14)); overflow: hidden;
+}
+.zpos-band {
+  position: absolute; top: 1px; bottom: 1px;
+  background: rgba(89,133,255,.28); border: 1px solid rgba(89,133,255,.55); border-radius: 3px;
+}
+.zpos-price {
+  position: absolute; top: -1px; bottom: -1px; width: 2px; margin-left: -1px;
+  background: var(--lf-text, #333); border-radius: 1px;
+}
+.zpos-price.inside { background: var(--accent); }
+.zpos-price.below { background: var(--red); }
+.zpos-price.above { background: var(--green); }
 .rel-chip {
   font-size: 11px; padding: 3px 8px; border-radius: 4px; border: 1px solid var(--border); color: var(--text-dim);
 }
@@ -1878,13 +1917,54 @@ input[type="checkbox"] { min-height: auto; accent-color: var(--accent); }
 .desk-price-ccc { color: var(--lf-text2); font-size: 13px; }
 .desk-quote .price-age { color: var(--lf-text2); font-size: 12px; margin-top: 2px; }
 
-/* правая колонка рабочего места: карточка сценария над рейлом зон */
+/* правая колонка рабочего места: панель «Актив / Зоны» с вкладками */
 .overview-layout { grid-template-columns: minmax(0, 1fr) 340px; }
 .desk-side {
   display: flex; flex-direction: column; gap: 12px;
   min-width: 0; min-height: 0;
 }
-.desk-side .zone-rail { flex: 1; min-height: 140px; }
+.desk-side .desk-panel { flex: 1; min-height: 160px; }
+.desk-panel {
+  display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+  background: var(--lf-surface); border: 1px solid var(--lf-border);
+  border-radius: var(--lf-radius-panel);
+}
+.desk-panel-tabs {
+  flex: none; display: flex; gap: 4px; padding: 8px 8px 0;
+  border-bottom: 1px solid var(--lf-border);
+}
+.panel-tab {
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 36px; padding: 6px 12px;
+  border: 1px solid transparent; border-bottom: 0;
+  border-radius: var(--lf-radius-ctrl) var(--lf-radius-ctrl) 0 0;
+  background: transparent; color: var(--lf-text2);
+  font: inherit; font-weight: 500; cursor: pointer;
+}
+.panel-tab:hover { color: var(--lf-text); }
+.panel-tab.active {
+  background: var(--lf-raised); color: var(--lf-text);
+  border-color: var(--lf-border);
+}
+.panel-tab-count {
+  min-width: 18px; padding: 0 5px; text-align: center;
+  border-radius: 999px; background: var(--lf-selected); color: var(--lf-text);
+  font-size: 11px; line-height: 18px; font-variant-numeric: tabular-nums;
+}
+.desk-panel-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.desk-panel-body > .desk-scenario,
+.desk-panel-body > .zone-rail { flex: 1; min-height: 0; }
+.desk-panel[data-tab="scenario"] .zone-rail { display: none; }
+.desk-panel[data-tab="zones"] .desk-scenario { display: none; }
+/* zone-rail живёт внутри панели: своя рамка больше не нужна */
+.desk-panel .zone-rail { border: 0; border-radius: 0; background: transparent; }
+.rail-tab-count {
+  min-width: 18px; padding: 0 5px; text-align: center;
+  border-radius: 999px; background: var(--lf-raised); color: var(--lf-text2);
+  font-size: 10px; line-height: 15px; font-variant-numeric: tabular-nums;
+}
+.rail-tab.active .rail-tab-count { background: rgba(255, 255, 255, .22); color: inherit; }
+.rail-tab-count:empty { display: none; }
 
 .desk-main {
   display: grid; grid-template-columns: 220px minmax(0, 1fr);
@@ -1953,11 +2033,10 @@ input[type="checkbox"] { min-height: auto; accent-color: var(--accent); }
   border-radius: 0 0 var(--lf-radius-panel) var(--lf-radius-panel);
 }
 
-/* карточка состояния сценария (снимок /current) */
+/* карточка состояния сценария (снимок /current) — внутри панели «Актив / Зоны» */
 .desk-scenario {
-  flex: none; background: var(--lf-surface);
-  border: 1px solid var(--lf-border); border-radius: var(--lf-radius-panel);
-  padding: 16px; max-height: 55%; overflow: auto;
+  flex: 1; min-height: 0; background: transparent;
+  border: 0; border-radius: 0; padding: 12px 14px; overflow: auto;
 }
 .desk-sc-head {
   display: flex; justify-content: space-between; align-items: center;
@@ -1982,6 +2061,49 @@ input[type="checkbox"] { min-height: auto; accent-color: var(--accent); }
   margin: 8px 0 0;
 }
 .desk-basis dd { margin: 0; color: var(--lf-text); }
+
+/* Схема «зона — цена» в карточке сообщения: вертикальная шкала цены,
+   зона контекста, зоны входа, уровень отмены и отметка текущей цены. */
+.sc-visual {
+  position: relative; margin: 10px 0 12px;
+  height: 150px; border: 1px solid var(--lf-border);
+  border-radius: var(--lf-radius-ctrl); background: var(--lf-raised);
+  overflow: hidden;
+}
+.sc-zone {
+  position: absolute; left: 8px; right: 8px;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 0 8px; border-radius: 4px; overflow: hidden;
+  font-size: 11px; line-height: 1.2;
+}
+.sc-zone.is-bull { background: rgba(24, 107, 80, .16); border: 1px solid rgba(24, 107, 80, .45); color: var(--lf-positive); }
+.sc-zone.is-bear { background: rgba(161, 50, 68, .14); border: 1px solid rgba(161, 50, 68, .45); color: var(--lf-negative); }
+.sc-zone-name { font-weight: 600; white-space: nowrap; }
+.sc-zone-bounds { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sc-entry {
+  position: absolute; left: 8px; right: 8px; height: 2px;
+  background: var(--lf-brand); opacity: .45; border-radius: 1px;
+}
+.sc-level {
+  position: absolute; left: 0; right: 0; height: 0;
+  border-top: 1px dashed var(--lf-warning, #b98a2e);
+}
+.sc-level-label {
+  position: absolute; left: 8px; top: 1px;
+  padding: 1px 6px; border-radius: 3px;
+  background: var(--lf-surface); color: var(--lf-text2); font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.sc-price {
+  position: absolute; left: 0; right: 0; height: 0;
+  border-top: 2px solid var(--lf-text); z-index: 2;
+}
+.sc-price-chip {
+  position: absolute; right: 8px; top: -9px;
+  padding: 1px 7px; border-radius: 999px;
+  background: var(--lf-text); color: var(--lf-surface);
+  font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums;
+}
 
 /* «Зоны сценария / N» под графиком (eligible_entries снимка /current) */
 .desk-entries {
@@ -2200,18 +2322,22 @@ input[type="checkbox"] { min-height: auto; accent-color: var(--accent); }
   .journal-status { min-height: 44px; }
 }
 
-/* 320–599: один поток — вывод сценария раньше графика, цели касания ≥44px */
+/* 320–599: один поток — панель актива после графика, цели касания ≥44px */
 @media (max-width: 599px) {
   .overview-layout { display: flex; flex-direction: column; }
   .desk-main, .desk-side { display: contents; }
-  .desk-scenario { order: 1; }
+  .overview-layout .chart-block { order: 1; }
   .desk-assets { order: 2; }
-  .overview-layout .chart-block { order: 3; }
-  .zone-rail { order: 4; max-height: none; }
+  .desk-panel { order: 3; flex: none; }
+  .h1-events-context { order: 4; }
+  .desk-panel-body { display: block; }
+  .desk-scenario { max-height: none; overflow: visible; }
+  .zone-rail { max-height: 70vh; }
   .desk-head-row { flex-direction: column; align-items: flex-start; }
   .desk-quote { text-align: left; }
   .desk-price-row { justify-content: flex-start; }
   .mode-tab { min-height: 44px; }
+  .panel-tab { min-height: 44px; }
   .desk-asset { min-height: 44px; }
   .review-head { flex-direction: column; gap: 6px; }
   .review-count { padding-top: 0; }
@@ -2337,6 +2463,25 @@ input[type="checkbox"] { min-height: auto; accent-color: var(--accent); }
 .events-status { white-space: nowrap; }
 .h1-events-context { margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--lf-border); border-radius: 8px; }
 .h1-events-context p { margin: 0 0 6px; }
+/* «События и время»: заголовок, строка рынка, индикатор LONG/SHORT, кнопка */
+.h1-events-context .side-card-head { margin: 0 0 6px; font-size: 14px; }
+.h1-events-context .side-market-line { margin: 0 0 8px; font-size: 13px; line-height: 1.45; }
+.h1-events-context .side-open { margin-top: 2px; }
+.events-side-state {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: 0 0 10px; padding: 7px 9px;
+  border: 1px solid var(--lf-border); border-radius: var(--lf-radius-ctrl);
+  background: var(--lf-raised);
+}
+.events-side-state .side-state {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 13px; font-weight: 600; letter-spacing: .02em;
+}
+.events-side-state .side-state.is-long { color: var(--lf-positive); }
+.events-side-state .side-state.is-short { color: var(--lf-negative); }
+.events-side-state .side-state.is-neutral { color: var(--lf-text2); font-weight: 500; }
+.events-side-state .side-state-note { font-size: 12px; color: var(--lf-text2); }
+.events-side-state.hidden { display: none; }
 @media (max-width: 720px) {
   .events-checks li { flex-direction: column; }
 }
@@ -2365,13 +2510,60 @@ body.app-body {
   display: flex; flex-direction: column;
 }
 .shell-main { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+/* Верхняя панель без заголовка и часов: только кнопка меню (на странице
+   H1 — ещё кнопка LTF). На телефоне панель пустая и скрывается. */
 .topbar {
-  flex: none; height: 64px; display: flex; align-items: center; justify-content: space-between;
-  padding: 0 30px; border-bottom: 1px solid var(--lf-border); background: var(--lf-bg);
+  flex: none; min-height: 48px; display: flex; flex-direction: row; align-items: center; justify-content: space-between;
+  padding: 0 16px; border-bottom: 1px solid var(--lf-border); background: var(--lf-bg);
 }
-.crumb { font-size: 15px; font-weight: 600; line-height: 22px; }
+.top-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+
+/* Сворачивание бокового меню: явный выбор пользователя в lf:sidebar.
+   Без атрибута действует адаптив по умолчанию. На телефоне (<768px)
+   сайдбар скрыт целиком, состояния не действуют. */
+.sidebar-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; flex: none;
+  border: 1px solid var(--lf-border); border-radius: var(--lf-radius-ctrl);
+  background: var(--lf-surface); color: var(--lf-text2); cursor: pointer;
+}
+.sidebar-toggle:hover { color: var(--lf-text); background: var(--lf-raised); }
+.sidebar-toggle .ico-expand { display: none; }
+html[data-sidebar="collapsed"] .sidebar-toggle .ico-collapse { display: none; }
+html[data-sidebar="collapsed"] .sidebar-toggle .ico-expand { display: block; }
+@media (min-width: 768px) {
+  html[data-sidebar="collapsed"] .sidebar { width: 64px; padding: 16px 6px; }
+  html[data-sidebar="collapsed"] .shell { margin-left: 64px; }
+  html[data-sidebar="collapsed"] .brand-text,
+  html[data-sidebar="collapsed"] .nav-label,
+  html[data-sidebar="collapsed"] .connection-label,
+  html[data-sidebar="collapsed"] .nav-full { display: none; }
+  html[data-sidebar="collapsed"] .nav-short { display: inline; }
+  html[data-sidebar="collapsed"] .sidebar .brand { align-items: center; padding: 4px 0 8px; }
+  html[data-sidebar="collapsed"] .sidebar .app-tab {
+    justify-content: center; padding: 6px 2px; font-size: 11px;
+    line-height: 1.15; text-align: center; min-height: 44px;
+  }
+  html[data-sidebar="collapsed"] .sidebar .conn-status { justify-content: center; padding: 4px 2px; }
+
+  /* Развернутое меню по кнопке — и на средних экранах, где по умолчанию узкое */
+  html[data-sidebar="expanded"] .sidebar { width: 208px; padding: 16px 12px; }
+  html[data-sidebar="expanded"] .shell { margin-left: 208px; }
+  html[data-sidebar="expanded"] .brand-text { display: flex; }
+  html[data-sidebar="expanded"] .nav-label { display: block; }
+  html[data-sidebar="expanded"] .connection-label { display: inline; }
+  html[data-sidebar="expanded"] .nav-full { display: inline; }
+  html[data-sidebar="expanded"] .nav-short { display: none; }
+  html[data-sidebar="expanded"] .sidebar .brand { align-items: flex-start; padding: 4px 8px 8px; }
+  html[data-sidebar="expanded"] .sidebar .app-tab {
+    justify-content: flex-start; padding: 8px 10px; min-height: 36px;
+    font-size: inherit; line-height: inherit; text-align: left;
+  }
+}
+@media (max-width: 767px) {
+  .sidebar-toggle { display: none; }
+}
 .top-right { display: flex; align-items: center; gap: 12px; }
-.clock { color: var(--lf-text2); font-size: 13px; font-variant-numeric: tabular-nums; }
 .sidebar .brand { align-items: flex-start; padding: 4px 8px 8px; }
 .brand-text { display: flex; flex-direction: column; line-height: 1.15; font-size: 15px; font-weight: 600; }
 .brand-text small {
@@ -2504,7 +2696,10 @@ body.app-body {
   .mobile-nav { display: flex; height: 64px; }
   .mobile-nav a, .mobile-nav button { min-height: 44px; font-size: 12px; }
   .now-title, .review-title { font-size: 23px; line-height: 28px; }
-  .topbar { padding: 0 16px; height: 56px; }
+  /* без заголовка и часов панель пуста — остаётся только на странице H1
+     (там живёт кнопка LTF) */
+  .topbar { display: none; }
+  .topbar.ltf-topbar { display: flex; min-height: 56px; padding: 0 16px; }
   .events-page { padding: 16px 12px 24px; }
   .events-split, .cal-layout { grid-template-columns: 1fr; }
   .overview-layout #chart-container { min-height: 300px; height: 340px; }
@@ -2535,10 +2730,9 @@ body.app-body {
 @media (max-width: 599px) {
   /* График — первый контекст. Карточка событий не вытесняет его за край экрана. */
   .overview-layout .chart-block { order: 1; }
-  .desk-scenario { order: 2; }
-  .zone-rail { order: 3; }
+  .desk-assets { order: 2; }
+  .desk-panel { order: 3; }
   #h1-events-context { order: 4; }
-  .desk-assets { order: 5; }
 }
 .app-footer { background: var(--lf-bg); }
 #view-settings { min-height: 0; }

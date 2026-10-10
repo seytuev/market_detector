@@ -135,10 +135,26 @@
   function renderSide(data) {
     const box = document.getElementById('h1-events-context');
     if (!box) return;
-    box.innerHTML = `<p><strong>События и время</strong></p>
-      <p>${esc(data.market_line)}</p>
-      <p class="events-service">${esc(data.service_line)}</p>
-      <p><a href="/events.html">Открыть раздел</a></p>`;
+    // Служебную строку источника здесь не показываем: это подробность раздела
+    // «Контекст рынка». Индикатор — сторона контекста событий (direction_note
+    // считает сервер по правилам наблюдения): она не зависит от графика
+    // и сценария рабочего места.
+    const note = data.direction_note || {};
+    let state;
+    if (note.side === 'long' || note.side === 'short') {
+      const long = note.side === 'long';
+      state = `<span class="side-state ${long ? 'is-long' : 'is-short'}">` +
+        `<span class="state-dot ${long ? 'dot-positive' : 'dot-negative'}"></span>` +
+        `${long ? '↑' : '↓'} ${long ? 'LONG' : 'SHORT'}</span>`;
+    } else {
+      state = '<span class="side-state is-neutral"><span class="state-dot dot-muted"></span>Без направления</span>';
+    }
+    box.innerHTML = `<div class="side-card-head"><strong>События и время</strong></div>
+      <p class="side-market-line">${esc(data.market_line)}</p>
+      <div class="events-side-state">${state}` +
+      (note.side && note.text ? `<span class="side-state-note">${esc(note.text)}</span>` : '') +
+      `</div>
+      <a class="btn small side-open" href="/events.html">Открыть раздел</a>`;
   }
 
   async function loadSide() {

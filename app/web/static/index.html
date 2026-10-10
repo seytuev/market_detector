@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>LevelFrame · Среда рыночного анализа</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-  <script>(function(){try{var c=localStorage.getItem('lf:theme');var l=window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches;var t=(c==='dark'||c==='light')?c:(c==='system'?(l?'light':'dark'):'light');document.documentElement.dataset.theme=t;}catch(e){document.documentElement.dataset.theme='light';}})();</script>
+  <script>(function(){try{var c=localStorage.getItem('lf:theme');var l=window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches;var t=(c==='dark'||c==='light')?c:(c==='system'?(l?'light':'dark'):'light');document.documentElement.dataset.theme=t;var sb=localStorage.getItem('lf:sidebar');if(sb==='collapsed'||sb==='expanded')document.documentElement.dataset.sidebar=sb;}catch(e){document.documentElement.dataset.theme='light';}})();</script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
   <link rel="stylesheet" href="/style.css">
@@ -14,12 +14,22 @@
 <body class="app-body">
   <a class="skip" href="#main">К содержимому</a>
   <aside class="sidebar">
+    <div class="sidebar-head">
     <a class="brand" href="#now" data-view="now">
       <svg class="brand-mark" width="30" height="30" viewBox="0 0 30 30" fill="none" aria-hidden="true">
         <path d="M7 5v20h16M12 9h12M12 15h9M12 21h6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
       <span class="brand-text">LevelFrame<small>MARKET INTELLIGENCE</small></span>
     </a>
+    <button type="button" id="sidebar-toggle" class="sidebar-toggle" aria-label="Свернуть меню" aria-expanded="true" title="Свернуть меню">
+      <svg class="ico-collapse" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <path d="M9 3 4.5 8 9 13M14 3 9.5 8 14 13" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <svg class="ico-expand" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <path d="M7 3l4.5 5L7 13M2 3l4.5 5L2 13" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
+    </div>
     <div class="nav-label">Анализ</div>
     <nav class="app-tabs" aria-label="Основная навигация">
       <a href="#now" data-view="now" class="app-tab active"><span class="nav-full">Обзор</span><span class="nav-short">Обзор</span></a>
@@ -38,10 +48,6 @@
     </div>
   </aside>
   <div class="shell">
-    <header class="topbar">
-      <span class="crumb" id="page-crumb">Обзор</span>
-      <div class="top-right"><span class="clock" id="shell-clock">МСК</span></div>
-    </header>
     <div class="shell-main" id="main">
 
   <section id="view-now" class="view active">
@@ -208,23 +214,33 @@
 
       <div class="desk-side">
         <section id="h1-events-context" class="h1-events-context" aria-label="События и время"></section>
-        <section id="desk-scenario" class="desk-scenario hidden" aria-label="Состояние сценария"></section>
-        <aside class="zone-rail" id="zone-rail">
+        <aside class="desk-panel" id="desk-panel" data-tab="scenario">
+          <div class="desk-panel-tabs" role="tablist" aria-label="Панель актива">
+            <button type="button" class="panel-tab active" id="panel-tab-scenario" data-panel-tab="scenario" role="tab" aria-selected="true" aria-controls="desk-scenario" title="Сообщение по активу">
+              <span id="panel-tab-symbol">Актив</span>
+            </button>
+            <button type="button" class="panel-tab" id="panel-tab-zones" data-panel-tab="zones" role="tab" aria-selected="false" aria-controls="zone-rail" title="Список зон">
+              Зоны<span id="panel-tab-count" class="panel-tab-count hidden"></span>
+            </button>
+          </div>
+          <div class="desk-panel-body">
+        <section id="desk-scenario" class="desk-scenario hidden" role="tabpanel" aria-label="Состояние сценария"></section>
+        <aside class="zone-rail" id="zone-rail" role="tabpanel" aria-label="Зоны">
         <div class="rail-head">
           <h2>Зоны</h2>
-          <button id="btn-table-mode" class="btn small" type="button">Таблица</button>
+          <button id="btn-table-mode" class="btn small" type="button" title="Показать зоны таблицей">Таблица</button>
         </div>
-        <div class="rail-tabs" role="tablist">
-          <button type="button" class="rail-tab active" data-bucket="live">Актуальные</button>
-          <button type="button" class="rail-tab" data-bucket="candidate">Кандидаты <span id="candidates-count"></span></button>
-          <button type="button" class="rail-tab" data-bucket="archive">Архив</button>
+        <div class="rail-tabs" role="tablist" aria-label="Группы зон">
+          <button type="button" class="rail-tab active" data-bucket="live" title="Подтверждённые и непробитые зоны">Актуальные<span class="rail-tab-count" id="rail-count-live"></span></button>
+          <button type="button" class="rail-tab" data-bucket="candidate" title="Зоны, ожидающие вашей проверки">Кандидаты <span id="candidates-count" class="rail-tab-count"></span></button>
+          <button type="button" class="rail-tab" data-bucket="archive" title="Отработанные, отклонённые и завершённые зоны">Архив<span class="rail-tab-count" id="rail-count-archive"></span></button>
         </div>
         <p id="candidates-global-note" class="work-meta rail-global-note"></p>
         <div class="list-filters">
-          <select id="zone-type-filter"><option value="">Все типы</option><option value="fvg">FVG</option><option value="ob">OB</option><option value="prb">PRB</option><option value="breaker">Breaker</option><option value="ssl">SSL</option><option value="bsl">BSL</option><option value="manual">Ручная</option></select>
-          <select id="zone-tf-filter"><option value="">D1 + W1</option><option value="D1">D1</option><option value="W1">W1</option></select>
-          <select id="zone-rel-filter"><option value="">Положение</option><option value="inside">Цена внутри</option><option value="above">Выше цены</option><option value="below">Ниже цены</option></select>
-          <button type="button" id="btn-resort" class="btn small">Обновить порядок</button>
+          <select id="zone-type-filter" title="Фильтр по типу зоны"><option value="">Все типы</option><option value="fvg">FVG</option><option value="ob">OB</option><option value="prb">PRB</option><option value="breaker">Breaker</option><option value="ssl">SSL</option><option value="bsl">BSL</option><option value="manual">Ручная</option></select>
+          <select id="zone-tf-filter" title="Фильтр по таймфрейму"><option value="">D1 + W1</option><option value="D1">D1</option><option value="W1">W1</option></select>
+          <select id="zone-rel-filter" title="Положение цены относительно зоны"><option value="">Положение</option><option value="inside">Цена внутри</option><option value="above">Выше цены</option><option value="below">Ниже цены</option></select>
+          <button type="button" id="btn-resort" class="btn small" title="Вернуть сортировку по близости к цене">Сбросить порядок</button>
         </div>
         <select id="zone-status-filter" class="hidden">
           <option value="">актуальные</option>
@@ -245,6 +261,8 @@
           <button class="back-link" id="detail-close" type="button">← К зонам</button>
           <div id="detail-content"></div>
         </aside>
+        </aside>
+          </div>
         </aside>
       </div>
     </div>
@@ -304,8 +322,8 @@
       </header>
       <div class="journal-tools">
         <label>Актив <select id="journal-instrument"><option value="">Все</option></select></label>
-        <label>С <input id="journal-from" type="date"></label>
-        <label>По <input id="journal-to" type="date"></label>
+        <label>С даты <input id="journal-from" type="date"></label>
+        <label>По дату <input id="journal-to" type="date"></label>
         <label>Текст <input id="journal-query" type="search" placeholder="По загруженным записям"></label>
       </div>
       <p class="field-desc" id="journal-scope">Фильтр действует на загруженные записи, не на всю историю базы.</p>

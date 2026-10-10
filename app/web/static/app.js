@@ -891,14 +891,69 @@ function filteredZones() {
   return zones;
 }
 
+// Счётчики групп списка зон (кандидаты считаются очередью проверки отдельно)
+function zoneBucketCounts() {
+  const htf = state.zones.filter(isHtf);
+  return {
+    live: htf.filter((z) => z.relevant || sweptLevelVisible(z)).length,
+    archive: htf.filter((z) =>
+      !sweptLevelVisible(z) &&
+      (z.display_until || ['rejected', 'archived', 'taken', 'converted'].includes(z.status))).length,
+  };
+}
+
+// Мини-схема положения цены относительно зоны в карточке зоны
+function zonePosBar(z) {
+  const p = state.lastPrice;
+  if (p == null || !(z.upper >= z.lower)) return '';
+  const span = Math.max(z.upper - z.lower, Math.abs(z.upper) * 0.0005, 1e-12);
+  const min = z.lower - span * 0.6;
+  const max = z.upper + span * 0.6;
+  const pct = (x) => Math.max(0, Math.min(100, ((x - min) / (max - min)) * 100));
+  const bandLeft = pct(z.lower);
+  const bandWidth = pct(z.upper) - bandLeft;
+  const rel = priceRelation(z);
+  return `<span class="zpos" aria-hidden="true" data-lo="${z.lower}" data-hi="${z.upper}">` +
+    `<span class="zpos-band" style="left:${bandLeft.toFixed(1)}%;width:${Math.max(bandWidth, 1.5).toFixed(1)}%"></span>` +
+    `<span class="zpos-price ${esc(rel)}" style="left:${pct(p).toFixed(1)}%" title="${esc(fmtPrice(p))}"></span>` +
+    `</span>`;
+}
+
+// Живой сдвиг маркеров цены в карточках зон между полными рендерами списка
+function updateZonePosBars() {
+  const p = state.lastPrice;
+  if (p == null) return;
+  document.querySelectorAll('.zpos[data-lo]').forEach((bar) => {
+    const lo = Number(bar.dataset.lo);
+    const hi = Number(bar.dataset.hi);
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) return;
+    const span = Math.max(hi - lo, Math.abs(hi) * 0.0005, 1e-12);
+    const min = lo - span * 0.6;
+    const max = hi + span * 0.6;
+    const pct = Math.max(0, Math.min(100, ((p - min) / (max - min)) * 100));
+    const dot = bar.querySelector('.zpos-price');
+    if (dot) dot.style.left = pct.toFixed(1) + '%';
+  });
+}
+
+const ZONE_EMPTY_RU = {
+  live: 'Актуальных зон по выбранным условиям нет. Список — подтверждённые и непробитые зоны D1 и W1.',
+  candidate: 'Кандидатов по выбранным условиям нет. Кандидаты ждут вашей проверки в очереди.',
+  archive: 'В архиве по выбранным условиям зон нет: отработанные, отклонённые и завершённые зоны.',
+};
+
 function renderZonesTable() {
   const tbody = $('zones-table') && $('zones-table').querySelector('tbody');
   const list = $('zone-list');
   const zones = filteredZones();
+  const counts = zoneBucketCounts();
+  if ($('rail-count-live')) $('rail-count-live').textContent = counts.live ? String(counts.live) : '';
+  if ($('rail-count-archive')) $('rail-count-archive').textContent = counts.archive ? String(counts.archive) : '';
+  renderPanelTabCount();
   if (list) {
     list.innerHTML = '';
     if (!zones.length) {
-      list.innerHTML = '<div class="ltf-empty">По выбранным условиям актуальных зон нет.</div>';
+      list.innerHTML = `<div class="ltf-empty">${esc(ZONE_EMPTY_RU[state.zoneBucket] || 'По выбранным условиям зон нет.')}</div>`;
     }
     for (const z of zones) {
       const rel = priceRelation(z);
@@ -907,11 +962,15 @@ function renderZonesTable() {
       card.type = 'button';
       card.className = 'zone-card' + (z.id === state.selectedZoneId ? ' selected' : '');
       card.innerHTML =
-        `<span class="swatch z-${esc(z.type)}"></span>` +
-        `<div><div class="title">${z.type.toUpperCase()} · ${z.timeframe} <span class="dir ${z.direction}">${z.direction === 'bear' ? '↓' : '↑'}</span></div>` +
-        `<div class="role">${esc(zoneRole(z))}</div>` +
-        `<div class="range">${range}</div></div>` +
-        `<span class="rel-chip ${rel}">${esc(relationLabel(rel) || (STATUS_RU[z.status] || z.status))}</span>`;
+        `<span class="zc-top"><span class="swatch z-${esc(z.type)}"></span>` +
+        `<span class="zc-type">${z.type.toUpperCase()} · ${z.timeframe}</span>` +
+        `<span class="dir ${z.direction}" title="${z.direction === 'bear' ? 'Медвежья зона' : 'Бычья зона'}">${z.direction === 'bear' ? '↓' : '↑'}</span>` +
+        `<span class="zc-status">${esc(STATUS_RU[z.status] || z.status)}${z.display_until ? ' · завершена' : ''}</span></span>` +
+        `<span class="zc-range">${range}</span>` +
+        zonePosBar(z) +
+        `<span class="zc-bottom"><span class="role">${esc(zoneRole(z))}</span>` +
+        (rel ? `<span class="rel-chip ${rel}">${esc(relationLabel(rel))}</span>` : '') +
+        `</span>`;
       card.onclick = () => openZoneDetail(z.id);
       list.appendChild(card);
     }
@@ -988,9 +1047,7 @@ function updateLastPrice() {
   if ($('instrument-meta') && ins) {
     $('instrument-meta').textContent = `${ins.venue} · ${ins.market_type || 'spot'}`;
   }
-  document.querySelectorAll('.zone-card .rel-chip').forEach((chip, idx) => {
-    /* подписи положения обновляются при полном рендере списка */
-  });
+  updateZonePosBars();
 }
 
 // ---------------------------------------------------------------------------
@@ -1194,6 +1251,8 @@ function openZoneDetail(zoneId) {
   // инспектор живёт во вкладке рабочего места (desk) — переключаемся на неё,
   // иначе клик из «Проверки» или «Журнала» открывал бы детали в скрытой вкладке
   showView('desk');
+  // выбор зоны на графике или в списке раскрывает вкладку «Зоны»
+  setDeskPanelTab('zones');
   return loadZoneDetail(zoneId, true);
 }
 
@@ -1294,6 +1353,7 @@ async function loadZoneDetail(zoneId, focusChart) {
 }
 
 function showGroupMembers(group) {
+  setDeskPanelTab('zones');
   const el = $('detail-content');
   el.innerHTML = `
     <h3>Визуальная группа (${group.zones.length} зон)</h3>
@@ -2347,14 +2407,6 @@ const VIEW_IDS = {
 };
 const VIEW_ALIASES = { overview: 'desk', events: 'journal' };
 
-const VIEW_CRUMB = {
-  now: 'Обзор',
-  desk: 'Рабочее место',
-  review: 'Проверка',
-  journal: 'Журнал',
-  settings: 'Настройки',
-};
-
 function showView(name) {
   name = VIEW_ALIASES[name] || name;
   if (!VIEW_IDS[name]) name = 'now';
@@ -2362,8 +2414,6 @@ function showView(name) {
   document.querySelectorAll('.app-tab[data-view], .mobile-nav a[data-view], .nav-more-panel a[data-view]').forEach((el) => {
     el.classList.toggle('active', el.dataset.view === name);
   });
-  const crumb = document.getElementById('page-crumb');
-  if (crumb) crumb.textContent = VIEW_CRUMB[name] || name;
   const moreBtn = document.getElementById('nav-more');
   if (moreBtn) moreBtn.classList.toggle('active', name === 'journal' || name === 'settings');
   const morePanel = document.getElementById('nav-more-panel');
@@ -2757,6 +2807,101 @@ function renderDeskAssets() {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Панель «Актив / Зоны» (объединённое окно правой колонки рабочего места):
+// переключение вкладками, при выборе зоны на графике вкладка «Зоны»
+// открывается сама.
+// ---------------------------------------------------------------------------
+function setDeskPanelTab(tab) {
+  const panel = $('desk-panel');
+  if (!panel) return;
+  const next = tab === 'zones' ? 'zones' : 'scenario';
+  panel.dataset.tab = next;
+  document.querySelectorAll('.desk-panel-tabs .panel-tab').forEach((btn) => {
+    const on = btn.dataset.panelTab === next;
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+}
+
+function renderPanelTabHead() {
+  const el = $('panel-tab-symbol');
+  if (!el) return;
+  const ins = state.instruments.find((i) => i.id === state.instrumentId);
+  el.textContent = ins ? displayPair(ins.symbol) : 'Актив';
+}
+
+function renderPanelTabCount() {
+  const el = $('panel-tab-count');
+  if (!el) return;
+  const zones = filteredZones();
+  if (!zones.length) {
+    el.classList.add('hidden');
+    el.textContent = '';
+    return;
+  }
+  el.classList.remove('hidden');
+  el.textContent = String(zones.length);
+}
+
+// Короткая схема «зона — цена» под заголовком сообщения: полоса цены от
+// нижней границы схемы к верхней, зона контекста, зоны входа за сценарием,
+// уровень отмены. Данные — снимок /current, ничего не досчитывается.
+function scenarioVisualHtml(v) {
+  const pres = v && v.presentation;
+  const ctx = pres && pres.context;
+  const price = (pres && pres.location && pres.location.quote != null)
+    ? Number(pres.location.quote)
+    : (v && v.price != null ? Number(v.price) : null);
+  const zoneLower = ctx && ctx.lower != null ? Number(ctx.lower) : null;
+  const zoneUpper = ctx && ctx.upper != null ? Number(ctx.upper) : null;
+  if (!ctx || zoneLower == null || zoneUpper == null || price == null) return '';
+
+  const entries = (v.eligible_entries || [])
+    .filter((e) => e && e.lower != null && e.upper != null)
+    .map((e) => ({ lower: Number(e.lower), upper: Number(e.upper) }));
+  const cancel = v.cancel_condition && v.cancel_condition.level != null
+    ? Number(v.cancel_condition.level) : null;
+  const sc = v.current_scenario;
+  const breakLevel = sc && sc.break_level != null ? Number(sc.break_level) : null;
+
+  const values = [price, zoneLower, zoneUpper, ...(cancel != null ? [cancel] : [])]
+    .concat(...entries.map((e) => [e.lower, e.upper]));
+  let min = Math.min(...values);
+  let max = Math.max(...values);
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return '';
+  if (max - min < max * 0.002) { // вырожденная схема (уровень совпал с ценой)
+    const pad = (max || 1) * 0.01;
+    min -= pad; max += pad;
+  }
+  const pad = (max - min) * 0.12;
+  min -= pad; max += pad;
+  // уровень подтверждения сценария — только если попадает в масштаб схемы
+  if (breakLevel != null && breakLevel > min && breakLevel < max) {
+    min = Math.min(min, breakLevel);
+    max = Math.max(max, breakLevel);
+  }
+  const y = (x) => ((max - x) / (max - min)) * 100; // цена растёт вверх
+  const band = (lo, hi) => `top:${y(hi).toFixed(2)}%;height:${(y(lo) - y(hi)).toFixed(2)}%`;
+  const bear = (ctx.direction || '') === 'bear';
+
+  let html = '<div class="sc-visual" role="img" aria-label="Схема: зона и цена">';
+  html += `<div class="sc-zone ${bear ? 'is-bear' : 'is-bull'}" style="${band(zoneLower, zoneUpper)}">` +
+    `<span class="sc-zone-name">${esc(ctx.type ? ctx.type.toUpperCase() + ' ' + (ctx.timeframe || '') : 'Зона')}</span>` +
+    `<span class="sc-zone-bounds">${esc(fmtPrice(zoneLower))} — ${esc(fmtPrice(zoneUpper))}</span></div>`;
+  entries.forEach((e) => {
+    html += `<div class="sc-entry" style="${band(e.lower, e.upper)}"></div>`;
+  });
+  if (cancel != null && cancel >= min && cancel <= max) {
+    html += `<div class="sc-level" style="top:${y(cancel).toFixed(2)}%">` +
+      `<span class="sc-level-label">Отмена ${esc(fmtPrice(cancel))}</span></div>`;
+  }
+  html += `<div class="sc-price" style="top:${y(price).toFixed(2)}%">` +
+    `<span class="sc-price-chip">${esc(fmtPrice(price))}</span></div>`;
+  html += '</div>';
+  return html;
+}
+
 function renderDeskScenario() {
   const el = $('desk-scenario');
   if (!el) return;
@@ -2782,7 +2927,7 @@ function renderDeskScenario() {
   const quote = pres && pres.location ? pres.location.quote : null;
   const suppress = live != null && quote != null && Number(live) !== Number(quote);
   if (pres && window.LFCopy) {
-    el.innerHTML = LFCopy.card(pres, { suppressLocation: suppress }) +
+    el.innerHTML = LFCopy.card(pres, { suppressLocation: suppress, visualHtml: scenarioVisualHtml(v) }) +
       `<button type="button" id="desk-watch-btn" class="btn ${watching ? 'primary' : ''} desk-watch">${watching ? '✓ Наблюдение включено' : 'Включить наблюдение'}</button>` +
       `<details class="desk-basis"><summary>Основания и качество данных</summary><dl>` +
       `<dt>Показан контекст</dt><dd>${esc(DESK_BASIS_RU[v.selected_context_basis] || v.selected_context_basis || '—')}</dd>` +
@@ -2888,6 +3033,7 @@ function renderDeskEntries() {
 
 function renderDeskExtras() {
   renderDeskHead();
+  renderPanelTabHead();
   renderDeskAssets();
   renderDeskScenario();
   renderDeskEntries();
@@ -3253,6 +3399,9 @@ async function main() {
   $('zone-type-filter').onchange = (e) => { state.zoneTypeFilter = e.target.value || null; renderZonesTable(); };
   $('zone-tf-filter').onchange = (e) => { state.zoneTfFilter = e.target.value || null; renderZonesTable(); };
   if ($('zone-rel-filter')) $('zone-rel-filter').onchange = (e) => { state.zoneRelFilter = e.target.value; renderZonesTable(); };
+  document.querySelectorAll('.desk-panel-tabs .panel-tab').forEach((btn) => {
+    btn.onclick = () => setDeskPanelTab(btn.dataset.panelTab);
+  });
   document.querySelectorAll('.rail-tab').forEach((tab) => {
     tab.onclick = () => {
       document.querySelectorAll('.rail-tab').forEach((t) => t.classList.toggle('active', t === tab));
