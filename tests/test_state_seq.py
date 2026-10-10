@@ -11,6 +11,9 @@
 """
 from __future__ import annotations
 
+import threading
+import time
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -113,6 +116,32 @@ def test_read_tx_consistent(db: Database, instrument_id: int):
     db.insert_candles([make_candle(T0 + 3_600_000, 100, 101, 99, 100.5,
                             timeframe="H1", instrument_id=instrument_id)])
     assert db.get_state_seq() > seq1
+
+
+def test_read_tx_nested_and_waits_out_open_write(db: Database):
+    with db.read_tx():
+        with db.read_tx():
+            assert db.get_state_seq() >= 0
+
+    started = threading.Event()
+
+    def writer():
+        db.conn._lock.acquire()
+        db.conn._conn.execute("BEGIN")
+        db.conn._lock.release()
+        started.set()
+        time.sleep(0.05)
+        db.conn._lock.acquire()
+        db.conn._conn.commit()
+        db.conn._lock.release()
+
+    thread = threading.Thread(target=writer)
+    thread.start()
+    assert started.wait(2)
+    with db.read_tx():
+        db.get_state_seq()
+    thread.join(2)
+    assert not thread.is_alive()
 
 
 def test_ws_broadcast_carries_state_seq(db, client, instrument_id: int):

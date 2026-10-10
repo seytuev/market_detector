@@ -159,6 +159,7 @@ class Database:
         # батче — семантика per-write commit сохраняется.
         self._batch_lock = threading.RLock()
         self._batch_depth = 0
+        self._read_depth = 0
         self._state_seq_dirty = False
         # Межпроцессная инвалидация: кэши этого процесса сбрасываются,
         # если чужой писатель сдвинул state_seq. Проверка не чаще 0.5 с
@@ -881,18 +882,39 @@ class Database:
         соединении — читаем без обёртки (видно промежуточное состояние
         replay, как и при per-write commit'ах)."""
         lock = self.conn._lock
-        with lock:
-            if self._batch_depth > 0:
-                yield
-                return
-            self.conn.execute("BEGIN DEFERRED")
-            try:
-                yield
-            finally:
-                try:
-                    self.conn.execute("ROLLBACK")
-                except Exception:
-                    pass  # транзакцию уже завершил commit вложенной записи
+        # Чужая запись между execute и commit оставляет транзакцию открытой
+        # и отпускает замок. BEGIN в этот зазор даёт
+        # «cannot start a transaction within a transaction» и 500 на снимке.
+        # Замок при ожидании не держим, чтобы писатель успел сделать commit.
+        # Вложенное чтение и batch транзакцию не открывают и не откатывают.
+        deadline = time.monotonic() + 5.0
+        while True:
+            with lock:
+                if self._batch_depth > 0 or self._read_depth > 0:
+                    self._read_depth += 1
+                    try:
+                        yield
+                    finally:
+                        self._read_depth -= 1
+                    return
+                raw = self.conn._conn
+                if not raw.in_transaction:
+                    self._read_depth += 1
+                    raw.execute("BEGIN DEFERRED")
+                    try:
+                        yield
+                    finally:
+                        self._read_depth -= 1
+                        try:
+                            raw.rollback()
+                        except Exception:
+                            pass  # транзакцию уже завершил commit вложенной записи
+                    return
+            if time.monotonic() >= deadline:
+                raise sqlite3.OperationalError(
+                    "cannot start a transaction within a transaction"
+                )
+            time.sleep(0.01)
 
     # ---------- кэш горячих LTF-чтений (replay: per-candle N+1) ----------
 
