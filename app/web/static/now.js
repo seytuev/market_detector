@@ -36,6 +36,8 @@
     all: () => true,
     attention: (r) => ['review', 'price_in_zone', 'data_problem'].includes(r.attention),
     watch: (r) => ['awaiting', 'eligible', 'price_in_zone'].includes(r.attention),
+    zone: (r) => r.attention === 'price_in_zone',
+    eligible: (r) => r.attention === 'eligible',
   };
 
   const st = {
@@ -104,7 +106,7 @@
     const inZone = st.rows.filter((r) => r.attention === 'price_in_zone').length;
     const eligible = st.rows.filter((r) => r.attention === 'eligible').length;
     $('now-stat-review').textContent = st.candidates;
-    $('now-stat-review-note').textContent = 'По всем активам';
+    $('now-stat-review-note').textContent = st.candidates ? 'Открыть проверку' : 'Очередь пуста';
     $('now-stat-zone').textContent = inZone;
     $('now-stat-eligible').textContent = eligible;
     $('now-assets-count').textContent = st.rows.length;
@@ -137,8 +139,10 @@
     const p = priceOf(ins.id);
     return `<tr data-iid="${ins.id}" tabindex="0"` +
       `${ins.id === st.selectedId ? ' class="selected"' : ''}>` +
-      `<td data-label="Актив / площадка"><span class="asset-sym">${esc(base)}${quote ? ' / ' + esc(quote) : ''}</span>` +
-      `<div class="asset-sub">${esc(ins.venue)} · ${esc(ins.market_type)}</div></td>` +
+      `<td data-label="Актив / площадка">` +
+      `<button type="button" class="asset-open" data-iid="${ins.id}">${esc(base)}${quote ? ' / ' + esc(quote) : ''}</button>` +
+      `<div class="asset-sub">${esc(ins.venue)} · ${esc(ins.market_type)}</div>` +
+      `<button type="button" class="asset-pick" data-iid="${ins.id}">Выбрать</button></td>` +
       `<td data-label="Состояние">${rowStateHtml(r)}</td>` +
       `<td data-label="Цена, USDT" class="num">` +
       `<span class="price-val">${p ? esc(fmtPrice(p.price)) : '—'}</span>` +
@@ -154,7 +158,17 @@
   function renderTable() {
     const rows = visibleRows();
     $('now-tbody').innerHTML = rows.map(rowHtml).join('');
-    $('now-empty').classList.toggle('hidden', rows.length > 0);
+    const empty = $('now-empty');
+    if (!st.rows.length) {
+      empty.classList.remove('hidden');
+      empty.innerHTML = 'Анализ выключен для всех активов. <a href="#settings" data-view="settings">Открыть настройки</a>';
+    } else if (!rows.length) {
+      empty.classList.remove('hidden');
+      empty.innerHTML = 'По этому фильтру активов нет. <button type="button" id="now-filter-reset">Сбросить фильтр</button>';
+    } else {
+      empty.classList.add('hidden');
+      empty.textContent = '';
+    }
   }
 
   // ------------------------------------------------------------- карточка
@@ -357,6 +371,7 @@
       // выбранного актива, а не каждому инструменту списка.
       pickSelected();
       render();
+      loadRecent(seq);
       await loadCurrent(st.selectedId, seq);
     } catch (e) {
       console.warn('now refresh:', e);
@@ -403,12 +418,62 @@
 
   // ------------------------------------------------------------------ events
 
-  document.querySelectorAll('.now-filter').forEach((btn) => {
+  function paintFilterButtons() {
+    document.querySelectorAll('#view-now .now-filter').forEach((btn) => {
+      btn.classList.toggle('active', (btn.dataset.filter || 'all') === st.filter);
+    });
+    document.querySelectorAll('.metric-filter').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.metric === st.filter);
+      btn.setAttribute('aria-pressed', btn.dataset.metric === st.filter ? 'true' : 'false');
+    });
+  }
+
+  document.querySelectorAll('#view-now .now-filter').forEach((btn) => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.now-filter').forEach((b) => b.classList.toggle('active', b === btn));
       st.filter = btn.dataset.filter || 'all';
+      paintFilterButtons();
       renderTable();
     });
+  });
+
+  document.querySelectorAll('.metric-filter').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (btn.dataset.metric === 'review') {
+        if (typeof showView === 'function') showView('review');
+        return;
+      }
+      st.filter = st.filter === btn.dataset.metric ? 'all' : btn.dataset.metric;
+      paintFilterButtons();
+      renderTable();
+    });
+  });
+
+  async function loadRecent(seq) {
+    const box = $('now-recent');
+    if (!box) return;
+    try {
+      const items = await api('/api/journal?kind=all&limit=5');
+      if (seq !== st.reqSeq) return;
+      if (!items || !items.length) {
+        box.innerHTML = '<li class="now-empty">Записей журнала пока нет.</li>';
+        return;
+      }
+      box.innerHTML = items.slice(0, 5).map((item) =>
+        `<li><span class="now-recent-time">${esc(ageText(item.at))}</span> ${esc(item.title || 'Запись')}</li>`
+      ).join('');
+    } catch (e) {
+      if (seq !== st.reqSeq) return;
+      box.innerHTML = '<li class="now-empty">Журнал не прочитан. <button type="button" id="now-recent-retry">Повторить</button></li>';
+    }
+  }
+
+  document.getElementById('view-now').addEventListener('click', (e) => {
+    if (e.target.id === 'now-filter-reset') {
+      st.filter = 'all';
+      paintFilterButtons();
+      renderTable();
+    }
+    if (e.target.id === 'now-recent-retry') loadRecent(st.reqSeq);
   });
 
   async function loadCurrent(id, seq) {
@@ -453,13 +518,31 @@
       }
       return;
     }
+    const open = e.target.closest('.asset-open');
+    if (open && window.LFDesk) {
+      e.preventDefault();
+      window.LFDesk.openInstrument(Number(open.dataset.iid));
+      return;
+    }
+    const pick = e.target.closest('.asset-pick');
+    if (pick) {
+      e.preventDefault();
+      selectRow(pick.closest('tr'));
+      return;
+    }
     selectRow(e.target.closest('tr'));
   });
   $('now-tbody').addEventListener('keydown', (e) => {
-    if (e.target.closest('.asset-off')) return;
-    if (e.key !== 'Enter' && e.key !== ' ') return;
+    if (e.target.closest('button')) return;
     const tr = e.target.closest('tr');
-    if (tr) { e.preventDefault(); selectRow(tr); }
+    if (!tr) return;
+    if (e.key === 'Enter' && window.LFDesk) {
+      e.preventDefault();
+      window.LFDesk.openInstrument(Number(tr.dataset.iid));
+    } else if (e.key === ' ') {
+      e.preventDefault();
+      selectRow(tr);
+    }
   });
 
   $('now-card').addEventListener('click', (e) => {

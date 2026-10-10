@@ -1,0 +1,1329 @@
+{
+  "generatedAt": "2026-10-09T21:30:15.302Z",
+  "scope": "Offline demo; not backend functionality or full accessibility audit",
+  "viewports": [
+    360,
+    390,
+    768,
+    1024,
+    1440,
+    1920
+  ],
+  "themes": [
+    "dark",
+    "light"
+  ],
+  "layouts": 144,
+  "checks": [
+    "overview → desk",
+    "HTF → H1",
+    "layers opens",
+    "zone dialog / Escape",
+    "invalid bounds rejected",
+    "review outcome",
+    "market subviews",
+    "search filters rows",
+    "setup selection",
+    "settings dirty/save",
+    "theme switch"
+  ],
+  "errors": [],
+  "results": [
+    {
+      "theme": "dark",
+      "width": 360,
+      "screen": "overview",
+      "overflow": false,
+      "bodyWidth": 360,
+      "viewport": 360,
+      "head": "Обзор рынка"
+    },
+    {
+      "theme": "dark",
+      "width": 360,
+      "screen": "desk",
+      "overflow": false,
+      "bodyWidth": 360,
+      "viewport": 360,
+      "head": "BTC / USDT"
+    },
+    {
+      "theme": "dark",
+      "width": 360,
+      "screen": "h1",
+      "overflow": false,
+      "bodyWidth": 360,
+      "viewport": 360,
+      "head": "BTC / USDT"
+    },
+    {
+      "theme": "dark",
+      "width": 360,
+      "screen": "review",
+      "overflow": false,
+      "bodyWidth": 360,
+      "viewport": 360,
+      "head": "Проверка зон"
+    },
+    {
+      "theme": "dark",
+      "width": 360,
+      "screen": "journal",
+      "overflow": false,
+      "bodyWidth": 360,
+      "viewport": 360,
+      "head": "Журнал"
+    },
+    {
+      "theme": "dark",
+      "width": 360,
+      "screen": "market",
+      "overflow": false,
+      "bodyWidth": 360,
+      "viewport": 360,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "dark",
+      "width": 360,
+      "screen": "feed",
+      "overflow": false,
+      "bodyWidth": 360,
+      "viewport": 360,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "dark",
+      "width": 360,
+      "screen": "calendar",
+      "overflow": false,
+      "bodyWidth": 360,
+      "viewport": 360,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "dark",
+      "width": 360,
+      "screen": "rules",
+      "overflow": false,
+      "bodyWidth": 360,
+      "viewport": 360,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "dark",
+      "width": 360,
+      "screen": "settings",
+      "overflow": false,
+      "bodyWidth": 360,
+      "viewport": 360,
+      "head": "Настройки"
+    },
+    {
+      "theme": "dark",
+      "width": 360,
+      "screen": "screener",
+      "overflow": false,
+      "bodyWidth": 360,
+      "viewport": 360,
+      "head": "Скринер"
+    },
+    {
+      "theme": "dark",
+      "width": 360,
+      "screen": "setup",
+      "overflow": false,
+      "bodyWidth": 360,
+      "viewport": 360,
+      "head": "ENA / USDT"
+    },
+    {
+      "theme": "dark",
+      "width": 390,
+      "screen": "overview",
+      "overflow": false,
+      "bodyWidth": 390,
+      "viewport": 390,
+      "head": "Обзор рынка"
+    },
+    {
+      "theme": "dark",
+      "width": 390,
+      "screen": "desk",
+      "overflow": false,
+      "bodyWidth": 390,
+      "viewport": 390,
+      "head": "BTC / USDT"
+    },
+    {
+      "theme": "dark",
+      "width": 390,
+      "screen": "h1",
+      "overflow": false,
+      "bodyWidth": 390,
+      "viewport": 390,
+      "head": "BTC / USDT"
+    },
+    {
+      "theme": "dark",
+      "width": 390,
+      "screen": "review",
+      "overflow": false,
+      "bodyWidth": 390,
+      "viewport": 390,
+      "head": "Проверка зон"
+    },
+    {
+      "theme": "dark",
+      "width": 390,
+      "screen": "journal",
+      "overflow": false,
+      "bodyWidth": 390,
+      "viewport": 390,
+      "head": "Журнал"
+    },
+    {
+      "theme": "dark",
+      "width": 390,
+      "screen": "market",
+      "overflow": false,
+      "bodyWidth": 390,
+      "viewport": 390,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "dark",
+      "width": 390,
+      "screen": "feed",
+      "overflow": false,
+      "bodyWidth": 390,
+      "viewport": 390,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "dark",
+      "width": 390,
+      "screen": "calendar",
+      "overflow": false,
+      "bodyWidth": 390,
+      "viewport": 390,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "dark",
+      "width": 390,
+      "screen": "rules",
+      "overflow": false,
+      "bodyWidth": 390,
+      "viewport": 390,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "dark",
+      "width": 390,
+      "screen": "settings",
+      "overflow": false,
+      "bodyWidth": 390,
+      "viewport": 390,
+      "head": "Настройки"
+    },
+    {
+      "theme": "dark",
+      "width": 390,
+      "screen": "screener",
+      "overflow": false,
+      "bodyWidth": 390,
+      "viewport": 390,
+      "head": "Скринер"
+    },
+    {
+      "theme": "dark",
+      "width": 390,
+      "screen": "setup",
+      "overflow": false,
+      "bodyWidth": 390,
+      "viewport": 390,
+      "head": "ENA / USDT"
+    },
+    {
+      "theme": "dark",
+      "width": 768,
+      "screen": "overview",
+      "overflow": false,
+      "bodyWidth": 768,
+      "viewport": 768,
+      "head": "Обзор рынка"
+    },
+    {
+      "theme": "dark",
+      "width": 768,
+      "screen": "desk",
+      "overflow": false,
+      "bodyWidth": 768,
+      "viewport": 768,
+      "head": "BTC / USDT"
+    },
+    {
+      "theme": "dark",
+      "width": 768,
+      "screen": "h1",
+      "overflow": false,
+      "bodyWidth": 768,
+      "viewport": 768,
+      "head": "BTC / USDT"
+    },
+    {
+      "theme": "dark",
+      "width": 768,
+      "screen": "review",
+      "overflow": false,
+      "bodyWidth": 768,
+      "viewport": 768,
+      "head": "Проверка зон"
+    },
+    {
+      "theme": "dark",
+      "width": 768,
+      "screen": "journal",
+      "overflow": false,
+      "bodyWidth": 768,
+      "viewport": 768,
+      "head": "Журнал"
+    },
+    {
+      "theme": "dark",
+      "width": 768,
+      "screen": "market",
+      "overflow": false,
+      "bodyWidth": 768,
+      "viewport": 768,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "dark",
+      "width": 768,
+      "screen": "feed",
+      "overflow": false,
+      "bodyWidth": 768,
+      "viewport": 768,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "dark",
+      "width": 768,
+      "screen": "calendar",
+      "overflow": false,
+      "bodyWidth": 768,
+      "viewport": 768,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "dark",
+      "width": 768,
+      "screen": "rules",
+      "overflow": false,
+      "bodyWidth": 768,
+      "viewport": 768,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "dark",
+      "width": 768,
+      "screen": "settings",
+      "overflow": false,
+      "bodyWidth": 768,
+      "viewport": 768,
+      "head": "Настройки"
+    },
+    {
+      "theme": "dark",
+      "width": 768,
+      "screen": "screener",
+      "overflow": false,
+      "bodyWidth": 768,
+      "viewport": 768,
+      "head": "Скринер"
+    },
+    {
+      "theme": "dark",
+      "width": 768,
+      "screen": "setup",
+      "overflow": false,
+      "bodyWidth": 768,
+      "viewport": 768,
+      "head": "ENA / USDT"
+    },
+    {
+      "theme": "dark",
+      "width": 1024,
+      "screen": "overview",
+      "overflow": false,
+      "bodyWidth": 1024,
+      "viewport": 1024,
+      "head": "Обзор рынка"
+    },
+    {
+      "theme": "dark",
+      "width": 1024,
+      "screen": "desk",
+      "overflow": false,
+      "bodyWidth": 1024,
+      "viewport": 1024,
+      "head": "BTC / USDT"
+    },
+    {
+      "theme": "dark",
+      "width": 1024,
+      "screen": "h1",
+      "overflow": false,
+      "bodyWidth": 1024,
+      "viewport": 1024,
+      "head": "BTC / USDT"
+    },
+    {
+      "theme": "dark",
+      "width": 1024,
+      "screen": "review",
+      "overflow": false,
+      "bodyWidth": 1024,
+      "viewport": 1024,
+      "head": "Проверка зон"
+    },
+    {
+      "theme": "dark",
+      "width": 1024,
+      "screen": "journal",
+      "overflow": false,
+      "bodyWidth": 1024,
+      "viewport": 1024,
+      "head": "Журнал"
+    },
+    {
+      "theme": "dark",
+      "width": 1024,
+      "screen": "market",
+      "overflow": false,
+      "bodyWidth": 1024,
+      "viewport": 1024,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "dark",
+      "width": 1024,
+      "screen": "feed",
+      "overflow": false,
+      "bodyWidth": 1024,
+      "viewport": 1024,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "dark",
+      "width": 1024,
+      "screen": "calendar",
+      "overflow": false,
+      "bodyWidth": 1024,
+      "viewport": 1024,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "dark",
+      "width": 1024,
+      "screen": "rules",
+      "overflow": false,
+      "bodyWidth": 1024,
+      "viewport": 1024,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "dark",
+      "width": 1024,
+      "screen": "settings",
+      "overflow": false,
+      "bodyWidth": 1024,
+      "viewport": 1024,
+      "head": "Настройки"
+    },
+    {
+      "theme": "dark",
+      "width": 1024,
+      "screen": "screener",
+      "overflow": false,
+      "bodyWidth": 1024,
+      "viewport": 1024,
+      "head": "Скринер"
+    },
+    {
+      "theme": "dark",
+      "width": 1024,
+      "screen": "setup",
+      "overflow": false,
+      "bodyWidth": 1024,
+      "viewport": 1024,
+      "head": "ENA / USDT"
+    },
+    {
+      "theme": "dark",
+      "width": 1440,
+      "screen": "overview",
+      "overflow": false,
+      "bodyWidth": 1440,
+      "viewport": 1440,
+      "head": "Обзор рынка"
+    },
+    {
+      "theme": "dark",
+      "width": 1440,
+      "screen": "desk",
+      "overflow": false,
+      "bodyWidth": 1440,
+      "viewport": 1440,
+      "head": "BTC / USDT"
+    },
+    {
+      "theme": "dark",
+      "width": 1440,
+      "screen": "h1",
+      "overflow": false,
+      "bodyWidth": 1440,
+      "viewport": 1440,
+      "head": "BTC / USDT"
+    },
+    {
+      "theme": "dark",
+      "width": 1440,
+      "screen": "review",
+      "overflow": false,
+      "bodyWidth": 1440,
+      "viewport": 1440,
+      "head": "Проверка зон"
+    },
+    {
+      "theme": "dark",
+      "width": 1440,
+      "screen": "journal",
+      "overflow": false,
+      "bodyWidth": 1440,
+      "viewport": 1440,
+      "head": "Журнал"
+    },
+    {
+      "theme": "dark",
+      "width": 1440,
+      "screen": "market",
+      "overflow": false,
+      "bodyWidth": 1440,
+      "viewport": 1440,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "dark",
+      "width": 1440,
+      "screen": "feed",
+      "overflow": false,
+      "bodyWidth": 1440,
+      "viewport": 1440,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "dark",
+      "width": 1440,
+      "screen": "calendar",
+      "overflow": false,
+      "bodyWidth": 1440,
+      "viewport": 1440,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "dark",
+      "width": 1440,
+      "screen": "rules",
+      "overflow": false,
+      "bodyWidth": 1440,
+      "viewport": 1440,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "dark",
+      "width": 1440,
+      "screen": "settings",
+      "overflow": false,
+      "bodyWidth": 1440,
+      "viewport": 1440,
+      "head": "Настройки"
+    },
+    {
+      "theme": "dark",
+      "width": 1440,
+      "screen": "screener",
+      "overflow": false,
+      "bodyWidth": 1440,
+      "viewport": 1440,
+      "head": "Скринер"
+    },
+    {
+      "theme": "dark",
+      "width": 1440,
+      "screen": "setup",
+      "overflow": false,
+      "bodyWidth": 1440,
+      "viewport": 1440,
+      "head": "ENA / USDT"
+    },
+    {
+      "theme": "dark",
+      "width": 1920,
+      "screen": "overview",
+      "overflow": false,
+      "bodyWidth": 1920,
+      "viewport": 1920,
+      "head": "Обзор рынка"
+    },
+    {
+      "theme": "dark",
+      "width": 1920,
+      "screen": "desk",
+      "overflow": false,
+      "bodyWidth": 1920,
+      "viewport": 1920,
+      "head": "BTC / USDT"
+    },
+    {
+      "theme": "dark",
+      "width": 1920,
+      "screen": "h1",
+      "overflow": false,
+      "bodyWidth": 1920,
+      "viewport": 1920,
+      "head": "BTC / USDT"
+    },
+    {
+      "theme": "dark",
+      "width": 1920,
+      "screen": "review",
+      "overflow": false,
+      "bodyWidth": 1920,
+      "viewport": 1920,
+      "head": "Проверка зон"
+    },
+    {
+      "theme": "dark",
+      "width": 1920,
+      "screen": "journal",
+      "overflow": false,
+      "bodyWidth": 1920,
+      "viewport": 1920,
+      "head": "Журнал"
+    },
+    {
+      "theme": "dark",
+      "width": 1920,
+      "screen": "market",
+      "overflow": false,
+      "bodyWidth": 1920,
+      "viewport": 1920,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "dark",
+      "width": 1920,
+      "screen": "feed",
+      "overflow": false,
+      "bodyWidth": 1920,
+      "viewport": 1920,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "dark",
+      "width": 1920,
+      "screen": "calendar",
+      "overflow": false,
+      "bodyWidth": 1920,
+      "viewport": 1920,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "dark",
+      "width": 1920,
+      "screen": "rules",
+      "overflow": false,
+      "bodyWidth": 1920,
+      "viewport": 1920,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "dark",
+      "width": 1920,
+      "screen": "settings",
+      "overflow": false,
+      "bodyWidth": 1920,
+      "viewport": 1920,
+      "head": "Настройки"
+    },
+    {
+      "theme": "dark",
+      "width": 1920,
+      "screen": "screener",
+      "overflow": false,
+      "bodyWidth": 1920,
+      "viewport": 1920,
+      "head": "Скринер"
+    },
+    {
+      "theme": "dark",
+      "width": 1920,
+      "screen": "setup",
+      "overflow": false,
+      "bodyWidth": 1920,
+      "viewport": 1920,
+      "head": "ENA / USDT"
+    },
+    {
+      "theme": "light",
+      "width": 360,
+      "screen": "overview",
+      "overflow": false,
+      "bodyWidth": 360,
+      "viewport": 360,
+      "head": "Обзор рынка"
+    },
+    {
+      "theme": "light",
+      "width": 360,
+      "screen": "desk",
+      "overflow": false,
+      "bodyWidth": 360,
+      "viewport": 360,
+      "head": "BTC / USDT"
+    },
+    {
+      "theme": "light",
+      "width": 360,
+      "screen": "h1",
+      "overflow": false,
+      "bodyWidth": 360,
+      "viewport": 360,
+      "head": "BTC / USDT"
+    },
+    {
+      "theme": "light",
+      "width": 360,
+      "screen": "review",
+      "overflow": false,
+      "bodyWidth": 360,
+      "viewport": 360,
+      "head": "Проверка зон"
+    },
+    {
+      "theme": "light",
+      "width": 360,
+      "screen": "journal",
+      "overflow": false,
+      "bodyWidth": 360,
+      "viewport": 360,
+      "head": "Журнал"
+    },
+    {
+      "theme": "light",
+      "width": 360,
+      "screen": "market",
+      "overflow": false,
+      "bodyWidth": 360,
+      "viewport": 360,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "light",
+      "width": 360,
+      "screen": "feed",
+      "overflow": false,
+      "bodyWidth": 360,
+      "viewport": 360,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "light",
+      "width": 360,
+      "screen": "calendar",
+      "overflow": false,
+      "bodyWidth": 360,
+      "viewport": 360,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "light",
+      "width": 360,
+      "screen": "rules",
+      "overflow": false,
+      "bodyWidth": 360,
+      "viewport": 360,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "light",
+      "width": 360,
+      "screen": "settings",
+      "overflow": false,
+      "bodyWidth": 360,
+      "viewport": 360,
+      "head": "Настройки"
+    },
+    {
+      "theme": "light",
+      "width": 360,
+      "screen": "screener",
+      "overflow": false,
+      "bodyWidth": 360,
+      "viewport": 360,
+      "head": "Скринер"
+    },
+    {
+      "theme": "light",
+      "width": 360,
+      "screen": "setup",
+      "overflow": false,
+      "bodyWidth": 360,
+      "viewport": 360,
+      "head": "ENA / USDT"
+    },
+    {
+      "theme": "light",
+      "width": 390,
+      "screen": "overview",
+      "overflow": false,
+      "bodyWidth": 390,
+      "viewport": 390,
+      "head": "Обзор рынка"
+    },
+    {
+      "theme": "light",
+      "width": 390,
+      "screen": "desk",
+      "overflow": false,
+      "bodyWidth": 390,
+      "viewport": 390,
+      "head": "BTC / USDT"
+    },
+    {
+      "theme": "light",
+      "width": 390,
+      "screen": "h1",
+      "overflow": false,
+      "bodyWidth": 390,
+      "viewport": 390,
+      "head": "BTC / USDT"
+    },
+    {
+      "theme": "light",
+      "width": 390,
+      "screen": "review",
+      "overflow": false,
+      "bodyWidth": 390,
+      "viewport": 390,
+      "head": "Проверка зон"
+    },
+    {
+      "theme": "light",
+      "width": 390,
+      "screen": "journal",
+      "overflow": false,
+      "bodyWidth": 390,
+      "viewport": 390,
+      "head": "Журнал"
+    },
+    {
+      "theme": "light",
+      "width": 390,
+      "screen": "market",
+      "overflow": false,
+      "bodyWidth": 390,
+      "viewport": 390,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "light",
+      "width": 390,
+      "screen": "feed",
+      "overflow": false,
+      "bodyWidth": 390,
+      "viewport": 390,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "light",
+      "width": 390,
+      "screen": "calendar",
+      "overflow": false,
+      "bodyWidth": 390,
+      "viewport": 390,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "light",
+      "width": 390,
+      "screen": "rules",
+      "overflow": false,
+      "bodyWidth": 390,
+      "viewport": 390,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "light",
+      "width": 390,
+      "screen": "settings",
+      "overflow": false,
+      "bodyWidth": 390,
+      "viewport": 390,
+      "head": "Настройки"
+    },
+    {
+      "theme": "light",
+      "width": 390,
+      "screen": "screener",
+      "overflow": false,
+      "bodyWidth": 390,
+      "viewport": 390,
+      "head": "Скринер"
+    },
+    {
+      "theme": "light",
+      "width": 390,
+      "screen": "setup",
+      "overflow": false,
+      "bodyWidth": 390,
+      "viewport": 390,
+      "head": "ENA / USDT"
+    },
+    {
+      "theme": "light",
+      "width": 768,
+      "screen": "overview",
+      "overflow": false,
+      "bodyWidth": 768,
+      "viewport": 768,
+      "head": "Обзор рынка"
+    },
+    {
+      "theme": "light",
+      "width": 768,
+      "screen": "desk",
+      "overflow": false,
+      "bodyWidth": 768,
+      "viewport": 768,
+      "head": "BTC / USDT"
+    },
+    {
+      "theme": "light",
+      "width": 768,
+      "screen": "h1",
+      "overflow": false,
+      "bodyWidth": 768,
+      "viewport": 768,
+      "head": "BTC / USDT"
+    },
+    {
+      "theme": "light",
+      "width": 768,
+      "screen": "review",
+      "overflow": false,
+      "bodyWidth": 768,
+      "viewport": 768,
+      "head": "Проверка зон"
+    },
+    {
+      "theme": "light",
+      "width": 768,
+      "screen": "journal",
+      "overflow": false,
+      "bodyWidth": 768,
+      "viewport": 768,
+      "head": "Журнал"
+    },
+    {
+      "theme": "light",
+      "width": 768,
+      "screen": "market",
+      "overflow": false,
+      "bodyWidth": 768,
+      "viewport": 768,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "light",
+      "width": 768,
+      "screen": "feed",
+      "overflow": false,
+      "bodyWidth": 768,
+      "viewport": 768,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "light",
+      "width": 768,
+      "screen": "calendar",
+      "overflow": false,
+      "bodyWidth": 768,
+      "viewport": 768,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "light",
+      "width": 768,
+      "screen": "rules",
+      "overflow": false,
+      "bodyWidth": 768,
+      "viewport": 768,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "light",
+      "width": 768,
+      "screen": "settings",
+      "overflow": false,
+      "bodyWidth": 768,
+      "viewport": 768,
+      "head": "Настройки"
+    },
+    {
+      "theme": "light",
+      "width": 768,
+      "screen": "screener",
+      "overflow": false,
+      "bodyWidth": 768,
+      "viewport": 768,
+      "head": "Скринер"
+    },
+    {
+      "theme": "light",
+      "width": 768,
+      "screen": "setup",
+      "overflow": false,
+      "bodyWidth": 768,
+      "viewport": 768,
+      "head": "ENA / USDT"
+    },
+    {
+      "theme": "light",
+      "width": 1024,
+      "screen": "overview",
+      "overflow": false,
+      "bodyWidth": 1024,
+      "viewport": 1024,
+      "head": "Обзор рынка"
+    },
+    {
+      "theme": "light",
+      "width": 1024,
+      "screen": "desk",
+      "overflow": false,
+      "bodyWidth": 1024,
+      "viewport": 1024,
+      "head": "BTC / USDT"
+    },
+    {
+      "theme": "light",
+      "width": 1024,
+      "screen": "h1",
+      "overflow": false,
+      "bodyWidth": 1024,
+      "viewport": 1024,
+      "head": "BTC / USDT"
+    },
+    {
+      "theme": "light",
+      "width": 1024,
+      "screen": "review",
+      "overflow": false,
+      "bodyWidth": 1024,
+      "viewport": 1024,
+      "head": "Проверка зон"
+    },
+    {
+      "theme": "light",
+      "width": 1024,
+      "screen": "journal",
+      "overflow": false,
+      "bodyWidth": 1024,
+      "viewport": 1024,
+      "head": "Журнал"
+    },
+    {
+      "theme": "light",
+      "width": 1024,
+      "screen": "market",
+      "overflow": false,
+      "bodyWidth": 1024,
+      "viewport": 1024,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "light",
+      "width": 1024,
+      "screen": "feed",
+      "overflow": false,
+      "bodyWidth": 1024,
+      "viewport": 1024,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "light",
+      "width": 1024,
+      "screen": "calendar",
+      "overflow": false,
+      "bodyWidth": 1024,
+      "viewport": 1024,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "light",
+      "width": 1024,
+      "screen": "rules",
+      "overflow": false,
+      "bodyWidth": 1024,
+      "viewport": 1024,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "light",
+      "width": 1024,
+      "screen": "settings",
+      "overflow": false,
+      "bodyWidth": 1024,
+      "viewport": 1024,
+      "head": "Настройки"
+    },
+    {
+      "theme": "light",
+      "width": 1024,
+      "screen": "screener",
+      "overflow": false,
+      "bodyWidth": 1024,
+      "viewport": 1024,
+      "head": "Скринер"
+    },
+    {
+      "theme": "light",
+      "width": 1024,
+      "screen": "setup",
+      "overflow": false,
+      "bodyWidth": 1024,
+      "viewport": 1024,
+      "head": "ENA / USDT"
+    },
+    {
+      "theme": "light",
+      "width": 1440,
+      "screen": "overview",
+      "overflow": false,
+      "bodyWidth": 1440,
+      "viewport": 1440,
+      "head": "Обзор рынка"
+    },
+    {
+      "theme": "light",
+      "width": 1440,
+      "screen": "desk",
+      "overflow": false,
+      "bodyWidth": 1440,
+      "viewport": 1440,
+      "head": "BTC / USDT"
+    },
+    {
+      "theme": "light",
+      "width": 1440,
+      "screen": "h1",
+      "overflow": false,
+      "bodyWidth": 1440,
+      "viewport": 1440,
+      "head": "BTC / USDT"
+    },
+    {
+      "theme": "light",
+      "width": 1440,
+      "screen": "review",
+      "overflow": false,
+      "bodyWidth": 1440,
+      "viewport": 1440,
+      "head": "Проверка зон"
+    },
+    {
+      "theme": "light",
+      "width": 1440,
+      "screen": "journal",
+      "overflow": false,
+      "bodyWidth": 1440,
+      "viewport": 1440,
+      "head": "Журнал"
+    },
+    {
+      "theme": "light",
+      "width": 1440,
+      "screen": "market",
+      "overflow": false,
+      "bodyWidth": 1440,
+      "viewport": 1440,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "light",
+      "width": 1440,
+      "screen": "feed",
+      "overflow": false,
+      "bodyWidth": 1440,
+      "viewport": 1440,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "light",
+      "width": 1440,
+      "screen": "calendar",
+      "overflow": false,
+      "bodyWidth": 1440,
+      "viewport": 1440,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "light",
+      "width": 1440,
+      "screen": "rules",
+      "overflow": false,
+      "bodyWidth": 1440,
+      "viewport": 1440,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "light",
+      "width": 1440,
+      "screen": "settings",
+      "overflow": false,
+      "bodyWidth": 1440,
+      "viewport": 1440,
+      "head": "Настройки"
+    },
+    {
+      "theme": "light",
+      "width": 1440,
+      "screen": "screener",
+      "overflow": false,
+      "bodyWidth": 1440,
+      "viewport": 1440,
+      "head": "Скринер"
+    },
+    {
+      "theme": "light",
+      "width": 1440,
+      "screen": "setup",
+      "overflow": false,
+      "bodyWidth": 1440,
+      "viewport": 1440,
+      "head": "ENA / USDT"
+    },
+    {
+      "theme": "light",
+      "width": 1920,
+      "screen": "overview",
+      "overflow": false,
+      "bodyWidth": 1920,
+      "viewport": 1920,
+      "head": "Обзор рынка"
+    },
+    {
+      "theme": "light",
+      "width": 1920,
+      "screen": "desk",
+      "overflow": false,
+      "bodyWidth": 1920,
+      "viewport": 1920,
+      "head": "BTC / USDT"
+    },
+    {
+      "theme": "light",
+      "width": 1920,
+      "screen": "h1",
+      "overflow": false,
+      "bodyWidth": 1920,
+      "viewport": 1920,
+      "head": "BTC / USDT"
+    },
+    {
+      "theme": "light",
+      "width": 1920,
+      "screen": "review",
+      "overflow": false,
+      "bodyWidth": 1920,
+      "viewport": 1920,
+      "head": "Проверка зон"
+    },
+    {
+      "theme": "light",
+      "width": 1920,
+      "screen": "journal",
+      "overflow": false,
+      "bodyWidth": 1920,
+      "viewport": 1920,
+      "head": "Журнал"
+    },
+    {
+      "theme": "light",
+      "width": 1920,
+      "screen": "market",
+      "overflow": false,
+      "bodyWidth": 1920,
+      "viewport": 1920,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "light",
+      "width": 1920,
+      "screen": "feed",
+      "overflow": false,
+      "bodyWidth": 1920,
+      "viewport": 1920,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "light",
+      "width": 1920,
+      "screen": "calendar",
+      "overflow": false,
+      "bodyWidth": 1920,
+      "viewport": 1920,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "light",
+      "width": 1920,
+      "screen": "rules",
+      "overflow": false,
+      "bodyWidth": 1920,
+      "viewport": 1920,
+      "head": "Контекст рынка"
+    },
+    {
+      "theme": "light",
+      "width": 1920,
+      "screen": "settings",
+      "overflow": false,
+      "bodyWidth": 1920,
+      "viewport": 1920,
+      "head": "Настройки"
+    },
+    {
+      "theme": "light",
+      "width": 1920,
+      "screen": "screener",
+      "overflow": false,
+      "bodyWidth": 1920,
+      "viewport": 1920,
+      "head": "Скринер"
+    },
+    {
+      "theme": "light",
+      "width": 1920,
+      "screen": "setup",
+      "overflow": false,
+      "bodyWidth": 1920,
+      "viewport": 1920,
+      "head": "ENA / USDT"
+    }
+  ]
+}

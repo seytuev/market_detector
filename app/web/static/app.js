@@ -2347,13 +2347,28 @@ const VIEW_IDS = {
 };
 const VIEW_ALIASES = { overview: 'desk', events: 'journal' };
 
+const VIEW_CRUMB = {
+  now: 'Обзор',
+  desk: 'Рабочее место',
+  review: 'Проверка',
+  journal: 'Журнал',
+  settings: 'Настройки',
+};
+
 function showView(name) {
   name = VIEW_ALIASES[name] || name;
   if (!VIEW_IDS[name]) name = 'now';
   document.querySelectorAll('.view').forEach((el) => el.classList.toggle('active', el.id === VIEW_IDS[name]));
-  document.querySelectorAll('.app-tab[data-view], .mobile-nav a[data-view]').forEach((el) => {
+  document.querySelectorAll('.app-tab[data-view], .mobile-nav a[data-view], .nav-more-panel a[data-view]').forEach((el) => {
     el.classList.toggle('active', el.dataset.view === name);
   });
+  const crumb = document.getElementById('page-crumb');
+  if (crumb) crumb.textContent = VIEW_CRUMB[name] || name;
+  const moreBtn = document.getElementById('nav-more');
+  if (moreBtn) moreBtn.classList.toggle('active', name === 'journal' || name === 'settings');
+  const morePanel = document.getElementById('nav-more-panel');
+  if (morePanel) morePanel.classList.add('hidden');
+  if (moreBtn) moreBtn.setAttribute('aria-expanded', 'false');
   if (name === 'settings') openSettings();
   if (name === 'now' && window.LFNow) window.LFNow.show();
   if (name === 'desk') {
@@ -3015,6 +3030,7 @@ function paintChartMode() {
   document.querySelectorAll('[data-chart-mode]').forEach((el) => {
     const on = el.dataset.chartMode === state.chartMode;
     el.classList.toggle('active', on);
+    el.setAttribute('aria-pressed', on ? 'true' : 'false');
     if (on) el.setAttribute('aria-current', 'page');
     else el.removeAttribute('aria-current');
   });
@@ -3122,9 +3138,48 @@ async function reloadAll() {
   await Promise.all([loadZones(), loadEvents(), loadCandidates(), loadH1Markers()]);
 }
 
+function initSettingsSections() {
+  const nav = document.getElementById('settings-sections');
+  if (!nav || nav.dataset.bound) return;
+  nav.dataset.bound = '1';
+  const known = ['assets', 'notify', 'look', 'rules'];
+  const show = (id, write) => {
+    const pane = known.includes(id) ? id : 'assets';
+    document.querySelectorAll('[data-settings-pane]').forEach((el) => {
+      el.classList.toggle('is-active', el.dataset.settingsPane === pane);
+    });
+    nav.querySelectorAll('[data-settings-pane-btn]').forEach((btn) => {
+      const on = btn.dataset.settingsPaneBtn === pane;
+      btn.classList.toggle('active', on);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    const target = document.querySelector(`[data-settings-pane="${pane}"]`);
+    if (write && target) target.scrollIntoView({ block: 'start' });
+    if (!write) return;
+    const url = new URL(location.href);
+    url.searchParams.set('section', pane);
+    history.replaceState(null, '', url.pathname + url.search + url.hash);
+  };
+  nav.addEventListener('click', (event) => {
+    const btn = event.target.closest('[data-settings-pane-btn]');
+    if (btn) show(btn.dataset.settingsPaneBtn, true);
+  });
+  show(new URLSearchParams(location.search).get('section') || 'assets', false);
+}
+
 async function main() {
   await ensureToken();
   setupViews();
+  initSettingsSections();
+  const assetsToggle = $('desk-assets-toggle');
+  if (assetsToggle) {
+    assetsToggle.onclick = () => {
+      const desk = document.querySelector('.desk-main');
+      if (!desk) return;
+      const open = desk.classList.toggle('assets-open');
+      assetsToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    };
+  }
   initChart();
 
   const hideInspector = () => {

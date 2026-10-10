@@ -17,7 +17,9 @@ window.HTF = (() => {
 
   function themeGet() {
     const saved = localStorage.getItem(THEME_KEY);
-    return (saved === 'dark' || saved === 'light') ? saved : 'system';
+    if (saved === 'dark' || saved === 'light' || saved === 'system') return saved;
+    // Нет выбора — светлая тема. «Как в системе» только после явного сохранения.
+    return 'light';
   }
 
   function themeApply(choice) {
@@ -223,6 +225,41 @@ window.HTF = (() => {
     chartTheme, openModal, closeModal, setConnectionState,
     theme: { get: themeGet, set: themeSet, apply: themeApply },
   };
+})();
+
+/* Часы МСК и панель «Ещё». Общие для страниц со shell. */
+(() => {
+  const clock = document.getElementById('shell-clock');
+  if (clock) {
+    const tick = () => {
+      const now = new Date();
+      const date = now.toLocaleDateString('ru-RU', {
+        day: 'numeric', month: 'short', timeZone: 'Europe/Moscow',
+      }).replace('.', '');
+      const time = now.toLocaleTimeString('ru-RU', {
+        hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Moscow',
+      });
+      clock.textContent = `${date} · ${time} МСК`;
+    };
+    tick();
+    setInterval(tick, 30000);
+  }
+  const btn = document.getElementById('nav-more');
+  const panel = document.getElementById('nav-more-panel');
+  if (!btn || !panel) return;
+  const close = () => {
+    panel.classList.add('hidden');
+    btn.setAttribute('aria-expanded', 'false');
+  };
+  btn.addEventListener('click', () => {
+    const open = panel.classList.contains('hidden');
+    panel.classList.toggle('hidden', !open);
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+  panel.querySelectorAll('a').forEach((link) => link.addEventListener('click', close));
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') close();
+  });
 })();
 
 /* Сплиттеры: перетаскивание границы меняет ширину правой панели и высоту
