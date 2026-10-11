@@ -246,6 +246,30 @@ def latest_leg(db, episode_id: int) -> Optional[dict[str, Any]]:
     return _row(row) if row else None
 
 
+def _aggregate_direction(sources: list[dict[str, Any]]) -> str:
+    """Детерминированный агрегат направления активных источников (F12).
+
+    Порядок вставки не влияет: источники сортируются по
+    (interaction_at, zone_id, id). Нейтральные источники направления не
+    задают; "neutral" — только когда направленных источников нет или их
+    направления реально конфликтуют (F11), а не от перестановки вставки."""
+    active = sorted(
+        (s for s in sources if s.get("active", 1)),
+        key=lambda s: (
+            int(s["interaction_at"]),
+            int(s.get("zone_id") or 0),
+            int(s["id"]),
+        ),
+    )
+    concrete = {
+        d for d in (_loads(s.get("evidence")).get("direction") for s in active)
+        if d and d != "neutral"
+    }
+    if len(concrete) == 1:
+        return next(iter(concrete))
+    return "neutral"
+
+
 def record_interaction(
     db, cfg, instrument_id: int, zone: Zone, occurred_at: int,
     interaction: Optional[str] = None, evidence: Optional[dict] = None,
@@ -298,15 +322,15 @@ def record_interaction(
     )
     inserted = cur.rowcount == 1
     if inserted:
-        merged = current["candidate_direction"]
-        if merged == "neutral" and direction != "neutral":
-            merged = direction
-        elif direction != "neutral" and merged != "neutral" and direction != merged:
-            merged = "neutral"
+        # F12: агрегат пересчитывается из множества активных источников —
+        # итог не зависит от порядка прихода. F7: last/expiry монотонны —
+        # запоздалый старый контакт не откатывает окно ожидания назад
+        merged = _aggregate_direction(episode_sources(db, int(current["id"])))
         expires = int(occurred_at) + wait_ms(cfg, zone.timeframe)
         db.conn.execute(
             """UPDATE htf_context_episode
-               SET last_distinct_interaction_at=?, expires_at=?, candidate_direction=?
+               SET last_distinct_interaction_at=MAX(last_distinct_interaction_at, ?),
+                   expires_at=MAX(expires_at, ?), candidate_direction=?
                WHERE id=?""",
             (occurred_at, expires, merged, current["id"]),
         )
@@ -336,6 +360,14 @@ def drop_source(db, instrument_id: int, zone_id: int, now: int, reason: str) -> 
                    SET state='invalidated', invalidated_at=?, invalid_reason=?
                    WHERE id=?""",
                 (now, reason, episode["id"]),
+            )
+        else:
+            # F11: агрегат пересчитывается из оставшихся активных источников —
+            # удалённый источник не продолжает поддерживать своё направление
+            merged = _aggregate_direction(episode_sources(db, episode["id"]))
+            db.conn.execute(
+                "UPDATE htf_context_episode SET candidate_direction=? WHERE id=?",
+                (merged, episode["id"]),
             )
     _commit(db)
 

@@ -294,6 +294,12 @@ def chart_result_inline(
         )
         for t in ("H1", "D1", "W1")
     ])
+    if tf == "H1":
+        from .charts import DEFAULT_MASK
+        rows.append([InlineKeyboardButton(
+            "Контекст",
+            callback_data=f"nav:chartgo:{iid}:D1:0:{DEFAULT_MASK}",
+        )])
     rows.append([
         InlineKeyboardButton(
             "Слои…", callback_data=f"nav:chartlay:{iid}:{tf}:{days}:{mask}"

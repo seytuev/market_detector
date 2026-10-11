@@ -171,7 +171,14 @@ class LtfDispatcher:
         период 3 дня с авторасширением 7/14 от HTF-касания (§8)."""
         if self.settings is None or ctx.observation is None:
             return None
-        from ..bot.charts import DEFAULT_MASK, layers_from_mask, render_ltf_chart
+        from ..bot.charts import render_ltf_chart
+        from .chart_snapshot import (
+            chart_meta_matches,
+            chart_signature,
+            find_saved_chart,
+            layers_for_kind,
+            write_chart_meta,
+        )
 
         obs = ctx.observation
         from ..services.h1_setup import local_leg_at
@@ -185,17 +192,26 @@ class LtfDispatcher:
                 if obs.activated_at else 0
             )
             days = 3 if elapsed_days <= 3 else (7 if elapsed_days <= 7 else 14)
-        end = ev.occurred_at  # no candle closed after the event may leak into its snapshot
-        out = (
-            Path(self.settings.db_path).parent / "charts"
-            / f"ltf_event_{ev.id}_{now_ms()}.png"
-        )
-        return await asyncio.to_thread(
+        # Правая граница — время события. Повтор доставки не рисует новый файл
+        # и не пересчитывает историю на текущих свечах.
+        signature = chart_signature(ev)
+        out_dir = Path(self.settings.db_path).parent / "charts"
+        out = out_dir / f"ltf_event_{ev.id}.png"
+        if chart_meta_matches(out, signature):
+            return str(out)
+        reused = find_saved_chart(out_dir, signature)
+        if reused:
+            return reused
+        path = await asyncio.to_thread(
             render_ltf_chart, self.db, obs.id, str(out),
             tf="H1", period_days=days,
-            layers=layers_from_mask(DEFAULT_MASK),
-            settings=self.settings, now=ev.occurred_at, end_ms=end,
+            layers=layers_for_kind(ev.kind, ev.payload),
+            settings=self.settings, now=ev.occurred_at, end_ms=ev.occurred_at,
+            event=ev,
         )
+        if path:
+            write_chart_meta(Path(path), signature, int(ev.id), int(ev.occurred_at))
+        return path
 
     def _packet_events(self, members):
         return [ev for m in members if not m["reason"] and (ev := self.db.get_ltf_event(m["event_id"])) is not None]
@@ -365,7 +381,7 @@ class LtfDispatcher:
                         break
             packet_id = self.outbox.put("ltf", key, Card(""), [ev.id], quiet=ev.kind == "range_ready")
             from ..services.h1_setup import entry_block_reason
-            block = entry_block_reason(self.db, ev, now_ms())
+            block = entry_block_reason(self.db, ev, now_ms(), cfg=self.cfg)
             if block:
                 self.outbox.suppress(packet_id, block)
                 self.db.mark_ltf_event_delivered(ev.id)

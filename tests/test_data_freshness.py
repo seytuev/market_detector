@@ -60,8 +60,12 @@ def test_channels_separate_and_ok_only_when_fresh(db: Database,
     assert ds["state"] == "ok"
     assert ds["quote_age_s"] == 60.0
     assert ds["quote_stale"] is False and ds["h1_stale"] is False
-    # устаревшая котировка — отдельно от свечей
-    db.set_quote(instrument_id, 100.5, NOW - 3 * 3600_000)
+    # устаревшая котировка — отдельно от свечей. F8: set_quote игнорирует
+    # тики старше сохранённого, поэтому старение данных эмулируем прямой
+    # записью meta (прошло время, новых тиков не было), а не запоздалым тиком
+    import json
+    db.set_meta(f"quote:{instrument_id}",
+                json.dumps({"price": 100.5, "ts": NOW - 3 * 3600_000}))
     ds = _data_state(db, settings, instrument_id,
                      db.get_quote(instrument_id), NOW)
     assert ds["state"] == "stale" and ds["reason"] == "quote_stale"

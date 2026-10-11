@@ -55,6 +55,23 @@ def context_type_name(zone) -> str:
     return name
 
 
+def _lifecycle_end_at(zone) -> Optional[int]:
+    """Известное рыночное время конца актуальности зоны (F6).
+
+    Источники: evidence.invalidated_at, breakout_close_at, display_until.
+    None — история перехода не записана, момент конца неизвестен."""
+    evidence = getattr(zone, "evidence", None) or {}
+    ends = [
+        v for v in (
+            evidence.get("invalidated_at"),
+            getattr(zone, "breakout_close_at", None),
+            getattr(zone, "display_until", None),
+        )
+        if v is not None
+    ]
+    return min(int(v) for v in ends) if ends else None
+
+
 def parent_decision(zone, policy, as_of: Optional[int] = None) -> ParentDecision:
     """Допуск зоны как HTF-родителя на момент as_of.
 
@@ -95,10 +112,20 @@ def parent_decision(zone, policy, as_of: Optional[int] = None) -> ParentDecision
             return ParentDecision(False, "confirmation_not_yet")
 
     status = zone.status
-    if status not in PARENT_QUERY_STATUSES:
-        return ParentDecision(False, "not_relevant")
-    if getattr(zone, "market_validity", "active") != "active":
-        return ParentDecision(False, "not_relevant")
+    if status not in PARENT_QUERY_STATUSES or (
+        getattr(zone, "market_validity", "active") != "active"
+    ):
+        if as_of is None:
+            return ParentDecision(False, "not_relevant")
+        # F6: историческая отсечка — текущий lifecycle не переписывает
+        # прошлое. Зона, завершённая ПОСЛЕ as_of, на этот момент ещё была
+        # рабочей; без записанного времени перехода ответ — unknown,
+        # а не подмена текущим состоянием
+        end_at = _lifecycle_end_at(zone)
+        if end_at is None:
+            return ParentDecision(False, "unknown_history", False)
+        if end_at <= as_of:
+            return ParentDecision(False, "not_relevant")
     until = zone.display_until
     if until is not None and (as_of is None or until <= as_of):
         return ParentDecision(False, "finished")

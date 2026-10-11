@@ -148,6 +148,9 @@ class EventDispatcher:
         return EventView(event=event, zone=zone, instrument=instrument)
 
     def _passes_filters(self, view: EventView) -> bool:
+        # Приближение к зоне остаётся фактом у зоны, но уведомление не создаём.
+        if view.event.kind == EventKind.APPROACH:
+            return False
         # §10: режим «уведомлять только о подтверждённых» — авто-кандидаты молчат
         if (
             self.cfg.notify_only_reviewed
@@ -280,16 +283,22 @@ class EventDispatcher:
         views = self._active_views(members)
         if not views:
             return "missing events"
-        allowed = [v for v in views if not self._bot_blocked(v) and not self._entry_stale(v)
-                   and not v.event.delayed and not self._asset_off(v)]
+        approach = [v for v in views if v.event.kind == EventKind.APPROACH]
+        allowed = [v for v in views if v not in approach and not self._bot_blocked(v)
+                   and not self._entry_stale(v) and not v.event.delayed
+                   and not self._asset_off(v)]
         if views and all(self._asset_off(v) for v in views):
             return "asset disabled"
         if not allowed:
+            if approach and len(approach) == len(views):
+                return "approach notifications disabled"
             return "muted, historical or stale"
         for view in views:
             if view not in allowed:
-                self.db.conn.execute("UPDATE notification_member SET reason='muted or stale' WHERE packet_id=? AND event_id=?",
-                                     (row["id"], view.event.id))
+                reason = ("approach not notified" if view.event.kind == EventKind.APPROACH
+                          else "muted or stale")
+                self.db.conn.execute("UPDATE notification_member SET reason=? WHERE packet_id=? AND event_id=?",
+                                     (reason, row["id"], view.event.id))
         self.db.conn.commit()
         return None
 
@@ -462,6 +471,9 @@ class EventDispatcher:
                     "SELECT 1 FROM notification_member WHERE channel='htf' AND event_id=?", (event_id,)).fetchone()
                 ev = self.db.get_event(event_id)
                 if exists or ev is None:
+                    continue
+                if ev.kind == EventKind.APPROACH:
+                    self._finish_packet(event_id, "suppressed")
                     continue
                 view = self._load_view(ev)
                 if ev.delayed or self._entry_stale(view) or self._asset_off(view):

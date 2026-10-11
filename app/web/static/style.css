@@ -1824,6 +1824,33 @@ input[type="checkbox"] { min-height: auto; accent-color: var(--accent); }
   overflow-x: hidden;
 }
 .now-card { padding: 16px; }
+
+/* Карточка актива: точка направления у заголовка (long/short приходят
+   с сервера в asset_state.direction) и ряды «подпись — значение». */
+.asset-status { display: flex; align-items: baseline; gap: 9px; }
+.asset-status.dir-long::before, .asset-status.dir-short::before {
+  content: ""; width: 10px; height: 10px; border-radius: 50%;
+  flex: none; align-self: center;
+}
+.asset-status.dir-long::before { background: var(--lf-positive); }
+.asset-status.dir-short::before { background: var(--lf-negative); }
+.msg-rows { margin: 4px 0 0; }
+.msg-row {
+  display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 2px 10px;
+  padding: 7px 0; border-top: 1px solid var(--lf-border);
+  font-size: 13px; line-height: 1.4;
+}
+.msg-row .msg-k { color: var(--lf-text2); font-size: 12px; padding-top: 1px; }
+.msg-row .msg-v { margin: 0; font-variant-numeric: tabular-nums; }
+.msg-row.kind-entry .msg-v, .msg-row.kind-bos .msg-v { font-weight: 500; }
+.msg-row.kind-cancel .msg-v { color: var(--lf-text2); }
+.msg-note {
+  display: inline-block; margin-left: 6px; padding: 1px 7px;
+  border-radius: 999px; background: var(--lf-raised); color: var(--lf-text2);
+  font-size: 11px; line-height: 16px; vertical-align: 1px; white-space: nowrap;
+}
+.now-card .sc-visual { margin: 12px 0 4px; height: 130px; }
+
 .msg-block { margin: 10px 0 0; }
 .msg-k { color: var(--lf-text2); font-size: 12px; }
 .msg-v { margin: 2px 0 0; font-size: 14px; line-height: 1.45; }
@@ -2768,4 +2795,70 @@ html[data-sidebar="collapsed"] .sidebar-toggle .ico-expand { display: block; }
     padding-left: 12px;
     padding-right: 12px;
   }
+}
+
+/* Аудит оболочки. Кнопка меню под маркой, чтобы не резать подпись.
+   Пустая верхняя полоса скрыта. На странице H1 полоса остаётся:
+   в ней кнопка LTF. */
+.sidebar-head {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+.sidebar-head .brand { align-self: stretch; min-width: 0; }
+.sidebar-head .sidebar-toggle { margin-top: 0; }
+.topbar:not(.ltf-topbar) { display: none; }
+.topbar.ltf-topbar .top-right { margin-left: auto; }
+@media (min-width: 768px) and (max-width: 1023px) {
+  .sidebar-head { align-items: center; }
+  html[data-sidebar="expanded"] .sidebar-head { align-items: flex-end; }
+}
+@media (min-width: 768px) {
+  html[data-sidebar="collapsed"] .sidebar-head { align-items: center; }
+}
+
+/* Очередь проверки: подписи не наезжают в узкой колонке. */
+.review-queue .rail-head {
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+}
+#review-progress {
+  flex: 1 1 100%;
+  font-size: 12px;
+  line-height: 16px;
+}
+.review-queue-filters { flex-wrap: wrap; gap: 6px; }
+.review-queue-filters select { flex: 1 1 120px; min-width: 0; }
+#btn-download-labels {
+  flex: 1 1 100%;
+  height: auto;
+  min-height: 30px;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+/* Рабочее место от 1024px: график занимает остаток высоты.
+   Карточка зон сценария остаётся под свечами и не закрывает ленту событий. */
+@media (min-width: 1024px) {
+  #view-overview .overview-layout {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+  }
+  #view-overview .desk-main,
+  #view-overview .desk-side,
+  #view-overview .chart-block {
+    min-height: 0;
+    overflow: hidden;
+  }
+  #view-overview .overview-layout #chart-container {
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 220px;
+    max-height: none;
+  }
+  #view-overview .desk-entries { max-height: 120px; }
 }

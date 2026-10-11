@@ -353,6 +353,12 @@ class Worker:
         LTF-наблюдений выполняет вызывающий."""
         adapter = self.adapters[ins.venue]
         price, ts = await adapter.last_price(ins.symbol)
+        # F8: тик со временем источника старше последнего известного
+        # игнорируется целиком — не меняет котировку, формирующийся бар
+        # и не вызывает scanner.on_price
+        known = self.db.get_quote(ins.id)
+        if known is not None and ts < known[1]:
+            return []
         # последняя котировка — в meta: read model LTF (§14) считает положение
         # цены относительно HTF-зон серверно по свежей котировке
         self.db.set_quote(ins.id, price, ts)

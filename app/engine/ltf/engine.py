@@ -17,6 +17,8 @@ Live и replay используют один детерминированный 
 """
 from __future__ import annotations
 
+import json
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -73,6 +75,8 @@ _INVALIDATING_REASONS = ("breaker_broken", "prb_broken", "jumped_through", "swep
 
 # состояния наблюдения, из которых возможна автоархивация по неактивности
 _STALE_ARCHIVABLE_STATES = ("waiting_structure", "active", "paused_data")
+
+log = logging.getLogger(__name__)
 
 
 def _processing_mode(lag_ms: int, grace_ms: int) -> str:
@@ -185,6 +189,16 @@ class LtfEngine:
         result = LtfTickResult()
         if not closed:
             return result
+        # F10: отпечаток OHLC уже обработанных свечей — курсор
+        # ltf:h1:last_close знает только время закрытия; расхождение OHLC
+        # при том же open_time фиксируется как ревизия исходных данных
+        fp_key = f"ltf:h1:ohlc:{instrument_id}"
+        try:
+            fingerprint = json.loads(self.db.get_meta(fp_key) or "{}")
+        except json.JSONDecodeError:
+            fingerprint = {}
+        fp_dirty = self._detect_h1_revisions(instrument_id, closed, last_done,
+                                             fingerprint)
         self._batch = StructureBatch() if self.scan_cursors else None
         try:
             for idx, c in enumerate(closed):
@@ -203,13 +217,54 @@ class LtfEngine:
                     detection_lag_ms=lag, result=result,
                 )
                 self.db.set_meta(key, str(c.close_time))
+                fingerprint[str(c.open_time)] = [c.open, c.high, c.low, c.close]
+                fp_dirty = True
         finally:
             self._batch = None
+            if fp_dirty:
+                self.db.set_meta(fp_key, json.dumps(fingerprint))
         reconcile_ideas(self.db, instrument_id, self.cfg, now)
         from ...services.liquidity_anchors import refresh_liquidity_anchors
         refresh_liquidity_anchors(self.db, instrument_id)
         mark_ideas_checkpoint(self.db, instrument_id)
         return result
+
+    def _detect_h1_revisions(
+        self, instrument_id: int, closed: list, last_done: int,
+        fingerprint: dict,
+    ) -> bool:
+        """F10 (детекция): свеча с open_time <= курсора, чей OHLC изменился
+        относительно обработанного, — ревизия исходных данных. Факт пишется
+        в лог и meta (ltf:h1:revision:{iid}), отпечаток обновляется, чтобы
+        та же ревизия не фиксировалась повторно. Пересчёт зависимостей
+        (pivots/события/зоны) — отдельный этап; опубликованная история
+        молча не стирается. True — отпечаток изменился."""
+        dirty = False
+        for c in closed:
+            if not c.closed or c.close_time > last_done:
+                continue
+            key = str(c.open_time)
+            bar = [c.open, c.high, c.low, c.close]
+            prev = fingerprint.get(key)
+            if prev is None:
+                fingerprint[key] = bar
+                dirty = True
+            elif prev != bar:
+                revision = {
+                    "open_time": c.open_time, "previous": prev, "current": bar,
+                    "detected_at": _real_now_ms(),
+                }
+                log.warning(
+                    "LTF %s: ревизия уже обработанной H1 open_time=%s "
+                    "OHLC %s -> %s; пересчёт зависимостей не выполняется (F10)",
+                    instrument_id, c.open_time, prev, bar,
+                )
+                self.db.set_meta(
+                    f"ltf:h1:revision:{instrument_id}", json.dumps(revision)
+                )
+                fingerprint[key] = bar
+                dirty = True
+        return dirty
 
     def replay_observation(self, observation_id: int) -> LtfTickResult:
         """§13: детерминированный прогон по сохранённым свечам тем же кодом.
@@ -443,12 +498,18 @@ class LtfEngine:
         # §9: касание потребляет текущий выбор зоны; отказ доставки не
         # отменяет факт касания — состояние пишется до события. ТЗ §3:
         # validity="tested" — факт истории, а не запрет навсегда: допуск к
-        # повторному выбору считается отдельно по max_test_depth
+        # повторному выбору считается отдельно по max_test_depth.
+        # Объект обновляется синхронно с БД (F5): оценка ниже идёт по
+        # состоянию ПОСЛЕ перехода, иначе первый глубокий тест (>= порога)
+        # сохранял бы reason=ok вместо tested_too_deep
+        first_test_at = zone.first_test_at or candle.close_time
         self.db.update_ltf_entry_zone(
             zone.id,
-            first_test_at=zone.first_test_at or candle.close_time,
+            first_test_at=first_test_at,
             validity="tested",
         )
+        zone.first_test_at = first_test_at
+        zone.validity = "tested"
         self._accumulate_test_depth(zone, candle)
         # reason пересчитывается ПОСЛЕ накопления глубины: глубокий тест
         # (>= 90%) сразу закрывает допуск (tested_too_deep), мелкий —
@@ -517,6 +578,7 @@ class LtfEngine:
             zone.id, max_test_depth=depth, test_extreme=extreme
         )
         zone.max_test_depth = depth
+        zone.test_extreme = extreme
         zone.test_extreme = extreme
 
     def _resolve_liquidity_test(
@@ -884,12 +946,16 @@ class LtfEngine:
             None,
         )
         since = trig.occurred_at if trig is not None else sc.created_at
+        head = up_to[-1] if up_to else None
+        # F1: момент решения — закрытие обрабатываемой свечи, а не время
+        # обнаружения: при catchup HTF-факт будущего (зона/тест, ещё
+        # неизвестные на эту H1) не должен подтверждать старое событие
+        event_as_of = head.close_time if head is not None and head.closed else now
         ctx = scenario_context(
             self.db, self._scenario_instrument(sc), sc.direction,
-            avail, up_to, since, as_of=now,
+            avail, up_to, since, as_of=event_as_of,
             sweep_only_after=self._ctx_sweep_cursor.get(sc.id),
         )
-        head = up_to[-1] if up_to else None
         if head is not None and head.closed:
             self._ctx_sweep_cursor[sc.id] = max(
                 head.close_time, self._ctx_sweep_cursor.get(sc.id, 0)
@@ -1654,7 +1720,9 @@ class LtfEngine:
         допуска §18 (admission_basis == context_exception)."""
         return [
             (e, zone, fe.admission_basis == ADMISSION_CONTEXT)
-            for e, zone, fe in admitted_scenario_entries(self.db, sc.id)
+            for e, zone, fe in admitted_scenario_entries(
+                self.db, sc.id, cfg=self.cfg
+            )
         ]
 
     def _announced_entry_ids(self, scenario_id: int) -> set[int]:
@@ -1792,20 +1860,30 @@ class LtfEngine:
         if not invalidated:
             return False
         now = _real_now_ms()
+        # F13: рыночное время факта инвалидации — из доказательства зоны
+        # (или конца рисунка), а не wall-clock обнаружения; режим — по лагу
+        # обнаружения, как у остального потока: восстановленная историческая
+        # инвалидация не выглядит свежей live-отменой
+        evidence = zone.evidence or {}
+        raw_at = evidence.get("invalidated_at") or zone.display_until
+        occurred = int(raw_at) if raw_at is not None else now
+        lag = max(0, now - occurred)
+        mode = _processing_mode(lag, self.cfg.ltf_live_grace_seconds * 1000)
         sc = self.db.get_active_ltf_scenario(obs.id)
         if sc is not None:
             self.db.update_ltf_scenario(
                 sc.id, state="cancelled", cancellation_reason="HTF_INVALIDATED",
-                cancelled_at=now, updated_at=now,
+                cancelled_at=occurred, updated_at=now,
             )
             self._emit(obs.id, sc.id, "cancellation", {
                 "scenario_id": sc.id, "reason": "HTF_INVALIDATED",
-            }, now, now, f"cancellation:{sc.id}:htf_invalidated",
-                "live", 0, LtfTickResult())
+                "invalidated_at": occurred,
+            }, occurred, now, f"cancellation:{sc.id}:htf_invalidated",
+                mode, lag, LtfTickResult())
         self.db.update_ltf_observation(obs.id, state="closed_by_parent",
                                        updated_at=now)
         from ...services.htf_context import note_source_outcome
-        note_source_outcome(self.db, zone, now)
+        note_source_outcome(self.db, zone, occurred)
         return True
 
     def close_scenario_manually(self, scenario_id: int) -> None:

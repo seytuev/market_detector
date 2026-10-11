@@ -22,12 +22,22 @@
   </script>
   <a class="skip" href="#ltf-main">К содержимому</a>
   <aside class="sidebar">
+    <div class="sidebar-head">
     <a class="brand" href="/#now">
       <svg class="brand-mark" width="30" height="30" viewBox="0 0 30 30" fill="none" aria-hidden="true">
         <path d="M7 5v20h16M12 9h12M12 15h9M12 21h6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
       <span class="brand-text">LevelFrame<small>MARKET INTELLIGENCE</small></span>
     </a>
+    <button type="button" id="sidebar-toggle" class="sidebar-toggle" aria-label="Свернуть меню" aria-expanded="true" title="Свернуть меню">
+      <svg class="ico-collapse" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <path d="M9 3 4.5 8 9 13M14 3 9.5 8 14 13" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <svg class="ico-expand" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <path d="M7 3l4.5 5L7 13M2 3l4.5 5L2 13" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
+    </div>
     <div class="nav-label">Анализ</div>
     <nav class="app-tabs" aria-label="Основная навигация">
       <a href="/#now" class="app-tab"><span class="nav-full">Обзор</span><span class="nav-short">Обзор</span></a>
@@ -47,16 +57,6 @@
   </aside>
   <div class="shell">
     <header class="topbar ltf-topbar">
-      <div class="top-left">
-        <button type="button" id="sidebar-toggle" class="sidebar-toggle" aria-label="Свернуть меню" aria-expanded="true" title="Свернуть меню">
-          <svg class="ico-collapse" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path d="M9 3 4.5 8 9 13M14 3 9.5 8 14 13" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-          <svg class="ico-expand" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path d="M7 3l4.5 5L7 13M2 3l4.5 5L2 13" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-        </button>
-      </div>
       <div class="top-right">
         <button id="btn-ltf-settings" class="btn">LTF</button>
       </div>

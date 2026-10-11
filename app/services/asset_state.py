@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from ..notify.formatting import fmt_price_ru, fmt_time_msk
@@ -86,6 +87,10 @@ def project_asset(
         state, transition if proven else None, evidence, zones, pd,
         invalidation, quality_text, leg, quality_bad,
     )
+    compact_rows = _compact_rows(
+        state, transition if proven else None, evidence, zones, pd,
+        invalidation, quality_text, leg, quality_bad, moment,
+    )
     snapshot_id = "asset:{iid}:{as_of}:{move}:{key}:{code}".format(
         iid=instrument_id,
         as_of=moment,
@@ -136,6 +141,7 @@ def project_asset(
         ),
         "pd": pd,
         "compact": compact,
+        "compact_rows": compact_rows,
         "details": {
             "grounds": _ground_lines(evidence),
             "zones": [
@@ -800,12 +806,13 @@ def _entry_line(zones, leg) -> str:
     half = "discount" if bull else "premium"
     lows = [z["admitted"][0] for z in zones]
     highs = [z["admitted"][1] for z in zones]
-    return "Вход: {n} {word} в {half} · {lo}–{hi}".format(
+    lo, hi = fmt_price_ru(min(lows)), fmt_price_ru(max(highs))
+    span = "–".join([lo, hi]) if lo != hi else lo
+    return "Вход: {n} {word} в {half} · {span}".format(
         n=len(zones),
         word=_zones_word(len(zones)),
         half=half,
-        lo=fmt_price_ru(min(lows)),
-        hi=fmt_price_ru(max(highs)),
+        span=span,
     )
 
 
@@ -869,6 +876,122 @@ def _shrink(lines: list[str], blocker: str) -> list[str]:
         rest = [line for line in merged if line not in kept]
         return (kept + rest)[:5] if blocker in kept else merged[:4] + [blocker]
     return merged[:5]
+
+
+_MSK_TZ = timezone(timedelta(hours=3))
+
+
+def _short_time(ms: int, now_ms: int) -> str:
+    """Время по МСК: для сегодняшней отсечки — только часы, иначе дата."""
+    dt = datetime.fromtimestamp(int(ms) / 1000, _MSK_TZ)
+    now_dt = datetime.fromtimestamp(int(now_ms) / 1000, _MSK_TZ)
+    hm = dt.strftime("%H:%M")
+    if dt.date() == now_dt.date():
+        return f"сегодня {hm}"
+    return f"{dt.strftime('%d.%m')} · {hm}"
+
+
+def _compact_rows(state, transition, evidence, zones, pd, invalidation,
+                  quality_text, leg, quality_bad, now_ms) -> list[dict]:
+    """Те же факты, что в compact, но подпись + значение + тип ряда.
+
+    Фронтенд рисует их сеткой и красит по kind; рынок не пересчитывает.
+    """
+    if not state.get("governs"):
+        return []
+    rows: list[dict] = []
+    if quality_bad:
+        rows.append({"kind": "quality", "k": "Качество", "v": quality_text})
+        if transition and transition.get("proven"):
+            rows.append({"kind": "bos", "k": _bos_label(transition),
+                         "v": _bos_value(transition, now_ms)})
+        rows.append({"kind": "blocker", "k": "Режим",
+                     "v": "Новые входы не отправляются"})
+        return rows
+    if transition and transition.get("proven"):
+        rows.append({"kind": "bos", "k": _bos_label(transition),
+                     "v": _bos_value(transition, now_ms)})
+    grounds = _grounds_summary(evidence)
+    if grounds:
+        rows.append({"kind": "grounds", "k": "Основание",
+                     "v": grounds.removeprefix("Основание: ")})
+    elif state.get("reason_code") == "context_missing":
+        rows.append({"kind": "grounds", "k": "Основание",
+                     "v": "действующего HTF-эпизода этого направления нет"})
+    entry = _entry_parts(zones, leg)
+    if entry:
+        rows.append({"kind": "entry", "k": "Вход", "v": entry})
+    pd_parts = _pd_parts(pd)
+    if pd_parts:
+        rows.append({"kind": "pd", "k": "PD H1", "v": pd_parts["v"],
+                     "note": pd_parts.get("note")})
+    elif leg:
+        rows.append({"kind": "pd", "k": "PD H1",
+                     "v": "диапазон текущей ноги ещё не записан"})
+    if invalidation.get("level") is not None:
+        rows.append({"kind": "cancel", "k": "Отмена",
+                     "v": "{rule} · {level}".format(
+                         rule=invalidation["rule"],
+                         level=fmt_price_ru(invalidation["level"]),
+                     )})
+    elif leg:
+        rows.append({"kind": "cancel", "k": "Отмена", "v": invalidation["rule"]})
+    blocker = _blocker_line(state)
+    if blocker:
+        rows.append({"kind": "blocker", "k": "Причина", "v": blocker})
+    return rows
+
+
+def _bos_label(transition: dict) -> str:
+    bull = transition.get("direction") == "bull"
+    arrow = "↑" if bull else "↓"
+    return "{kind} {arrow}".format(kind=transition.get("kind") or "BOS", arrow=arrow)
+
+
+def _bos_value(transition: dict, now_ms: int) -> str:
+    bull = transition.get("direction") == "bull"
+    side = "выше" if bull else "ниже"
+    return "закрытие {side} {level} · {when}".format(
+        side=side,
+        level=fmt_price_ru(transition["break_level"]),
+        when=_short_time(int(transition["occurred_at"]), now_ms),
+    )
+
+
+def _entry_parts(zones, leg) -> str:
+    if not zones or not leg:
+        return ""
+    bull = leg.get("direction") == "bull"
+    half = "discount" if bull else "premium"
+    lows = [z["admitted"][0] for z in zones]
+    highs = [z["admitted"][1] for z in zones]
+    lo, hi = fmt_price_ru(min(lows)), fmt_price_ru(max(highs))
+    span = "–".join([lo, hi]) if lo != hi else lo
+    return "{n} {word} в {half} · {span}".format(
+        n=len(zones),
+        word=_zones_word(len(zones)),
+        half=half,
+        span=span,
+    )
+
+
+def _pd_parts(pd) -> dict:
+    if not pd or pd.get("lower") is None or pd.get("upper") is None or pd.get("eq") is None:
+        return {}
+    label = pd.get("label") or ""
+    note = ""
+    if "предварительный" in label:
+        note = "предварительный"
+    elif "подтвержд" in label:
+        note = "подтверждён"
+    return {
+        "v": "{lo} → {hi} · 50% {eq}".format(
+            lo=fmt_price_ru(pd["lower"]),
+            hi=fmt_price_ru(pd["upper"]),
+            eq=fmt_price_ru(pd["eq"]),
+        ),
+        "note": note,
+    }
 
 
 def _ground_lines(evidence: list[dict]) -> list[str]:

@@ -32,10 +32,13 @@ def set_header(fig, title: str, subtitle: str | None = None) -> float:
                  color=_COLOR_TEXT, fontweight="bold")
         y -= 0.057
     if subtitle:
-        for ln in textwrap.wrap(subtitle, 95):
-            fig.text(0.008, y, ln, va="top", ha="left", fontsize=13,
-                     color=_COLOR_MUTED)
-            y -= 0.039
+        # Каждая заданная строка переносится отдельно: факт окна не
+        # склеивается с карточкой зоны и не рвётся посередине числа.
+        for raw in subtitle.splitlines() or [""]:
+            for ln in textwrap.wrap(raw, 95) or [""]:
+                fig.text(0.008, y, ln, va="top", ha="left", fontsize=13,
+                         color=_COLOR_MUTED)
+                y -= 0.039
     return y
 
 
@@ -69,23 +72,29 @@ def _spread_positions(ys: list[float], line_h: float) -> list[float]:
     return ys
 
 
-def layout_price_labels(fig, ax, items: list[tuple[float, str, str]],
-                        fontsize: int = 16) -> list:
+def layout_price_labels(fig, ax, items: list, fontsize: int = 16) -> list:
     """Подписи уровней в правой колонке без наложений (§10.2).
 
-    items — [(price, text, color)], порядок по цене сохраняется. Точное
-    совпадение уровней → одна общая подпись с перечислением инструментов.
-    Связь с реальной линией при сдвиге — тонкая выносная линия.
+    items — [(price, text, color)] или [(price, text, color, primary)].
+    Порядок по цене сохраняется. Точное совпадение уровней → одна общая
+    подпись. Связь с реальной линией при сдвиге — тонкая выносная линия.
+    primary помечает подпись, которую нельзя спрятать в карточку.
     Возвращает созданные text-артисты (для тестов).
     """
     if not items:
         return []
+    parsed = []
+    for item in items:
+        price, text, color = item[0], item[1], item[2]
+        primary = bool(item[3]) if len(item) > 3 else False
+        parsed.append((price, text, color, primary))
     merged: list[list] = []
-    for price, text, color in sorted(items, key=lambda t: -t[0]):
+    for price, text, color, primary in sorted(parsed, key=lambda t: -t[0]):
         if merged and abs(price - merged[-1][0]) <= 1e-9 * max(1.0, abs(price)):
             merged[-1][1] = f"{merged[-1][1]} + {text}"
+            merged[-1][3] = merged[-1][3] or primary
         else:
-            merged.append([price, text, color])
+            merged.append([price, text, color, primary])
 
     y0, y1 = ax.get_ylim()
     span = (y1 - y0) or 1.0
@@ -98,21 +107,72 @@ def layout_price_labels(fig, ax, items: list[tuple[float, str, str]],
 
     trans = ax.get_yaxis_transform()
     artists = []
-    for (price, text, color), y in zip(merged, ys):
+    for (price, text, color, primary), y in zip(merged, ys):
         t = ax.text(
             1.005, y, text, transform=trans, fontsize=fontsize, color=color,
             ha="left", va="center", zorder=6, clip_on=False,
         )
+        t.set_gid("primary" if primary else "secondary")
         artists.append(t)
         if abs(y - price) > line_h * 0.4:
-            ax.annotate(
+            leader = ax.annotate(
                 "", xy=(1.0, price), xytext=(1.005, y),
                 xycoords=trans, textcoords=trans, annotation_clip=False,
                 arrowprops=dict(arrowstyle="-", lw=0.5, color=color,
                                 alpha=0.55),
                 zorder=5,
             )
+            t._lf_leader = leader
     return artists
+
+
+def _boxes_overlap(a, b) -> bool:
+    return (
+        a.x0 < b.x1 - 1 and b.x0 < a.x1 - 1
+        and a.y0 < b.y1 - 1 and b.y0 < a.y1 - 1
+    )
+
+
+def contain_labels(fig, artists: list) -> list[str]:
+    """Измеряет рамки после отрисовки. Второстепенное, что не влезает
+    или пересекается, уходит в карточку. Основные подписи остаются.
+    """
+    visible = [t for t in artists if t.get_visible() and t.get_text()]
+    if not visible:
+        return []
+    try:
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+    except Exception:
+        return []
+    bbox = fig.bbox
+    dropped: list[str] = []
+    kept = []
+    for t in visible:
+        primary = t.get_gid() == "primary"
+        tb = t.get_window_extent(renderer)
+        outside = (
+            tb.x0 < bbox.x0 - 1 or tb.x1 > bbox.x1 + 1
+            or tb.y0 < bbox.y0 - 1 or tb.y1 > bbox.y1 + 1
+        )
+        if outside and primary and t.get_fontsize() > 9:
+            t.set_fontsize(9)
+            fig.canvas.draw()
+            tb = t.get_window_extent(renderer)
+            outside = (
+                tb.x0 < bbox.x0 - 1 or tb.x1 > bbox.x1 + 1
+                or tb.y0 < bbox.y0 - 1 or tb.y1 > bbox.y1 + 1
+            )
+        overlap = any(_boxes_overlap(tb, prev) for prev in kept)
+        if (outside or overlap) and not primary:
+            t.set_visible(False)
+            leader = getattr(t, "_lf_leader", None)
+            if leader is not None:
+                leader.set_visible(False)
+            dropped.append(t.get_text())
+            continue
+        kept.append(tb)
+    return dropped
 
 
 def add_legend(fig, entries: list[tuple[str, str]], dashed: tuple[str, ...] = ()):

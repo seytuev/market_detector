@@ -474,6 +474,10 @@ class Database:
                 ("reverse_break_pivot_id", "INTEGER"),
                 ("reverse_break_confirmed_at", "INTEGER"),
                 ("last_processed_close", "INTEGER"),
+                # правила v1 §3/§6.2: причинный HTF-контакт и якорь рабочего PD
+                ("htf_interaction_id", "INTEGER"),
+                ("pd_anchor_structure_key", "TEXT"),
+                ("pd_anchor_kind", "TEXT"),
             ):
                 if col not in ltf_sc_cols:
                     self.conn.execute(
@@ -494,6 +498,61 @@ class Database:
                     self.conn.execute(
                         f"ALTER TABLE ltf_range ADD COLUMN {col} {ddl}"
                     )
+            # Правила HTF/LTF v1 (10.10.2026): машина состояний эпизода §4,
+            # связи событий с визитом/активацией §7, ревизии свечей §10.3.
+            # Новые таблицы (zone_activation, pd_revision, candle_revision)
+            # созданы executescript выше; колонки существующих таблиц —
+            # ALTER'ами. Старые строки — NULL/unknown (R25): история визитов
+            # в активации не превращается
+            ep_cols = {
+                r["name"]
+                for r in self.conn.execute(
+                    "PRAGMA table_info(htf_context_episode)"
+                ).fetchall()
+            }
+            for col, ddl in (
+                ("state_v2", "TEXT"),
+                ("predecessor_episode_id", "INTEGER"),
+                ("opposing_source_id", "INTEGER"),
+                ("htf_pass_confirmed_at", "INTEGER"),
+                ("reverse_break_event_id", "INTEGER"),
+                ("leg_anchor_at", "INTEGER"),
+                ("leg_anchor_available_at", "INTEGER"),
+                ("horizon_extended", "INTEGER NOT NULL DEFAULT 0"),
+                ("data_quality_note", "TEXT"),
+            ):
+                if col not in ep_cols:
+                    self.conn.execute(
+                        f"ALTER TABLE htf_context_episode ADD COLUMN {col} {ddl}"
+                    )
+            # перенос прежнего state в state_v2; терминальные значения
+            # сохраняются как есть. Идемпотентно: трогает только NULL
+            self.conn.execute(
+                """UPDATE htf_context_episode
+                   SET state_v2 = CASE state
+                       WHEN 'awaiting_h1' THEN 'awaiting_initial_confirmation'
+                       WHEN 'confirmed' THEN 'context_active'
+                       ELSE state END
+                   WHERE state_v2 IS NULL"""
+            )
+            event_cols = {
+                r["name"]
+                for r in self.conn.execute("PRAGMA table_info(event)").fetchall()
+            }
+            for col, ddl in (
+                ("visit_id", "INTEGER"),
+                ("activation_id", "INTEGER"),
+            ):
+                if col not in event_cols:
+                    self.conn.execute(f"ALTER TABLE event ADD COLUMN {col} {ddl}")
+            candle_cols = {
+                r["name"]
+                for r in self.conn.execute("PRAGMA table_info(candle)").fetchall()
+            }
+            if "revision" not in candle_cols:
+                self.conn.execute(
+                    "ALTER TABLE candle ADD COLUMN revision INTEGER NOT NULL DEFAULT 0"
+                )
             from .events.schema import apply_events_schema
             apply_events_schema(self.conn)
             self.conn.commit()
@@ -523,13 +582,32 @@ class Database:
 
     # ---------- meta: последние котировки (read model LTF, ТЗ §14) ----------
 
-    def set_quote(self, instrument_id: int, price: float, ts_ms: int) -> None:
+    def set_quote(
+        self, instrument_id: int, price: float, ts_ms: int, *,
+        price_kind: Optional[str] = None, event_at: Optional[int] = None,
+        received_at: Optional[int] = None,
+    ) -> None:
         """Последняя котировка инструмента (цена и время последней сделки);
         пишет воркер на live-тике. Положение цены относительно HTF-зон
-        сервер считает только по свежей котировке (§6/§14)."""
+        сервер считает только по свежей котировке (§6/§14). Тик со временем
+        источника старше уже сохранённого игнорируется: запоздавший ответ
+        не двигает котировку назад (F8). Правила v1 §10.1: вид цены и
+        раздельные времена события/получения хранятся в том же JSON;
+        время ответа не выдаётся за время сделки."""
+        existing = self.get_quote(instrument_id)
+        if existing is not None and existing[1] > ts_ms:
+            return
+        payload = {
+            "price": price, "ts": ts_ms,
+            "price_kind": price_kind or "unknown",
+            "event_at": int(event_at) if event_at is not None else ts_ms,
+            "received_at": (
+                int(received_at) if received_at is not None else now_ms()
+            ),
+        }
         self.set_meta(
             f"quote:{instrument_id}",
-            json.dumps({"price": price, "ts": ts_ms}),
+            json.dumps(payload),
         )
 
     def get_quote(self, instrument_id: int) -> Optional[tuple[float, int]]:
@@ -541,6 +619,26 @@ class Database:
             return float(d["price"]), int(d["ts"])
         except (ValueError, KeyError, TypeError):
             return None
+
+    def get_quote_detail(self, instrument_id: int) -> Optional[dict[str, Any]]:
+        """Полная запись котировки (правила v1 §10.1): вид цены, время
+        события и время получения. Старые записи без новых полей читаются
+        с заполнением из ts (обратная совместимость)."""
+        raw = self.get_meta(f"quote:{instrument_id}")
+        if not raw:
+            return None
+        try:
+            d = json.loads(raw)
+            price, ts = float(d["price"]), int(d["ts"])
+        except (ValueError, KeyError, TypeError):
+            return None
+        return {
+            "price": price,
+            "ts": ts,
+            "price_kind": d.get("price_kind") or "unknown",
+            "event_at": int(d.get("event_at") or ts),
+            "received_at": int(d.get("received_at") or ts),
+        }
 
     def get_all_quotes(self) -> dict[int, tuple[float, int]]:
         """Все котировки одним запросом (список инструментов без N+1)."""
@@ -556,6 +654,160 @@ class Database:
             except (ValueError, KeyError, TypeError):
                 continue
         return out
+
+    # ----- активации зон, ревизии PD и свечей (правила HTF/LTF v1) -----
+
+    _ACTIVATION_UPDATABLE = frozenset({
+        "episode_id", "observation_id", "ended_at", "end_reason",
+        "depth_before", "fill_before", "max_depth_current", "fill_current",
+        "fresh_for_new_activation", "current_activation_valid",
+    })
+
+    def create_zone_activation(
+        self, zone_id: int, cycle_id: int, started_at: int, *,
+        episode_id: Optional[int] = None, observation_id: Optional[int] = None,
+        depth_before: Optional[float] = None, fill_before: Optional[float] = None,
+        fresh_for_new_activation: bool = True, created_at: int = 0,
+    ) -> int:
+        """Новая независимая активация зоны (§7). depth_before/fill_before
+        фиксируются в момент перехода; NULL — unknown (история без разметки,
+        R25)."""
+        cur = self.conn.execute(
+            """INSERT INTO zone_activation
+               (zone_id, cycle_id, episode_id, observation_id, started_at,
+                depth_before, fill_before, fresh_for_new_activation, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (zone_id, cycle_id, episode_id, observation_id, started_at,
+             depth_before, fill_before, int(fresh_for_new_activation), created_at),
+        )
+        self._commit()
+        return int(cur.lastrowid)
+
+    @staticmethod
+    def _activation_row(r: sqlite3.Row) -> dict[str, Any]:
+        return {k: r[k] for k in r.keys()}
+
+    def get_zone_activation(self, activation_id: int) -> Optional[dict[str, Any]]:
+        r = self.conn.execute(
+            "SELECT * FROM zone_activation WHERE id=?", (activation_id,)
+        ).fetchone()
+        return self._activation_row(r) if r else None
+
+    def get_open_zone_activation(
+        self, zone_id: int, cycle_id: int
+    ) -> Optional[dict[str, Any]]:
+        r = self.conn.execute(
+            """SELECT * FROM zone_activation
+               WHERE zone_id=? AND cycle_id=? AND ended_at IS NULL
+               ORDER BY id DESC LIMIT 1""",
+            (zone_id, cycle_id),
+        ).fetchone()
+        return self._activation_row(r) if r else None
+
+    def list_zone_activations(
+        self, zone_id: int, cycle_id: Optional[int] = None
+    ) -> list[dict[str, Any]]:
+        q = "SELECT * FROM zone_activation WHERE zone_id=?"
+        args: list[Any] = [zone_id]
+        if cycle_id is not None:
+            q += " AND cycle_id=?"
+            args.append(cycle_id)
+        q += " ORDER BY id"
+        return [self._activation_row(r) for r in self.conn.execute(q, args).fetchall()]
+
+    def update_zone_activation(self, activation_id: int, **fields: Any) -> None:
+        unknown = set(fields) - self._ACTIVATION_UPDATABLE
+        if unknown:
+            raise ValueError(f"zone_activation: неизвестные поля {sorted(unknown)}")
+        if not fields:
+            return
+        sets = ", ".join(f"{k}=?" for k in fields)
+        self.conn.execute(
+            f"UPDATE zone_activation SET {sets} WHERE id=?",
+            (*fields.values(), activation_id),
+        )
+        self._commit()
+
+    def insert_pd_revision(
+        self, scenario_id: int, anchor_structure_key: str, anchor_kind: str,
+        anchors: Iterable[Any], available_at: int, *,
+        range_version: Optional[int] = None, created_at: int = 0,
+    ) -> int:
+        """Ревизия рабочего PD сценария (§6.2): якорь BOS|SMS, опоры и время
+        их доступности; старые ревизии не переписываются."""
+        cur = self.conn.execute(
+            """INSERT INTO pd_revision
+               (scenario_id, range_version, anchor_structure_key, anchor_kind,
+                anchors_json, available_at, created_at)
+               VALUES (?,?,?,?,?,?,?)""",
+            (scenario_id, range_version, anchor_structure_key, anchor_kind,
+             json.dumps(list(anchors), ensure_ascii=False), available_at, created_at),
+        )
+        self._commit()
+        return int(cur.lastrowid)
+
+    def list_pd_revisions(self, scenario_id: int) -> list[dict[str, Any]]:
+        return [
+            {k: r[k] for k in r.keys()}
+            for r in self.conn.execute(
+                "SELECT * FROM pd_revision WHERE scenario_id=? ORDER BY id",
+                (scenario_id,),
+            ).fetchall()
+        ]
+
+    def insert_candle_revision(
+        self, instrument_id: int, timeframe: str, open_time: int,
+        old_ohlc: Iterable[Any], new_ohlc: Iterable[Any], detected_at: int,
+    ) -> Optional[int]:
+        """Факт коррекции уже закрытой свечи (§10.3). INSERT OR IGNORE по
+        (instrument_id, timeframe, open_time, detected_at): повторная
+        детекция той же ревизии дублей не создаёт."""
+        cur = self.conn.execute(
+            """INSERT OR IGNORE INTO candle_revision
+               (instrument_id, timeframe, open_time, old_ohlc_json,
+                new_ohlc_json, detected_at)
+               VALUES (?,?,?,?,?,?)""",
+            (instrument_id, timeframe, open_time,
+             json.dumps(list(old_ohlc)), json.dumps(list(new_ohlc)), detected_at),
+        )
+        self._commit()
+        return int(cur.lastrowid) if cur.rowcount == 1 else None
+
+    def list_candle_revisions(
+        self, instrument_id: int, timeframe: Optional[str] = None
+    ) -> list[dict[str, Any]]:
+        q = "SELECT * FROM candle_revision WHERE instrument_id=?"
+        args: list[Any] = [instrument_id]
+        if timeframe is not None:
+            q += " AND timeframe=?"
+            args.append(timeframe)
+        q += " ORDER BY detected_at, id"
+        return [
+            {k: r[k] for k in r.keys()}
+            for r in self.conn.execute(q, args).fetchall()
+        ]
+
+    _EPISODE_V2_UPDATABLE = frozenset({
+        "predecessor_episode_id", "opposing_source_id", "htf_pass_confirmed_at",
+        "reverse_break_event_id", "leg_anchor_at", "leg_anchor_available_at",
+        "horizon_extended", "data_quality_note",
+    })
+
+    def set_episode_state_v2(
+        self, episode_id: int, state_v2: str, **fields: Any
+    ) -> None:
+        """Переход машины состояний эпизода (правила v1 §4) с фактами
+        перехода (предшественник, источник B, проход HTF, обратный слом,
+        опора горизонта). Прежний state не трогается — он для совместимости."""
+        unknown = set(fields) - self._EPISODE_V2_UPDATABLE
+        if unknown:
+            raise ValueError(f"htf_context_episode: неизвестные поля {sorted(unknown)}")
+        sets = ["state_v2=?"] + [f"{k}=?" for k in fields]
+        self.conn.execute(
+            f"UPDATE htf_context_episode SET {', '.join(sets)} WHERE id=?",
+            (state_v2, *fields.values(), episode_id),
+        )
+        self._commit()
 
     def close(self) -> None:
         self.conn.close()
@@ -713,6 +965,9 @@ class Database:
              c.low, c.close, int(c.closed), c.source)
             for c in candles
         ]
+        # закрытие терминально (F9): запоздавший незакрытый снимок того же
+        # open_time не «переоткрывает» свечу и не переписывает её OHLC;
+        # коррекция закрытой свечи допустима только с тем же closed=True
         cur = self.conn.executemany(
             """INSERT INTO candle (instrument_id, timeframe, open_time, close_time,
                                   open, high, low, close, closed, source)
@@ -720,7 +975,8 @@ class Database:
                ON CONFLICT (instrument_id, timeframe, open_time)
                DO UPDATE SET close_time=excluded.close_time, open=excluded.open,
                              high=excluded.high, low=excluded.low, close=excluded.close,
-                             closed=excluded.closed, source=excluded.source""",
+                             closed=excluded.closed, source=excluded.source
+               WHERE NOT (candle.closed=1 AND excluded.closed=0)""",
             rows,
         )
         self._commit()
@@ -1354,6 +1610,7 @@ class Database:
         zone_id: Optional[int] = None,
         since_ms: Optional[int] = None,
         limit: int = 500,
+        exclude_kinds: Optional[tuple[str, ...]] = None,
     ) -> list[Event]:
         q = "SELECT * FROM event WHERE 1=1"
         args: list[Any] = []
@@ -1363,6 +1620,9 @@ class Database:
         if since_ms is not None:
             q += " AND occurred_at>=?"
             args.append(since_ms)
+        if exclude_kinds:
+            q += f" AND kind NOT IN ({','.join('?' * len(exclude_kinds))})"
+            args.extend(exclude_kinds)
         q += " ORDER BY occurred_at DESC LIMIT ?"
         args.append(limit)
         return [
@@ -1385,7 +1645,8 @@ class Database:
                      delayed=bool(row["delayed"]), evidence=json.loads(row["evidence"] or "{}"))
 
     def list_events_for_instrument(
-        self, instrument_id: int, since_ms: Optional[int] = None, limit: int = 100
+        self, instrument_id: int, since_ms: Optional[int] = None, limit: int = 100,
+        exclude_kinds: Optional[tuple[str, ...]] = None,
     ) -> list[Event]:
         """HTF-события инструмента (join через зону), свежие первыми —
         история для бота (ТЗ п.11)."""
@@ -1396,6 +1657,9 @@ class Database:
         if since_ms is not None:
             q += " AND event.occurred_at>=?"
             args.append(since_ms)
+        if exclude_kinds:
+            q += f" AND event.kind NOT IN ({','.join('?' * len(exclude_kinds))})"
+            args.extend(exclude_kinds)
         q += " ORDER BY event.occurred_at DESC LIMIT ?"
         args.append(limit)
         return [

@@ -290,6 +290,7 @@
       const arrow = v.direction === 'bull' ? '↑' : (v.direction === 'bear' ? '↓' : '');
       el.innerHTML = LFCopy.card(pres, {
         suppressLocation: suppress,
+        visualHtml: window.LFCopy.visual(pres, { price: p ? p.price : null }),
         extraHtml:
           `${!governed && arrow ? `<div class="msg-v">${esc(arrow)} ${esc(v.direction === 'bull' ? 'рост' : v.direction === 'bear' ? 'снижение' : 'разные направления')}</div>` : ''}` +
           `<button type="button" class="btn primary now-open-desk" data-iid="${ins.id}">Открыть рабочее место</button>` +

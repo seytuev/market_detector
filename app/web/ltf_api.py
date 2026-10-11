@@ -235,7 +235,7 @@ def register_ltf_routes(app, db: Database, settings, require_auth, ltf_engine=No
         # сценарий; отменённый доступен в истории (scenarios/last_cancellation
         # и журнале), а в текущей карточке — ожидание нового сценария
         sc = db.get_active_ltf_scenario(obs.id)
-        sc_block = _scenario_block(db, sc) if sc is not None else None
+        sc_block = _scenario_block(db, sc, cfg=settings.detector) if sc is not None else None
         return {
             "observation": obs.to_dict(),
             "instrument": _instrument_brief(db, obs.instrument_id),

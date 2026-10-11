@@ -657,13 +657,21 @@ def _lookback_ms(cfg) -> int:
 
 
 def _trade_context(db, instrument_id: int, direction: str, as_of: int) -> tuple[bool, list[dict]]:
+    # F2: историческая проекция ограничена отсечкой — сценарий учитывается
+    # только если его триггер уже существовал к as_of (created_at — запасной
+    # вариант для строк без события-триггера) и он не был отменён до as_of;
+    # отмена ПОСЛЕ as_of на ответ не влияет
     row = db.conn.execute(
         """SELECT 1 FROM ltf_scenario s
            JOIN ltf_observation o ON o.id=s.observation_id
+           LEFT JOIN ltf_structure_event e ON e.id=s.trigger_event_id
            WHERE o.instrument_id=? AND s.direction=?
-             AND s.state IN ('range_pending','monitoring_entries')
+             AND COALESCE(e.occurred_at, s.created_at)<=?
+             AND (s.cancelled_at IS NULL OR s.cancelled_at>?)
+             AND (s.state IN ('range_pending','monitoring_entries')
+                  OR s.cancelled_at>?)
            LIMIT 1""",
-        (instrument_id, direction),
+        (instrument_id, direction, int(as_of), int(as_of), int(as_of)),
     ).fetchone()
     sources: list[dict] = []
     if row is not None:
@@ -704,7 +712,7 @@ def _overlap_interval(lower: float, upper: float, half_low: float, half_high: fl
 
 
 def zone_against_leg(formed_at: int, confirmed: bool, lower: float, upper: float,
-                     snap: dict, *, is_level: bool = False) -> str:
+                     snap: dict, *, is_level: bool = False, cfg=None) -> str:
     """Причина зоны относительно уже построенного снимка ноги."""
     if snap.get("range_status") == "range_pending":
         return snap.get("reason") or "range_pending"
@@ -727,7 +735,7 @@ def zone_against_leg(formed_at: int, confirmed: bool, lower: float, upper: float
         confirmed_at=int(snap["as_of"]) if confirmed else None,
     )
     decision = evaluate_entry(
-        zone, direction, DetectorConfig(), rng,
+        zone, direction, cfg or DetectorConfig(), rng,
         pd_status="provisional" if snap.get("range_status") == "provisional" else None,
     )
     if is_level:
@@ -1014,7 +1022,7 @@ def setup_card_lines(snap: Optional[dict]) -> list[str]:
     return lines
 
 
-def entry_block_reason(db, event, now: int) -> Optional[str]:
+def entry_block_reason(db, event, now: int, cfg=None) -> Optional[str]:
     """Подавить входовой пакет, если нога уже не текущая или зона чужая.
 
     Обычный BOS и отмена сценария этим правилом не закрываются.
@@ -1042,7 +1050,7 @@ def entry_block_reason(db, event, now: int) -> Optional[str]:
             return None
         return None
     from ..config import DetectorConfig
-    window = int(current["origin_at"]) - _lookback_ms(DetectorConfig())
+    window = int(current["origin_at"]) - _lookback_ms(cfg or DetectorConfig())
     if int(zone.formed_at) < window:
         return "other_movement"
     if event.kind == "touch" and rev is not None:

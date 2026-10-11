@@ -1386,6 +1386,9 @@ async function loadEvents() {
 }
 
 function renderEvents(assetEvents, allEvents) {
+  const shown = (rows) => (rows || []).filter((e) => e.kind !== 'approach');
+  assetEvents = shown(assetEvents);
+  allEvents = shown(allEvents);
   const journal = allEvents || assetEvents;
   const ul = $('events-list');
   const label = $('events-strip-label');
@@ -2049,8 +2052,8 @@ const SETTINGS_META = {
   },
   approach_pct: {
     title: 'Порог приближения к зоне (доля)',
-    desc: '0.02 = 2%. Событие «приближение» создаётся, когда цена подошла к зоне ближе этого ' +
-          'расстояния (§9). Внутри зоны расстояние считается нулём.',
+    desc: '0.02 = 2%. Факт пишется, когда цена подошла к зоне ближе этого расстояния (§9). ' +
+          'Уведомление по приближению не отправляется. Внутри зоны расстояние считается нулём.',
     group: 'Касания и глубина',
   },
   depth_mid: {
@@ -2422,6 +2425,7 @@ function showView(name) {
   if (name === 'settings') openSettings();
   if (name === 'now' && window.LFNow) window.LFNow.show();
   if (name === 'desk') {
+    renderDeskHead(); // пара известна из списка активов, не ждём снимок /current
     requestAnimationFrame(drawZones);
     scheduleDeskRefresh(); // снимок /current мог устареть, пока desk был скрыт
   }
@@ -2473,7 +2477,7 @@ function handleWsMessage(data) {
   } else if (data.type === 'event') {
     const foreign = data.instrument_id != null
       && data.instrument_id !== state.instrumentId;
-    if (data.event && !foreign && $('events-list')) {
+    if (data.event && data.event.kind !== 'approach' && !foreign && $('events-list')) {
       $('events-list').prepend(eventLi(data.event));
     }
     loadZones().then(() => {
@@ -2844,63 +2848,8 @@ function renderPanelTabCount() {
   el.textContent = String(zones.length);
 }
 
-// Короткая схема «зона — цена» под заголовком сообщения: полоса цены от
-// нижней границы схемы к верхней, зона контекста, зоны входа за сценарием,
-// уровень отмены. Данные — снимок /current, ничего не досчитывается.
-function scenarioVisualHtml(v) {
-  const pres = v && v.presentation;
-  const ctx = pres && pres.context;
-  const price = (pres && pres.location && pres.location.quote != null)
-    ? Number(pres.location.quote)
-    : (v && v.price != null ? Number(v.price) : null);
-  const zoneLower = ctx && ctx.lower != null ? Number(ctx.lower) : null;
-  const zoneUpper = ctx && ctx.upper != null ? Number(ctx.upper) : null;
-  if (!ctx || zoneLower == null || zoneUpper == null || price == null) return '';
-
-  const entries = (v.eligible_entries || [])
-    .filter((e) => e && e.lower != null && e.upper != null)
-    .map((e) => ({ lower: Number(e.lower), upper: Number(e.upper) }));
-  const cancel = v.cancel_condition && v.cancel_condition.level != null
-    ? Number(v.cancel_condition.level) : null;
-  const sc = v.current_scenario;
-  const breakLevel = sc && sc.break_level != null ? Number(sc.break_level) : null;
-
-  const values = [price, zoneLower, zoneUpper, ...(cancel != null ? [cancel] : [])]
-    .concat(...entries.map((e) => [e.lower, e.upper]));
-  let min = Math.min(...values);
-  let max = Math.max(...values);
-  if (!Number.isFinite(min) || !Number.isFinite(max)) return '';
-  if (max - min < max * 0.002) { // вырожденная схема (уровень совпал с ценой)
-    const pad = (max || 1) * 0.01;
-    min -= pad; max += pad;
-  }
-  const pad = (max - min) * 0.12;
-  min -= pad; max += pad;
-  // уровень подтверждения сценария — только если попадает в масштаб схемы
-  if (breakLevel != null && breakLevel > min && breakLevel < max) {
-    min = Math.min(min, breakLevel);
-    max = Math.max(max, breakLevel);
-  }
-  const y = (x) => ((max - x) / (max - min)) * 100; // цена растёт вверх
-  const band = (lo, hi) => `top:${y(hi).toFixed(2)}%;height:${(y(lo) - y(hi)).toFixed(2)}%`;
-  const bear = (ctx.direction || '') === 'bear';
-
-  let html = '<div class="sc-visual" role="img" aria-label="Схема: зона и цена">';
-  html += `<div class="sc-zone ${bear ? 'is-bear' : 'is-bull'}" style="${band(zoneLower, zoneUpper)}">` +
-    `<span class="sc-zone-name">${esc(ctx.type ? ctx.type.toUpperCase() + ' ' + (ctx.timeframe || '') : 'Зона')}</span>` +
-    `<span class="sc-zone-bounds">${esc(fmtPrice(zoneLower))} — ${esc(fmtPrice(zoneUpper))}</span></div>`;
-  entries.forEach((e) => {
-    html += `<div class="sc-entry" style="${band(e.lower, e.upper)}"></div>`;
-  });
-  if (cancel != null && cancel >= min && cancel <= max) {
-    html += `<div class="sc-level" style="top:${y(cancel).toFixed(2)}%">` +
-      `<span class="sc-level-label">Отмена ${esc(fmtPrice(cancel))}</span></div>`;
-  }
-  html += `<div class="sc-price" style="top:${y(price).toFixed(2)}%">` +
-    `<span class="sc-price-chip">${esc(fmtPrice(price))}</span></div>`;
-  html += '</div>';
-  return html;
-}
+// Схема «зона — цена» под заголовком сообщения живёт в messages.js
+// (LFCopy.visual): одна разметка на Обзоре и на рабочем месте.
 
 function renderDeskScenario() {
   const el = $('desk-scenario');
@@ -2927,7 +2876,14 @@ function renderDeskScenario() {
   const quote = pres && pres.location ? pres.location.quote : null;
   const suppress = live != null && quote != null && Number(live) !== Number(quote);
   if (pres && window.LFCopy) {
-    el.innerHTML = LFCopy.card(pres, { suppressLocation: suppress, visualHtml: scenarioVisualHtml(v) }) +
+    el.innerHTML = LFCopy.card(pres, {
+      suppressLocation: suppress,
+      visualHtml: window.LFCopy.visual(pres, {
+        price: v.price != null ? v.price : (state.lastPrice != null ? state.lastPrice : null),
+        entries: v.eligible_entries,
+        cancel: v.cancel_condition && v.cancel_condition.level != null ? v.cancel_condition.level : null,
+      }),
+    }) +
       `<button type="button" id="desk-watch-btn" class="btn ${watching ? 'primary' : ''} desk-watch">${watching ? '✓ Наблюдение включено' : 'Включить наблюдение'}</button>` +
       `<details class="desk-basis"><summary>Основания и качество данных</summary><dl>` +
       `<dt>Показан контекст</dt><dd>${esc(DESK_BASIS_RU[v.selected_context_basis] || v.selected_context_basis || '—')}</dd>` +
@@ -3139,6 +3095,7 @@ async function loadInstruments() {
   state.instruments = await api('/api/instruments');
   if (!state.instrumentId) state.instrumentId = resolveInitialInstrument();
   fillInstrumentSelect();
+  renderDeskHead();
 }
 
 // updateLayers объявлен внутри main(); смена режима зовёт его после чекбоксов.

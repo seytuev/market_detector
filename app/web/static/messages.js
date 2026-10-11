@@ -112,6 +112,77 @@ window.LFCopy = (() => {
     return html;
   }
 
+  function rowsHtml(asset) {
+    const rows = asset.compact_rows;
+    if (Array.isArray(rows) && rows.length) {
+      return '<div class="msg-rows">' + rows.map((row) =>
+        '<div class="msg-row kind-' + esc(row.kind || 'info') + '">' +
+        '<span class="msg-k">' + esc(row.k) + '</span>' +
+        '<span class="msg-v">' + esc(row.v) +
+        (row.note ? ' <span class="msg-note">' + esc(row.note) + '</span>' : '') +
+        '</span></div>'
+      ).join('') + '</div>';
+    }
+    let html = '';
+    (asset.compact || []).slice(0, 5).forEach((line) => {
+      html += `<p class="asset-line">${esc(line)}</p>`;
+    });
+    return html;
+  }
+
+  /* Схема «зона — цена»: полоса цены, зона контекста, зоны входа, отмена.
+     Данные приходят готовыми; здесь они только раскладываются по высоте. */
+  function visual(pres, opts) {
+    opts = opts || {};
+    if (!pres || !pres.context) return '';
+    const ctx = pres.context;
+    const zoneLower = ctx.lower != null ? Number(ctx.lower) : null;
+    const zoneUpper = ctx.upper != null ? Number(ctx.upper) : null;
+    const price = opts.price != null ? Number(opts.price)
+      : (pres.location && pres.location.quote != null ? Number(pres.location.quote) : null);
+    if (zoneLower == null || zoneUpper == null || price == null || !Number.isFinite(price)) return '';
+
+    const entries = (opts.entries || [])
+      .filter((e) => e && e.lower != null && e.upper != null)
+      .map((e) => ({ lower: Number(e.lower), upper: Number(e.upper) }));
+    const cancel = opts.cancel != null ? Number(opts.cancel) : null;
+
+    const values = [price, zoneLower, zoneUpper, ...(cancel != null ? [cancel] : [])]
+      .concat(...entries.map((e) => [e.lower, e.upper]));
+    let min = Math.min(...values);
+    let max = Math.max(...values);
+    if (!Number.isFinite(min) || !Number.isFinite(max)) return '';
+    if (max - min < max * 0.002) { // вырожденная схема (уровень совпал с ценой)
+      const pad = (max || 1) * 0.01;
+      min -= pad; max += pad;
+    }
+    const pad = (max - min) * 0.12;
+    min -= pad; max += pad;
+    const y = (x) => ((max - x) / (max - min)) * 100; // цена растёт вверх
+    const band = (lo, hi) => `top:${y(hi).toFixed(2)}%;height:${(y(lo) - y(hi)).toFixed(2)}%`;
+    const bear = (ctx.direction || '') === 'bear';
+
+    let html = '<div class="sc-visual" role="img" aria-label="Схема: зона и цена">';
+    html += `<div class="sc-zone ${bear ? 'is-bear' : 'is-bull'}" style="${band(zoneLower, zoneUpper)}">` +
+      `<span class="sc-zone-name">${esc(ctx.type ? ctx.type.toUpperCase() + ' ' + (ctx.timeframe || '') : 'Зона')}</span>` +
+      `<span class="sc-zone-bounds">${esc(fmt(zoneLower))} — ${esc(fmt(zoneUpper))}</span></div>`;
+    entries.forEach((e) => {
+      html += `<div class="sc-entry" style="${band(e.lower, e.upper)}"></div>`;
+    });
+    if (cancel != null && cancel >= min && cancel <= max) {
+      html += `<div class="sc-level" style="top:${y(cancel).toFixed(2)}%">` +
+        `<span class="sc-level-label">Отмена ${esc(fmt(cancel))}</span></div>`;
+    }
+    html += `<div class="sc-price" style="top:${y(price).toFixed(2)}%">` +
+      `<span class="sc-price-chip">${esc(fmt(price))}</span></div>`;
+    html += '</div>';
+    return html;
+  }
+
+  function fmt(v) {
+    return window.HTF ? HTF.fmtPrice(v) : String(v);
+  }
+
   function card(p, opts) {
     if (!p) return '';
     opts = opts || {};
@@ -119,15 +190,15 @@ window.LFCopy = (() => {
     const asset = p.asset;
     if (asset && asset.governs && asset.asset_state && asset.asset_state.title) {
       const title = asset.asset_state.title;
+      const dir = asset.asset_state.direction === 'long' ? 'dir-long'
+        : asset.asset_state.direction === 'short' ? 'dir-short' : '';
       let html = '';
       if (p.instrument_line) {
         html += `<div class="now-card-head"><span>${esc(p.instrument_line)}</span></div>`;
       }
-      html += `<h3 class="asset-status">${esc(title)}</h3>`;
+      html += `<h3 class="asset-status ${dir}">${esc(title)}</h3>`;
       html += visual;
-      (asset.compact || []).slice(0, 5).forEach((line) => {
-        html += `<p class="asset-line">${esc(line)}</p>`;
-      });
+      html += rowsHtml(asset);
       html += '<details class="asset-more"><summary>Подробнее</summary>';
       html += assetDetails(asset);
       html += '</details>';
@@ -166,5 +237,5 @@ window.LFCopy = (() => {
     }
   });
 
-  return { card };
+  return { card, visual };
 })();

@@ -1158,9 +1158,10 @@ def create_app(
         """Лента событий. instrument_id ограничивает её одним активом;
         без параметра остаётся общий журнал."""
         out = []
+        skip = (EventKind.APPROACH.value,)
         events = (
-            db.list_events_for_instrument(instrument_id, limit=limit)
-            if instrument_id is not None else db.get_events(limit=limit)
+            db.list_events_for_instrument(instrument_id, limit=limit, exclude_kinds=skip)
+            if instrument_id is not None else db.get_events(limit=limit, exclude_kinds=skip)
         )
         for e in events:
             zone = db.get_zone(e.zone_id)
@@ -1272,10 +1273,14 @@ def create_app(
         )
         # ТЗ «LTF Current Setup» §10/п.14: смена ltf_entry_types — лёгкий
         # пересчёт привязок активных сценариев (без replay свечей и без
-        # новых событий/уведомлений; история строк сохраняется)
+        # новых событий/уведомлений; история строк сохраняется). F3: то же
+        # при смене прочих параметров пригодности (entry_reuse_max_depth) —
+        # иначе общий отбор расходился бы с evaluate_final движка
         need_reclassify = ltf_engine is not None and (
             settings.detector.ltf_entry_types != old_values.get(
                 "ltf_entry_types", settings.detector.ltf_entry_types)
+            or settings.detector.entry_reuse_max_depth != old_values.get(
+                "entry_reuse_max_depth", settings.detector.entry_reuse_max_depth)
         )
         if not (need_resync or need_reclassify):
             return {"applied": applied, "saved_to": str(path),

@@ -102,13 +102,20 @@ class StructureBatch:
         closed = self.closed
         n_new_raw = len(candles)
         # префикс совпадает, если на стыке та же свеча (open_time уникальны
-        # в рамках инструмента/ТФ) — иначе полный пересчёт
+        # в рамках инструмента/ТФ) И тот же OHLC (F10: ревизия уже
+        # обработанной свечи при том же open_time — не тот же префикс,
+        # инкрементальный результат по старым данным недопустим) —
+        # иначе полный пересчёт
         same_prefix = (
             n_new_raw >= prev_len
             and (prev_len == 0
                  or (len(candles) > 0 and len(closed) > 0
                      and closed[prev_len - 1].open_time == prev_last
-                     and candles[prev_len - 1].open_time == prev_last))
+                     and candles[prev_len - 1].open_time == prev_last
+                     and (closed[prev_len - 1].open, closed[prev_len - 1].high,
+                          closed[prev_len - 1].low, closed[prev_len - 1].close)
+                     == (candles[prev_len - 1].open, candles[prev_len - 1].high,
+                         candles[prev_len - 1].low, candles[prev_len - 1].close)))
         )
         if not same_prefix:
             self._reset(candles, left, right)

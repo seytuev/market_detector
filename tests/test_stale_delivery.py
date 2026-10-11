@@ -106,7 +106,7 @@ async def test_htf_entry_event_stale_when_entry_eligible_lost():
     sender = _RecSender()
     disp = EventDispatcher(db, DetectorConfig(), sender)
     db.update_zone(zid, entry_eligible=False)
-    ev = _event(db, zid, EventKind.APPROACH, now_ms())
+    ev = _event(db, zid, EventKind.TOUCH, now_ms())
     deliveries = await disp.dispatch([ev])
     assert sender.payloads == []
     assert deliveries[0].status == "stale"

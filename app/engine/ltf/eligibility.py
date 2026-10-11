@@ -294,14 +294,16 @@ def evaluate_final(
 
 
 def admitted_scenario_entries(
-    db, scenario_id: int
+    db, scenario_id: int, cfg: Optional[DetectorConfig] = None
 ) -> list[tuple[LtfScenarioEntry, LtfEntryZone, FinalEligibility]]:
     """Единый отбор допущенных зон сценария на текущей версии диапазона.
 
     Единственный источник правила допуска для движка (уведомления), API
     (карточка, график) и счётчиков — замена дублирующихся отборов
     engine._entry_candidates и ltf_api._fresh_entries (L01). ver=0 до
-    появления первой пары диапазона.
+    появления первой пары диапазона. cfg обязан быть актуальным конфигом
+    потребителя (F3): default DetectorConfig() подменял бы пользовательский
+    entry_reuse_max_depth и расходился с evaluate_final движка.
     """
     from .context import context_complete, context_flags
 
@@ -323,6 +325,7 @@ def admitted_scenario_entries(
             continue
         fe = evaluate_final(
             e, zone, allow_outside=allow_outside, liquidity_tests=tests,
+            cfg=cfg,
         )
         if fe.eligible_now:
             out.append((e, zone, fe))

@@ -18,6 +18,7 @@ import json
 from typing import Any, Optional
 
 from ..db import Database
+from ..models import EventKind
 from ..texts_ru import KIND_RU, LTF_EVENT_KIND_RU, LTF_REVIEW_DECISION_RU
 
 JOURNAL_KINDS = ("all", "market", "decisions", "delivery")
@@ -43,7 +44,8 @@ def _market_items(db: Database, limit: int) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     instruments = {i.id: i for i in db.get_instruments(include_retired=True)}
 
-    for e in db.get_events(limit=limit):
+    # Приближение не попадает в хронологию: уведомление по нему выключено.
+    for e in db.get_events(limit=limit, exclude_kinds=(EventKind.APPROACH.value,)):
         zone = db.get_zone(e.zone_id)
         ins = instruments.get(zone.instrument_id) if zone else None
         symbol = ins.symbol if ins else None

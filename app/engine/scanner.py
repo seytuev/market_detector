@@ -92,7 +92,9 @@ class Scanner:
         boundary = close_boundary_ms(candle.open_time, tf)
         now = now_ms()
         if candles is None:
-            candles = self.db.get_candles(iid, tf)
+            # F4: скан одной свечи по предзагруженной БД не видит свечи
+            # позже обрабатываемой — та же отсечка, что у replay-префикса
+            candles = self.db.get_candles(iid, tf, end_ms=candle.open_time)
 
         created += self._scan_fvg_and_blocks(iid, tf, candles, now)
         created += self._check_block_transitions(iid, tf, candle, candles, boundary, now)

@@ -102,7 +102,7 @@ def _context_flags(db: Database, scenario_id: int) -> dict[str, Any]:
 
 
 def _fresh_entries(
-    db: Database, scenario_id: int
+    db: Database, scenario_id: int, cfg=None
 ) -> list[tuple[LtfScenarioEntry, LtfEntryZone]]:
     """Подходящие зоны текущей версии диапазона (§3.2 счётчик).
 
@@ -111,7 +111,7 @@ def _fresh_entries(
     §18 — и контекстно допущенные FVG с reason == "outside_pd"."""
     return [
         (e, zone)
-        for e, zone, _fe in admitted_scenario_entries(db, scenario_id)
+        for e, zone, _fe in admitted_scenario_entries(db, scenario_id, cfg=cfg)
     ]
 
 
@@ -340,7 +340,7 @@ def _context_view(
     }
 
 
-def _scenario_block(db: Database, sc: LtfScenario) -> dict[str, Any]:
+def _scenario_block(db: Database, sc: LtfScenario, cfg=None) -> dict[str, Any]:
     """Блок текущего (не отменённого) сценария: уровень слома и время
     закрытия — из структурного события-триггера; диапазон с опорами
     (pivot_at ≠ confirmed_at, §3.5)."""
@@ -377,7 +377,7 @@ def _scenario_block(db: Database, sc: LtfScenario) -> dict[str, Any]:
         ),
         "range": rng.to_dict() if rng is not None else None,
         "anchors": anchors,
-        "fresh_entries": len(_fresh_entries(db, sc.id)),
+        "fresh_entries": len(_fresh_entries(db, sc.id, cfg=cfg)),
         # §18: контекст «снятие SSL/BSL + тест 50% D1 FVG» для карточки
         "context": {
             **_context_flags(db, sc.id),
@@ -1304,7 +1304,7 @@ def instrument_current(
     eligible_zones: list[LtfEntryZone] = []
     counts = {"eligible": 0, "excluded": 0, "historical": 0}
     if sc is not None:
-        sc_block = _scenario_block(db, sc)
+        sc_block = _scenario_block(db, sc, cfg=policy)
         if sc_block["range"] is not None:
             rng_block = {**sc_block["range"],
                          "anchors": sc_block["anchors"]}
@@ -1463,13 +1463,17 @@ def _level_broken(candles, level: float, since_ms: int, bear: bool) -> bool:
     return False
 
 
-def _expected_levels(db: Database, obs: LtfObservation, settings) -> dict[str, Any]:
+def _expected_levels(
+    db: Database, obs: LtfObservation, settings, as_of: Optional[int] = None,
+) -> dict[str, Any]:
     """Ожидаемые BOS/SMS из той же машины, которая регистрирует слом.
 
     Готовый уровень и уровень с невыполненной предпосылкой остаются видимыми.
     Свершившийся слом, снятый уровень и отсутствующая опора в слот не попадают:
     пустая якорная структура — ровно {bos: None, sms: None}.
+    as_of задан — проекция на этот момент, а не на текущие часы.
     """
+    moment = now_ms() if as_of is None else int(as_of)
     since = obs.activated_at - settings.detector.ltf_history_days * 86_400_000
     pivots = [
         PivotCandidate(
@@ -1480,10 +1484,16 @@ def _expected_levels(db: Database, obs: LtfObservation, settings) -> dict[str, A
         )
         for p in db.list_ltf_pivots(obs.instrument_id, since_ms=since)
         if p.state == "confirmed"
+        and (as_of is None or (p.confirmed_at or 0) <= moment)
     ]
-    candles = db.get_candles(obs.instrument_id, "H1", start_ms=since)
+    candles = db.get_candles(
+        obs.instrument_id, "H1", start_ms=since,
+        end_ms=moment if as_of is not None else None,
+    )
+    if as_of is not None:
+        candles = [c for c in candles if c.close_time <= moment]
     conditions = expected_structure_conditions(
-        pivots, candles, obs.direction, now_ms(), since_ms=since,
+        pivots, candles, obs.direction, moment, since_ms=since,
     )
     return legacy_expected(conditions, obs.direction.value)
 
@@ -1496,21 +1506,61 @@ def _local_setup(db, settings, instrument_id: int):
     )
 
 
+def _scenario_as_of(scenarios, as_of: int):
+    """Сценарий, который уже существовал в момент снимка.
+
+    created_at == 0 — время не записано, такую строку нельзя поставить
+    на ось. Если датированных строк нет, остаётся прежний запасной выбор.
+    """
+    dated = [s for s in scenarios if s.created_at]
+    pool = [s for s in dated if s.created_at <= as_of] if dated else list(scenarios)
+    if not pool:
+        return None
+    live = [s for s in pool if s.cancelled_at is None or s.cancelled_at > as_of]
+    return (live or pool)[-1]
+
+
 def observation_chart_layers(
-    db: Database, settings, observation_id: int
+    db: Database, settings, observation_id: int,
+    *,
+    as_of: Optional[int] = None,
+    scenario_id: Optional[int] = None,
+    known_at: Optional[int] = None,
 ) -> Optional[dict[str, Any]]:
     """Слои графика наблюдения (§3.5): свечной horizon от касания HTF,
     pivots, структурные события активного (или последнего) сценария,
     диапазоны, подходящие/исключённые entry-зоны, тесты ликвидности,
     ожидаемые уровни. None — наблюдение не найдено (HTTP-слой отвечает 404).
-    Используется и веб-эндпоинтом, и рендером графика для Telegram-бота."""
+    Используется и веб-эндпоинтом, и рендером графика для Telegram-бота.
+
+    Без as_of/scenario_id ответ прежний: активный или последний сценарий
+    и ожидаемые уровни на текущий момент. С as_of слои обрезаются этим
+    моментом. scenario_id фиксирует сценарий события, в том числе уже
+    отменённый, и не подменяет его новым активным.
+    """
     obs = db.get_ltf_observation(observation_id)
     if obs is None:
         return None
     zone = db.get_zone(obs.zone_id)
     scenarios = db.list_ltf_scenarios(observation_id=obs.id)
-    sc = db.get_active_ltf_scenario(obs.id) or (
-        scenarios[-1] if scenarios else None
+    limitations: list[str] = []
+    if scenario_id is not None:
+        sc = next((s for s in scenarios if s.id == scenario_id), None)
+        if sc is None:
+            limitations.append("сценарий события не найден")
+            sc = db.get_active_ltf_scenario(obs.id) or (
+                scenarios[-1] if scenarios else None
+            )
+    elif as_of is not None:
+        sc = _scenario_as_of(scenarios, int(as_of))
+        if any(not s.created_at for s in scenarios):
+            limitations.append("у части сценариев нет времени создания")
+    else:
+        sc = db.get_active_ltf_scenario(obs.id) or (
+            scenarios[-1] if scenarios else None
+        )
+    known = int(known_at) if known_at is not None else (
+        int(as_of) if as_of is not None else None
     )
     # окно наблюдения: структура до касания HTF — тот же horizon,
     # что при подгрузке истории (§4)
@@ -1519,29 +1569,59 @@ def observation_chart_layers(
         p.to_dict()
         for p in db.list_ltf_pivots(obs.instrument_id, since_ms=since)
     ]
-    # структурные события — только активного (или последнего) сценария:
-    # события отменённых сценариев на график не выводятся
+    # Без scenario_id — активный или последний сценарий. Явный scenario_id
+    # оставляет отменённый сценарий события, а не подменяет его новым.
     structure_events = (
         [e.to_dict() for e in db.list_ltf_structure_events(sc.id)]
         if sc is not None else []
     )
     structure_events.sort(key=lambda e: e["occurred_at"])
+    if as_of is not None:
+        moment = int(as_of)
+        pivots = [
+            p for p in pivots
+            if p["pivot_at"] <= moment
+            and p.get("confirmed_at") is not None
+            and p["confirmed_at"] <= known
+        ]
+        structure_events = [
+            e for e in structure_events
+            if e["occurred_at"] <= moment
+            and (e.get("detected_at") or 0) <= known
+        ]
     ranges = []
     entries: list[dict[str, Any]] = []
     entries_excluded: list[dict[str, Any]] = []
     liquidity_tests: list[dict[str, Any]] = []
     if sc is not None:
-        current = db.get_current_ltf_range(sc.id)
+        if as_of is None:
+            current = db.get_current_ltf_range(sc.id)
+            range_rows = db.list_ltf_ranges(sc.id)
+        else:
+            range_rows = [
+                r for r in db.list_ltf_ranges(sc.id)
+                if r.available_at <= int(as_of)
+            ]
+            current = range_rows[-1] if range_rows else None
         ranges = [
             {**r.to_dict(),
              "current": current is not None and r.id == current.id}
-            for r in db.list_ltf_ranges(sc.id)
+            for r in range_rows
         ]
         ver = current.version if current is not None else None
-        sc_entries = [
-            e for e in db.list_ltf_scenario_entries(sc.id)
-            if e.state != "invalid"
-        ]
+        raw_entries = db.list_ltf_scenario_entries(sc.id)
+        if as_of is None:
+            sc_entries = [e for e in raw_entries if e.state != "invalid"]
+        else:
+            sc_entries = [
+                e for e in raw_entries
+                if not e.added_at or e.added_at <= known
+            ]
+            if any(e.state == "invalid" for e in sc_entries):
+                limitations.append(
+                    "часть зон сейчас недействительна; статус на момент "
+                    "события по строке не восстановить"
+                )
         if sc_entries:
             # нет строк текущей версии — показываем строки последней
             # версии, для которой они есть, а не пустой/старый набор
@@ -1552,9 +1632,17 @@ def observation_chart_layers(
             sc_entries = [e for e in sc_entries if e.range_version == ver]
         allow_outside = context_complete(_context_flags(db, sc.id))
         tests = db.list_ltf_liquidity_tests(scenario_id=sc.id)
+        if as_of is not None:
+            tests = [t for t in tests if t.touch_at <= int(as_of)]
         for e in sc_entries:
             z = db.get_ltf_entry_zone(e.entry_zone_id)
             if z is None:
+                continue
+            if as_of is not None and (
+                z.formed_at > int(as_of)
+                or z.confirmed_at is None
+                or z.confirmed_at > known
+            ):
                 continue
             fe = evaluate_final(
                 e, z, allow_outside=allow_outside, liquidity_tests=tests,
@@ -1580,10 +1668,23 @@ def observation_chart_layers(
             # доступны отдельной группой (слой «Исключённые зоны»
             # включается в UI отдельно)
             (entries if fe.eligible_now else entries_excluded).append(row)
-        liquidity_tests = [
-            t.to_dict() for t in db.list_ltf_liquidity_tests(scenario_id=sc.id)
-        ]
-    return {
+        for t in tests:
+            row = t.to_dict()
+            if (
+                as_of is not None
+                and row.get("resolved_at")
+                and row["resolved_at"] > known
+            ):
+                row["state"] = "awaiting_close"
+                row["close_price"] = None
+                if not any("исход проверки" in item for item in limitations):
+                    limitations.append(
+                        "исход проверки ликвидности на момент снимка ещё не был закрыт"
+                    )
+            liquidity_tests.append(row)
+    if as_of is not None and zone is not None:
+        limitations.append("границы HTF — текущая запись зоны, не история версий")
+    payload = {
         "timeframe": "H1",
         "parent_zone": (
             {
@@ -1599,9 +1700,27 @@ def observation_chart_layers(
         "entries": entries,        # подходящие, полные границы (§8.5/§10)
         "entries_excluded": entries_excluded,  # исключённые с reason (§10)
         "liquidity_tests": liquidity_tests,
-        "expected": _expected_levels(db, obs, settings),
-        "setup": _local_setup(db, settings, obs.instrument_id),
+        "expected": _expected_levels(db, obs, settings, as_of=as_of),
+        "setup": (
+            _setup_as_of(db, settings, obs.instrument_id, int(as_of))
+            if as_of is not None
+            else _local_setup(db, settings, obs.instrument_id)
+        ),
     }
+    if as_of is not None:
+        payload["as_of"] = int(as_of)
+        payload["known_at"] = known
+        payload["scenario_id"] = sc.id if sc is not None else None
+        payload["limitations"] = limitations
+    return payload
+
+
+def _setup_as_of(db, settings, instrument_id: int, as_of: int):
+    """Причинный PD на момент снимка. Текущую ногу не подменяет."""
+    from .h1_setup import project_setup
+    return project_setup(
+        db, settings.detector, instrument_id, as_of, mode="event",
+    )
 
 
 def instrument_structure(

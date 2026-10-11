@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS candle (
     close REAL NOT NULL,
     closed INTEGER NOT NULL DEFAULT 1,
     source TEXT NOT NULL,
+    -- правила v1 §10.3: число ревизий уже закрытой свечи (коррекции источника)
+    revision INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (instrument_id, timeframe, open_time)
 );
 
@@ -130,6 +132,9 @@ CREATE TABLE IF NOT EXISTS event (
     depth REAL NOT NULL DEFAULT 0,
     delayed INTEGER NOT NULL DEFAULT 0,
     evidence TEXT NOT NULL DEFAULT '{}',
+    -- правила v1 §7: связь факта с визитом/активацией (NULL — до разметки)
+    visit_id INTEGER,
+    activation_id INTEGER,
     UNIQUE (zone_id, cycle_id, kind, occurred_at)
 );
 CREATE INDEX IF NOT EXISTS ix_event_time ON event (occurred_at);
@@ -243,6 +248,10 @@ CREATE TABLE IF NOT EXISTS ltf_scenario (
     reverse_break_pivot_id INTEGER,
     reverse_break_confirmed_at INTEGER,
     last_processed_close INTEGER,       -- ms: close_time последней обработанной H1
+    -- правила v1 §3/§6.2: причинный HTF-контакт и якорь рабочего PD
+    htf_interaction_id INTEGER,
+    pd_anchor_structure_key TEXT,
+    pd_anchor_kind TEXT,                -- BOS | SMS (равноправны, тип сохраняется)
     created_at INTEGER NOT NULL DEFAULT 0,
     updated_at INTEGER NOT NULL DEFAULT 0
 );
@@ -855,7 +864,25 @@ CREATE TABLE IF NOT EXISTS htf_context_episode (
     rule_version TEXT NOT NULL,
     evidence TEXT NOT NULL DEFAULT '{}',
     closed_at INTEGER,
-    close_reason TEXT
+    close_reason TEXT,
+    -- правила v1 §4: машина состояний контекста (state сохранён для
+    -- совместимости; awaiting_h1→awaiting_initial_confirmation,
+    -- confirmed→context_active, терминальные значения без изменений)
+    state_v2 TEXT,
+    -- §4: предыдущий контекст A при opposing_confirmed и источник B,
+    -- подтвердивший встречный сценарий
+    predecessor_episode_id INTEGER,
+    opposing_source_id INTEGER,
+    -- §4/§5: закрытие D1/W1 за дальней границей B и обратный BOS/SMS H1
+    -- для возврата (могут прийти в любом порядке, хранятся раздельно)
+    htf_pass_confirmed_at INTEGER,
+    reverse_break_event_id INTEGER,
+    -- §8: 60-дневный горизонт от глобальной опоры ноги; время опоры и
+    -- отдельно время доступности этой информации
+    leg_anchor_at INTEGER,
+    leg_anchor_available_at INTEGER,
+    horizon_extended INTEGER NOT NULL DEFAULT 0,
+    data_quality_note TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_htf_context_episode_instr
     ON htf_context_episode(instrument_id, state);
@@ -953,3 +980,64 @@ CREATE TABLE IF NOT EXISTS h1_local_leg_revision (
 );
 CREATE INDEX IF NOT EXISTS ix_h1_local_leg_revision_asof
     ON h1_local_leg_revision(leg_id, as_of);
+
+-- ============================================================================
+-- Правила HTF/LTF v1 (HTF_LTF_Context_Rules_v1_2026-10-10): активации зон,
+-- ревизии PD и свечей. CREATE ... IF NOT EXISTS — применяется и к старым БД
+-- из Database.migrate(); колонки существующих таблиц добавляются ALTER'ами
+-- там же.
+-- ============================================================================
+
+-- §7: независимая активация зоны — отдельно от визита цены и от механического
+-- validity. Глубина/заполнение ДО активации фиксируются в момент перехода;
+-- для исторических визитов без разметки они NULL (unknown, R25) — старая
+-- история не превращается в активации задним числом.
+CREATE TABLE IF NOT EXISTS zone_activation (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    zone_id INTEGER NOT NULL REFERENCES zone(id),
+    cycle_id INTEGER NOT NULL,
+    episode_id INTEGER,
+    observation_id INTEGER,
+    started_at INTEGER NOT NULL,
+    ended_at INTEGER,
+    end_reason TEXT,
+    depth_before REAL,               -- глубина до независимой активации; NULL — unknown
+    fill_before REAL,                -- заполнение до активации; NULL — unknown
+    max_depth_current REAL NOT NULL DEFAULT 0,
+    fill_current REAL NOT NULL DEFAULT 0,
+    fresh_for_new_activation INTEGER NOT NULL DEFAULT 1,
+    current_activation_valid INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS ix_zone_activation_zone
+    ON zone_activation (zone_id, cycle_id);
+CREATE INDEX IF NOT EXISTS ix_zone_activation_ended
+    ON zone_activation (zone_id, ended_at);
+
+-- §6.2: история ревизий рабочего PD сценария. Якорь — последний причинно
+-- связанный BOS или SMS (равноправны, тип сохраняется); старая ревизия не
+-- переписывается, PD чужого движения не подставляется.
+CREATE TABLE IF NOT EXISTS pd_revision (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scenario_id INTEGER NOT NULL REFERENCES ltf_scenario(id),
+    range_version INTEGER,
+    anchor_structure_key TEXT NOT NULL,
+    anchor_kind TEXT NOT NULL,           -- BOS | SMS
+    anchors_json TEXT NOT NULL DEFAULT '[]',  -- структурные опоры PD
+    available_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS ix_pd_revision_scenario ON pd_revision (scenario_id);
+
+-- §10.3: журнал коррекций уже закрытых свечей. Ревизия хранится, старое
+-- значение не стирается; пересчёт зависимостей идёт по этой истории.
+CREATE TABLE IF NOT EXISTS candle_revision (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    instrument_id INTEGER NOT NULL REFERENCES instrument(id),
+    timeframe TEXT NOT NULL,
+    open_time INTEGER NOT NULL,
+    old_ohlc_json TEXT NOT NULL,
+    new_ohlc_json TEXT NOT NULL,
+    detected_at INTEGER NOT NULL,
+    UNIQUE (instrument_id, timeframe, open_time, detected_at)
+);

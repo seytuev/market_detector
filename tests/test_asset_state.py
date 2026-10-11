@@ -492,3 +492,44 @@ def test_four_part_key_does_not_invent_a_price(db, instrument_id):
     asset = _view(db, instrument_id)
     assert asset["structure"]["proven"] is False
     assert fmt_price_ru(FVG_EDGE) == "85 136,11"
+
+
+def test_compact_rows_mirror_compact(db, instrument_id):
+    bull_zone = _zone(db, instrument_id, Direction.BULL, 60000, 66000, kind=ZoneType.OB, tf="W1")
+    obs = _obs(db, instrument_id, bull_zone, Direction.BULL, "active", _open(1), cycle=2)
+    _scenario(db, obs, Direction.BULL, created=_close(21))
+    _leg(db, instrument_id, "bull", LEVEL, 20)
+    _entry(db, instrument_id, "bull", 81650, 82000, _open(16))
+    asset = _view(db, instrument_id)
+    rows = asset["compact_rows"]
+    assert rows, "карточка актива обязана отдавать структурные ряды"
+    kinds = [row["kind"] for row in rows]
+    assert "bos" in kinds and "entry" in kinds and "pd" in kinds and "cancel" in kinds
+    bos = next(row for row in rows if row["kind"] == "bos")
+    # компактное время: без года и без суффикса «МСК»
+    assert bos["k"].startswith("BOS") and "МСК" not in bos["v"]
+    assert "сегодня" not in bos["v"]  # переход не в день отсечки — дата + время
+    pd_row = next(row for row in rows if row["kind"] == "pd")
+    assert "50%" in pd_row["v"]
+    # ряды передают те же факты, что и строковый compact
+    text = " ".join(row["v"] for row in rows)
+    assert "81 650" in text and "82 000" in text
+
+
+def test_entry_parts_level_prints_single_price():
+    from app.services.asset_state import _entry_parts
+    leg = {"direction": "bull"}
+    level = _entry_parts([{"admitted": [82804.65, 82804.65]}], leg)
+    assert level.startswith("1 зона в discount · ")
+    assert "82 804,65" in level
+    assert "82 804,65–82 804,65" not in level
+    span = _entry_parts([{"admitted": [82804.65, 83500.0]}], leg)
+    assert "82 804,65–83 500" in span or "82 804,65 – 83 500" in span
+
+
+def test_short_time_today_vs_other_day():
+    from app.services.asset_state import _short_time
+    ms = _close(12)
+    assert "сегодня" in _short_time(ms, ms)
+    other = _short_time(ms, ms + 86_400_000)
+    assert "сегодня" not in other and " · " in other

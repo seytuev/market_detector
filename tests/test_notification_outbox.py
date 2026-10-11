@@ -256,8 +256,8 @@ async def test_superseding_one_zone_does_not_lose_other_zone(db, instrument_id):
     from tests.test_bot_alerts import _htf_event
     sender = LogSender()
     disp = EventDispatcher(db, DetectorConfig(), sender)
-    a = _htf_event(db, instrument_id, EventKind.APPROACH)
-    b = _htf_event(db, instrument_id, EventKind.APPROACH)
+    a = _htf_event(db, instrument_id, EventKind.DEPTH_50)
+    b = _htf_event(db, instrument_id, EventKind.DEPTH_50)
     await disp.dispatch([a, b])
     touch_id = db.insert_event(replace(a, id=None, kind=EventKind.TOUCH, occurred_at=a.occurred_at + 1))
     await disp.dispatch([db.get_event(touch_id)])
@@ -267,6 +267,22 @@ async def test_superseding_one_zone_does_not_lose_other_zone(db, instrument_id):
     assert len(sender.cards) == 2
     digest = sender.cards[1][0]
     assert len(digest.targets) == 1 and digest.targets[0]["zone_id"] == b.zone_id
+
+
+async def test_approach_is_not_notified(db, instrument_id):
+    from tests.test_bot_alerts import _htf_event
+    sender = LogSender()
+    disp = EventDispatcher(db, DetectorConfig(), sender)
+    ev = _htf_event(db, instrument_id, EventKind.APPROACH)
+    assert await disp.dispatch([ev]) == []
+    due(db)
+    await disp.outbox.flush()
+    assert sender.cards == []
+    pid = disp.outbox.put("htf", "queued-approach", Card("приближение"), [ev.id], quiet=True)
+    due(db)
+    await disp.outbox.flush()
+    assert disp.outbox.get(pid)["status"] == "suppressed"
+    assert sender.cards == []
 
 
 async def test_finalized_packet_repairs_journal_after_crash(db, instrument_id):

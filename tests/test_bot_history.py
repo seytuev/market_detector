@@ -75,8 +75,11 @@ def test_service_status_quotes_ok_and_stale(db, seeded):
     assert st["quotes"]["last_quote_at"] is not None
     assert "BTCUSDT" in st["quotes"]["stale"]
     assert st["quotes"]["ok"] is False  # BTC без котировки
-    # протухшая котировка — тоже просрочена
-    db.set_quote(seeded["eth"], 100.0, now_ms() - 10 * 3_600_000)
+    # протухшая котировка — тоже просрочена. F8: set_quote не принимает тик
+    # старше сохранённого — старение эмулируем прямой записью meta
+    import json
+    db.set_meta(f"quote:{seeded['eth']}",
+                json.dumps({"price": 100.0, "ts": now_ms() - 10 * 3_600_000}))
     st = service_status(db, settings)
     assert "ETHUSDT" in st["quotes"]["stale"]
 
