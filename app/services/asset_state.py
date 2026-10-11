@@ -375,6 +375,7 @@ def _zones(db, instrument_id: int, leg, pd, setup) -> list[dict]:
                 continue
             regions.append({
                 "type": row.get("type") or "зона",
+                "timeframe": row.get("timeframe"),
                 "lower": row.get("lower"),
                 "upper": row.get("upper"),
                 "admitted": [admitted[0], admitted[1]],
@@ -410,6 +411,7 @@ def _zones(db, instrument_id: int, leg, pd, setup) -> list[dict]:
         seen.add(key)
         found.append({
             "type": row["type"],
+            "timeframe": None,  # в ltf_entry_zone таймфрейма нет
             "lower": row["lower"],
             "upper": row["upper"],
             "admitted": [lo, hi],
@@ -903,14 +905,14 @@ def _compact_rows(state, transition, evidence, zones, pd, invalidation,
     if quality_bad:
         rows.append({"kind": "quality", "k": "Качество", "v": quality_text})
         if transition and transition.get("proven"):
-            rows.append({"kind": "bos", "k": _bos_label(transition),
-                         "v": _bos_value(transition, now_ms)})
+            rows.append({"kind": "bos", "dir": _bos_dir(transition),
+                         "k": _bos_label(transition), "v": _bos_value(transition, now_ms)})
         rows.append({"kind": "blocker", "k": "Режим",
                      "v": "Новые входы не отправляются"})
         return rows
     if transition and transition.get("proven"):
-        rows.append({"kind": "bos", "k": _bos_label(transition),
-                     "v": _bos_value(transition, now_ms)})
+        rows.append({"kind": "bos", "dir": _bos_dir(transition),
+                     "k": _bos_label(transition), "v": _bos_value(transition, now_ms)})
     grounds = _grounds_summary(evidence)
     if grounds:
         rows.append({"kind": "grounds", "k": "Основание",
@@ -918,9 +920,7 @@ def _compact_rows(state, transition, evidence, zones, pd, invalidation,
     elif state.get("reason_code") == "context_missing":
         rows.append({"kind": "grounds", "k": "Основание",
                      "v": "действующего HTF-эпизода этого направления нет"})
-    entry = _entry_parts(zones, leg)
-    if entry:
-        rows.append({"kind": "entry", "k": "Вход", "v": entry})
+    rows.extend(_entry_rows(zones, leg))
     pd_parts = _pd_parts(pd)
     if pd_parts:
         rows.append({"kind": "pd", "k": "PD H1", "v": pd_parts["v"],
@@ -942,6 +942,10 @@ def _compact_rows(state, transition, evidence, zones, pd, invalidation,
     return rows
 
 
+def _bos_dir(transition: dict) -> str:
+    return "long" if transition.get("direction") == "bull" else "short"
+
+
 def _bos_label(transition: dict) -> str:
     bull = transition.get("direction") == "bull"
     arrow = "↑" if bull else "↓"
@@ -958,21 +962,23 @@ def _bos_value(transition: dict, now_ms: int) -> str:
     )
 
 
-def _entry_parts(zones, leg) -> str:
+def _entry_rows(zones, leg) -> list[dict]:
+    """Каждая допущенная зона — отдельный ряд «название: цена»."""
     if not zones or not leg:
-        return ""
-    bull = leg.get("direction") == "bull"
-    half = "discount" if bull else "premium"
-    lows = [z["admitted"][0] for z in zones]
-    highs = [z["admitted"][1] for z in zones]
-    lo, hi = fmt_price_ru(min(lows)), fmt_price_ru(max(highs))
-    span = "–".join([lo, hi]) if lo != hi else lo
-    return "{n} {word} в {half} · {span}".format(
-        n=len(zones),
-        word=_zones_word(len(zones)),
-        half=half,
-        span=span,
-    )
+        return []
+    half = "в discount" if leg.get("direction") == "bull" else "в premium"
+    rows = []
+    for i, zone in enumerate(zones):
+        name = _source_name({"type": zone.get("type"), "timeframe": zone.get("timeframe")}) or "зона"
+        lo, hi = fmt_price_ru(zone["admitted"][0]), fmt_price_ru(zone["admitted"][1])
+        span = f"{lo}–{hi}" if lo != hi else lo
+        rows.append({
+            "kind": "entry",
+            "k": "Вход" if i == 0 else "",
+            "v": f"{name}: {span}",
+            "note": half if i == 0 else "",
+        })
+    return rows
 
 
 def _pd_parts(pd) -> dict:

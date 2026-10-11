@@ -25,6 +25,9 @@ window.LFCopy = (() => {
     return text;
   }
 
+  /* Подробнее — только факты нынешнего контекста: основание, зоны входа,
+     диагностика. Другие контексты, ликвидность и история остаются в данных,
+     но карточку не засоряют. */
   function assetDetails(asset) {
     const d = (asset && asset.details) || {};
     let html = '';
@@ -33,12 +36,6 @@ window.LFCopy = (() => {
       const rows = d.zones.map((line) => esc(line)).join('<br>');
       html += `<div class="msg-block"><div class="msg-k">Зоны входа</div><div class="msg-v">${rows}</div></div>`;
     }
-    (d.other_contexts || []).forEach((line) => { html += block('Другой контекст', line); });
-    if ((d.liquidity || []).length) {
-      const rows = d.liquidity.map((line) => esc(line)).join('<br>');
-      html += `<div class="msg-block"><div class="msg-k">Ликвидность</div><div class="msg-v">${rows}</div></div>`;
-    }
-    (d.history || []).forEach((line) => { html += block('История', line); });
     const diag = (d.diagnostics || []).join('\n');
     if (diag) {
       html += `<details class="asset-diag"><summary>Диагностика</summary><div class="msg-v">${esc(diag)}</div></details>`;
@@ -116,7 +113,8 @@ window.LFCopy = (() => {
     const rows = asset.compact_rows;
     if (Array.isArray(rows) && rows.length) {
       return '<div class="msg-rows">' + rows.map((row) =>
-        '<div class="msg-row kind-' + esc(row.kind || 'info') + '">' +
+        '<div class="msg-row kind-' + esc(row.kind || 'info') +
+        (row.dir ? ' dir-' + esc(row.dir) : '') + '">' +
         '<span class="msg-k">' + esc(row.k) + '</span>' +
         '<span class="msg-v">' + esc(row.v) +
         (row.note ? ' <span class="msg-note">' + esc(row.note) + '</span>' : '') +
@@ -199,10 +197,12 @@ window.LFCopy = (() => {
       html += `<h3 class="asset-status ${dir}">${esc(title)}</h3>`;
       html += visual;
       html += rowsHtml(asset);
+      // кнопка действия выше «Подробнее»; подвал (котировка) — самым последним
+      if (opts.extraHtml) html += opts.extraHtml;
       html += '<details class="asset-more"><summary>Подробнее</summary>';
       html += assetDetails(asset);
       html += '</details>';
-      if (opts.extraHtml) html += opts.extraHtml;
+      if (opts.footHtml) html += opts.footHtml;
       return html;
     }
     const headline = (p.headline && p.headline.headline) || '—';

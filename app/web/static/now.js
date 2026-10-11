@@ -293,7 +293,8 @@
         visualHtml: window.LFCopy.visual(pres, { price: p ? p.price : null }),
         extraHtml:
           `${!governed && arrow ? `<div class="msg-v">${esc(arrow)} ${esc(v.direction === 'bull' ? 'рост' : v.direction === 'bear' ? 'снижение' : 'разные направления')}</div>` : ''}` +
-          `<button type="button" class="btn primary now-open-desk" data-iid="${ins.id}">Открыть рабочее место</button>` +
+          `<button type="button" class="btn primary now-open-desk" data-iid="${ins.id}">Открыть рабочее место</button>`,
+        footHtml:
           `<div class="now-card-foot">Котировка · <span class="price-age">${esc(p ? ageText(p.at) : '—')}</span></div>`,
       });
       return;

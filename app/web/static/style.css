@@ -1844,6 +1844,9 @@ input[type="checkbox"] { min-height: auto; accent-color: var(--accent); }
 .msg-row .msg-v { margin: 0; font-variant-numeric: tabular-nums; }
 .msg-row.kind-entry .msg-v, .msg-row.kind-bos .msg-v { font-weight: 500; }
 .msg-row.kind-cancel .msg-v { color: var(--lf-text2); }
+/* BOS/SMS красится по направлению перехода (dir с сервера) */
+.msg-row.dir-long .msg-k { color: var(--lf-positive); font-weight: 600; }
+.msg-row.dir-short .msg-k { color: var(--lf-negative); font-weight: 600; }
 .msg-note {
   display: inline-block; margin-left: 6px; padding: 1px 7px;
   border-radius: 999px; background: var(--lf-raised); color: var(--lf-text2);

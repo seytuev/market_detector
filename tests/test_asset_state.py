@@ -509,22 +509,33 @@ def test_compact_rows_mirror_compact(db, instrument_id):
     # компактное время: без года и без суффикса «МСК»
     assert bos["k"].startswith("BOS") and "МСК" not in bos["v"]
     assert "сегодня" not in bos["v"]  # переход не в день отсечки — дата + время
+    assert bos["dir"] == "long", "направление перехода едет отдельным полем"
     pd_row = next(row for row in rows if row["kind"] == "pd")
     assert "50%" in pd_row["v"]
-    # ряды передают те же факты, что и строковый compact
-    text = " ".join(row["v"] for row in rows)
-    assert "81 650" in text and "82 000" in text
+    # каждая допущенная зона — отдельный ряд «название: цена»
+    entry_rows = [row for row in rows if row["kind"] == "entry"]
+    assert entry_rows and entry_rows[0]["k"] == "Вход"
+    assert entry_rows[0]["note"] == "в discount"
+    text = " ".join(row["v"] for row in entry_rows)
+    assert "81 650" in text and "82 000" in text and ": " in text
 
 
-def test_entry_parts_level_prints_single_price():
-    from app.services.asset_state import _entry_parts
+def test_entry_rows_level_prints_single_price_with_name():
+    from app.services.asset_state import _entry_rows
     leg = {"direction": "bull"}
-    level = _entry_parts([{"admitted": [82804.65, 82804.65]}], leg)
-    assert level.startswith("1 зона в discount · ")
-    assert "82 804,65" in level
-    assert "82 804,65–82 804,65" not in level
-    span = _entry_parts([{"admitted": [82804.65, 83500.0]}], leg)
-    assert "82 804,65–83 500" in span or "82 804,65 – 83 500" in span
+    rows = _entry_rows(
+        [{"type": "ob", "timeframe": "D1", "admitted": [82804.65, 82804.65]}], leg)
+    assert len(rows) == 1
+    assert rows[0]["k"] == "Вход" and rows[0]["note"] == "в discount"
+    assert rows[0]["v"] == "OB D1: 82 804,65"
+    span = _entry_rows(
+        [{"type": "fvg", "timeframe": None, "admitted": [82804.65, 83500.0]}], leg)
+    assert span[0]["v"].startswith("FVG: ")
+    assert "82 804,65–83 500" in span[0]["v"]
+    bear = _entry_rows(
+        [{"type": "fvg", "timeframe": "W1", "admitted": [82804.65, 82804.65]}],
+        {"direction": "bear"})
+    assert bear[0]["note"] == "в premium"
 
 
 def test_short_time_today_vs_other_day():
