@@ -114,26 +114,32 @@ def test_full_flow_bos_range_entries_cancellation(db: Database, cfg, instrument_
     assert mv["end_at"] == candles[14].open_time
     assert mv["candles"] == 6                  # idx9..idx14 включительно
     assert mv["provenance_status"] == "ok"
-    # зоны причинного движения: FVG/OB/BSL; FVG, сформированный ПОСЛЕ слома,
-    # не добавлен (§8.1)
+    # На свече слома третья свеча FVG [8.2;9.2] ещё не закрыта — зоны нет
+    # и в карточке BOS её нет. После закрытия idx15 она принадлежит контексту.
     zones = db.list_ltf_entry_zones(instrument_id=instrument_id)
     bounds = {(z.type, z.lower, z.upper) for z in zones}
     assert len(zones) == 4                   # 3 FVG движения + BSL-пик
-    assert ("FVG", 8.2, 9.2) not in bounds   # сформирован после слома
+    assert ("FVG", 8.2, 9.2) not in bounds
     assert ("BSL", 15.0, 15.0) in bounds
+    assert not any(e["lower"] == 8.2 for e in bos[0].payload.get("entries") or [])
 
-    # откат idx18 трогает FVG [8.8;10.0] до готовности диапазона (п.10/п.12)
+    # idx16 касается FVG [8.2;9.2], idx18 — FVG [8.8;10.0] и перекрывает
+    # поздний разрыв целиком. Оба факта до готовности диапазона.
     _feed(db, engine, instrument_id, candles, 18)
     fvg_b = [z for z in db.list_ltf_entry_zones(instrument_id=instrument_id)
              if (z.type, z.lower, z.upper) == ("FVG", 8.8, 10.0)][0]
     assert db.get_ltf_entry_zone(fvg_b.id).validity == "tested"
-    assert [e.kind for e in _events(db, obs.id)] == ["bos", "touch"]
+    late = [z for z in db.list_ltf_entry_zones(instrument_id=instrument_id)
+            if (z.type, z.lower, z.upper) == ("FVG", 8.2, 9.2)][0]
+    assert late.validity == "tested" and late.max_test_depth == 1.0
+    assert late.evidence["relation"] == "after_break"
+    assert [e.kind for e in _events(db, obs.id)] == ["bos", "touch", "touch"]
 
     # idx21: LH 9.5 подтверждён, но связанной пары ещё нет — последний LL (idx14)
     # старше LH; диапазон ждёт нового подтверждённого LL (§7, п.6)
     _feed(db, engine, instrument_id, candles, 21)
     assert db.get_ltf_scenario(sc.id).state == "range_pending"
-    assert [e.kind for e in _events(db, obs.id)] == ["bos", "touch"]
+    assert [e.kind for e in _events(db, obs.id)] == ["bos", "touch", "touch"]
 
     # idx23: подтверждённый LL2 7.6 → связанная пара LH(9.5)→LL(7.6):
     # диапазон v1, сценарий в monitoring_entries, якорь пары — BSL-кандидат (§7),
@@ -144,21 +150,28 @@ def test_full_flow_bos_range_entries_cancellation(db: Database, cfg, instrument_
     rng = db.get_current_ltf_range(sc.id)
     assert (rng.version, rng.lower, rng.upper) == (1, 7.6, 9.5)
     evs = _events(db, obs.id)
-    assert [e.kind for e in evs] == ["bos", "touch", "entries_ready"]
+    assert [e.kind for e in evs] == ["bos", "touch", "touch", "entries_ready"]
     ready = evs[-1]
-    # ТЗ §3: FVG [8.8;10.0], протестированный откатом idx18 на ~58% (< 90%),
-    # допустим к повторному выбору — входит в готовый список вместе с якорем
-    assert [e["type"] for e in ready.payload["entries"]] == ["FVG", "BSL"]
-    assert ready.payload["entries"][0]["lower"] == 8.8   # повторный выбор (ТЗ §3)
-    assert ready.payload["entries"][1]["lower"] == 9.5   # якорь пары (§7)
+    # §6.3 (правила v1): PD — не фильтр. Поздний FVG [8.2;9.2] и OB [10;11],
+    # подтверждённый этим внешним разрывом, входят вместе с зонами ноги.
+    # FVG [8.8;10.0] протестирован откатом idx18 на ~58%.
+    assert [e["type"] for e in ready.payload["entries"]] == [
+        "FVG", "FVG", "FVG", "BSL", "FVG", "OB", "BSL",
+    ]
+    assert [e["lower"] for e in ready.payload["entries"]] == [
+        11.0, 10.2, 8.8, 15.0, 8.2, 10.0, 9.5,
+    ]
     assert ready.payload["range"]["version"] == 1
 
     # idx24: касание BSL 9.5 (снятие без возврата — failed) и обратный слом
     # на одном закрытии: журнал хранит оба факта, «готов вход» не публикуется (п.19)
     _feed(db, engine, instrument_id, candles, 24)
     evs = _events(db, obs.id)
+    # §7/§9: заполнение FVG [8.2;9.2] в текущей активации — сообщение
+    # context_transition (наблюдение продолжается), сценарий не отменяется
     assert [e.kind for e in evs] == [
-        "bos", "touch", "entries_ready", "touch", "sweep_failed", "cancellation",
+        "bos", "touch", "touch", "entries_ready", "context_transition",
+        "touch", "sweep_failed", "cancellation",
     ]
     cancel = evs[-1]
     assert cancel.payload["reason"] == "reverse_bos"
@@ -375,9 +388,10 @@ def test_replay_is_idempotent(db: Database, cfg, instrument_id: int):
     res = engine.replay_observation(obs.id)
     assert res.events == []
     assert counts() == before
-    # восстановленные события replay помечены delayed и не удвоились
-    # (7: с §7 Этап 4 диапазон origin_reversal на idx17 добавляет entries_ready)
-    assert len(db.list_ltf_events(observation_id=obs.id, limit=1000)) == 7
+    # восстановленные события replay помечены delayed и не удвоились.
+    # origin_reversal на idx17 даёт entries_ready; касание FVG после слома
+    # (idx16) — отдельный факт, поэтому событий 8, не 7.
+    assert len(db.list_ltf_events(observation_id=obs.id, limit=1000)) == 9
 
 
 def _role_log_rows(db: Database) -> int:
@@ -503,7 +517,8 @@ def test_replay_does_not_add_range_versions(db: Database, cfg, instrument_id: in
 
 
 def test_htf_parent_invalidation(db: Database, cfg, instrument_id: int):
-    """§4/п.15: достоверная инвалидация родителя → HTF_INVALIDATED."""
+    """Правила v1 §6.1 (R33): инвалидация родителя — информационный факт,
+    НЕ отмена сценария; отмена — только квалифицированный обратный слом."""
     engine = LtfEngine(db, cfg)
     candles = _series(SERIES_H_HL, SERIES_H_CLOSES, instrument_id)
     zid = _setup(db, instrument_id)
@@ -516,12 +531,12 @@ def test_htf_parent_invalidation(db: Database, cfg, instrument_id: int):
                    end_reason="converted_to_breaker (§6/§15.6)")
     assert engine.check_parent_validity(db.get_zone(zid)) is True
     sc = db.get_ltf_scenario(sc.id)
-    assert sc.state == "cancelled"
-    assert sc.cancellation_reason == "HTF_INVALIDATED"
-    assert db.get_ltf_observation(obs.id).state == "closed_by_parent"
+    assert sc.state == "range_pending"             # сценарий жив (R33)
+    assert sc.cancellation_reason is None
+    assert db.get_ltf_observation(obs.id).state == "active"
     evs = _events(db, obs.id)
-    assert evs[-1].kind == "cancellation"
-    assert evs[-1].payload["reason"] == "HTF_INVALIDATED"
+    assert evs[-1].kind == "context_update"
+    assert evs[-1].payload["fact"] == "htf_invalidated"
 
 
 def test_parent_90pct_test_not_invalidation(db: Database, cfg, instrument_id: int):
@@ -662,7 +677,7 @@ def test_swept_bsl_not_resurrected_on_range_update(db: Database, cfg,
     e2 = [e for e in db.list_ltf_scenario_entries(sc.id)
           if e.entry_zone_id == bsl.id and e.range_version == 2][0]
     assert (e2.reason, e2.state) == ("swept_level", "tested")
-    assert all(z.id != bsl.id for _, z, _ in engine._entry_candidates(
+    assert all(z.id != bsl.id for _, z in engine._entry_candidates(
         db.get_ltf_scenario(sc.id)))
     # и повторное включение типа его не воскрешает
     cfg.ltf_entry_types = "OB,FVG,SSL"
@@ -736,7 +751,7 @@ def test_disabled_entry_type_reclassify(db: Database, cfg, instrument_id: int):
             eligible=True, overlap="full", state="fresh",
         ))
     # якорь пары — тоже кандидат (BSL 15.0 на границе Premium)
-    assert {z.type for _, z, _ in engine._entry_candidates(sc)} == {"FVG", "OB", "BSL"}
+    assert {z.type for _, z in engine._entry_candidates(sc)} == {"FVG", "OB", "BSL"}
 
     cfg.ltf_entry_types = "OB,BSL,SSL"
     changed = engine.reclassify_active_entries(now_ms=T0 + 11 * H1_MS)
@@ -748,7 +763,7 @@ def test_disabled_entry_type_reclassify(db: Database, cfg, instrument_id: int):
           if e.entry_zone_id == ob.id][0]
     assert (oe.reason, oe.state) == ("ok", "fresh")
     # из кандидатов уведомлений FVG исключён, строка и зона на месте
-    assert {z.type for _, z, _ in engine._entry_candidates(
+    assert {z.type for _, z in engine._entry_candidates(
         db.get_ltf_scenario(sc.id))} == {"OB", "BSL"}
     assert db.get_ltf_entry_zone(fvg.id) is not None
     # повторное включение возвращает FVG
@@ -823,7 +838,11 @@ def test_a01_catchup_backlog_suppressed_then_live(db: Database, cfg,
     assert len(ready) == 1
     assert ready[0].processing_mode == "live"
     assert ready[0].delayed is False
-    assert [e.id for e in db.pending_ltf_events()] == [ready[0].id]
+    # все live-события (entries_ready и касание idx18) — в pending
+    live_ids = {
+        e.id for e in _events(db, obs.id) if not e.delayed
+    }
+    assert {e.id for e in db.pending_ltf_events()} == live_ids
 
 
 def test_a01_replay_marks_replay_and_stays_suppressed(db: Database, cfg,
@@ -837,11 +856,13 @@ def test_a01_replay_marks_replay_and_stays_suppressed(db: Database, cfg,
     db.insert_candles(candles)
     engine.replay_observation(obs.id)
     evs = _events(db, obs.id)
-    # §7 Этап 4: диапазон origin_reversal на idx17 (entries_ready), касание
-    # FVG происходит на idx24, когда она стала подходящей на continuation v2
+    # Касание FVG после слома (idx16) раньше первого entries_ready.
+    # §7 Этап 4: диапазон origin_reversal на idx17; §6.3: зоны вне Premium
+    # допущены — дополнение на idx23 только с новым якорем.
+    # §7/§9: заполнение FVG в текущей активации — context_transition
     assert [e.kind for e in evs] == [
-        "bos", "entries_ready", "entries_ready", "touch", "touch",
-        "sweep_failed", "cancellation",
+        "bos", "touch", "entries_ready", "touch", "context_transition",
+        "entries_ready", "touch", "sweep_failed", "cancellation",
     ]
     assert all(e.processing_mode == "replay" for e in evs)
     assert all(e.delayed for e in evs)

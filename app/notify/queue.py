@@ -184,13 +184,20 @@ class EventDispatcher:
         """ТЗ 07.10.2026 §13.6: зона могла стать невалидной между постановкой
         уведомления и отправкой — просроченный текущий вход не отправляем.
         Просроченным считается входовое событие по зоне, которая к моменту
-        отправки снята/архивна/невалидна или потеряла допуск к входу."""
+        отправки снята/архивна/невалидна или потеряла допуск к входу.
+
+        Правила v1 §7 (R26): глубина 90%+ В ТЕКУЩЕЙ активации (есть открытая
+        zone_activation) не подавляет её события — механический
+        entry_eligible=False по глубине применяется только к отработанности
+        ДО новой независимой активации."""
         if view.event.kind not in _ENTRY_KINDS or view.zone is None:
             return False
         zone = view.zone
         if zone.status in _STALE_STATUSES or zone.market_validity != "active":
             return True
-        return not zone.entry_eligible
+        if zone.entry_eligible:
+            return False
+        return self.db.get_open_zone_activation(zone.id, zone.cycle_id) is None
 
     def _group_members(self, views: list[EventView]) -> dict[int, list[Zone]]:
         """§10: состав визуальных групп для зон пакета (только пометка в
@@ -402,7 +409,7 @@ class EventDispatcher:
                 e, z = v.event, v.zone
                 # Terminal lifecycle events are unique per zone cycle regardless
                 # of detector re-evaluation time or quote jitter.
-                terminal = e.kind.value in {"fvg_filled", "ob_invalidated", "breaker_archived", "prb_archived", "level_taken"}
+                terminal = e.kind.value in {"fvg_filled", "ob_invalidated", "source_passed", "breaker_archived", "prb_archived", "level_taken"}
                 fact = fingerprint([iid, tf, z.type.value if z else "", z.direction.value if z else "",
                               z.lower if z else None, z.upper if z else None,
                               z.formed_at if z else None, e.cycle_id, e.kind.value,

@@ -49,8 +49,11 @@ _HTF_MAP: dict[EventKind, NormalizedKind] = {
     EventKind.DEPTH_50: NormalizedKind.DEPTH_50,
     EventKind.FVG_WEAKENED: NormalizedKind.DEPTH_50,
     EventKind.DEPTH_90: NormalizedKind.DEPTH_90,
-    EventKind.FVG_FILLED: NormalizedKind.ZONE_INVALIDATED,
+    # Правила v1 §7: заполненный FVG — факт визита, не инвалидация;
+    # инвалидация FVG — только проход закрытием собственного ТФ (SOURCE_PASSED)
+    EventKind.FVG_FILLED: NormalizedKind.INFO,
     EventKind.OB_INVALIDATED: NormalizedKind.ZONE_INVALIDATED,
+    EventKind.SOURCE_PASSED: NormalizedKind.ZONE_INVALIDATED,
     EventKind.BREAKER_ARCHIVED: NormalizedKind.ZONE_INVALIDATED,
     EventKind.PRB_ARCHIVED: NormalizedKind.ZONE_INVALIDATED,
     EventKind.LEVEL_TAKEN: NormalizedKind.LIQUIDITY_TAKEN,

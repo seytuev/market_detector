@@ -12,6 +12,7 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timezone
+from typing import Optional
 
 from .adapters.base import AdapterError, MarketDataAdapter, TIMEFRAME_MS
 from .config import DetectorConfig, Settings
@@ -57,15 +58,19 @@ QUOTE_BACKOFF_CAP = 5
 
 # §4 LTF-спеки: наблюдение открывается при фактическом достижении
 # подтверждённой HTF-зоны D1/W1 разрешённого типа (настройка
-# htf_context_types, ТЗ «LTF Current Setup» §16.1: OB — согласованный
-# триггер; FVG — предлагаемый режим, PRB/Breaker/BSL/SSL триггерами
-# не являются). FVG_WEAKENED — аналог DEPTH_50 для FVG: касание 50%
+# htf_context_types). Правила v1 §3: источниками являются также уровни
+# BSL/SSL (контакт — LEVEL_TAKEN: касание/пересечение без требования
+# подтверждённого sweep; направление ожидания BSL→bear, SSL→bull) и
+# пересечение всей зоны между наблюдениями (JUMP_THROUGH, §10.1: ожидание
+# допустимо, точный момент контакта неизвестен).
+# FVG_WEAKENED — аналог DEPTH_50 для FVG: касание 50%
 # НЕ прекращает FVG (статус WEAKENED — качественная пометка общего
 # движка, зона валидна), поэтому такое событие тоже открывает наблюдение.
 LTF_START_KINDS = {
     EventKind.TOUCH, EventKind.ALREADY_IN_ZONE,
     EventKind.DEPTH_50, EventKind.DEPTH_90,
     EventKind.FVG_WEAKENED,
+    EventKind.LEVEL_TAKEN, EventKind.JUMP_THROUGH,
 }
 LTF_PARENT_TIMEFRAMES = ("D1", "W1")
 # Допуск родителя — eligible_htf_parent (F01). Этот набор только не даёт
@@ -74,7 +79,10 @@ LTF_PARENT_VALID_STATUSES = PARENT_QUERY_STATUSES
 # состояния наблюдения, при которых LTF продолжает обработку и восстановление
 LTF_OPEN_STATES = ("waiting_structure", "active", "paused_data")
 
-_LTF_CONTEXT_ZONE_TYPES = {"OB": ZoneType.OB, "FVG": ZoneType.FVG}
+_LTF_CONTEXT_ZONE_TYPES = {
+    "OB": ZoneType.OB, "FVG": ZoneType.FVG,
+    "BSL": ZoneType.BSL, "SSL": ZoneType.SSL,
+}
 
 
 class Worker:
@@ -337,6 +345,11 @@ class Worker:
                 })
             await self._check_freshness(ins, tf)
 
+        # §10.3: ревизии закрытых D1/W1 — переоценка переходов зон с дедупом
+        events += await asyncio.to_thread(
+            self.scanner.process_candle_revisions, ins.id, now_ms()
+        )
+
         # F02: при включённом быстром цикле котировку обновляет он
         # (quote_loop) — HTF-цикл цену не запрашивает; выключен
         # (quote_poll_seconds = 0) — прежний путь, котировка вместе с HTF
@@ -350,20 +363,37 @@ class Worker:
 
         Общий хвост HTF-цикла (quote_poll_seconds = 0) и быстрого цикла
         котировок (F02). События возвращает — доставку и запуск
-        LTF-наблюдений выполняет вызывающий."""
+        LTF-наблюдений выполняет вызывающий. Контракт тика — QuoteTick
+        (§10.1): сделка (trade, event_at) или информационная цена
+        (ticker/mid, event_at=None — время ответа за сделку не выдаётся)."""
         adapter = self.adapters[ins.venue]
-        price, ts = await adapter.last_price(ins.symbol)
-        # F8: тик со временем источника старше последнего известного
-        # игнорируется целиком — не меняет котировку, формирующийся бар
+        tick = await adapter.last_price(ins.symbol)
+        # F8/R47: монотонность по event_at, когда он известен, иначе по
+        # received_at (зафиксированное правило QuoteTick.monotonic_at). Старый
+        # тик игнорируется целиком — не меняет котировку, формирующийся бар
         # и не вызывает scanner.on_price
-        known = self.db.get_quote(ins.id)
-        if known is not None and ts < known[1]:
+        known = self.db.get_quote_detail(ins.id)
+        if known is not None and tick.monotonic_at < (
+            known["event_at"] if known["event_at"] is not None else known["ts"]
+        ):
             return []
+        now = now_ms()
+        # §10.1: возраст рыночных данных (по сделке) и задержка обнаружения
+        # раздельно; пороги качества не меняются
+        age_ms = now - tick.event_at if tick.event_at is not None else None
+        detection_lag_ms = now - tick.received_at
         # последняя котировка — в meta: read model LTF (§14) считает положение
         # цены относительно HTF-зон серверно по свежей котировке
-        self.db.set_quote(ins.id, price, ts)
+        self.db.set_quote(
+            ins.id, tick.price, tick.monotonic_at,
+            price_kind=tick.price_kind, event_at=tick.event_at,
+            received_at=tick.received_at,
+            age_ms=age_ms, detection_lag_ms=detection_lag_ms,
+        )
+        price, ts = tick.price, tick.monotonic_at
         events = await asyncio.to_thread(
-            self.scanner.on_price, ins.id, price, ts, True, set(self.scan_tfs)
+            self.scanner.on_price, ins.id, price, ts, True, set(self.scan_tfs),
+            tick.price_kind,
         )
         # Котировка двигает high/low/close текущего незакрытого бара.
         # D1/W1 — график HTF; H1 — снимки бота и структура. В детектор H1
@@ -504,15 +534,27 @@ class Worker:
         )
 
     async def _ltf_open_observation(
-        self, ins: Instrument, zone, occurred_at: int
+        self, ins: Instrument, zone, occurred_at: int, *,
+        interaction: Optional[str] = None, evidence: Optional[dict] = None,
     ) -> None:
         """Открыть наблюдение за зоной и подгрузить H1-контекст (§4).
 
         Идемпотентно по UNIQUE(zone_id, cycle_id) (§4, приёмка п.20);
-        подгрузка истории — один раз на наблюдение (meta-флаг seeded)."""
+        подгрузка истории — один раз на наблюдение (meta-флаг seeded).
+        interaction/evidence — основание контакта для источника эпизода
+        (contact_basis): рыночный факт или служебная пометка (manual_watch)."""
         obs = await asyncio.to_thread(
-            self.ltf_engine.on_htf_zone_touched, ins.id, zone, occurred_at
+            self.ltf_engine.on_htf_zone_touched, ins.id, zone, occurred_at,
+            interaction, evidence,
         )
+        if obs is None:
+            # §7 (R16/R18): зона отработана до новой независимой активации —
+            # факт записан в zone_activation, наблюдение не открывается
+            log.info(
+                "LTF: зона %s исторически отработана до активации — "
+                "наблюдение не открывается", zone.id,
+            )
+            return
         if not self.db.get_meta(f"ltf:h1:seeded:{obs.id}"):
             # §4: подгрузить историю H1 до касания — предшествующая
             # структура как контекст; события replay помечаются delayed
@@ -542,7 +584,12 @@ class Worker:
             )
             if existing is not None:
                 continue
-            await self._ltf_open_observation(ins, zone, self._first_htf_reach_ms(zone))
+            await self._ltf_open_observation(
+                ins, zone, self._first_htf_reach_ms(zone),
+                # §2: включение «Анализировать» — не рыночный контакт;
+                # источник эпизода помечается служебным основанием
+                evidence={"contact_basis": "manual_watch"},
+            )
             opened = True
         if opened and self.broadcast:
             self.broadcast({
@@ -643,13 +690,42 @@ class Worker:
         """
         if not self._ltf_active:
             return
+        # §4/§5: проход HTF-источника своим ТФ — факт машины возврата
+        # контекста (записывается рыночным временем события)
+        from .services import htf_context as _htf_ctx
+        for e in events:
+            if e.kind not in (EventKind.SOURCE_PASSED, EventKind.OB_INVALIDATED):
+                continue
+            zone = self.db.get_zone(e.zone_id)
+            if zone is not None:
+                await asyncio.to_thread(
+                    _htf_ctx.note_source_outcome, self.db, zone, e.occurred_at, self.cfg
+                )
         for e in events:
             if e.kind not in LTF_START_KINDS:
                 continue
             zone = self.db.get_zone(e.zone_id)
-            if not eligible_htf_parent(zone, self.cfg, as_of=e.occurred_at):
+            # LEVEL_TAKEN завершает уровень в момент события (TAKEN +
+            # display_until = occurred_at): допуск родителя оценивается
+            # строго до контакта — сам контакт и есть начало наблюдения (R09)
+            as_of = (
+                e.occurred_at - 1
+                if e.kind == EventKind.LEVEL_TAKEN else e.occurred_at
+            )
+            if not eligible_htf_parent(zone, self.cfg, as_of=as_of):
                 continue
-            await self._ltf_open_observation(ins, zone, e.occurred_at)
+            contact_evidence = dict(e.evidence or {})
+            # §3/Q18 (R34): контакт по реальной котировке имеет доказанное
+            # время — та же H1 может подтвердить сценарий; пересечение между
+            # наблюдениями точного времени не имеет
+            if contact_evidence.get("observed") and not contact_evidence.get(
+                "exact_contact_unknown"
+            ):
+                contact_evidence.setdefault("order_proven", True)
+            await self._ltf_open_observation(
+                ins, zone, e.occurred_at,
+                evidence=contact_evidence,
+            )
         # §4: инвалидация родителя закрывает сценарий (HTF_INVALIDATED);
         # тест 90% и запрет Breaker наблюдение не закрывают (внутри метода)
         for obs in self.db.list_ltf_observations(instrument_id=ins.id):

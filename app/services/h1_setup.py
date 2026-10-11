@@ -303,8 +303,10 @@ def _open_leg(state, event, pivots, candles, as_of: int, origin: Optional[dict])
 def apply_candle(state: dict, candle: Candle, events: list, pivots: list, candles: list) -> list:
     """Один закрытый бар. Возвращает ноги, которые нужно сохранить."""
     dirty: list[dict] = []
-    primary = [e for e in events if e.kind == "BOS" and e.stage == "primary"]
-    secondary = [e for e in events if e.kind == "BOS" and e.stage != "primary"]
+    # §6.1 (правила v1): локальная нога и PD открываются от BOS и SMS
+    # на равных; тип события сохраняется в фактах ноги
+    primary = [e for e in events if e.kind in ("BOS", "SMS") and e.stage == "primary"]
+    secondary = [e for e in events if e.kind in ("BOS", "SMS") and e.stage != "primary"]
     if len({_dir_value(e.direction) for e in primary}) > 1:
         state["quality"] = "intrabar_order_unknown"
     primary.sort(key=lambda e: (_dir_value(e.direction), e.level_key))
@@ -345,14 +347,14 @@ def apply_candle(state: dict, candle: Candle, events: list, pivots: list, candle
 
 
 def replay_events(events: list, pivots: list, candles: list, as_of: int) -> dict:
-    """Полный проход по уже известным BOS. Будущие свечи и опоры не входят."""
+    """Полный проход по уже известным BOS/SMS. Будущие свечи и опоры не входят."""
     closed = sorted(
         (c for c in candles if c.closed and int(c.close_time) <= int(as_of)),
         key=lambda c: c.open_time,
     )
     grouped: dict[int, list] = {}
     for event in events:
-        if event.kind != "BOS" or int(event.occurred_at) > int(as_of):
+        if event.kind not in ("BOS", "SMS") or int(event.occurred_at) > int(as_of):
             continue
         grouped.setdefault(int(event.occurred_at), []).append(event)
     state = _new_state()

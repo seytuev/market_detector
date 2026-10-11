@@ -277,7 +277,9 @@ def test_zones_of_this_leg_and_old_geometry(db, cfg, instrument_id):
     assert crossed["admitted"] == [81600, 81900]
     assert crossed["reason"] == "eligible_provisional"
     above = [z for z in snap["candidates"] if z.get("lower") is not None and z["lower"] > 81900]
-    assert above and all(z["reason"] == "outside_pd" for z in above)
+    # §6.3 (правила v1): PD — не фильтр; зоны выше EQ допускаются с пометкой
+    # предварительного PD (положение в PD — описательная характеристика)
+    assert above and all(z["reason"] in ("ok", "eligible_provisional") for z in above)
     assert all(z["status"] != "forming" or z not in snap["eligible_regions"] for z in snap["candidates"])
 
     forming = zone_against_leg(candles[2].open_time, False, 80700, 81100, snap)

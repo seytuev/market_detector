@@ -234,13 +234,14 @@ def test_apply_normalizes(mig):
         ])
         assert [(r["entry_zone_id"], r["range_version"]) for r in got] == expected
         # (e) reason-бэкфилл по версии строки: sweep после переноса теста →
-        # swept_level у z10; z30 вне Premium [150,200] на v2 → outside_pd;
-        # OB z40 в Premium [175,200] на v1 → ok; версия 0 → range_pending
+        # swept_level у z10; z30 вне Premium [150,200] на v2 — §6.3: PD не
+        # фильтр → ok; OB z40 в Premium [175,200] на v1 → ok;
+        # версия 0 → range_pending
         reasons = {(r["entry_zone_id"], r["range_version"]): r["reason"]
                    for r in got}
         assert reasons[(ids["z10"], 1)] == "swept_level"
         assert reasons[(ids["z10"], 2)] == "swept_level"
-        assert reasons[(ids["z30"], 2)] == "outside_pd"
+        assert reasons[(ids["z30"], 2)] == "ok"
         assert reasons[(ids["z40"], 1)] == "ok"
         assert reasons[(ids["z40"], 0)] == "range_pending"
         assert reasons[(ids["z50"], 2)] == "ok"
@@ -329,12 +330,11 @@ def test_apply_idempotent(mig):
 def test_reason_by_row_version_not_head(mig):
     """Без future leakage: строка классифицируется по СВОЕЙ версии диапазона,
     а не по голове. z30 (уровень 120): на v1 [100,200] (Premium [150,200]) —
-    outside_pd и на своей версии, и на голове; z40 OB [190,195]: на v2
-    [150,200] Premium [175,200] — ok; если бы классифицировали по голове
+    §6.3: PD не фильтр → ok и на своей версии, и на голове; z40 OB [190,195]:
+    на v2 [150,200] Premium [175,200] — ok; если бы классифицировали по голове
     отменённого сценария 2 [50,60], результат отличался бы."""
     rep = _run(mig, apply=True)
     sc = next(s for s in rep["scenarios"] if s["scenario_id"] == mig["ids"]["sc1"])
-    assert sc["reasons_after"].get("ok") == 2       # z40@v2, z50@v1
+    assert sc["reasons_after"].get("ok") == 3       # z30@v1, z40@v2, z50@v1
     assert sc["reasons_after"].get("swept_level") == 2
-    assert sc["reasons_after"].get("outside_pd") == 1
     assert sc["reasons_after"].get("range_pending") == 1

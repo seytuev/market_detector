@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from app.adapters.base import AdapterError
+from app.adapters.base import AdapterError, QuoteTick
 from app.config import DetectorConfig, Settings
 from app.db import Database
 from app.models import (
@@ -37,7 +37,7 @@ class FakeAdapter:
 
     def __init__(self):
         self.candles = []
-        self.price = (110.0, now_ms())
+        self.price = QuoteTick(110.0, now_ms(), now_ms(), "trade")
         self.klines_calls = 0
         self.price_calls: dict[str, int] = {}
         self.price_fail: set[str] = set()
@@ -102,10 +102,10 @@ async def test_quote_loop_updates_quote_independent_of_htf_cycle():
     ins = await _seed(db, worker)
     assert db.get_quote(ins.id) is None
 
-    adapter.price = (111.5, now_ms())
+    adapter.price = QuoteTick(111.5, now_ms(), now_ms(), "trade")
     await worker._quote_poll_once()
 
-    assert db.get_quote(ins.id) == adapter.price
+    assert db.get_quote(ins.id) == tuple(adapter.price)
     assert adapter.klines_calls == 0  # HTF-цикл не затрагивался
 
 
@@ -125,7 +125,7 @@ async def test_quote_updates_open_h1_and_skips_expired_bar():
             timeframe="H1", instrument_id=ins.id, closed=False,
         ),
     ])
-    adapter.price = (107.5, now)
+    adapter.price = QuoteTick(107.5, now, now, "trade")
     await worker._quote_poll_once()
     bar = db.last_candle(ins.id, "H1", closed_only=False)
     assert bar is not None and bar.closed is False
@@ -145,7 +145,7 @@ async def test_quote_updates_open_h1_and_skips_expired_bar():
             timeframe="H1", instrument_id=ins2.id, closed=False,
         ),
     ])
-    adapter2.price = (150.0, now)
+    adapter2.price = QuoteTick(150.0, now, now, "trade")
     await worker2._quote_poll_once()
     stale = db2.last_candle(ins2.id, "H1", closed_only=False)
     assert stale is not None
@@ -179,7 +179,7 @@ async def test_poll_instrument_fetches_quote_when_quote_loop_disabled():
 
     await worker.poll_once()
 
-    assert db.get_quote(ins.id) == adapter.price
+    assert db.get_quote(ins.id) == tuple(adapter.price)
 
 
 async def test_quote_loop_touch_event_not_duplicated():
@@ -190,7 +190,7 @@ async def test_quote_loop_touch_event_not_duplicated():
     worker = _make_worker(db, adapter)
     ins = await _seed(db, worker)
     zone = _zone(db, ins.id)
-    adapter.price = (95.0, now_ms())  # цена внутри зоны [90;100] → TOUCH
+    adapter.price = QuoteTick(95.0, now_ms(), now_ms(), "trade")  # цена внутри зоны [90;100] → TOUCH
 
     await worker._quote_poll_once()
     events = db.get_events(zone_id=zone.id)
@@ -214,7 +214,7 @@ async def test_quote_loop_error_isolation_and_backoff():
 
     await worker._quote_poll_once()
     assert db.get_quote(btc.id) is None
-    assert db.get_quote(eth.id) == adapter.price  # сосед не пострадал
+    assert db.get_quote(eth.id) == tuple(adapter.price)  # сосед не пострадал
 
     for _ in range(QUOTE_FAIL_K - 1):
         await worker._quote_poll_once()
@@ -234,7 +234,7 @@ async def test_quote_loop_error_isolation_and_backoff():
         await worker._quote_poll_once()
         if db.get_quote(btc.id) is not None:
             break
-    assert db.get_quote(btc.id) == adapter.price
+    assert db.get_quote(btc.id) == tuple(adapter.price)
 
 
 def test_quality_quote_threshold_follows_quote_loop():

@@ -12,7 +12,12 @@ from app.services.market_copy import CATALOG_CODES, render
 from app.services.presentation import (
     _reconcile_action, assemble, condition_texts, select_headline,
 )
-from app.services.reconcile import fvg_contradiction, read_reconcile, reconcile_zone
+from app.services.reconcile import (
+    fvg_contradiction,
+    fvg_has_fill_event,
+    read_reconcile,
+    reconcile_zone,
+)
 from tests.conftest import make_candle
 
 T0 = 1_700_000_000_000
@@ -267,6 +272,9 @@ def test_reconcile_records_only_proven_fill(db):
     assert result["status"] == "resolved"
     assert result["outcome"] == "fill_recorded"
     fresh = db.get_zone(zone_id)
-    assert fresh.display_until is not None
-    assert "fvg_filled" in (fresh.end_reason or "")
+    # правила v1 §7: заполнение записано как событие визита, но рисунок
+    # им больше не завершается (display_until/end_reason не ставятся)
+    assert fvg_has_fill_event(db, fresh) is True
+    assert fresh.display_until is None
+    assert "fvg_filled" not in (fresh.end_reason or "")
     assert fvg_contradiction(db, fresh, 81822.67, True) is False

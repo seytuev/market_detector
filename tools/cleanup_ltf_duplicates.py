@@ -40,6 +40,8 @@ CHILD_TABLES = (
     "ltf_movement",
     "ltf_structure_event",
     "ltf_event",
+    # правила v1 §6.2: ревизии PD сценария (FK → ltf_scenario)
+    "pd_revision",
 )
 OPEN_STATES = ("range_pending", "monitoring_entries")
 

@@ -260,13 +260,18 @@ def test_shallow_tested_ob_reselected_on_new_range(db: Database, cfg,
 
 @pytest.mark.parametrize("depth,extreme,reselected", [
     (0.89, 101.56, True),     # 89% < 90% — повторный выбор допустим
-    (0.90, 101.6, False),     # ровно 90% (P90 = 101.6) — недопустимо
-    (0.95, 101.8, False),     # 95% — недопустимо
+    # Правила v1 §7 (R17): глубина накоплена В текущей активации
+    # (first_test_at позже activated_at) — повторный выбор не блокируется.
+    # Блокировка по глубине ДО новой независимой активации — reason
+    # historically_worked (покрыто tests/test_activation_visit.py)
+    (0.90, 101.6, True),
+    (0.95, 101.8, True),
 ])
 def test_deep_test_blocks_reselection(db: Database, cfg, instrument_id: int,
                                       depth, extreme, reselected):
-    """C: прежний тест >= 90% запрещает повторный выбор, но зона остаётся
-    рыночно актуальной (validity='tested', не invalid)."""
+    """C: прежний тест >= 90% запрещает повторный выбор только когда он ДО
+    активации (§7); в текущей активации зона остаётся рыночно актуальной
+    (validity='tested', не invalid) и допустимой."""
     engine = LtfEngine(db, cfg)
     candles = make_h1_candles(REUSE_FLOW, T_FLOW, instrument_id)
     obs, sc = _setup_pending(db, instrument_id)

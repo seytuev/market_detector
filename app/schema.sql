@@ -1031,6 +1031,8 @@ CREATE INDEX IF NOT EXISTS ix_pd_revision_scenario ON pd_revision (scenario_id);
 
 -- §10.3: журнал коррекций уже закрытых свечей. Ревизия хранится, старое
 -- значение не стирается; пересчёт зависимостей идёт по этой истории.
+-- Дедуп по целевому состоянию (open_time + новый OHLC): повторная доставка
+-- той же ревизии не плодит строки, а две РАЗНЫЕ ревизии в одну ms обе живут.
 CREATE TABLE IF NOT EXISTS candle_revision (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     instrument_id INTEGER NOT NULL REFERENCES instrument(id),
@@ -1039,5 +1041,26 @@ CREATE TABLE IF NOT EXISTS candle_revision (
     old_ohlc_json TEXT NOT NULL,
     new_ohlc_json TEXT NOT NULL,
     detected_at INTEGER NOT NULL,
-    UNIQUE (instrument_id, timeframe, open_time, detected_at)
+    UNIQUE (instrument_id, timeframe, open_time, new_ohlc_json)
 );
+
+-- §10.2: плато равных в тиках экстремумов — единая структурная опора/
+-- ликвидность. Уровень, начало/конец, участники, ревизия; подтверждение
+-- после правого окна последнего участника. Расширение группы — новая
+-- ревизия той же строки (по start_open), подтверждение не датируется задним
+-- числом; опорная запись для downstream — ltf_pivot (evidence.plateau).
+CREATE TABLE IF NOT EXISTS ltf_plateau (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    instrument_id INTEGER NOT NULL REFERENCES instrument(id),
+    side TEXT NOT NULL,                 -- high | low
+    level REAL NOT NULL,
+    start_open INTEGER NOT NULL,        -- open_time первой свечи группы
+    end_open INTEGER NOT NULL,          -- open_time последнего участника
+    members_json TEXT NOT NULL DEFAULT '[]',
+    revision INTEGER NOT NULL DEFAULT 1,
+    state TEXT NOT NULL DEFAULT 'confirmed',  -- confirmed | ambiguous | forming
+    confirmed_at INTEGER,
+    created_at INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (instrument_id, side, level, start_open)
+);
+CREATE INDEX IF NOT EXISTS ix_ltf_plateau_instr ON ltf_plateau (instrument_id, side);

@@ -553,6 +553,35 @@ class Database:
                 self.conn.execute(
                     "ALTER TABLE candle ADD COLUMN revision INTEGER NOT NULL DEFAULT 0"
                 )
+            # §10.3: дедуп ревизий по целевому OHLC (а не по ms обнаружения —
+            # две разные ревизии в одну миллисекунду обе должны жить).
+            # Пересоздание таблицы при старом ключе UNIQUE(detected_at)
+            rev_sql = self.conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='candle_revision'"
+            ).fetchone()
+            if rev_sql and "UNIQUE (instrument_id, timeframe, open_time, detected_at)" in (
+                rev_sql["sql"] or ""
+            ):
+                self.conn.executescript(
+                    """ALTER TABLE candle_revision RENAME TO candle_revision_old;
+                       CREATE TABLE candle_revision (
+                           id INTEGER PRIMARY KEY AUTOINCREMENT,
+                           instrument_id INTEGER NOT NULL REFERENCES instrument(id),
+                           timeframe TEXT NOT NULL,
+                           open_time INTEGER NOT NULL,
+                           old_ohlc_json TEXT NOT NULL,
+                           new_ohlc_json TEXT NOT NULL,
+                           detected_at INTEGER NOT NULL,
+                           UNIQUE (instrument_id, timeframe, open_time, new_ohlc_json)
+                       );
+                       INSERT OR IGNORE INTO candle_revision
+                           (id, instrument_id, timeframe, open_time,
+                            old_ohlc_json, new_ohlc_json, detected_at)
+                       SELECT id, instrument_id, timeframe, open_time,
+                              old_ohlc_json, new_ohlc_json, detected_at
+                       FROM candle_revision_old;
+                       DROP TABLE candle_revision_old;"""
+                )
             from .events.schema import apply_events_schema
             apply_events_schema(self.conn)
             self.conn.commit()
@@ -586,6 +615,7 @@ class Database:
         self, instrument_id: int, price: float, ts_ms: int, *,
         price_kind: Optional[str] = None, event_at: Optional[int] = None,
         received_at: Optional[int] = None,
+        age_ms: Optional[int] = None, detection_lag_ms: Optional[int] = None,
     ) -> None:
         """Последняя котировка инструмента (цена и время последней сделки);
         пишет воркер на live-тике. Положение цены относительно HTF-зон
@@ -593,18 +623,25 @@ class Database:
         источника старше уже сохранённого игнорируется: запоздавший ответ
         не двигает котировку назад (F8). Правила v1 §10.1: вид цены и
         раздельные времена события/получения хранятся в том же JSON;
-        время ответа не выдаётся за время сделки."""
+        время ответа не выдаётся за время сделки. age_ms — возраст рыночных
+        данных на момент записи, detection_lag_ms — задержка обнаружения."""
         existing = self.get_quote(instrument_id)
         if existing is not None and existing[1] > ts_ms:
             return
         payload = {
             "price": price, "ts": ts_ms,
             "price_kind": price_kind or "unknown",
-            "event_at": int(event_at) if event_at is not None else ts_ms,
+            # R45: время сделки хранится только когда источник его сообщил;
+            # время получения за время сделки не выдаётся
+            "event_at": int(event_at) if event_at is not None else None,
             "received_at": (
                 int(received_at) if received_at is not None else now_ms()
             ),
         }
+        if age_ms is not None:
+            payload["age_ms"] = int(age_ms)
+        if detection_lag_ms is not None:
+            payload["detection_lag_ms"] = int(detection_lag_ms)
         self.set_meta(
             f"quote:{instrument_id}",
             json.dumps(payload),
@@ -636,8 +673,12 @@ class Database:
             "price": price,
             "ts": ts,
             "price_kind": d.get("price_kind") or "unknown",
-            "event_at": int(d.get("event_at") or ts),
+            "event_at": (
+                int(d["event_at"]) if d.get("event_at") is not None else None
+            ),
             "received_at": int(d.get("received_at") or ts),
+            "age_ms": d.get("age_ms"),
+            "detection_lag_ms": d.get("detection_lag_ms"),
         }
 
     def get_all_quotes(self) -> dict[int, tuple[float, int]]:
@@ -715,6 +756,22 @@ class Database:
         q += " ORDER BY id"
         return [self._activation_row(r) for r in self.conn.execute(q, args).fetchall()]
 
+    def list_zone_activations_at(
+        self, zone_id: int, as_of: int
+    ) -> list[dict[str, Any]]:
+        """Активации, открытые на момент as_of (историческая проекция §7):
+        начаты не позднее as_of и ещё не завершены к нему."""
+        return [
+            self._activation_row(r)
+            for r in self.conn.execute(
+                """SELECT * FROM zone_activation
+                   WHERE zone_id=? AND started_at<=?
+                     AND (ended_at IS NULL OR ended_at>?)
+                   ORDER BY id""",
+                (zone_id, int(as_of), int(as_of)),
+            ).fetchall()
+        ]
+
     def update_zone_activation(self, activation_id: int, **fields: Any) -> None:
         unknown = set(fields) - self._ACTIVATION_UPDATABLE
         if unknown:
@@ -727,6 +784,49 @@ class Database:
             (*fields.values(), activation_id),
         )
         self._commit()
+
+    def insert_ltf_plateau(
+        self, instrument_id: int, side: str, level: float, start_open: int,
+        end_open: int, members: Iterable[Any], revision: int, state: str,
+        confirmed_at: Optional[int], created_at: int = 0,
+    ) -> int:
+        """Плато-группа (§10.2): upsert по (instrument_id, side, level,
+        start_open) — расширение группы обновляет конец/ревизию/подтверждение,
+        прежняя форма в ltf_pivot остаётся историей."""
+        cur = self.conn.execute(
+            """INSERT INTO ltf_plateau
+               (instrument_id, side, level, start_open, end_open, members_json,
+                revision, state, confirmed_at, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT (instrument_id, side, level, start_open)
+               DO UPDATE SET end_open=excluded.end_open,
+                             members_json=excluded.members_json,
+                             revision=excluded.revision,
+                             state=excluded.state,
+                             confirmed_at=excluded.confirmed_at""",
+            (instrument_id, side, level, start_open, end_open,
+             json.dumps(list(members)), revision, state, confirmed_at, created_at),
+        )
+        self._commit()
+        self._bump_ltf_cache()
+        if cur.rowcount == 1:
+            return int(cur.lastrowid)
+        row = self.conn.execute(
+            """SELECT id FROM ltf_plateau
+               WHERE instrument_id=? AND side=? AND level=? AND start_open=?""",
+            (instrument_id, side, level, start_open),
+        ).fetchone()
+        return int(row["id"])
+
+    def list_ltf_plateau(self, instrument_id: int) -> list[dict[str, Any]]:
+        return [
+            {k: r[k] for k in r.keys()}
+            for r in self.conn.execute(
+                "SELECT * FROM ltf_plateau WHERE instrument_id=? "
+                "ORDER BY side, start_open",
+                (instrument_id,),
+            ).fetchall()
+        ]
 
     def insert_pd_revision(
         self, scenario_id: int, anchor_structure_key: str, anchor_kind: str,
@@ -960,6 +1060,41 @@ class Database:
     # ---------- candles ----------
 
     def insert_candles(self, candles: Iterable[Candle]) -> int:
+        candles = list(candles)
+        # §10.3: ревизия уже закрытой свечи — факт в candle_revision (старые
+        # и новые OHLC) + счётчик candle.revision. Дедуп по (instrument, tf,
+        # open_time, новый OHLC): повторная доставка той же ревизии не
+        # плодит строки
+        closed_keys = [
+            (c.instrument_id, c.timeframe, c.open_time)
+            for c in candles if c.closed
+        ]
+        if closed_keys:
+            existing: dict[tuple, tuple] = {}
+            by_tf: dict[tuple, set] = {}
+            for iid, tf, ot in closed_keys:
+                by_tf.setdefault((iid, tf), set()).add(ot)
+            for (iid, tf), ots in by_tf.items():
+                marks = ",".join("?" * len(ots))
+                for r in self.conn.execute(
+                    f"SELECT open_time, open, high, low, close FROM candle "
+                    f"WHERE instrument_id=? AND timeframe=? AND closed=1 "
+                    f"AND open_time IN ({marks})",
+                    (iid, tf, *ots),
+                ).fetchall():
+                    existing[(iid, tf, int(r["open_time"]))] = (
+                        r["open"], r["high"], r["low"], r["close"],
+                    )
+            detected = now_ms()
+            for c in candles:
+                if not c.closed:
+                    continue
+                prev = existing.get((c.instrument_id, c.timeframe, c.open_time))
+                if prev is not None and prev != (c.open, c.high, c.low, c.close):
+                    self._record_candle_revision(
+                        c.instrument_id, c.timeframe, c.open_time,
+                        list(prev), [c.open, c.high, c.low, c.close], detected,
+                    )
         rows = [
             (c.instrument_id, c.timeframe, c.open_time, c.close_time, c.open, c.high,
              c.low, c.close, int(c.closed), c.source)
@@ -967,7 +1102,8 @@ class Database:
         ]
         # закрытие терминально (F9): запоздавший незакрытый снимок того же
         # open_time не «переоткрывает» свечу и не переписывает её OHLC;
-        # коррекция закрытой свечи допустима только с тем же closed=True
+        # коррекция закрытой свечи допустима только с тем же closed=True —
+        # тогда это ревизия (revision+1, §10.3)
         cur = self.conn.executemany(
             """INSERT INTO candle (instrument_id, timeframe, open_time, close_time,
                                   open, high, low, close, closed, source)
@@ -975,13 +1111,64 @@ class Database:
                ON CONFLICT (instrument_id, timeframe, open_time)
                DO UPDATE SET close_time=excluded.close_time, open=excluded.open,
                              high=excluded.high, low=excluded.low, close=excluded.close,
-                             closed=excluded.closed, source=excluded.source
+                             closed=excluded.closed, source=excluded.source,
+                             revision = candle.revision + CASE
+                                 WHEN candle.closed=1 AND excluded.closed=1 AND (
+                                     candle.open != excluded.open OR
+                                     candle.high != excluded.high OR
+                                     candle.low != excluded.low OR
+                                     candle.close != excluded.close)
+                                 THEN 1 ELSE 0 END
                WHERE NOT (candle.closed=1 AND excluded.closed=0)""",
             rows,
         )
         self._commit()
         self.bump_state_seq()
         return cur.rowcount
+
+    def _record_candle_revision(
+        self, instrument_id: int, timeframe: str, open_time: int,
+        old_ohlc: Iterable[Any], new_ohlc: Iterable[Any], detected_at: int,
+    ) -> Optional[int]:
+        """Записать факт ревизии, если такой (к тому же новому OHLC) ещё нет.
+
+        Дедуп по целевому состоянию: движок (отпечаток F10) и путь upsert
+        сходятся в одной строке, а не в двух разных фактах. OHLC
+        нормализуется к float — формат числа в JSON не создаёт псевдо-разных
+        ревизий."""
+        old = [float(v) for v in old_ohlc]
+        new = [float(v) for v in new_ohlc]
+        new_json = json.dumps(new)
+        dup = self.conn.execute(
+            """SELECT 1 FROM candle_revision
+               WHERE instrument_id=? AND timeframe=? AND open_time=?
+                 AND new_ohlc_json=? LIMIT 1""",
+            (instrument_id, timeframe, open_time, new_json),
+        ).fetchone()
+        if dup is not None:
+            return None
+        return self.insert_candle_revision(
+            instrument_id, timeframe, open_time, old, new, detected_at,
+        )
+
+    def candle_at(
+        self, instrument_id: int, timeframe: str, open_time: int
+    ) -> Optional[Candle]:
+        r = self.conn.execute(
+            """SELECT * FROM candle
+               WHERE instrument_id=? AND timeframe=? AND open_time=?""",
+            (instrument_id, timeframe, open_time),
+        ).fetchone()
+        return self._to_candle(r) if r else None
+
+    def latest_candle_revision_at(self, instrument_id: int, timeframe: str) -> int:
+        """MAX(detected_at) по журналу ревизий (дешёвый сигнал для пересчёта)."""
+        r = self.conn.execute(
+            """SELECT MAX(detected_at) AS t FROM candle_revision
+               WHERE instrument_id=? AND timeframe=?""",
+            (instrument_id, timeframe),
+        ).fetchone()
+        return int(r["t"] or 0)
 
     def get_candles(
         self,
@@ -1032,7 +1219,7 @@ class Database:
             instrument_id=r["instrument_id"], timeframe=r["timeframe"],
             open_time=r["open_time"], close_time=r["close_time"], open=r["open"],
             high=r["high"], low=r["low"], close=r["close"], closed=bool(r["closed"]),
-            source=r["source"],
+            source=r["source"], revision=int(r["revision"] or 0),
         )
 
     # ---------- zones ----------
@@ -1592,10 +1779,12 @@ class Database:
         """Идемпотентно: UNIQUE(zone, cycle, kind, occurred_at). None = дубликат."""
         cur = self.conn.execute(
             """INSERT OR IGNORE INTO event
-               (zone_id, cycle_id, kind, occurred_at, detected_at, price, depth, delayed, evidence)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
+               (zone_id, cycle_id, kind, occurred_at, detected_at, price, depth,
+                delayed, evidence, visit_id, activation_id)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (e.zone_id, e.cycle_id, e.kind.value, e.occurred_at, e.detected_at, e.price,
-             e.depth, int(e.delayed), json.dumps(e.evidence, ensure_ascii=False)),
+             e.depth, int(e.delayed), json.dumps(e.evidence, ensure_ascii=False),
+             e.visit_id, e.activation_id),
         )
         self._commit()
         # rowcount надёжен в отличие от lastrowid после проигнорированной вставки
@@ -1631,6 +1820,7 @@ class Database:
                 kind=EventKind(r["kind"]), occurred_at=r["occurred_at"],
                 detected_at=r["detected_at"], price=r["price"], depth=r["depth"],
                 delayed=bool(r["delayed"]), evidence=json.loads(r["evidence"] or "{}"),
+                visit_id=r["visit_id"], activation_id=r["activation_id"],
             )
             for r in self.conn.execute(q, args).fetchall()
         ]
@@ -1642,7 +1832,8 @@ class Database:
         return Event(id=row["id"], zone_id=row["zone_id"], cycle_id=row["cycle_id"],
                      kind=EventKind(row["kind"]), occurred_at=row["occurred_at"],
                      detected_at=row["detected_at"], price=row["price"], depth=row["depth"],
-                     delayed=bool(row["delayed"]), evidence=json.loads(row["evidence"] or "{}"))
+                     delayed=bool(row["delayed"]), evidence=json.loads(row["evidence"] or "{}"),
+                     visit_id=row["visit_id"], activation_id=row["activation_id"])
 
     def list_events_for_instrument(
         self, instrument_id: int, since_ms: Optional[int] = None, limit: int = 100,
@@ -1668,6 +1859,7 @@ class Database:
                 kind=EventKind(r["kind"]), occurred_at=r["occurred_at"],
                 detected_at=r["detected_at"], price=r["price"], depth=r["depth"],
                 delayed=bool(r["delayed"]), evidence=json.loads(r["evidence"] or "{}"),
+                visit_id=r["visit_id"], activation_id=r["activation_id"],
             )
             for r in self.conn.execute(q, args).fetchall()
         ]
@@ -2350,6 +2542,9 @@ class Database:
             reverse_break_pivot_id=r["reverse_break_pivot_id"],
             reverse_break_confirmed_at=r["reverse_break_confirmed_at"],
             last_processed_close=r["last_processed_close"],
+            htf_interaction_id=r["htf_interaction_id"],
+            pd_anchor_structure_key=r["pd_anchor_structure_key"],
+            pd_anchor_kind=r["pd_anchor_kind"],
             created_at=r["created_at"], updated_at=r["updated_at"],
         )
 
@@ -2753,12 +2948,11 @@ class Database:
         один агрегирующий запрос для всех инструментов (eligible_count
         списка активов без N+1, §4.2/§14). reason='' — строки до миграции:
         пригодность выводится из state (fallback eligibility.entry_reason:
-        fresh/tested+eligible → ok). §18 (L01): контекстно допущенные FVG вне
-        Premium входят, когда у сценария полный контекст — оба факта
-        context_update (counter_sweep и htf_fvg50); правило зеркалит
-        eligibility.evaluate_final (допуск по обычному правилу — состояния
-        fresh и tested с reason ok, повторно допущенная tested-зона не
-        выпадает из счётчика)."""
+        fresh/tested+eligible → ok). §6.3 (правила v1): PD — не фильтр —
+        зоны вне половины диапазона входят без контекстного исключения;
+        правило зеркалит eligibility.evaluate_final (допуск по обычному
+        правилу — состояния fresh/tested/out_of_range с reason ok/outside_pd,
+        повторно допущенная tested-зона не выпадает из счётчика)."""
         q = """
             SELECT o.instrument_id AS instrument_id,
                    se.scenario_id AS scenario_id,
@@ -2775,20 +2969,7 @@ class Database:
               AND (
                   (se.state IN ('fresh', 'tested') AND se.eligible = 1
                    AND (se.reason = 'ok' OR se.reason = ''))
-                  OR (se.state = 'out_of_range' AND se.reason = 'outside_pd'
-                      AND z.type = 'FVG'
-                      AND EXISTS (
-                          SELECT 1 FROM ltf_event e1
-                          WHERE e1.scenario_id = se.scenario_id
-                            AND e1.kind = 'context_update'
-                            AND json_extract(e1.payload, '$.fact')
-                                = 'counter_sweep')
-                      AND EXISTS (
-                          SELECT 1 FROM ltf_event e2
-                          WHERE e2.scenario_id = se.scenario_id
-                            AND e2.kind = 'context_update'
-                            AND json_extract(e2.payload, '$.fact')
-                                = 'htf_fvg50'))
+                  OR (se.state = 'out_of_range' AND se.reason IN ('outside_pd', 'ok'))
               )
         """
         return [dict(r) for r in self.conn.execute(q).fetchall()]

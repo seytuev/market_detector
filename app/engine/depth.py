@@ -144,6 +144,23 @@ def jumped_through(zone: Zone, prev_price: Optional[float], lo: float, hi: float
     return prev_price < zone.lower and lo > zone.upper
 
 
+def crossed_between_observations(
+    zone: Zone, prev_price: Optional[float], lo: float, hi: float
+) -> bool:
+    """Правила v1 §10.1 (R42): весь диапазон [L;U] пересечён между двумя
+    наблюдениями в ЛЮБУЮ сторону (в т.ч. против направления зоны — тогда
+    jumped_through не срабатывает). Для ожидания LTF это контакт-кандидат:
+    точный момент неизвестен, направление позже определяет BOS/SMS."""
+    if prev_price is None:
+        return False
+    if interval_intersects(zone, lo, hi):
+        return False
+    return (
+        (prev_price > zone.upper and hi < zone.lower)
+        or (prev_price < zone.lower and lo > zone.upper)
+    )
+
+
 def was_near(zone: Zone, prev_price: Optional[float], approach_pct: float) -> bool:
     """Была ли предыдущая цена в зоне или в полосе приближения (для подавления
     повторного APPROACH внутри одного эпизода подхода)."""

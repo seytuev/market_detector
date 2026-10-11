@@ -32,12 +32,18 @@ from ...models import Direction
 from ...models_ltf import LtfEntryZone, LtfLiquidityTest, LtfMovement, LtfScenarioEntry
 from .entries import classify_entry, entry_reusable, fvg_filled
 from .ranges import RangeDraft
-from .relevance import relevance_reason
+from .relevance import ActivationCut, activation_cut, relevance_reason
 
 # Стабильные reason-коды (ТЗ §10/§12: фильтры истории по причине исключения)
 REASON_OK = "ok"                        # подходит: все условия выполнены
+# §6.3 (правила v1): PD — НЕ фильтр, код сохранён для совместимости журнала
+# и UI (deprecated как блокирующий): положение в PD — описательное поле
 REASON_OUTSIDE_PD = "outside_pd"        # вне нужной половины диапазона
 REASON_TESTED_TOO_DEEP = "tested_too_deep"  # тест >= entry_reuse_max_depth (90%)
+# Правила v1 §7 (R16/R18): глубина ≥ порога / заполнение накоплены ДО новой
+# независимой активации — основание исторически отработано; в текущем
+# активирующем визите те же метрики активацию не отменяют (R17/R19)
+REASON_HISTORICALLY_WORKED = "historically_worked"
 REASON_TYPE_DISABLED = "type_disabled"  # тип отключён настройкой ltf_entry_types
 REASON_INVALID = "invalid"              # зона рыночно невалидна
 REASON_SWEPT_LEVEL = "swept_level"      # BSL/SSL с подтверждённым снятием
@@ -53,6 +59,7 @@ ELIGIBILITY_REASONS = (
     REASON_OK,
     REASON_OUTSIDE_PD,
     REASON_TESTED_TOO_DEEP,
+    REASON_HISTORICALLY_WORKED,
     REASON_TYPE_DISABLED,
     REASON_INVALID,
     REASON_SWEPT_LEVEL,
@@ -83,18 +90,21 @@ def evaluate_entry(
     movements: Optional[list[LtfMovement]] = None,
     liquidity_tests: Optional[list[LtfLiquidityTest]] = None,
     pd_status: Optional[str] = None,
+    cut: Optional["ActivationCut"] = None,
 ) -> EligibilityResult:
     """eligible_now зоны для сценария: конъюнкция условий §10.
 
     Проверки идут от рыночных фактов к конфигурационным и пространственным;
     первый сработавший отказ — стабильный reason. rng=None — диапазон ещё
     не подтверждён: пространственный фильтр не применяется, зона копится
-    кандидатом (state fresh, reason range_pending).
+    кандидатом (state fresh, reason range_pending). cut — отсечка §7:
+    глубина и заполнение оцениваются относительно начала активации (см.
+    relevance_reason); без cut — прежний максимум за жизнь.
     """
     eligible, overlap = classify_entry(
         zone.lower, zone.upper, zone.is_level, rng, direction
     )
-    ban = relevance_reason(zone, cfg, liquidity_tests or ())
+    ban = relevance_reason(zone, cfg, liquidity_tests or (), cut)
     if ban:
         return EligibilityResult(ban, "invalid" if ban == REASON_INVALID else "tested", eligible, overlap)
     # 1) рыночная актуальность: invalid не переводится обратно в fresh
@@ -120,8 +130,9 @@ def evaluate_entry(
     ):
         return EligibilityResult(REASON_LEVEL_BROKEN, "tested", eligible, overlap)
     # 3c) §10 (Этап 6): полностью перекрытый FVG терминально недопустим как
-    # новая Entry Zone — по собственному правилу, независимо от связанного OB
-    if fvg_filled(zone):
+    # новая Entry Zone — по собственному правилу, независимо от связанного OB.
+    # В режиме §7 (cut) заполнение уже оценено relevance_reason по отсечке
+    if cut is None and fvg_filled(zone):
         return EligibilityResult(REASON_FVG_FILLED, "tested", eligible, overlap)
     # 4) принадлежность движению сценария: movement_id обязан разрешаться;
     # movement_id=0 (уровень якоря диапазона) — вне этой проверки
@@ -130,16 +141,17 @@ def evaluate_entry(
         if mv is None or mv.provenance_status == "ambiguous":
             return EligibilityResult(REASON_ORIGIN_UNRESOLVED, "out_of_range",
                                      eligible, overlap)
-    # 5) допустимость по истории тестов: глубина СТРОГО < порога (ТЗ §3)
-    if zone.validity == "tested" and not entry_reusable(zone, cfg):
+    # 5) допустимость по истории тестов: глубина СТРОГО < порога (ТЗ §3);
+    # в режиме §7 (cut) глубина уже оценена relevance_reason по отсечке
+    if cut is None and zone.validity == "tested" and not entry_reusable(zone, cfg):
         return EligibilityResult(REASON_TESTED_TOO_DEEP, "tested",
                                  eligible, overlap)
     # 6) диапазона ещё нет — кандидат до появления подтверждённой пары
     if rng is None:
         return EligibilityResult(REASON_RANGE_PENDING, "fresh", True, "pending")
-    # 7) пересечение нужной половины диапазона (частичного достаточно)
-    if not eligible:
-        return EligibilityResult(REASON_OUTSIDE_PD, "out_of_range", False, overlap)
+    # 7) §6.3 (правила v1): PD — не фильтр. Положение в половине диапазона
+    # остаётся описательной характеристикой (overlap/half), блокирующей
+    # причины outside_pd больше нет
     if pd_status == "provisional":
         return EligibilityResult(REASON_PROVISIONAL, "fresh", True, overlap)
     return EligibilityResult(REASON_OK, "fresh", True, overlap)
@@ -229,16 +241,18 @@ def evaluate_final(
     allow_outside: bool,
     liquidity_tests: Optional[list[LtfLiquidityTest]] = None,
     cfg: Optional[DetectorConfig] = None,
+    cut: Optional["ActivationCut"] = None,
 ) -> FinalEligibility:
     """Окончательный допуск (L01 + F29–F31).
 
     Сохранённые eligible/reason не перебивают обязательные запреты
     актуальной зоны и её тестов. Контекстное исключение §18 по-прежнему
     единственный путь допуска FVG вне половины диапазона и не оживляет
-    терминальный объект.
+    терминальный объект. cut — отсечка §7: глубина/заполнение ДО активации
+    (historically_worked / fvg_filled), метрики текущего визита не блокируют.
     """
     cfg = cfg or DetectorConfig()
-    ban = relevance_reason(zone, cfg, liquidity_tests or ())
+    ban = relevance_reason(zone, cfg, liquidity_tests or (), cut)
     if ban is None and zone.type in ("BSL", "SSL") and entry.state == "tested":
         if not _tests_of(zone, liquidity_tests):
             # Явный swept_level без строки теста остаётся снятием.
@@ -249,7 +263,7 @@ def evaluate_final(
                 if entry.reason == REASON_SWEPT_LEVEL
                 else REASON_LEVEL_BROKEN
             )
-    if ban is None and zone.type == "OB" and not entry_reusable(zone, cfg):
+    if ban is None and cut is None and zone.type == "OB" and not entry_reusable(zone, cfg):
         if zone.validity == "tested" or entry.state == "tested":
             if zone.max_test_depth >= cfg.entry_reuse_max_depth or (
                 zone.test_extreme is not None
@@ -269,28 +283,47 @@ def evaluate_final(
             eligible_now=False, blocking_reasons=(ban,),
             admission_basis=None, **base,
         )
-    if (entry.eligible and reason == REASON_OK
-            and entry.state in ("fresh", "tested")):
+    # §6.3 (правила v1): PD — не фильтр. outside_pd сохранён в старых строках
+    # как описательный код и допуск не ограничивает; пространственное
+    # пересечение (spatial_overlap) — характеристика, а не условие.
+    # Контекстное исключение §18 (counter-sweep + FVG50) как требование
+    # допуска снято; сами факты продолжают вычисляться (journal §18)
+    if (reason in (REASON_OK, REASON_OUTSIDE_PD)
+            and entry.state in ("fresh", "tested", "out_of_range")):
         return FinalEligibility(
             eligible_now=True, blocking_reasons=(),
             admission_basis=ADMISSION_RULE, **base,
         )
-    if (entry.eligible and reason == REASON_PROVISIONAL
-            and entry.state in ("fresh", "tested")):
+    if (reason == REASON_PROVISIONAL
+            and entry.state in ("fresh", "tested", "out_of_range")):
         return FinalEligibility(
             eligible_now=True, blocking_reasons=(),
             admission_basis="provisional_pd", **base,
-        )
-    if allow_outside and reason == REASON_OUTSIDE_PD and zone.type == "FVG":
-        return FinalEligibility(
-            eligible_now=True, blocking_reasons=(),
-            admission_basis=ADMISSION_CONTEXT, **base,
         )
     return FinalEligibility(
         eligible_now=False,
         blocking_reasons=(() if reason == REASON_OK else (reason,)),
         admission_basis=None, **base,
     )
+
+
+def activation_cut_for(
+    db, obs, zone: LtfEntryZone, cfg: Optional[DetectorConfig]
+) -> Optional[ActivationCut]:
+    """Отсечка §7 для зоны: состояние ДО активации наблюдения.
+
+    Дешёвый путь: вычисляется только когда lifetime-метрики достигли порога
+    (остальным отсечка ничего не меняет — нет перечитывания свечей)."""
+    if obs is None or zone.is_level:
+        return None
+    cfg = cfg or DetectorConfig()
+    lifetime_hit = (
+        (zone.type == "OB" and not entry_reusable(zone, cfg))
+        or fvg_filled(zone)
+    )
+    if not lifetime_hit:
+        return None
+    return activation_cut(db, zone, obs.activated_at, cfg)
 
 
 def admitted_scenario_entries(
@@ -307,14 +340,17 @@ def admitted_scenario_entries(
     """
     from .context import context_complete, context_flags
 
+    sc = db.get_ltf_scenario(scenario_id)
+    obs = db.get_ltf_observation(sc.observation_id) if sc is not None else None
     cur = db.get_current_ltf_range(scenario_id)
     ver = cur.version if cur is not None else 0
+    # §6.3 (правила v1): PD — не фильтр; строки out_of_range рассматриваются
+    # наравне, контекстное исключение §18 как условие допуска не требуется
+    rows = db.list_ltf_scenario_entries(scenario_id, state="fresh")
+    rows += db.list_ltf_scenario_entries(scenario_id, state="out_of_range")
     allow_outside = context_complete(
         context_flags(db.list_ltf_events(scenario_id=scenario_id, limit=1000))
     )
-    rows = db.list_ltf_scenario_entries(scenario_id, state="fresh")
-    if allow_outside:
-        rows += db.list_ltf_scenario_entries(scenario_id, state="out_of_range")
     tests = db.list_ltf_liquidity_tests(scenario_id=scenario_id)
     out: list[tuple[LtfScenarioEntry, LtfEntryZone, FinalEligibility]] = []
     for e in rows:
@@ -325,7 +361,7 @@ def admitted_scenario_entries(
             continue
         fe = evaluate_final(
             e, zone, allow_outside=allow_outside, liquidity_tests=tests,
-            cfg=cfg,
+            cfg=cfg, cut=activation_cut_for(db, obs, zone, cfg),
         )
         if fe.eligible_now:
             out.append((e, zone, fe))

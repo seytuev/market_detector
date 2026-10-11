@@ -134,8 +134,12 @@ async def async_main() -> None:
             log.info("база %s (%s байт), том %s", settings.db_path, db_bytes, mount)
         else:
             log.info("база %s (%s байт)", settings.db_path, db_bytes)
-    from .services.htf_profile import migrate_saved_htf_profile
+    from .services.htf_profile import (
+        migrate_saved_htf_profile,
+        migrate_saved_htf_profile_v3,
+    )
     migrate_saved_htf_profile(db, settings)
+    migrate_saved_htf_profile_v3(db, settings)
 
     adapters = {
         "binance": BinanceSpotAdapter(settings.binance_base_url),

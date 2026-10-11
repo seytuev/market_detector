@@ -97,3 +97,78 @@ def migrate_saved_htf_profile(db, settings) -> dict:
         detector_cfg.htf_context_types = "OB,FVG"
     log.info("профиль HTF мигрирован OB → OB,FVG")
     return report
+
+
+# Правила v1 §3 (R09): BSL/SSL — полноценные HTF-источники. Мигрируются
+# только «старые default-профили» ровно OB или OB,FVG; любой явно
+# отредактированный набор — выбор пользователя, не переписывается.
+META_KEY_V3 = "htf_profile:add_levels:v3"
+_V3_LEGACY = (["OB"], ["OB", "FVG"])
+_V3_NEW = "OB,FVG,BSL,SSL"
+
+
+def migrate_saved_htf_profile_v3(db, settings) -> dict:
+    """Один раз: OB / OB,FVG → OB,FVG,BSL,SSL. Повторный вызов — по флагу."""
+    recorded = db.get_meta(META_KEY_V3)
+    if recorded:
+        try:
+            previous = json.loads(recorded)
+        except json.JSONDecodeError:
+            previous = {"action": "skipped", "reason": "flag_unreadable"}
+        previous["repeated"] = True
+        return previous
+
+    path = settings_path(settings)
+    if not path.exists():
+        return {"action": "skipped", "reason": "no_file"}
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        log.warning("профиль HTF (v3) не мигрирован: %s", exc)
+        return {"action": "skipped", "reason": "unreadable", "error": str(exc)}
+
+    detector = payload.get("detector", payload)
+    if not isinstance(detector, dict) or "htf_context_types" not in detector:
+        return {"action": "skipped", "reason": "key_absent"}
+
+    saved = detector.get("htf_context_types")
+    tokens = _tokens(saved if saved is not None else "")
+    if tokens not in _V3_LEGACY:
+        report = {
+            "action": "skipped",
+            "reason": "explicit_profile",
+            "saved": saved,
+            "at": now_ms(),
+        }
+        db.set_meta(META_KEY_V3, json.dumps(report, ensure_ascii=False))
+        log.info("профиль HTF (v3) оставлен как есть: %s", saved)
+        return report
+
+    old = ",".join(tokens)
+    detector["htf_context_types"] = _V3_NEW
+    if "detector" in payload and isinstance(payload.get("detector"), dict):
+        payload["detector"] = detector
+    else:
+        payload = {"detector": detector}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    os.replace(tmp, path)
+    report = {
+        "action": "migrated",
+        "old": old,
+        "new": _V3_NEW,
+        "added": ["BSL", "SSL"],
+        "at": now_ms(),
+    }
+    db.set_meta(META_KEY_V3, json.dumps(report, ensure_ascii=False))
+    # Файл читается до миграции — обновляем и конфиг в памяти (как v2)
+    detector_cfg = getattr(settings, "detector", None)
+    if detector_cfg is not None and hasattr(detector_cfg, "htf_context_types"):
+        detector_cfg.htf_context_types = _V3_NEW
+    log.info("профиль HTF мигрирован %s → %s", old, _V3_NEW)
+    return report

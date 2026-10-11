@@ -264,20 +264,32 @@ async def test_05_same_bos_cancels_short_and_confirms_long(db, cfg, instrument_i
     engine = LtfEngine(db, cfg)
     candles = _series(SERIES_H_HL, SERIES_H_CLOSES, instrument_id)
     bear = _zone(db, instrument_id)
+    engine.on_htf_zone_touched(instrument_id, bear, occurred_at=T0)
+    _feed(db, engine, instrument_id, candles, 14)
+    # правила v1 §4: bearish BOS подтвердил основной контекст A (R01)
+    episode_a = _latest(db, instrument_id)
+    assert episode_a["state"] == "confirmed"
+    assert episode_a["state_v2"] == "context_active"
+    # встречный контакт B ПОСЛЕ подтверждения A — кандидат со ссылкой на A;
+    # наблюдение закрываем: сценарий B должен открыться reversal-путём
     manual = _zone(
         db, instrument_id, kind=ZoneType.MANUAL, direction=Direction.BULL,
         lower=80.0, upper=81.5, formed_at=T0 - 5_000, source="manual",
-        evidence={"direction_unset": True},
     )
-    engine.on_htf_zone_touched(instrument_id, bear, occurred_at=T0)
-    engine.on_htf_zone_touched(instrument_id, manual, occurred_at=T0 + 1)
+    engine.on_htf_zone_touched(
+        instrument_id, manual, occurred_at=candles[15].open_time,
+    )
+    episode_b = _latest(db, instrument_id)
+    assert episode_b["state_v2"] == "opposing_pending"
+    assert episode_b["predecessor_episode_id"] == episode_a["id"]
     db.update_ltf_observation(
         db.get_ltf_observation_by_zone(manual.id, manual.cycle_id).id,
-        state="closed_by_parent", updated_at=T0,
+        state="closed_by_parent", updated_at=candles[15].open_time,
     )
-    _feed(db, engine, instrument_id, candles)
+    _feed(db, engine, instrument_id, candles[15:])
     episode = _latest(db, instrument_id)
     assert episode["state"] == "confirmed"
+    assert episode["state_v2"] == "opposing_confirmed"
     cancels = [e for e in _events(db, instrument_id) if e.kind == "cancellation" and e.payload.get("reason") == "reverse_bos"]
     longs = [e for e in _events(db, instrument_id) if e.kind == "bos" and e.payload.get("reversal_confirmed")]
     assert cancels and longs
@@ -501,20 +513,29 @@ def test_17_one_alert_per_visit_and_reuse(db, cfg, instrument_id):
 
 
 def test_18_close_below_protected_ll_cancels_once(db, cfg, instrument_id):
+    # Правила v1 §6.1 (R31): пробой защищённого LL без контекстного основания
+    # — НЕ отмена; пометка local_structure_change один раз (дедуп)
     engine, obs, sc = _protected_long(db, cfg, instrument_id, price=100.0)
     wick = make_candle(T0, 101, 102, 99, 100.5, timeframe="H1", instrument_id=instrument_id)
     assert engine._cancel_on_protected_level(obs, sc, wick, wick.close_time, "live", 0, LtfTickResult()) is False
     assert db.get_ltf_scenario(sc.id).state != "cancelled"
     broke = make_candle(T0 + H1_MS, 100, 101, 98, 99, timeframe="H1", instrument_id=instrument_id)
-    assert engine._cancel_on_protected_level(obs, sc, broke, broke.close_time, "live", 0, LtfTickResult()) is True
+    assert engine._cancel_on_protected_level(obs, sc, broke, broke.close_time, "live", 0, LtfTickResult()) is False
     again = make_candle(T0 + 2 * H1_MS, 99, 100, 97, 98, timeframe="H1", instrument_id=instrument_id)
     engine._cancel_on_protected_level(
         obs, db.get_ltf_scenario(sc.id), again, again.close_time, "live", 0, LtfTickResult(),
     )
+    # отмены нет; одна пометка локального структурного изменения
     cancels = [e for e in db.list_ltf_events(observation_id=obs.id) if e.kind == "cancellation"]
-    assert len(cancels) == 1
-    assert cancels[0].payload["reason"] == "protected_ll"
-    assert "market_transition_key" not in cancels[0].payload
+    assert cancels == []
+    assert db.get_ltf_scenario(sc.id).state != "cancelled"
+    marks = [
+        e for e in db.list_ltf_events(observation_id=obs.id)
+        if e.kind == "context_update"
+        and e.payload.get("fact") == "local_structure_change"
+    ]
+    assert len(marks) == 1
+    assert marks[0].payload["protected_kind"] == "ll"
     closed = db.get_ltf_scenario(sc.id)
     engine._build_entries(
         obs, closed, StructureEventDraft(

@@ -61,7 +61,10 @@ def test_archive_threshold_configurable(db: Database, cfg, instrument_id: int):
     assert db.get_ltf_observation(obs.id).state == "active"
 
 
-def test_archive_cancels_active_scenario(db: Database, cfg, instrument_id: int):
+def test_archive_keeps_active_scenario(db: Database, cfg, instrument_id: int):
+    """Правила v1 §8 (R24): автоархивация — техническая очистка данных, а не
+    срок торгового контекста: активный сценарий таймером не отменяется
+    (прежняя отмена с причиной 'stale' убрана), наблюдение не архивируется."""
     engine = LtfEngine(db, cfg)
     obs = _obs(db, instrument_id, "active", NOW - 20 * DAY_MS)
     sc = db.insert_ltf_scenario(LtfScenario(
@@ -69,14 +72,12 @@ def test_archive_cancels_active_scenario(db: Database, cfg, instrument_id: int):
         trigger="BOS", stage="primary", state="monitoring_entries",
         created_at=NOW - 30 * DAY_MS, updated_at=NOW - 20 * DAY_MS,
     ))
-    assert engine.archive_stale_observations(now_ms=NOW) == [obs.id]
+    assert engine.archive_stale_observations(now_ms=NOW) == []
     sc = db.get_ltf_scenario(sc.id)
-    assert sc.state == "cancelled" and sc.cancellation_reason == "stale"
-    assert db.get_ltf_observation(obs.id).state == "closed_stale"
-    events = db.list_ltf_events(observation_id=obs.id, limit=100)
-    assert [(e.kind, e.payload["reason"]) for e in events] == [
-        ("cancellation", "stale"),
-    ]
+    assert sc.state == "monitoring_entries"
+    assert sc.cancellation_reason is None
+    assert db.get_ltf_observation(obs.id).state == "active"
+    assert db.list_ltf_events(observation_id=obs.id, limit=100) == []
 
 
 def test_archive_respects_recent_structure_events(db: Database, cfg,

@@ -19,7 +19,7 @@ from typing import Optional
 import httpx
 
 from ..models import Candle, Instrument, now_ms
-from .base import TIMEFRAME_MS, AdapterError
+from .base import TIMEFRAME_MS, AdapterError, QuoteTick
 
 # Маппинг внутренних таймфреймов на коды Binance
 INTERVAL_MAP = {"H1": "1h", "H4": "4h", "D1": "1d", "W1": "1w"}
@@ -140,13 +140,20 @@ class BinanceSpotAdapter:
             )
         return candles
 
-    async def last_price(self, symbol: str) -> tuple[float, int]:
-        """Цена и время ПОСЛЕДНЕЙ СДЕЛКИ (last trade, не ticker) — §11 п.1."""
+    async def last_price(self, symbol: str) -> QuoteTick:
+        """Тик последней СДЕЛКИ (last trade, не ticker) — §11 п.1, §10.1:
+        price_kind=trade, event_at — время сделки источника."""
         resp = await self._get("/api/v3/trades", {"symbol": symbol, "limit": 1})
         trades = resp.json()
         if not trades:
             raise AdapterError(f"binance: нет сделок по {symbol}")
-        return float(trades[-1]["price"]), int(trades[-1]["time"])
+        return QuoteTick(
+            price=float(trades[-1]["price"]),
+            event_at=int(trades[-1]["time"]),
+            received_at=now_ms(),
+            price_kind="trade",
+            source_seq=str(trades[-1].get("id")) if trades[-1].get("id") is not None else None,
+        )
 
     async def status(self) -> dict:
         """Состояние подключения: ping + время отклика."""

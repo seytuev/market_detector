@@ -23,6 +23,7 @@ KIND_RU: dict[EventKind, str] = {
     EventKind.BREAKER_ARCHIVED: "Breaker пробит и архивирован",
     EventKind.PRB_ARCHIVED: "PRB пробит и архивирован",
     EventKind.LEVEL_TAKEN: "уровень пересечён (снят)",
+    EventKind.SOURCE_PASSED: "источник пройден закрытием собственного ТФ",
     EventKind.ZONE_CONFIRMED_BY_USER: "зона подтверждена пользователем",
     EventKind.DATA_STALE: "данные устарели",
     EventKind.DATA_RECOVERED: "данные восстановлены",

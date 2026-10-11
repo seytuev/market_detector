@@ -168,13 +168,17 @@ def test_fvg_filled_before_activation_born_filled(db: Database, cfg,
         assert zone.first_test_at == candles[25].close_time
         entries = [e for e in db.list_ltf_scenario_entries(sc.id)
                    if e.entry_zone_id == zone.id]
-        assert entries and all(e.reason == REASON_FVG_FILLED for e in entries)
+        # Правила v1 §7 (R19): FVG заполнен В текущей активации — факт
+        # визита сохранён (validity/depth выше), но основание текущей
+        # реакции не отменяется; терминальный fvg_filled — только для
+        # заполнения ДО новой независимой активации
+        assert entries and all(e.reason != REASON_FVG_FILLED for e in entries)
     # replay не меняет итог
     engine.replay_observation(obs.id)
     for e in db.list_ltf_scenario_entries(sc.id):
         z = db.get_ltf_entry_zone(e.entry_zone_id)
         if z.type == "FVG" and z.max_test_depth == 1.0:
-            assert e.reason == REASON_FVG_FILLED
+            assert e.reason != REASON_FVG_FILLED
 
 
 def test_fvg_filled_while_out_of_range_caught_at_rebind(db: Database, cfg,
@@ -217,7 +221,9 @@ def test_fvg_filled_while_out_of_range_caught_at_rebind(db: Database, cfg,
     assert zone.first_test_at == up_to[0].open_time
     fe = [e for e in db.list_ltf_scenario_entries(sc.id)
           if e.entry_zone_id == fvg.id and e.range_version == 2][0]
-    assert fe.reason == REASON_FVG_FILLED
+    # Правила v1 §7 (R19) + §6.3: перекрытие в текущей активации — не
+    # fvg_filled; PD — не фильтр, вне половины — не outside_pd: допуск
+    assert fe.reason == "ok"
     oe = [e for e in db.list_ltf_scenario_entries(sc.id)
           if e.entry_zone_id == ob.id and e.range_version == 2][0]
     assert oe.reason != REASON_FVG_FILLED

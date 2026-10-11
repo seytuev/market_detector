@@ -9,6 +9,8 @@
 4. диапазон: range_recalc → новая версия LtfRange, пересчёт применимости
    ScenarioEntry (§7);
 5. при первичном BOS/SMS: movement + Entry Zones + свежесть (§8/§9);
+   на каждой следующей закрытой H1 действующего сценария — добор OB/FVG
+   дальнейшего движения, без нового слома и без отсечки по свече BOS/SMS;
 6. события LtfEvent с дедуп-ключами §11.5 (insert_ltf_event отбрасывает дубли).
 
 Если снятие и отмена приходятся на одно закрытие, журнал хранит оба факта,
@@ -19,12 +21,12 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Optional
 
 from ...config import DetectorConfig
 from ...db import Database
-from ...models import Direction, Zone, ZoneStatus, now_ms as _real_now_ms
+from ...models import Direction, Zone, ZoneStatus, ZoneType, now_ms as _real_now_ms
 from ...models_ltf import (
     RULE_VERSION_LTF,
     LtfEntryZone,
@@ -38,18 +40,17 @@ from ...models_ltf import (
     LtfStructureEvent,
 )
 from .breaks import StructureEventDraft, detect_breaks
-from .context import context_complete, context_flags, scenario_context
+from .context import context_flags, scenario_context
 from ..depth import reaches_depth
 from .eligibility import (
-    ADMISSION_CONTEXT,
     REASON_LEVEL_BROKEN,
-    REASON_OUTSIDE_PD,
+    activation_cut_for,
     admitted_scenario_entries,
-    entry_reason,
     evaluate_entry,
 )
 from .entries import (
     H1_MS,
+    MovementDraft,
     build_movement,
     detect_entry_zones,
     fvg_filled,
@@ -135,27 +136,105 @@ class LtfEngine:
     # ------------------------------------------------------------------ #
 
     def on_htf_zone_touched(
-        self, instrument_id: int, zone: Zone, occurred_at: int
-    ) -> LtfObservation:
+        self, instrument_id: int, zone: Zone, occurred_at: int,
+        interaction: Optional[str] = None, evidence: Optional[dict] = None,
+    ) -> Optional[LtfObservation]:
         """Открыть (или вернуть существующее) наблюдение за HTF-зоной.
 
         Идемпотентно по UNIQUE(zone_id, cycle_id): повторное HTF-событие
         и подавление Telegram не влияют на наблюдение (§4).
+        interaction/evidence — основание контакта для источника эпизода
+        (правила v1 §3/§10.1: touch/level_cross/crossed_between_observations
+        или служебный manual_watch).
+
+        Правила v1 §7: контакт фиксируется как zone_activation с состоянием
+        зоны ДО неё; зона, отработанная ≥ порога глубины/заполнения ДО новой
+        независимой активации (R16/R18), — не свежее основание: активация
+        пишется, но новое наблюдение не открывается (None). unknown
+        (needs_replay) наблюдение не блокирует (R25).
         """
-        obs = self.db.insert_ltf_observation(LtfObservation(
-            id=None, instrument_id=instrument_id, zone_id=zone.id,
-            zone_version=int(zone.evidence.get("boundary_version", 1)),
-            cycle_id=zone.cycle_id, direction=zone.direction,
-            state="waiting_structure", activated_at=occurred_at,
-            created_at=occurred_at, updated_at=occurred_at,
-            evidence={
+        depth_before, fill_before = self._activation_pre_state(zone)
+        worked = self._historically_worked(zone, depth_before, fill_before)
+        obs = self.db.get_ltf_observation_by_zone(zone.id, zone.cycle_id)
+        if obs is not None and obs.state == "closed_stale":
+            # §8/R24: техническая автоархивация не закрывает торговый
+            # контекст — новый рыночный факт восстанавливает наблюдение;
+            # связь с активацией сохраняется (новая не создаётся), дубли
+            # событий гасятся дедуп-ключами
+            self.db.update_ltf_observation(
+                obs.id, state="waiting_structure", updated_at=occurred_at,
+            )
+            obs = self.db.get_ltf_observation(obs.id)
+        if obs is None and not worked:
+            obs_evidence: dict[str, Any] = {
                 "zone_type": zone.type.value, "timeframe": zone.timeframe,
                 "zone_lower": zone.lower, "zone_upper": zone.upper,
-            },
-        ))
+            }
+            # §3/Q18: доказанное время контакта (реальная котировка) идёт и в
+            # наблюдение — скан сломов допускает подтверждение на той же H1
+            if (evidence or {}).get("order_proven"):
+                obs_evidence["order_proven"] = True
+            obs = self.db.insert_ltf_observation(LtfObservation(
+                id=None, instrument_id=instrument_id, zone_id=zone.id,
+                zone_version=int(zone.evidence.get("boundary_version", 1)),
+                cycle_id=zone.cycle_id, direction=zone.direction,
+                state="waiting_structure", activated_at=occurred_at,
+                created_at=occurred_at, updated_at=occurred_at,
+                evidence=obs_evidence,
+            ))
         from ...services.htf_context import record_interaction
-        record_interaction(self.db, self.cfg, instrument_id, zone, occurred_at)
+        episode = record_interaction(
+            self.db, self.cfg, instrument_id, zone, occurred_at,
+            interaction=interaction, evidence=evidence,
+        )
+        if self.db.get_open_zone_activation(zone.id, zone.cycle_id) is None:
+            self.db.create_zone_activation(
+                zone.id, zone.cycle_id, occurred_at,
+                episode_id=int(episode["id"]) if episode else None,
+                observation_id=obs.id if obs is not None else None,
+                depth_before=depth_before, fill_before=fill_before,
+                fresh_for_new_activation=not worked and self._known_fresh(
+                    zone, depth_before, fill_before
+                ),
+                created_at=occurred_at,
+            )
         return obs
+
+    def _activation_pre_state(self, zone: Zone):
+        """Состояние HTF-зоны ДО активации (§7): максимум самостоятельных
+        тестов OB / заполнение FVG по визитам. None — unknown (R25:
+        needs_replay, история до визита не восстанавливается)."""
+        if getattr(zone, "needs_replay", False):
+            return None, None
+        if zone.type == ZoneType.FVG:
+            visits = self.db.get_visits(zone.id, zone.cycle_id)
+            depth = max((v.max_depth for v in visits), default=None)
+            return depth, (depth >= 1.0 if depth is not None else None)
+        if zone.is_level:
+            return 0.0, False
+        return (zone.max_test_depth if zone.has_tests else 0.0), None
+
+    def _historically_worked(self, zone: Zone, depth_before, fill_before) -> bool:
+        """§7: отработанность ДО активации. unknown не блокирует (R25)."""
+        if zone.type == ZoneType.FVG:
+            return fill_before is True
+        if zone.is_level:
+            return False
+        return (
+            depth_before is not None
+            and depth_before >= self.cfg.entry_reuse_max_depth
+        )
+
+    def _known_fresh(self, zone: Zone, depth_before, fill_before) -> bool:
+        """fresh_for_new_activation: unknown — не считается свежим (R25)."""
+        if zone.type == ZoneType.FVG:
+            return fill_before is not None and not fill_before
+        if zone.is_level:
+            return True
+        return (
+            depth_before is not None
+            and depth_before < self.cfg.entry_reuse_max_depth
+        )
 
     # ------------------------------------------------------------------ #
     # Обработка закрытий H1 (§13)
@@ -177,14 +256,23 @@ class LtfEngine:
             ideas_checkpoint_fresh, mark_ideas_checkpoint, reconcile_ideas,
         )
         if last.close_time <= last_done:
-            # Новых закрытий нет. Идеи пересчитываем только если снимок
-            # устарел; серию H1 заново не читаем.
-            if not ideas_checkpoint_fresh(self.db, instrument_id):
-                reconcile_ideas(self.db, instrument_id, self.cfg, now)
-                from ...services.liquidity_anchors import refresh_liquidity_anchors
-                refresh_liquidity_anchors(self.db, instrument_id)
-                mark_ideas_checkpoint(self.db, instrument_id)
-            return LtfTickResult()
+            # §10.3: новых закрытий нет, но есть необработанная ревизия уже
+            # закрытых свечей — дешёвый сигнал (одна строка MAX), без чтения
+            # всей серии на каждом тике
+            if self.db.latest_candle_revision_at(instrument_id, "H1") <= int(
+                self.db.get_meta(f"ltf:h1:revision_done:{instrument_id}") or 0
+            ):
+                # Пропущенные OB/FVG уже обработанного контекста добираются
+                # один раз, без текущих уведомлений.
+                self._recover_context_zones_once(instrument_id)
+                # Идеи пересчитываем только если снимок устарел; серию H1
+                # заново не читаем.
+                if not ideas_checkpoint_fresh(self.db, instrument_id):
+                    reconcile_ideas(self.db, instrument_id, self.cfg, now)
+                    from ...services.liquidity_anchors import refresh_liquidity_anchors
+                    refresh_liquidity_anchors(self.db, instrument_id)
+                    mark_ideas_checkpoint(self.db, instrument_id)
+                return LtfTickResult()
         closed = self.db.get_candles(instrument_id, "H1")
         result = LtfTickResult()
         if not closed:
@@ -197,8 +285,24 @@ class LtfEngine:
             fingerprint = json.loads(self.db.get_meta(fp_key) or "{}")
         except json.JSONDecodeError:
             fingerprint = {}
-        fp_dirty = self._detect_h1_revisions(instrument_id, closed, last_done,
-                                             fingerprint)
+        revisions, fp_dirty = self._detect_h1_revisions(
+            instrument_id, closed, last_done, fingerprint
+        )
+        # §10.3 (R46/R47): ревизия уже обработанных свечей — причинный
+        # пересчёт с момента самой ранней ревизии. До пересчёта — снимок
+        # активных сценариев для уведомления об исправлении
+        pre_scenarios: dict[int, str] = {}
+        if revisions:
+            earliest = min(r["open_time"] for r in revisions)
+            idx0 = next(
+                (i for i, c in enumerate(closed) if c.open_time >= earliest),
+                len(closed),
+            )
+            last_done = closed[idx0 - 1].close_time if idx0 > 0 else 0
+            for obs in self.db.list_ltf_observations(instrument_id=instrument_id):
+                sc = self.db.get_active_ltf_scenario(obs.id)
+                if sc is not None:
+                    pre_scenarios[sc.id] = sc.state
         self._batch = StructureBatch() if self.scan_cursors else None
         try:
             for idx, c in enumerate(closed):
@@ -223,6 +327,15 @@ class LtfEngine:
             self._batch = None
             if fp_dirty:
                 self.db.set_meta(fp_key, json.dumps(fingerprint))
+        if revisions:
+            self._emit_correction_events(
+                instrument_id, revisions, pre_scenarios, now, grace_ms, result,
+            )
+            self.db.set_meta(
+                f"ltf:h1:revision_done:{instrument_id}",
+                str(self.db.latest_candle_revision_at(instrument_id, "H1")),
+            )
+        self._recover_context_zones_once(instrument_id)
         reconcile_ideas(self.db, instrument_id, self.cfg, now)
         from ...services.liquidity_anchors import refresh_liquidity_anchors
         refresh_liquidity_anchors(self.db, instrument_id)
@@ -232,14 +345,18 @@ class LtfEngine:
     def _detect_h1_revisions(
         self, instrument_id: int, closed: list, last_done: int,
         fingerprint: dict,
-    ) -> bool:
-        """F10 (детекция): свеча с open_time <= курсора, чей OHLC изменился
+    ) -> tuple[list[dict], bool]:
+        """F10/§10.3: свеча с open_time <= курсора, чей OHLC изменился
         относительно обработанного, — ревизия исходных данных. Факт пишется
-        в лог и meta (ltf:h1:revision:{iid}), отпечаток обновляется, чтобы
-        та же ревизия не фиксировалась повторно. Пересчёт зависимостей
-        (pivots/события/зоны) — отдельный этап; опубликованная история
-        молча не стирается. True — отпечаток изменился."""
+        в лог и candle_revision (источник истины; дедуп по целевому OHLC —
+        upsert-путь и этот детектор сходятся в одной строке), отпечаток
+        обновляется, чтобы та же ревизия не фиксировалась повторно.
+        Опубликованная история молча не стирается; пересчёт — с момента
+        самой ранней ревизии (вызывающий). Возвращает (список ревизий,
+        признак изменения отпечатка)."""
+        revisions: list[dict] = []
         dirty = False
+        detected = _real_now_ms()
         for c in closed:
             if not c.closed or c.close_time > last_done:
                 continue
@@ -252,19 +369,70 @@ class LtfEngine:
             elif prev != bar:
                 revision = {
                     "open_time": c.open_time, "previous": prev, "current": bar,
-                    "detected_at": _real_now_ms(),
+                    "detected_at": detected,
                 }
                 log.warning(
                     "LTF %s: ревизия уже обработанной H1 open_time=%s "
-                    "OHLC %s -> %s; пересчёт зависимостей не выполняется (F10)",
+                    "OHLC %s -> %s; пересчёт зависимостей с этого момента (§10.3)",
                     instrument_id, c.open_time, prev, bar,
+                )
+                self.db._record_candle_revision(
+                    instrument_id, "H1", c.open_time, prev, bar, detected,
                 )
                 self.db.set_meta(
                     f"ltf:h1:revision:{instrument_id}", json.dumps(revision)
                 )
                 fingerprint[key] = bar
+                revisions.append(revision)
                 dirty = True
-        return dirty
+        return revisions, dirty
+
+    def _emit_correction_events(
+        self, instrument_id: int, revisions: list[dict],
+        pre_scenarios: dict[int, str], now: int, grace_ms: int,
+        result: LtfTickResult,
+    ) -> None:
+        """R46 (§10.3): пересчёт изменил уже активный сигнал — отдельное
+        уведомление об исправлении с причиной (candle_revision) и ссылкой на
+        исходный сценарий. Неизменённые факты не пересылаются (дедуп-ключ),
+        массовой повторной рассылки истории нет: режим по лагу, как у всех."""
+        earliest = min(r["open_time"] for r in revisions)
+        rev_opens = sorted(r["open_time"] for r in revisions)
+        lag = max(0, now - earliest)
+        for sc_id, prev_state in pre_scenarios.items():
+            sc = self.db.get_ltf_scenario(sc_id)
+            if sc is None or sc.state == prev_state:
+                continue  # состояние не изменилось — исправление мимо
+            obs = self.db.get_ltf_observation(sc.observation_id)
+            trigger = (
+                next((e for e in self.db.list_ltf_structure_events(sc.id)
+                      if e.id == sc.trigger_event_id), None)
+                if sc.trigger_event_id else None
+            )
+            fact_ref = (
+                f"исходный факт: {trigger.kind} {trigger.break_level}"
+                if trigger is not None else f"сценарий {sc.id}"
+            )
+            opens = ", ".join(str(o) for o in rev_opens)
+            text = (
+                f"Исправление данных (H1): сценарий {sc.id} "
+                f"{prev_state} → {sc.state}. Причина: ревизия закрытых "
+                f"свечей ({opens}). Исходный факт сохранён в журнале: {fact_ref}."
+            )
+            self._emit(
+                obs.id if obs is not None else 0, sc.id, "correction", {
+                    "fact": "scenario_corrected",
+                    "reason": "candle_revision",
+                    "revision_open_times": rev_opens,
+                    "scenario_id": sc.id,
+                    "previous_state": prev_state,
+                    "new_state": sc.state,
+                    "text": text,
+                },
+                earliest, now,
+                f"correction:{sc.id}:{'_'.join(str(o) for o in rev_opens)}",
+                _processing_mode(lag, grace_ms), lag, result,
+            )
 
     def replay_observation(self, observation_id: int) -> LtfTickResult:
         """§13: детерминированный прогон по сохранённым свечам тем же кодом.
@@ -411,15 +579,13 @@ class LtfEngine:
                 e for e in self.db.list_ltf_scenario_entries(sc.id, state="fresh")
                 if e.range_version == ver
             ]
-            # §18: контекстно допущенные FVG вне Premium (state out_of_range)
-            # получают тот же touch-флоу, что и свежие зоны
-            if context_complete(self._scenario_context(sc.id)):
-                entries += [
-                    e for e in self.db.list_ltf_scenario_entries(
-                        sc.id, state="out_of_range")
-                    if e.range_version == ver
-                    and entry_reason(e) == REASON_OUTSIDE_PD
-                ]
+            # §6.3 (правила v1): касание отслеживается по полному диапазону
+            # зоны — строки вне половины PD получают тот же touch-флоу
+            entries += [
+                e for e in self.db.list_ltf_scenario_entries(
+                    sc.id, state="out_of_range")
+                if e.range_version == ver
+            ]
             tests = self.db.list_ltf_liquidity_tests(scenario_id=sc.id)
             if (obs.evidence or {}).get("reversal_episode_id"):
                 self._scan_reversal_visits(
@@ -450,11 +616,12 @@ class LtfEngine:
                                                 processing_mode,
                                                 detection_lag_ms, result)
                     continue
-                # replay/backlog: версия диапазона подтверждена позже этой
-                # свечи — касания до выбора зоны на текущей версии не
-                # переисполняются (ТЗ §3: повторный выбор не воскрешает
-                # исторические тесты; §13: replay не меняет прошлое)
-                if cur is not None and candle.close_time < cur.available_at:
+                # replay/backlog: выбор версии происходит после прохода
+                # касаний той же свечи. Свеча, на которой версия стала
+                # доступна, и всё более раннее к этой версии не относятся
+                # (ТЗ §3: повторный выбор не воскрешает исторические тесты;
+                # §13: replay не меняет прошлое).
+                if cur is not None and candle.close_time <= cur.available_at:
                     continue
                 self._on_entry_touched(obs, sc, entry, zone, candle, tests,
                                        now, processing_mode, detection_lag_ms,
@@ -528,9 +695,8 @@ class LtfEngine:
             added_at=entry.added_at, updated_at=now,
         ))
         result.touches.append(zone.id)
-        # §18: допущенная вне Premium FVG аннотируется и в touch — факт
-        # «не в Premium» отображается, но не блокирует
-        flags = self._scenario_context(sc.id)
+        # §6.3 (правила v1): PD — не фильтр; положение в половине диапазона
+        # (half) — описательная характеристика, допуска оно не ограничивает
         payload: dict[str, Any] = {
             "entry_zone_id": zone.id, "scenario_id": sc.id, "type": zone.type,
             "lower": zone.lower, "upper": zone.upper, "mid": zone.mid,
@@ -538,14 +704,25 @@ class LtfEngine:
             "half": zone_half(zone.lower, zone.upper, zone.is_level,
                               cur, sc.direction.value),
         }
-        if (zone.type == "FVG" and ev.reason == REASON_OUTSIDE_PD
-                and context_complete(flags)):
-            payload["outside_premium"] = True
-            payload["context"] = self._context_brief(flags)
         # §11.5: ключ касания — entry_zone_id + сценарий, БЕЗ range_version
         self._emit(obs.id, sc.id, "touch", payload,
                    candle.close_time, now, f"touch:{zone.id}:{sc.id}",
                    processing_mode, detection_lag_ms, result)
+        # §7/§9: FVG впервые заполнился в текущем активирующем визите —
+        # основание сохранено, наблюдение продолжается (R19)
+        if (zone.type == "FVG" and not zone.is_level
+                and reaches_depth(zone, zone.test_extreme, 1.0)):
+            from ...services.htf_context import emit_context_transition
+            emit_context_transition(
+                self.db, self.cfg, obs.instrument_id,
+                fact="fvg_filled_current",
+                text="Текущий FVG полностью заполнен; наблюдение реакции H1 продолжается",
+                occurred_at=candle.close_time,
+                dedupe_key=f"ctxtr:{sc.id}:fvgfilled:{zone.id}",
+                observation_id=obs.id, scenario_id=sc.id, detected_at=now,
+                processing_mode=processing_mode,
+                detection_lag_ms=detection_lag_ms,
+            )
 
         if zone.type not in ("BSL", "SSL"):
             return  # OB/FVG: касание зафиксировано, зона в истории (§9)
@@ -738,29 +915,60 @@ class LtfEngine:
     # (3) Сценарии: открытие, события, отмена (§6)
     # ------------------------------------------------------------------ #
 
+    def _latest_zone_interaction(self, zone_id: Optional[int]) -> Optional[int]:
+        """id htf_context_source последнего контакта зоны (связь сценария с
+        причинным HTF-контактом, §3/§6.2)."""
+        if zone_id is None:
+            return None
+        row = self.db.conn.execute(
+            """SELECT id FROM htf_context_source
+               WHERE zone_id=? ORDER BY interaction_at DESC, id DESC LIMIT 1""",
+            (zone_id,),
+        ).fetchone()
+        return int(row["id"]) if row else None
+
+    @staticmethod
+    def _observation_scan_since(obs, up_to: list) -> int:
+        """Начало скана сломов наблюдения. Контакт с доказанным временем
+        (order_proven — реальная котировка, §3/Q18, R34) допускает слом на
+        той же H1: свеча контакта включается в скан целиком. Без доказанного
+        внутрисвечного порядка — прежняя отсечка activated_at."""
+        since = obs.activated_at
+        if (obs.evidence or {}).get("order_proven"):
+            for c in up_to:
+                if c.open_time <= since <= c.close_time:
+                    return c.open_time
+        return since
+
     def _maybe_open_scenario(
         self, obs, avail: list[PivotCandidate], up_to: list, candle,
         now: int, processing_mode: str, detection_lag_ms: int,
         result: LtfTickResult,
     ) -> None:
         """Первичный BOS/SMS в направлении HTF-родителя открывает сценарий
-        (SMS самостоятелен, §6.3)."""
+        (SMS самостоятелен, §6.3). Невалидный родитель новых сценариев не
+        порождает (ТЗ 06.10.2026 §10 T21); уже активный сценарий этот путь
+        не трогает (R33)."""
+        zone = self.db.get_zone(obs.zone_id)
+        if zone is not None and zone.market_validity != "active":
+            return
         # stop_on_cancellation=False: обратный слом отменяет АКТИВНЫЙ сценарий
         # (§6.5); ждущему наблюдению отменять нечего, scan.cancellation здесь
         # не используется, а обрезка скана навсегда блокировала бы открытие
         # (и переоткрытие после отмены) при любом встречном сломе в окне
+        since = self._observation_scan_since(obs, up_to)
         if self._batch is not None:
             # пакетная обработка (replay/backlog): курсорный скан — та же
             # траектория машин, что у полного перескана на эту свечу
             cur = self._batch.cursor(
-                ("open", obs.id), obs.direction, obs.activated_at,
+                ("open", obs.id), obs.direction, since,
                 stop_on_cancellation=False, cancel_not_before_ms=None,
             )
             scan = cur.scan(self._batch.avail, self._batch.closed,
                             self._batch.open_times, now)
         else:
             scan = detect_breaks(avail, up_to, obs.direction, now,
-                                 since_ms=obs.activated_at,
+                                 since_ms=since,
                                  stop_on_cancellation=False)
         primaries = [
             e for e in scan.events
@@ -790,8 +998,13 @@ class LtfEngine:
         ]
         if not primaries:
             return
-        # §6.5: BOS и SMS на одной свече — основной тип BOS
-        main = next((e for e in primaries if e.kind == "BOS"), primaries[0])
+        # §6.1 (правила v1): BOS и SMS равноправны как триггер. На одной
+        # свече — детерминированный выбор по доступности уровня (раньше
+        # подтверждённый pivot, затем level_key); тип в выборе не участвует
+        primaries.sort(key=lambda e: (
+            e.evidence.get("pivot_confirmed_at") or 0, e.level_key, e.kind,
+        ))
+        main = primaries[0]
         sc = self.db.insert_ltf_scenario(LtfScenario(
             id=None, observation_id=obs.id, direction=obs.direction,
             trigger=main.kind, stage="primary", state="range_pending",
@@ -804,11 +1017,21 @@ class LtfEngine:
         se_ids: dict[str, int] = {}
         for e in primaries:
             se_ids[e.level_key] = self._insert_structure_event(sc.id, e, now).id
+        # §6.2: якорь рабочего PD — триггерное причинное событие (BOS|SMS),
+        # связь с HTF-контактом; первая ревизия PD
         self.db.update_ltf_scenario(
             sc.id, trigger_event_id=se_ids[main.level_key],
-            origin_break_event_id=se_ids[main.level_key], updated_at=now,
+            origin_break_event_id=se_ids[main.level_key],
+            pd_anchor_structure_key=main.level_key,
+            pd_anchor_kind=main.kind,
+            htf_interaction_id=self._latest_zone_interaction(obs.zone_id),
+            updated_at=now,
         )
         sc.trigger_event_id = se_ids[main.level_key]
+        self.db.insert_pd_revision(
+            sc.id, main.level_key, main.kind, [], candle.close_time,
+            created_at=now,
+        )
         sc.origin_break_event_id = se_ids[main.level_key]
         # §11.2/п.18: диапазон и зоны готовы на закрытии слома — одно
         # объединённое событие, иначе range_pending и позже дополнение
@@ -850,41 +1073,83 @@ class LtfEngine:
             if e.occurred_at == candle.close_time
         ]
         if cancel is not None:
-            # §13.4/п.19: журнал хранит оба факта, но новый входной сигнал
-            # от отменённого сценария не публикуется
+            # §13.4/п.19: журнал хранит оба факта (события и обратный слом)
             for e in fresh:
                 self._insert_structure_event(sc.id, e, now)
             rev = cancel.event
             self._insert_structure_event(sc.id, rev, now)
-            # §5/§12: уровень отмены — хранимый факт с происхождением
-            # (опорный pivot обратной машины из evidence события-слома)
-            rev_pivot_id = rev.evidence.get("broken_pivot_id")
-            rev_confirmed_at = rev.evidence.get("pivot_confirmed_at")
-            self.db.update_ltf_scenario(
-                sc.id, state="cancelled", cancellation_reason=cancel.pattern,
-                cancelled_at=now, updated_at=now,
-                reverse_break_level_price=rev.break_level,
-                reverse_break_pivot_id=rev_pivot_id,
-                reverse_break_confirmed_at=rev_confirmed_at,
-                last_processed_close=candle.close_time,
-            )
-            self.db.update_ltf_observation(obs.id, state="waiting_structure",
-                                           updated_at=now)
-            # §11.5: scenario_id + cancellation_event_id (level_key слома).
-            # Журнал остаётся по сценарию. Карточка склеивается ключом перехода.
-            cancel_payload = {
-                "scenario_id": sc.id, "reason": cancel.pattern,
-                "break_level": rev.break_level,
-                "break_candle_open_time": rev.break_candle_open_time,
-                "reverse_break_pivot_id": rev_pivot_id,
-                "reverse_break_confirmed_at": rev_confirmed_at,
-            }
-            cancel_payload.update(self._market_transition_fields(obs, rev))
-            self._emit(obs.id, sc.id, "cancellation", cancel_payload,
-                       rev.occurred_at, now, f"cancellation:{sc.id}:{rev.level_key}",
-                       processing_mode, detection_lag_ms, result)
-            result.cancellations.append(sc.id)
-            return
+            if not self._qualified_reverse(obs, sc, rev):
+                # §6.1/R31: обратный слом без контекстного основания — НЕ
+                # отмена; локальное структурное изменение / возможная
+                # ликвидность (пометка, не cancel)
+                self._emit(
+                    obs.id, sc.id, "context_update", {
+                        "fact": "local_structure_change", "scenario_id": sc.id,
+                        "kind": rev.kind, "break_level": rev.break_level,
+                        "break_candle_open_time": rev.break_candle_open_time,
+                        "note": "обратный слом без контекстного основания — сценарий не отменён",
+                    }, rev.occurred_at, now,
+                    f"context:{sc.id}:localbreak:{rev.level_key}",
+                    processing_mode, detection_lag_ms, result,
+                )
+                # §9: сообщение — коррекция без встречного основания
+                from ...services.htf_context import (
+                    _dir_ru,
+                    emit_context_transition,
+                )
+                dir_txt = _dir_ru("bull" if sc.direction == Direction.BEAR else "bear")
+                ctx_txt = "медвежьего" if sc.direction == Direction.BEAR else "бычьего"
+                emit_context_transition(
+                    self.db, self.cfg, obs.instrument_id,
+                    fact="local_structure_change",
+                    text=(
+                        f"{rev.kind} H1 {dir_txt} без встречного HTF-основания. "
+                        f"Коррекция внутри {ctx_txt} контекста"
+                    ),
+                    occurred_at=rev.occurred_at,
+                    dedupe_key=f"ctxtr:{sc.id}:localbreak:{rev.level_key}",
+                    observation_id=obs.id, scenario_id=sc.id, detected_at=now,
+                    processing_mode=processing_mode,
+                    detection_lag_ms=detection_lag_ms,
+                )
+            else:
+                # §5/§12: уровень отмены — хранимый факт с происхождением
+                # (опорный pivot обратной машины из evidence события-слома)
+                rev_pivot_id = rev.evidence.get("broken_pivot_id")
+                rev_confirmed_at = rev.evidence.get("pivot_confirmed_at")
+                self.db.update_ltf_scenario(
+                    sc.id, state="cancelled", cancellation_reason=cancel.pattern,
+                    cancelled_at=now, updated_at=now,
+                    reverse_break_level_price=rev.break_level,
+                    reverse_break_pivot_id=rev_pivot_id,
+                    reverse_break_confirmed_at=rev_confirmed_at,
+                    last_processed_close=candle.close_time,
+                )
+                self.db.update_ltf_observation(obs.id, state="waiting_structure",
+                                               updated_at=now)
+                # §7: квалифицированная отмена завершает активацию зоны
+                for act in self.db.list_zone_activations(obs.zone_id, obs.cycle_id):
+                    if act["ended_at"] is None:
+                        self.db.update_zone_activation(
+                            int(act["id"]), ended_at=rev.occurred_at,
+                            end_reason="qualified_reverse_break",
+                            current_activation_valid=False,
+                        )
+                # §11.5: scenario_id + cancellation_event_id (level_key слома).
+                # Журнал остаётся по сценарию. Карточка склеивается ключом перехода.
+                cancel_payload = {
+                    "scenario_id": sc.id, "reason": cancel.pattern,
+                    "break_level": rev.break_level,
+                    "break_candle_open_time": rev.break_candle_open_time,
+                    "reverse_break_pivot_id": rev_pivot_id,
+                    "reverse_break_confirmed_at": rev_confirmed_at,
+                }
+                cancel_payload.update(self._market_transition_fields(obs, rev))
+                self._emit(obs.id, sc.id, "cancellation", cancel_payload,
+                           rev.occurred_at, now, f"cancellation:{sc.id}:{rev.level_key}",
+                           processing_mode, detection_lag_ms, result)
+                result.cancellations.append(sc.id)
+                return
 
         if self._cancel_on_protected_level(
             obs, sc, candle, now, processing_mode, detection_lag_ms, result,
@@ -902,8 +1167,35 @@ class LtfEngine:
                                            obs=obs,
                                            processing_mode=processing_mode,
                                            detection_lag_ms=detection_lag_ms)
-        # §6.5: продолжение в том же направлении — фиксируем событие, но новые
-        # зоны последующих движений не добавляем (§8.1)
+        # §6.2/R40: последний причинный BOS/SMS обновляет якорь рабочего PD
+        # на равных (тип не участвует в выборе); ревизия PD сохраняется
+        if se_ids:
+            causal = [e for e, _ in se_ids]
+            causal.sort(key=lambda e: (
+                e.evidence.get("pivot_confirmed_at") or 0, e.level_key, e.kind,
+            ))
+            anchor = causal[0]
+            rng_now = created_range or self.db.get_current_ltf_range(sc.id)
+            anchors = [
+                a for a in (
+                    (rng_now.anchor_low_pivot_id, rng_now.anchor_high_pivot_id)
+                    if rng_now is not None else ()
+                )
+                if a is not None
+            ]
+            self.db.update_ltf_scenario(
+                sc.id, pd_anchor_structure_key=anchor.level_key,
+                pd_anchor_kind=anchor.kind, updated_at=now,
+            )
+            self.db.insert_pd_revision(
+                sc.id, anchor.level_key, anchor.kind, anchors,
+                candle.close_time,
+                range_version=rng_now.version if rng_now is not None else None,
+                created_at=now,
+            )
+        # Продолжение в том же направлении не открывает новое движение.
+        # OB/FVG действующего контекста добираются отдельно, на каждой
+        # закрытой H1, в том числе без нового BOS/SMS.
         for e, se_id in se_ids:
             self._emit_structure_event(obs, sc, e, se_id, now,
                                        processing_mode, detection_lag_ms,
@@ -917,6 +1209,7 @@ class LtfEngine:
             obs, sc, avail, up_to, candle, now, result,
             processing_mode, detection_lag_ms,
         )
+        self._scan_context_zones(obs, sc, avail, up_to, candle, now, result)
         # §11.5: дополнение — только при ещё не сообщённых свежих зонах,
         # не при каждом изменении M
         self._maybe_entries_ready(obs, sc, candle.close_time, now,
@@ -1383,6 +1676,7 @@ class LtfEngine:
         return evaluate_entry(
             zone, sc.direction, self.cfg, rng,
             movements=movements, liquidity_tests=tests, pd_status=status,
+            cut=activation_cut_for(self.db, obs, zone, self.cfg),
         )
 
     def _reversal_start_pivot(self, obs, avail: list[PivotCandidate]):
@@ -1398,10 +1692,31 @@ class LtfEngine:
                 return pivot
         return None
 
+    def _qualified_reverse(self, obs, sc, rev) -> bool:
+        """§6.1 (правила v1): квалификация обратного BOS/SMS для отмены.
+
+        Основание — противоположный HTF-источник с доказанным контактом до
+        слома ЛИБО опора, сформированная структурой HTF-контекста (pivot,
+        подтверждённый после активации; геометрическое нахождение вне
+        HTF-зоны не мешает — R32). Слом pivot «на пустом месте» (до
+        контакта и без встречного HTF) отменой не является (R31)."""
+        pivot_confirmed = rev.evidence.get("pivot_confirmed_at")
+        if pivot_confirmed is not None and int(pivot_confirmed) >= int(obs.activated_at):
+            return True
+        from ...services.htf_context import opposing_contact_before
+        return opposing_contact_before(
+            self.db, obs.instrument_id, sc.direction, int(rev.occurred_at),
+        )
+
     def _cancel_on_protected_level(
         self, obs, sc, candle, now, processing_mode, detection_lag_ms, result,
     ) -> bool:
-        """Закрытие за исходным LL/HH отменяет один раз. Фитиль только пишется."""
+        """Закрытие за исходным LL/HH — пометка, не отмена. Фитиль только пишется.
+
+        Правила v1 §6.1 (R31): пробой защищённого LL/HH без контекстного
+        основания сам по себе сценарий НЕ отменяет — это локальное
+        структурное изменение / возможная ликвидность. Отмена — только
+        квалифицированный обратный BOS/SMS (_qualified_reverse)."""
         if not (obs.evidence or {}).get("reversal_episode_id"):
             return False
         from ...services.htf_context import load_episode
@@ -1413,11 +1728,9 @@ class LtfEngine:
         if sc.direction == Direction.BULL and kind == "ll":
             breached = candle.close < price
             wicked = candle.low < price and not breached
-            reason = "protected_ll"
         elif sc.direction == Direction.BEAR and kind == "hh":
             breached = candle.close > price
             wicked = candle.high > price and not breached
-            reason = "protected_hh"
         else:
             return False
         if wicked:
@@ -1431,22 +1744,205 @@ class LtfEngine:
             return False
         if not breached:
             return False
-        self.db.update_ltf_scenario(
-            sc.id, state="cancelled", cancellation_reason=reason,
-            cancelled_at=now, updated_at=now,
-            reverse_break_level_price=price,
-            last_processed_close=candle.close_time,
-        )
-        self.db.update_ltf_observation(obs.id, state="waiting_structure", updated_at=now)
         self._emit(
-            obs.id, sc.id, "cancellation",
-            {"scenario_id": sc.id, "reason": reason, "break_level": price,
-             "break_candle_open_time": candle.open_time},
-            candle.close_time, now, f"cancellation:{sc.id}:{reason}",
+            obs.id, sc.id, "context_update", {
+                "fact": "local_structure_change", "scenario_id": sc.id,
+                "protected_kind": kind, "price": price,
+                "candle_open_time": candle.open_time,
+                "note": "пробой защищённого уровня без контекстного основания — сценарий не отменён (R31)",
+            },
+            candle.close_time, now, f"context:{sc.id}:protected_broken",
             processing_mode, detection_lag_ms, result,
         )
-        result.cancellations.append(sc.id)
-        return True
+        return False
+
+    def _announced_key(self, scenario_id: int) -> str:
+        return f"ltf:announced_entries:{scenario_id}"
+
+    def _mark_announced(self, scenario_id: int, zone_ids: list[int]) -> None:
+        """Зона уже известна контексту. Повторно как текущий сигнал не уходит.
+
+        Журнал и карточка BOS/SMS не переписываются: id только скрывает зону
+        от следующего entries_ready. Доставка исторического факта идёт
+        прежним путём delayed/replay, отдельного события здесь нет.
+        """
+        if not zone_ids:
+            return
+        current = self._announced_entry_ids(scenario_id)
+        current.update(int(z) for z in zone_ids)
+        self.db.set_meta(
+            self._announced_key(scenario_id),
+            json.dumps(sorted(current)),
+        )
+
+    def _origin_movement_draft(self, sc) -> Optional[tuple[LtfMovement, MovementDraft]]:
+        """Движение триггерного слома. Конец ноги остаётся свечой BOS/SMS:
+        поздние зоны ссылаются на него, но не сдвигают его."""
+        movements = self.db.list_ltf_movements(sc.id)
+        if not movements:
+            return None
+        row = next(
+            (m for m in movements if m.id == sc.origin_movement_id),
+            movements[0],
+        )
+        lookback = (self.cfg.uncalibrated_consolidation_max_candles + 5) * H1_MS
+        draft = MovementDraft(
+            scenario_id=sc.id,
+            direction=sc.direction,
+            start_pivot_ref=row.start_pivot_id,
+            end_pivot_ref=row.end_pivot_id,
+            start_at=row.start_at,
+            end_at=row.end_at,
+            window_start=row.start_at - lookback,
+            break_event_key=str(row.break_event_id or ""),
+            source_candle_ids=list(row.source_candle_ids or []),
+            provenance_status=row.provenance_status,
+        )
+        return row, draft
+
+    def _scan_context_zones(
+        self, obs, sc, avail, up_to, candle, now, result: LtfTickResult,
+        *, recover: bool = False,
+    ) -> None:
+        """OB/FVG действующего контекста по свечам, уже закрытым к ``candle``.
+
+        Отменённый и закрытый сценарий новых зон не получает. Повтор той же
+        свечи не создаёт второй прямоугольник и не меняет первое
+        подтверждение. Зона, подтверждённая раньше этой свечи, не становится
+        текущим сигналом.
+        """
+        if sc.state in ("cancelled", "closed"):
+            return
+        built = self._origin_movement_draft(sc)
+        if built is None:
+            return
+        row, movement = built
+        det = detect_entry_zones(up_to, movement, avail, sc.direction, self.cfg)
+        linked: dict[tuple, int] = {}
+        for zid in self._scenario_zone_ids(sc.id):
+            z0 = self.db.get_ltf_entry_zone(zid)
+            if z0 is not None:
+                linked[(z0.type, z0.direction, z0.lower, z0.upper, z0.formed_at)] = z0.id
+        market: dict[tuple, LtfEntryZone] = {}
+        for z0 in self.db.list_ltf_entry_zones(instrument_id=obs.instrument_id):
+            market[(z0.type, z0.direction, z0.lower, z0.upper, z0.formed_at)] = z0
+        rng = self.db.get_current_ltf_range(sc.id)
+        rng_draft = self._row_to_draft(rng, sc.direction) if rng else None
+        ver = rng.version if rng else 0
+        movements = self.db.list_ltf_movements(sc.id)
+        tests = self.db.list_ltf_liquidity_tests(scenario_id=sc.id)
+        historical: list[int] = []
+        for z in det.zones:
+            if z.type not in ("OB", "FVG"):
+                continue
+            # Подтверждение — граница закрытия третьей свечи (close_time + 1).
+            # Будущая тройка в префикс этой свечи не входит.
+            if z.confirmed_at > candle.close_time + 1:
+                continue
+            key = (z.type, z.direction, z.lower, z.upper, z.formed_at)
+            if key in linked:
+                continue
+            ez = market.get(key)
+            if ez is None:
+                ez = self.db.insert_ltf_entry_zone(LtfEntryZone(
+                    id=None, instrument_id=obs.instrument_id, type=z.type,
+                    direction=z.direction, lower=z.lower, upper=z.upper,
+                    formed_at=z.formed_at, confirmed_at=z.confirmed_at,
+                    movement_id=row.id, first_test_at=z.first_test_at,
+                    validity=z.validity, max_test_depth=z.max_test_depth,
+                    test_extreme=z.test_extreme, evidence=z.evidence,
+                ))
+                market[key] = ez
+            linked[key] = ez.id
+            result.entry_zones_processed.append(ez.id)
+            # Один прямоугольник на инструмент. movement_id строки — нога
+            # сценария, который записал её первым. Для допуска этого
+            # сценария происхождение уже проверено детектором по его ноге;
+            # чужой id не делает свою зону «без происхождения». Строку не
+            # переписываем.
+            known_movements = {m.id for m in movements}
+            judged = ez
+            if ez.movement_id and ez.movement_id not in known_movements:
+                judged = replace(ez, movement_id=row.id)
+            ev = self._evaluate_zone(obs, sc, judged, rng_draft, movements, tests)
+            # Связь доступна с фактического подтверждения, не со времени догона.
+            added_at = z.confirmed_at if (
+                recover or z.confirmed_at <= candle.close_time
+            ) else candle.close_time
+            self.db.upsert_ltf_scenario_entry(LtfScenarioEntry(
+                id=None, scenario_id=sc.id, entry_zone_id=ez.id,
+                range_version=ver, eligible=ev.eligible, overlap=ev.overlap,
+                state=ev.state, reason=ev.reason,
+                added_at=added_at, updated_at=added_at,
+            ))
+            if recover or z.confirmed_at <= candle.close_time:
+                historical.append(ez.id)
+        if historical:
+            self._mark_announced(sc.id, historical)
+
+    def rescan_active_context_zones(
+        self, instrument_id: Optional[int] = None,
+    ) -> dict[str, Any]:
+        """Добрать пропущенные OB/FVG действующих сценариев по сохранённым H1.
+
+        Повтор идемпотентен: чужие и уже записанные объекты не дублируются,
+        первое подтверждение не сдвигается, ручные поля существующих строк
+        не переписываются. Новые строки не создают текущих уведомлений.
+        """
+        added: list[dict[str, Any]] = []
+        scenarios = 0
+        for obs in self.db.list_ltf_observations(instrument_id=instrument_id):
+            if obs.state not in ("waiting_structure", "active"):
+                continue
+            sc = self.db.get_active_ltf_scenario(obs.id)
+            if sc is None or sc.state in ("cancelled", "closed"):
+                continue
+            candles = [
+                c for c in self.db.get_candles(obs.instrument_id, "H1")
+                if c.closed
+            ]
+            if not candles:
+                continue
+            scenarios += 1
+            before = set(self._scenario_zone_ids(sc.id))
+            candle = candles[-1]
+            self._scan_context_zones(
+                obs, sc, [], candles, candle, candle.close_time,
+                LtfTickResult(), recover=True,
+            )
+            for zid in self._scenario_zone_ids(sc.id) - before:
+                zone = self.db.get_ltf_entry_zone(zid)
+                if zone is None or zone.type not in ("OB", "FVG"):
+                    continue
+                added.append({
+                    "id": zone.id,
+                    "scenario_id": sc.id,
+                    "type": zone.type,
+                    "direction": zone.direction.value,
+                    "lower": zone.lower,
+                    "upper": zone.upper,
+                    "formed_at": zone.formed_at,
+                    "confirmed_at": zone.confirmed_at,
+                    "validity": zone.validity,
+                    "relation": (zone.evidence or {}).get("relation"),
+                    "break_at": (zone.evidence or {}).get("break_at"),
+                    "base_at": (zone.evidence or {}).get("base_at"),
+                })
+        return {"scenarios": scenarios, "zones_added": len(added), "added": added}
+
+    def _recover_context_zones_once(self, instrument_id: int) -> None:
+        key = f"ltf:context_zones_rescan:v1:{instrument_id}"
+        if self.db.get_meta(key) == "1":
+            return
+        if self.db.last_candle(instrument_id, "H1") is None:
+            return
+        stats = self.rescan_active_context_zones(instrument_id)
+        self.db.set_meta(key, "1")
+        if stats["zones_added"]:
+            log.info(
+                "LTF %s: восстановлены OB/FVG действующего контекста: %s",
+                instrument_id, stats["zones_added"],
+            )
 
     def _extend_reversal_zones(
         self, obs, sc, avail, up_to, candle, now, result,
@@ -1693,47 +2189,48 @@ class LtfEngine:
 
     def _entry_payload(
         self, sc, entry: LtfScenarioEntry, zone: LtfEntryZone, rng,
-        flags: dict[str, Any], outside_premium: bool,
     ) -> dict[str, Any]:
-        payload: dict[str, Any] = {
+        return {
             "entry_zone_id": zone.id, "type": zone.type, "lower": zone.lower,
             "upper": zone.upper, "mid": zone.mid, "overlap": entry.overlap,
             "confirmed_at": zone.confirmed_at,
-            # §18: половина диапазона зоны — всегда; допуск вне Premium —
-            # явная пометка + краткий контекст
+            # §6.3: половина диапазона зоны — описательная характеристика
             "half": zone_half(zone.lower, zone.upper, zone.is_level,
                               rng, sc.direction.value),
         }
-        if outside_premium:
-            payload["outside_premium"] = True
-            payload["context"] = self._context_brief(flags)
-        return payload
 
     def _entry_candidates(
         self, sc
-    ) -> list[tuple[LtfScenarioEntry, LtfEntryZone, bool]]:
+    ) -> list[tuple[LtfScenarioEntry, LtfEntryZone]]:
         """Зоны, допущенные к выбору на текущей версии диапазона (ver=0 до
         пары): свежие и повторно выбранные протестированные с глубиной
-        тестов < 90% (ТЗ §3 — переклассификация в _update_range).
+        тестов < 90% (ТЗ §3 — переклассификация в _update_range); §6.3:
+        положение в PD допуск не ограничивает.
         Отбор делегирован admitted_scenario_entries — единому источнику
-        правила допуска (L01); третий элемент кортежа — признак контекстного
-        допуска §18 (admission_basis == context_exception)."""
+        правила допуска (L01)."""
         return [
-            (e, zone, fe.admission_basis == ADMISSION_CONTEXT)
-            for e, zone, fe in admitted_scenario_entries(
+            (e, zone)
+            for e, zone, _fe in admitted_scenario_entries(
                 self.db, sc.id, cfg=self.cfg
             )
         ]
 
     def _announced_entry_ids(self, scenario_id: int) -> set[int]:
         """Уже сообщённые зоны (§11.5): id из payload прошлых bos/sms/
-        entries_ready того же сценария."""
+        entries_ready того же сценария и зоны, восстановленные без нового
+        сигнала."""
         announced: set[int] = set()
         for ev in self.db.list_ltf_events(scenario_id=scenario_id, limit=1000):
             if ev.kind not in ("bos", "sms", "entries_ready"):
                 continue
             for item in ev.payload.get("entries", []):
                 announced.add(item["entry_zone_id"])
+        raw = self.db.get_meta(self._announced_key(scenario_id))
+        if raw:
+            try:
+                announced.update(int(z) for z in json.loads(raw))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                pass
         return announced
 
     def _movement_payload(
@@ -1770,7 +2267,6 @@ class LtfEngine:
         rng = self.db.get_current_ltf_range(sc.id)
         reversal = bool((obs.evidence or {}).get("reversal_episode_id"))
         fresh = self._entry_candidates(sc) if (rng is not None or reversal) else []
-        flags = self._scenario_context(sc.id)
         payload: dict[str, Any] = {
             "scenario_id": sc.id, "structure_event_id": se_id,
             "direction": sc.direction.value, "kind": e.kind, "stage": e.stage,
@@ -1784,8 +2280,8 @@ class LtfEngine:
             # при range_pending зоны копятся кандидатами и не анонсируются —
             # о готовых сообщит entries_ready (§11.2)
             "entries": [
-                self._entry_payload(sc, en, z, rng, flags, out)
-                for en, z, out in fresh
+                self._entry_payload(sc, en, z, rng)
+                for en, z in fresh
             ],
         }
         if reversal:
@@ -1811,16 +2307,15 @@ class LtfEngine:
         if rng is None:
             return
         announced = self._announced_entry_ids(sc.id)
-        flags = self._scenario_context(sc.id)
-        fresh = [(en, z, out) for en, z, out in self._entry_candidates(sc)
+        fresh = [(en, z) for en, z in self._entry_candidates(sc)
                  if z.id not in announced]
         if fresh:
-            ids = sorted(z.id for _, z, _ in fresh)
+            ids = sorted(z.id for _, z in fresh)
             self._emit(obs.id, sc.id, "entries_ready", {
                 "scenario_id": sc.id, "range": self._range_payload(rng),
                 "entries": [
-                    self._entry_payload(sc, en, z, rng, flags, out)
-                    for en, z, out in fresh
+                    self._entry_payload(sc, en, z, rng)
+                    for en, z in fresh
                 ],
             }, occurred_at, now, f"entries_ready:{sc.id}:{','.join(map(str, ids))}",
                 processing_mode, detection_lag_ms, result)
@@ -1836,11 +2331,15 @@ class LtfEngine:
     # ------------------------------------------------------------------ #
 
     def check_parent_validity(self, zone: Zone) -> bool:
-        """Инвалидация HTF-родителя → HTF_INVALIDATED (§4).
+        """Инвалидация HTF-родителя — фиксация факта, НЕ отмена сценария.
 
-        True — родитель инвалидирован и наблюдение закрыто. Тест 90%
-        (WORKED) и запрет Breaker наблюдение НЕ закрывают (приёмка п.17);
-        конверсия в Breaker = подтверждённый пробой в обратную сторону.
+        Правила v1 §6.1 (R33): рыночная неактуальность зоны (invalid,
+        конверсия, пробой) — отдельное состояние зоны; автоматическая
+        отмена LTF-сценария по статусу родителя запрещена. Отмена — только
+        квалифицированный обратный BOS/SMS (_qualified_reverse). Факт
+        прохода по-прежнему идёт в машину контекста §4 (note_source_outcome)
+        рыночным временем (F13). True — родитель инвалидирован (факт
+        записан). Тест 90% (WORKED) и запрет Breaker фактом не являются.
         """
         obs = self.db.get_ltf_observation_by_zone(zone.id, zone.cycle_id)
         if obs is None or obs.state in (
@@ -1852,9 +2351,6 @@ class LtfEngine:
             and zone.end_reason is not None
             and zone.end_reason.startswith(_INVALIDATING_REASONS)
         ) or (
-            # ТЗ 06.10.2026 §10 (T21): невалидный HTF OB не порождает новые
-            # LTF-сценарии — рыночная инвалидность закрывает наблюдение
-            # независимо от плоского status (candidate/active)
             zone.market_validity == "invalid"
         )
         if not invalidated:
@@ -1863,7 +2359,7 @@ class LtfEngine:
         # F13: рыночное время факта инвалидации — из доказательства зоны
         # (или конца рисунка), а не wall-clock обнаружения; режим — по лагу
         # обнаружения, как у остального потока: восстановленная историческая
-        # инвалидация не выглядит свежей live-отменой
+        # инвалидация не выглядит свежим live-событием
         evidence = zone.evidence or {}
         raw_at = evidence.get("invalidated_at") or zone.display_until
         occurred = int(raw_at) if raw_at is not None else now
@@ -1871,19 +2367,18 @@ class LtfEngine:
         mode = _processing_mode(lag, self.cfg.ltf_live_grace_seconds * 1000)
         sc = self.db.get_active_ltf_scenario(obs.id)
         if sc is not None:
-            self.db.update_ltf_scenario(
-                sc.id, state="cancelled", cancellation_reason="HTF_INVALIDATED",
-                cancelled_at=occurred, updated_at=now,
-            )
-            self._emit(obs.id, sc.id, "cancellation", {
-                "scenario_id": sc.id, "reason": "HTF_INVALIDATED",
+            # информационный факт (не cancellation): зона invalid отдельно
+            self._emit(obs.id, sc.id, "context_update", {
+                "fact": "htf_invalidated", "scenario_id": sc.id,
                 "invalidated_at": occurred,
-            }, occurred, now, f"cancellation:{sc.id}:htf_invalidated",
+            }, occurred, now, f"context:{sc.id}:htf_invalidated",
                 mode, lag, LtfTickResult())
-        self.db.update_ltf_observation(obs.id, state="closed_by_parent",
-                                       updated_at=now)
+        # R33: наблюдение и активный сценарий НЕ закрываются по статусу
+        # родителя; новые сценарии от невалидной зоны не открываются
+        # (блок в _maybe_open_scenario, ТЗ 06.10.2026 §10 T21)
+        self.db.update_ltf_observation(obs.id, updated_at=now)
         from ...services.htf_context import note_source_outcome
-        note_source_outcome(self.db, zone, occurred)
+        note_source_outcome(self.db, zone, occurred, cfg=self.cfg)
         return True
 
     def close_scenario_manually(self, scenario_id: int) -> None:
@@ -1913,7 +2408,16 @@ class LtfEngine:
     def archive_stale_observations(
         self, now_ms: Optional[int] = None
     ) -> list[int]:
-        """Наблюдения без активности дольше ltf_observation_stale_days →
+        """Техническая очистка наблюдений без активности (closed_stale).
+
+        Правила v1 §8 (R24): автоархивация — НЕ срок торгового контекста.
+        Наблюдение с АКТИВНЫМ сценарием не архивируется вовсе (прежняя
+        отмена сценария причиной 'stale' убрана): контекст и активация
+        закрываются только квалифицированным сломом/переходами §4/§5.
+        zone_activation и эпизод архивация не трогает; новый рыночный факт
+        восстанавливает наблюдение (on_htf_zone_touched → waiting_structure).
+
+        Наблюдения без активности дольше ltf_observation_stale_days →
         история (closed_stale), тот же путь записи, что у closed_by_parent.
 
         Активность — updated_at наблюдения; для наблюдения с живым сценарием
@@ -1942,17 +2446,9 @@ class LtfEngine:
                 continue
             sc = self.db.get_active_ltf_scenario(obs.id)
             if sc is not None:
-                events = self.db.list_ltf_structure_events(sc.id)
-                if events and max(e.occurred_at for e in events) >= cutoff:
-                    continue  # сценарий жив: сломы были недавно
-                self.db.update_ltf_scenario(
-                    sc.id, state="cancelled", cancellation_reason="stale",
-                    cancelled_at=now, updated_at=now,
-                )
-                self._emit(obs.id, sc.id, "cancellation", {
-                    "scenario_id": sc.id, "reason": "stale",
-                }, now, now, f"cancellation:{sc.id}:stale",
-                    "live", 0, LtfTickResult())
+                # R24: живой сценарий — не техническая архивация; контекст
+                # не закрывается таймером
+                continue
             self.db.update_ltf_observation(obs.id, state="closed_stale",
                                            updated_at=now)
             archived.append(obs.id)

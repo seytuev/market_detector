@@ -163,7 +163,7 @@ def test_observations_list_and_filters(client, seeded):
     assert item["instrument"]["symbol"] == "BTCUSDT"
     assert item["parent_zone"]["type"] == "ob" and item["parent_zone"]["timeframe"] == "D1"
     assert item["scenario"]["trigger"] == "BOS"
-    assert item["fresh_entries"] == 2          # FVG + OB свежие
+    assert item["fresh_entries"] == 3          # FVG + OB + BSL (§6.3: PD не фильтр)
     # вкладки
     history = client.get("/api/ltf/observations?tab=history", headers=AUTH).json()
     assert [o["id"] for o in history] == [seeded["obs2"].id]
@@ -193,7 +193,7 @@ def test_observation_card(client, seeded):
     assert sc["anchors"]["low"]["price"] == 90.0
     assert sc["anchors"]["low"]["pivot_at"] == T0 - 500
     assert sc["anchors"]["low"]["confirmed_at"] == T0 - 100
-    assert sc["fresh_entries"] == 2
+    assert sc["fresh_entries"] == 3  # §6.3: BSL вне PD допущен
     # последняя отмена — по закрытому наблюдению
     card2 = client.get(f"/api/ltf/observations/{obs2.id}", headers=AUTH).json()
     assert card2["last_cancellation"]["reason"] == "HTF_INVALIDATED"
@@ -244,7 +244,7 @@ def test_entries_table_with_dist(client, seeded):
     assert r.status_code == 200
     rows = {row["type"]: row for row in r.json()["entries"]}
     # ТЗ §10: по умолчанию — только подходящие (reason ok); строка v0 скрыта
-    assert set(rows) == {"FVG", "OB"}
+    assert set(rows) == {"FVG", "OB", "BSL"}  # §6.3: BSL вне PD допущен
     fvg = rows["FVG"]
     assert (fvg["lower"], fvg["upper"], fvg["mid"]) == (98.0, 102.0, 100.0)
     assert fvg["half"] == "premium" and fvg["partial"] is True
@@ -260,11 +260,12 @@ def test_entries_table_with_dist(client, seeded):
         f"/api/ltf/scenarios/{sc1.id}/entries?view=excluded&price=95",
         headers=AUTH,
     ).json()["entries"]
-    assert [row["type"] for row in excluded] == ["BSL"]
-    bsl = excluded[0]
+    assert [row["type"] for row in excluded] == []  # §6.3: исключённых нет
+    # BSL вне PD допущен (§6.3): dist и состояние — в рабочем списке
+    bsl = rows["BSL"]
     assert bsl["dist_abs"] == 20.0                # уровень: abs(P−K)
     assert bsl["half"] == "none"                  # выше диапазона
-    assert bsl["reason"] == "outside_pd"          # fallback из state до миграции
+    assert bsl["reason"] == "outside_pd"          # описательный код (§6.3)
     assert bsl["liquidity_state"] == "awaiting_close"  # ≠ «подтверждено» (§3.4)
     # без price — dist пустые, не выдумываем
     rows2 = client.get(f"/api/ltf/scenarios/{sc1.id}/entries", headers=AUTH).json()["entries"]
@@ -273,7 +274,7 @@ def test_entries_table_with_dist(client, seeded):
     rows3 = client.get(
         f"/api/ltf/scenarios/{sc1.id}/entries?include_all=true", headers=AUTH
     ).json()["entries"]
-    assert len(rows3) == 3
+    assert len(rows3) == 4  # §6.3: BSL вне PD тоже среди подходящих
     assert any(r["range_version"] == 0 and r["outdated"] for r in rows3)
     # history: все строки всех версий, включая исключённые (история причин)
     rows4 = client.get(
@@ -493,12 +494,11 @@ def test_chart_entries_fallback_to_max_version(client, db, seeded):
         f"/api/ltf/observations/{obs1.id}/chart", headers=AUTH
     ).json()
     # записей v2 нет — fallback на v1; группировка eligible/excluded (§10):
-    # подходящие FVG+OB в рабочем слое, BSL outside_pd — в исключённых,
+    # §6.3: BSL вне PD допущен — все три в рабочем слое, исключённых нет,
     # строка v0 не подмешана
-    assert len(chart["entries"]) == 2
-    assert {e["type"] for e in chart["entries"]} == {"FVG", "OB"}
-    assert [e["type"] for e in chart["entries_excluded"]] == ["BSL"]
-    assert chart["entries_excluded"][0]["reason"] == "outside_pd"
+    assert len(chart["entries"]) == 3
+    assert {e["type"] for e in chart["entries"]} == {"FVG", "OB", "BSL"}
+    assert chart["entries_excluded"] == []
 
 
 def test_invalid_entries_excluded(client, db, seeded):
@@ -621,22 +621,22 @@ def test_settings_entry_types_reclassify(client, db, seeded):
     # подходящие и счётчик: только OB
     rows = client.get(f"/api/ltf/scenarios/{sc1.id}/entries",
                       headers=AUTH).json()["entries"]
-    assert [row["type"] for row in rows] == ["OB"]
+    assert [row["type"] for row in rows] == ["OB", "BSL"]  # §6.3: BSL вне PD допущен
     card = client.get(f"/api/ltf/observations/{seeded['obs1'].id}",
                       headers=AUTH).json()
-    assert card["active_scenario"]["fresh_entries"] == 1
+    assert card["active_scenario"]["fresh_entries"] == 2  # OB + BSL (§6.3)
     # исключённые с причиной; график — eligible/excluded группами
     excluded = client.get(
         f"/api/ltf/scenarios/{sc1.id}/entries?view=excluded", headers=AUTH
     ).json()["entries"]
     assert {row["type"]: row["reason"] for row in excluded} == {
-        "FVG": "type_disabled", "BSL": "outside_pd",
+        "FVG": "type_disabled",
     }
     chart = client.get(
         f"/api/ltf/observations/{seeded['obs1'].id}/chart", headers=AUTH
     ).json()
-    assert [e["type"] for e in chart["entries"]] == ["OB"]
-    assert {e["type"] for e in chart["entries_excluded"]} == {"FVG", "BSL"}
+    assert [e["type"] for e in chart["entries"]] == ["OB", "BSL"]  # §6.3
+    assert {e["type"] for e in chart["entries_excluded"]} == {"FVG"}
     # зона не удалена, история версий сохранена
     assert db.get_ltf_entry_zone(seeded["ez_fvg"].id) is not None
     assert len(db.list_ltf_scenario_entries(sc1.id)) == 4

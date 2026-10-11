@@ -49,9 +49,13 @@ def test_d1_close_inside_only_on_transition(db, cfg, instrument_id):
 
 
 def test_d1_close_inside_no_history_no_event_outside(db, cfg, instrument_id):
-    """Закрытие вне зоны события не создаёт вовсе."""
+    """Закрытие вне зоны не создаёт события «закрепление внутри».
+
+    Правила v1 §5: закрытие D1 СТРОГО за дальней границей (день 1, 90 < 100)
+    — отдельный факт прохода SOURCE_PASSED, к D1_CLOSE_INSIDE отношения
+    не имеет."""
     z = _d1_zone(db, instrument_id)
     scanner = Scanner(db, cfg)
     for c in _day_candles([90.0, 95.0, 99.0]):
         evs = [e for e in scanner.on_closed_candle(c) if e.zone_id == z.id]
-        assert evs == []
+        assert EventKind.D1_CLOSE_INSIDE not in [e.kind for e in evs]

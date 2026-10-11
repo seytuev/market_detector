@@ -123,39 +123,34 @@ def test_short_fvg_outside_premium_ssl_fvg50_context(
     assert (ready.payload["range"]["lower"],
             ready.payload["range"]["upper"]) == (7.2, 9.6)
     by_lower = {e["lower"]: e for e in ready.payload["entries"]}
-    assert set(by_lower) == {9.6, 10.0, 11.0, 13.0}
+    # §6.3 (правила v1): PD — не фильтр; допуск не требует контекстного
+    # исключения — аннотаций outside_premium больше нет, факты §18 остаются
+    # событиями context_update (выше); положение half — описательное
+    assert set(by_lower) == {9.6, 10.0, 11.0, 12.0, 13.0, 17.0}
     # якорь пары BSL 9.6 — обычный допуск (в Premium)
     assert by_lower[9.6]["type"] == "BSL"
     assert "outside_premium" not in by_lower[9.6]
     assert by_lower[9.6]["half"] == "premium"
-    # FVG движения вне Premium — контекстный допуск с аннотациями (§18)
-    for lower in (10.0, 11.0, 13.0):
+    # зоны движения вне Premium (FVG/OB/BSL) — допущены по обычному правилу
+    expected_types = {10.0: "FVG", 11.0: "FVG", 12.0: "OB", 13.0: "FVG",
+                      17.0: "BSL"}
+    for lower, ztype in expected_types.items():
         e = by_lower[lower]
-        assert e["type"] == "FVG"
-        assert e["outside_premium"] is True
-        assert e["half"] == "none"
-        assert e["context"]["counter_swept"] is True
-        assert e["context"]["htf_fvg50"] == {"zone_id": d1fvg_id, "tf": "D1"}
+        assert e["type"] == ztype
+        assert "outside_premium" not in e
 
-    # уведомление entries_ready содержит обе аннотации §18
+    # уведомление entries_ready без аннотаций «допущено по контексту»
     texts = render_ltf_messages(ready, _ctx(db, obs, sc))
     joined = "\n".join(texts)
-    assert "вне Premium (допущено по контексту" in joined
-    assert "Зона вне Premium — не критично для этого сценария" in joined
-    assert "Контекст: обновление лоя = снятие SSL + тест 50% D1 FVG" in joined
+    assert "допущено по контексту" not in joined
 
-    # idx26: касание допущенной FVG [10.0;10.5] — те же аннотации в touch
+    # idx26: касание допущенной FVG [10.0;10.5] — полный диапазон (§6.3)
     _feed(db, engine, instrument_id, candles, 26)
     evs = _events(db, obs.id)
     assert evs[-1].kind == "touch"
     touch = evs[-1]
     assert (touch.payload["lower"], touch.payload["upper"]) == (10.0, 10.5)
-    assert touch.payload["outside_premium"] is True
-    assert touch.payload["half"] == "none"
-    assert touch.payload["context"]["htf_fvg50"]["zone_id"] == d1fvg_id
-    tt = "\n".join(render_ltf_messages(touch, _ctx(db, obs, sc)))
-    assert "Зона вне Premium — не критично для этого сценария" in tt
-    assert "Контекст: обновление лоя = снятие SSL + тест 50% D1 FVG" in tt
+    assert "outside_premium" not in touch.payload
 
     # context_update отдельно не доставляется: ни группы, ни шаблона
     ctx_events = [e for e in evs if e.kind == "context_update"]

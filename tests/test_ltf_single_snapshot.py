@@ -135,11 +135,11 @@ def seeded(db, instrument_id):
                     "fresh", "ok")
     ez_ob = _entry(db, instrument_id, sc1.id, "OB", 100.0, 101.0,
                    "tested", "ok")
-    _entry(db, instrument_id, sc1.id, "BSL", 115.0, 115.0,
-           "out_of_range", "outside_pd")
+    ez_bsl = _entry(db, instrument_id, sc1.id, "BSL", 115.0, 115.0,
+                    "out_of_range", "outside_pd")
     _entry(db, instrument_id, sc1.id, "FVG", 98.0, 102.0, "fresh", "ok", ver=0)
     return {"obs1": obs1, "sc1": sc1, "z1": z1,
-            "ez_fvg": ez_fvg, "ez_ob": ez_ob}
+            "ez_fvg": ez_fvg, "ez_ob": ez_ob, "ez_bsl": ez_bsl}
 
 
 def _overview(client, instrument_id):
@@ -165,11 +165,12 @@ def test_single_snapshot_counts_and_version(client, db, seeded, instrument_id):
     body, row = _overview(client, instrument_id)
     cur = _current(client, instrument_id)
     assert body["state_version"] == cur["state_version"]
-    assert row["eligible_count"] == 2                    # FVG fresh + OB tested
-    assert cur["counts"]["eligible"] == len(cur["eligible_entries"]) == 2
+    assert row["eligible_count"] == 3                    # FVG + OB + BSL (§6.3)
+    assert cur["counts"]["eligible"] == len(cur["eligible_entries"]) == 3
     assert row["eligible_count"] == cur["counts"]["eligible"]
     ids = {e["entry_zone_id"] for e in cur["eligible_entries"]}
-    assert ids == {seeded["ez_fvg"].id, seeded["ez_ob"].id}
+    # §6.3: BSL вне PD допущен во всех проекциях
+    assert ids == {seeded["ez_fvg"].id, seeded["ez_ob"].id, seeded["ez_bsl"].id}
     # SQL-агрегат зеркалит тот же допуск (tested + reason ok)
     sql_ids = {
         r["entry_zone_id"] for r in db.list_ltf_eligible_zones()
@@ -230,7 +231,7 @@ def test_overview_counts_selected_context_only(client, db, seeded,
     cur = _current(client, instrument_id)
     assert cur["selected_context_id"] == seeded["obs1"].id
     assert cur["scenario_id"] == seeded["sc1"].id
-    assert row["eligible_count"] == cur["counts"]["eligible"] == 2  # не 2+3
+    assert row["eligible_count"] == cur["counts"]["eligible"] == 3  # §6.3
     assert body["state_version"] == cur["state_version"]
 
 
@@ -242,8 +243,9 @@ def test_stage_follows_counts(client, db, seeded, instrument_id):
     cur = _current(client, instrument_id)
     assert cur["data_state"]["state"] == "data_pending"
     assert row["stage"] == cur["stage"] == "Недостаточно данных"
-    assert row["eligible_count"] == cur["counts"]["eligible"] == 2
+    assert row["eligible_count"] == cur["counts"]["eligible"] == 3  # §6.3
     # count=0: все зоны текущей версии исключены → «Нет подходящих зон»
+    # (type_disabled — исключение, сохранённое и после §6.3)
     z2 = db.insert_zone(Zone(
         id=None, instrument_id=instrument_id, type=ZoneType.FVG,
         direction=Direction.BEAR, timeframe="W1", lower=120.0, upper=130.0,
@@ -253,7 +255,7 @@ def test_stage_follows_counts(client, db, seeded, instrument_id):
         db, instrument_id, z2, Direction.BEAR, T0 + 10, T0 + 300,
     )
     _entry(db, instrument_id, sc2.id, "BSL", 115.0, 115.0,
-           "out_of_range", "outside_pd")
+           "out_of_range", "type_disabled")
     # ручной выбор контекста без подходящих зон
     r = client.post(
         f"/api/ltf/instruments/{instrument_id}/select-context",

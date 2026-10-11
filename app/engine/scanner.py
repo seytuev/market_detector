@@ -69,8 +69,10 @@ class Scanner:
     def __init__(self, db: Database, cfg: DetectorConfig):
         self.db = db
         self.cfg = cfg
-        # последняя наблюдавшаяся цена инструмента — для детекции скачков (§6)
+        # последняя наблюдавшаяся цена инструмента — для детекции скачков (§6);
+        # её timestamp — для интервала пересечения между наблюдениями (§10.1)
         self._last_price: dict[int, float] = {}
+        self._last_price_ts: dict[int, int] = {}
 
     # ------------------------------------------------------------------
     # закрытая свеча: структурные обновления
@@ -98,6 +100,7 @@ class Scanner:
 
         created += self._scan_fvg_and_blocks(iid, tf, candles, now)
         created += self._check_block_transitions(iid, tf, candle, candles, boundary, now)
+        created += self._check_source_pass(iid, tf, candle, boundary, now)
         if tf in ("D1", "W1"):
             self._scan_pivots(iid, tf, candles, now)
         created += self._check_level_crossings(iid, candle.low, candle.high, boundary, now)
@@ -419,6 +422,83 @@ class Scanner:
         ev = self._emit(ev)
         return [ev] if ev is not None else []
 
+    # ----- проход HTF-источника (правила v1 §5) -----
+
+    def _check_source_pass(
+        self, iid: int, tf: str, candle: Candle, boundary: int, now: int
+    ) -> list[Event]:
+        """Проход источника подтверждается ТОЛЬКО закрытием свечи собственного
+        ТФ строго за дальней границей/уровнем (§5, R20): равенство границе и
+        тень — не проход; закрытие младшего ТФ за зоной старшего проход не
+        подтверждает (R21 — проверка идёт только по свечам ТФ зоны).
+        OB имеет своё событие OB_INVALIDATED (_check_block_transitions);
+        здесь FVG и уровни BSL/SSL → SOURCE_PASSED.
+
+        Правила v1 §7: полное заполнение FVG (FVG_FILLED) — факт визита, а не
+        проход; market_validity зоны меняет только это закрытие.
+        """
+        created: list[Event] = []
+        for z in self.db.get_zones(iid, timeframes={tf}):
+            if z.market_validity != "active":
+                continue
+            if z.confirmed_at is None or z.confirmed_at > boundary:
+                continue
+            passed = False
+            if z.type == ZoneType.FVG:
+                if z.status not in (ZoneStatus.ACTIVE, ZoneStatus.WEAKENED):
+                    continue
+                passed = (
+                    candle.close < z.lower
+                    if z.direction == Direction.BULL
+                    else candle.close > z.upper
+                )
+                compared = z.lower if z.direction == Direction.BULL else z.upper
+            elif z.type in (ZoneType.BSL, ZoneType.SSL):
+                if z.status not in (ZoneStatus.ACTIVE, ZoneStatus.TAKEN):
+                    continue
+                if z.evidence.get("pass_confirmed_at") is not None:
+                    continue
+                # диапазон нулевой ширины: проход против ожидаемой реакции —
+                # закрытие собственного ТФ выше уровня (BSL) / ниже (SSL)
+                passed = (
+                    candle.close > z.lower
+                    if z.type == ZoneType.BSL
+                    else candle.close < z.lower
+                )
+                compared = z.lower
+            else:
+                continue
+            if not passed:
+                continue
+            ev_d = dict(z.evidence)
+            ev_d.setdefault("invalidated_at", boundary)
+            ev_d.setdefault("first_invalidating_candle_open_time", candle.open_time)
+            ev_d["pass_confirmed_at"] = boundary
+            self._update_evidence(z, ev_d)
+            if z.type == ZoneType.FVG:
+                self.db.update_zone(z.id, market_validity="invalid",
+                                    entry_eligible=False)
+                set_zone_end(self.db, z, boundary, None,
+                             "close_beyond (правила v1 §5)")
+            ev = Event(
+                id=None, zone_id=z.id, cycle_id=z.cycle_id,
+                kind=EventKind.SOURCE_PASSED, occurred_at=boundary,
+                detected_at=now, price=candle.close,
+                delayed=is_delayed(self.cfg, boundary, now),
+                evidence={
+                    "candle_open_time": candle.open_time,
+                    "open": candle.open, "high": candle.high,
+                    "low": candle.low, "close": candle.close,
+                    "boundary_compared": compared,
+                    "rule": "правила v1 §5: закрытие собственного ТФ строго "
+                            "за дальней границей/уровнем",
+                },
+            )
+            ev = self._emit(ev)
+            if ev is not None:
+                created.append(ev)
+        return created
+
     # ----- SSL/BSL -----
 
     def _scan_pivots(self, iid: int, tf: str, candles: list[Candle], now: int) -> None:
@@ -584,24 +664,58 @@ class Scanner:
         return created
 
     # ------------------------------------------------------------------
+    # ревизии закрытых свечей (правила v1 §10.3)
+    # ------------------------------------------------------------------
+
+    def process_candle_revisions(self, iid: int, now: int) -> list[Event]:
+        """Повторная обработка D1/W1-свечей с записанной ревизией.
+
+        Переоценка переходов зон (ob_invalidated/source_passed/d1_close_inside)
+        тем же детерминированным путём: вставки идемпотентны, события не
+        дублируются, неактуальные старые события остаются в журнале (§10.3).
+        Курсор — по detected_at журнала candle_revision."""
+        key = f"htf:candle_revision:last:{iid}"
+        last = int(self.db.get_meta(key) or 0)
+        rows = [
+            r for r in self.db.list_candle_revisions(iid)
+            if r["timeframe"] in ("D1", "W1") and int(r["detected_at"]) > last
+        ]
+        if not rows:
+            return []
+        created: list[Event] = []
+        for r in rows:
+            candle = self.db.candle_at(iid, r["timeframe"], int(r["open_time"]))
+            if candle is None or not candle.closed:
+                continue
+            created += self.on_closed_candle(candle)
+        self.db.set_meta(
+            key, str(max(int(r["detected_at"]) for r in rows))
+        )
+        return created
+
+    # ------------------------------------------------------------------
     # текущая цена: касания / глубина / скачки
     # ------------------------------------------------------------------
 
     def on_price(
         self, instrument_id: int, price: float, ts_ms: int, observed: bool = True,
-        timeframes: Optional[set] = None,
+        timeframes: Optional[set] = None, price_kind: Optional[str] = None,
     ) -> list[Event]:
         """Тик текущей цены. Отслеживает ACTIVE/WEAKENED/подтверждённых
         кандидатов; WORKED пропускаются (у них только проверка Breaker
         в on_closed_candle), TAKEN/ARCHIVED — тоже.
         timeframes — необязательное ограничение ТФ отслеживаемых зон (настройка
-        scan_timeframes применяется воркером)."""
+        scan_timeframes применяется воркером). price_kind — вид цены тика
+        (§10.1: trade/ticker/mid/…), помечается в evidence контакта для
+        различения «доказанная сделка» vs «информационная цена»."""
         prev = self._last_price.get(instrument_id)
+        prev_ts = self._last_price_ts.get(instrument_id)
         created = self._track_all(
             instrument_id, price, price, ts_ms, observed, prev, now_ms(),
-            timeframes=timeframes,
+            timeframes=timeframes, prev_ts=prev_ts, price_kind=price_kind,
         )
         self._last_price[instrument_id] = price
+        self._last_price_ts[instrument_id] = ts_ms
         return created
 
     def _track_all(
@@ -615,6 +729,8 @@ class Scanner:
         detected_at: int,
         entered_at: Optional[int] = None,
         timeframes: Optional[set] = None,
+        prev_ts: Optional[int] = None,
+        price_kind: Optional[str] = None,
     ) -> list[Event]:
         created: list[Event] = []
         zones = self.db.get_zones(iid, statuses=TRACKED_STATUSES, timeframes=timeframes)
@@ -661,12 +777,14 @@ class Scanner:
             if not z.is_level and z.type in RANGE_TYPES:
                 created += track_zone(
                     self.db, self.cfg, z, lo, hi, ts, observed, prev,
-                    detected_at, entered_at,
+                    detected_at, entered_at, prev_ts=prev_ts,
+                    price_kind=price_kind,
                 )
         for z in silent:
             created += track_zone(
                 self.db, self.cfg, z, lo, hi, ts, observed, prev,
-                detected_at, entered_at, silent=True,
+                detected_at, entered_at, silent=True, prev_ts=prev_ts,
+                price_kind=price_kind,
             )
         return created
 
@@ -709,6 +827,7 @@ class Scanner:
         created: list[Event] = []
         now = now_ms()
         self._last_price.pop(instrument_id, None)
+        self._last_price_ts.pop(instrument_id, None)
         last_ts: Optional[int] = None
         # нарастающий срез по ТФ: свечи до окна replay (уже в БД) + обработанные
         seen: dict[str, list[Candle]] = {
@@ -722,10 +841,12 @@ class Scanner:
                 created += self._track_all(
                     instrument_id, c.low, c.high, boundary, False, prev, now,
                     entered_at=c.open_time, timeframes=timeframes,
+                    prev_ts=self._last_price_ts.get(instrument_id),
                 )
                 seen[c.timeframe].append(c)
                 created += self.on_closed_candle(c, candles=seen[c.timeframe])
                 self._last_price[instrument_id] = c.close
+                self._last_price_ts[instrument_id] = boundary
                 last_ts = boundary
 
             # §8: если после обработки истории цена уже в актуальной зоне — отметить

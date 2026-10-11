@@ -2613,6 +2613,7 @@ const DESK_REASON_RU = {
   ok: 'Подходит по правилам',
   outside_pd: 'Вне Premium/Discount',
   tested_too_deep: 'Тест ≥ 90% глубины',
+  historically_worked: 'Отработана до активации (≥ 90% глубины)',
   type_disabled: 'Тип отключён настройкой',
   invalid: 'Зона невалидна',
   swept_level: 'Уровень снят',

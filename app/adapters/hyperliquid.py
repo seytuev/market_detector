@@ -35,7 +35,7 @@ from typing import Optional
 import httpx
 
 from ..models import Candle, Instrument, now_ms
-from .base import TIMEFRAME_MS, AdapterError
+from .base import TIMEFRAME_MS, AdapterError, QuoteTick
 
 # Маппинг внутренних таймфреймов на коды Hyperliquid
 INTERVAL_MAP = {"H1": "1h", "H4": "4h", "D1": "1d", "W1": "1w"}
@@ -180,11 +180,14 @@ class HyperliquidSpotAdapter:
             )
         return candles
 
-    async def last_price(self, symbol: str) -> tuple[float, int]:
-        """Mid-цена пары из allMids и штамп момента запроса.
+    async def last_price(self, symbol: str) -> QuoteTick:
+        """Mid-цена пары из allMids (правила v1 §10.1).
 
-        ВНИМАНИЕ: это mid, а не last trade — публичного эндпоинта последней
-        сделки у Hyperliquid нет (см. docstring модуля, §14.4 спеки).
+        ВНИМАНИЕ: это mid (price_kind=mid), а не last trade — публичного
+        эндпоинта последней сделки у Hyperliquid нет (см. docstring модуля,
+        §14.4 спеки). Mid — информационный источник: event_at=None, время
+        ответа за время сделки не выдаётся (R45); доказанную сделку им
+        незаметно подменять нельзя.
         """
         resp = await self._post({"type": "allMids"})
         ts = now_ms()
@@ -194,7 +197,12 @@ class HyperliquidSpotAdapter:
             raise AdapterError(
                 f"hyperliquid: нет mid-цены для {symbol} в allMids"
             )
-        return float(mids[api_symbol]), ts
+        return QuoteTick(
+            price=float(mids[api_symbol]),
+            event_at=None,
+            received_at=ts,
+            price_kind="mid",
+        )
 
     async def status(self) -> dict:
         """Состояние подключения: доступность /info (spotMeta) + время отклика."""

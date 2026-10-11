@@ -152,14 +152,17 @@ async def test_binance_unknown_symbol_raises_adapter_error():
 
 
 async def test_binance_last_price_is_last_trade():
-    """last_price — именно последняя сделка (/trades), не тикер (§11 п.1)."""
+    """last_price — именно последняя сделка (/trades), не тикер (§11 п.1):
+    price_kind=trade, event_at — время сделки (правила v1 §10.1)."""
     adapter = BinanceSpotAdapter(BINANCE)
     trade = {"id": 1, "price": "75469.47", "qty": "0.00014",
              "time": 1789581229638, "isBuyerMaker": False, "isBestMatch": True}
     with respx.mock:
         respx.get(f"{BINANCE}/api/v3/trades").respond(200, json=[trade])
-        price, ts = await adapter.last_price("BTCUSDT")
-    assert (price, ts) == (75469.47, 1789581229638)
+        tick = await adapter.last_price("BTCUSDT")
+    assert (tick.price, tick.event_at) == (75469.47, 1789581229638)
+    assert tick.price_kind == "trade"
+    assert tick.received_at is not None
     await adapter.aclose()
 
 
@@ -224,13 +227,17 @@ async def test_hyperliquid_unknown_pair_raises_adapter_error():
 
 
 async def test_hyperliquid_last_price_from_allmids():
-    """last_price — mid из allMids (публичного last trade у HL нет, см. docstring)."""
+    """last_price — mid из allMids (публичного last trade у HL нет):
+    price_kind=mid, event_at=None — время ответа не выдаётся за сделку (R45)."""
     adapter = HyperliquidSpotAdapter(HYPERLIQUID)
     with respx.mock:
         respx.post(f"{HYPERLIQUID}/info").respond(200, json={"@142": "75458.5"})
-        price, ts = await adapter.last_price("@142")
-    assert price == 75458.5
-    assert ts > 0
+        tick = await adapter.last_price("@142")
+    assert tick.price == 75458.5
+    assert tick.price_kind == "mid"
+    assert tick.event_at is None
+    assert tick.received_at > 0
+    assert tick.monotonic_at == tick.received_at
     await adapter.aclose()
 
 

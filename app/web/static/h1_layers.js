@@ -219,6 +219,7 @@
     range_pending: 'Диапазон ещё не подтверждён', outside_pd: 'Вне нужной половины диапазона',
     data_gap: 'Недостаточно истории для проверки', invalid: 'Зона невалидна',
     fvg_filled: 'FVG полностью перекрыт', tested_too_deep: 'Достигнут порог глубины теста',
+    historically_worked: 'Отработана до активации (≥ 90% глубины)',
     swept_level: 'Ликвидность снята', level_broken: 'Уровень пробит',
     parent_invalid: 'HTF-родитель невалиден', manual: 'Идея закрыта вручную',
     zones_exhausted: 'Зоны исчерпаны', discovery_pending: 'Зоны ещё определяются',

@@ -603,8 +603,9 @@ def _entry_row(
         "reason": fe.primary_reason,
         "blocking_reasons": list(fe.blocking_reasons),
         "admission_basis": fe.admission_basis,
-        # §18: контекстный допуск FVG вне Premium — отображается, не блокирует
-        "outside_premium": fe.admission_basis == ADMISSION_CONTEXT,
+        # §6.3: PD — не фильтр; флаг outside_premium снят (§18-исключение
+        # как условие допуска отменено), положение — в half/overlap
+        "outside_premium": False,
         # §9 (Этап 5): точечный уровень (W=0) глубины не имеет — null,
         # UI показывает «—» вместо «0%»
         "max_test_depth": None if zone.is_level else zone.max_test_depth,
@@ -1220,6 +1221,12 @@ def instruments_overview(db: Database, settings) -> list[dict[str, Any]]:
             htf_context = {
                 "type": zone.type.value, "timeframe": zone.timeframe,
             }
+            # Проекция машины контекста (§4): state_v2, основной/встречный
+            # контекст, ожидаемое условие возврата, продление горизонта (§8)
+            from .htf_context import context_state_v2
+            proj = context_state_v2(db, iid)
+            if proj is not None:
+                htf_context["state_v2"] = proj
         attention = _attention_group(
             db, iid, obs_list, len(eligible), stage, ds,
             price, locate,
@@ -1658,10 +1665,8 @@ def observation_chart_layers(
                 "blocking_reasons": list(fe.blocking_reasons),
                 "admission_basis": fe.admission_basis,
                 "half": _half_label(z, current, sc.direction.value),
-                # §18: контекстный допуск FVG вне Premium
-                "outside_premium": (
-                    fe.admission_basis == ADMISSION_CONTEXT
-                ),
+                # §6.3: PD — не фильтр; outside_premium снят
+                "outside_premium": False,
             }
             # ТЗ §10/§4.3: рабочий слой — только подходящие зоны
             # (§18: и контекстно допущенные FVG вне Premium); исключённые

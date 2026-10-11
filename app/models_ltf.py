@@ -79,6 +79,10 @@ class LtfScenario:
     reverse_break_pivot_id: Optional[int] = None  # опорный pivot обратной машины
     reverse_break_confirmed_at: Optional[int] = None  # confirmed_at того pivot
     last_processed_close: Optional[int] = None    # ms: close_time последней обработанной H1
+    # правила v1 §3/§6.2: причинный HTF-контакт и якорь рабочего PD
+    htf_interaction_id: Optional[int] = None
+    pd_anchor_structure_key: Optional[str] = None
+    pd_anchor_kind: Optional[str] = None           # BOS | SMS (равноправны)
     created_at: int = 0
     updated_at: int = 0
 
@@ -100,6 +104,9 @@ class LtfScenario:
             "reverse_break_pivot_id": self.reverse_break_pivot_id,
             "reverse_break_confirmed_at": self.reverse_break_confirmed_at,
             "last_processed_close": self.last_processed_close,
+            "htf_interaction_id": self.htf_interaction_id,
+            "pd_anchor_structure_key": self.pd_anchor_structure_key,
+            "pd_anchor_kind": self.pd_anchor_kind,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }

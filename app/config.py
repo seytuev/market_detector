@@ -118,11 +118,12 @@ class DetectorConfig:
                                              # Setup» §3/§9). Поле сохранено для
                                              # совместимости settings.json/API
     ltf_entry_types: str = "FVG,OB,BSL,SSL"  # типы отображаемых Entry Zones
-    # Какие HTF-зоны D1/W1 запускают LTF-наблюдение. OB и FVG равноправны:
-    # любое пересечение валидной зоны запускает поиск разворота на H1.
-    # PRB/Breaker/BSL/SSL триггерами не являются (для уровней нужны отдельные
-    # направление ожидания и условие активации). Допустимые значения: OB, FVG.
-    htf_context_types: str = "OB,FVG"
+    # Какие HTF-зоны D1/W1 запускают LTF-наблюдение. Правила v1 §3:
+    # OB/FVG и уровни BSL/SSL равноправны как источники; для уровней
+    # направление ожидания фиксировано (BSL→bear, SSL→bull), контакт —
+    # касание/пересечение уровня без требования подтверждённого sweep.
+    # Допустимые значения: OB, FVG, BSL, SSL.
+    htf_context_types: str = "OB,FVG,BSL,SSL"
     # Продуктовый default, не число со скриншота: сколько часов хранить
     # эпизод HTF-контекста от последнего отдельного взаимодействия до
     # подтверждения H1. 0 в поле ТФ — брать общий срок. Повтор того же
@@ -131,6 +132,15 @@ class DetectorConfig:
     htf_context_wait_hours: int = 168
     htf_context_wait_hours_d1: int = 0
     htf_context_wait_hours_w1: int = 0
+    # Правила v1 §8: горизонт ТОРГОВОГО контекста — 60 дней от глобальной
+    # опоры ноги; продлевается, пока нет квалифицированного обратного слома
+    # (R39: сама дата ничего не отменяет). 168ч выше — только техническое
+    # ожидание ПЕРВОГО подтверждения, не срок контекста (R24)
+    htf_context_horizon_days: int = 60
+    # §12.1 ТЗ — PROVISIONAL (формула якоря уточняется у владельца):
+    # leg_extreme — время последнего обновлённого экстремума ноги;
+    # leg_start — время начала ноги (исходная опора)
+    htf_context_leg_anchor: str = "leg_extreme"
     # ТЗ §16.2 (предлагаемый режим, выключен по умолчанию): «Предварительный
     # диапазон» — read-only слой временного конца текущего движения до
     # подтверждения опор тремя правыми свечами. На подтверждённые диапазоны,
@@ -179,13 +189,13 @@ class DetectorConfig:
     def htf_context_type_set(self) -> set[str]:
         """Типы HTF-контекста D1/W1, запускающие LTF-наблюдение (§16.1).
 
-        Только OB/FVG: остальные типы движка (PRB/Breaker/BSL/SSL) из строки
-        настройки отбрасываются — триггерами они не являются."""
+        Правила v1 §3: OB/FVG/BSL/SSL — допустимые источники; остальные типы
+        движка (PRB/Breaker) из строки настройки отбрасываются."""
         return {
             t.strip().upper()
             for t in self.htf_context_types.split(",")
             if t.strip()
-        } & {"OB", "FVG"}
+        } & {"OB", "FVG", "BSL", "SSL"}
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +260,7 @@ _NUMERIC_RANGES: dict[str, tuple[float, float]] = {
     "htf_context_wait_hours": (1, 8760),
     "htf_context_wait_hours_d1": (0, 8760),
     "htf_context_wait_hours_w1": (0, 8760),
+    "htf_context_horizon_days": (1, 3650),
     "stale_quote_seconds": (0, 86400),
     "stale_h1_intervals": (1, 100),
     "stale_d1_intervals": (1, 100),
@@ -260,11 +271,12 @@ _NUMERIC_RANGES: dict[str, tuple[float, float]] = {
 _CSV_ENUMS: dict[str, set[str]] = {
     "scan_timeframes": {"D1", "W1"},
     "ltf_entry_types": {"FVG", "OB", "BSL", "SSL"},
-    "htf_context_types": {"OB", "FVG"},
+    "htf_context_types": {"OB", "FVG", "BSL", "SSL"},
     "ltf_notify_kinds": {
         "bos_sms", "entries_ready", "touch", "sweep_outcome", "cancellation",
     },
     "ltf_range_anchor_policy": {"origin_reversal", "continuation_only"},
+    "htf_context_leg_anchor": {"leg_extreme", "leg_start"},
 }
 
 

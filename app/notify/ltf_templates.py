@@ -372,4 +372,14 @@ def render_ltf_messages(ev: LtfEvent, ctx: LtfContext) -> list[str]:
         return _render_sweep(ev, ctx)
     if ev.kind == "cancellation":
         return _render_cancellation(ev, ctx)
+    if ev.kind == "correction":
+        # §10.3 (R46): минимальный текст исправления (финальные — этап 10)
+        p = ev.payload or {}
+        head = f"LevelFrame · {_symbol(ctx)} · H1\n{p.get('text') or 'Исправление исходных данных.'}"
+        return _split(head, [], _footer(ev, ctx))
+    if ev.kind == "context_transition":
+        # §9: смысловой переход машины контекста (готовый текст в payload)
+        p = ev.payload or {}
+        head = f"LevelFrame · {_symbol(ctx)} · H1\n{p.get('text') or ''}"
+        return _split(head, [], _footer(ev, ctx))
     return []

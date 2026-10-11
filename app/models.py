@@ -95,6 +95,10 @@ class EventKind(str, Enum):
     BREAKER_ARCHIVED = "breaker_archived"
     PRB_ARCHIVED = "prb_archived"
     LEVEL_TAKEN = "level_taken"      # §7: пересечение уровня SSL/BSL
+    # Правила v1 §5: проход HTF-источника (FVG/BSL/SSL) закрытием СОБСТВЕННОГО
+    # ТФ строго за дальней границей/уровнем; тень и равенство — не проход.
+    # Для OB тот же факт — OB_INVALIDATED
+    SOURCE_PASSED = "source_passed"
     ZONE_CONFIRMED_BY_USER = "zone_confirmed_by_user"
     # Сервис
     DATA_STALE = "data_stale"        # §11: устаревшие данные
@@ -132,6 +136,8 @@ class Candle:
     close: float
     closed: bool = True
     source: str = ""      # явный источник каждого значения (§11)
+    # правила v1 §10.3: число ревизий уже закрытой свечи
+    revision: int = 0
 
     @property
     def is_bull(self) -> bool:
@@ -299,6 +305,9 @@ class Event:
     depth: float = 0.0
     delayed: bool = False     # §11: восстановленное событие с исходным временем
     evidence: dict[str, Any] = field(default_factory=dict)
+    # правила v1 §7: связь факта с визитом/активацией (NULL — до разметки)
+    visit_id: Optional[int] = None
+    activation_id: Optional[int] = None
 
     def idempotency_key(self, user: str = "owner") -> str:
         """§8/§9: повторная обработка не удваивает отправку."""

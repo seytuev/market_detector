@@ -657,8 +657,44 @@ def _stored_zone_visible(zone: LtfEntryZone, as_of: int) -> bool:
     return True
 
 
-def _scan_zones(pivots, candles, events, cfg, as_of: int, index: _CandleIndex) -> list[dict[str, Any]]:
+def _context_bounds(db: Database, instrument_id: int, links: dict) -> dict:
+    """Ключ структурного события → дедлайн подтверждения зоны.
+
+    None — сценарий ещё жив, верхней отсечки нет. Число — включительная
+    граница ``confirmed_at``. Ключа нет — событие не привязано к сценарию,
+    и снимок не тянет зоны дальше закрытия этого слома.
+    """
+    scenarios = {
+        s.id: s for s in db.list_ltf_scenarios_for_instrument(instrument_id)
+    }
+    open_states = {"range_pending", "monitoring_entries"}
+    bounds: dict = {}
+    for key, ids in links.items():
+        rows = [scenarios[i] for i in ids if i in scenarios]
+        if not rows:
+            continue
+        if any(s.state in open_states for s in rows):
+            bounds[key] = None
+            continue
+        caps = []
+        for s in rows:
+            # Свеча отмены уже не принимает новую зону: дедлайн — её close_time,
+            # а confirmed_at третьей свечи на 1 мс больше close_time.
+            if s.last_processed_close:
+                caps.append(int(s.last_processed_close))
+            elif s.cancelled_at:
+                caps.append(int(s.cancelled_at))
+        if caps:
+            bounds[key] = max(caps)
+    return bounds
+
+
+def _scan_zones(
+    pivots, candles, events, cfg, as_of: int, index: _CandleIndex,
+    context_bounds: Optional[dict] = None,
+) -> list[dict[str, Any]]:
     lookback = (cfg.uncalibrated_consolidation_max_candles + 5) * H1_MS
+    context_bounds = context_bounds or {}
     found: list[dict[str, Any]] = []
     seen = set()
     for ev in events:
@@ -667,7 +703,17 @@ def _scan_zones(pivots, candles, events, cfg, as_of: int, index: _CandleIndex) -
         movement = build_movement(0, pivots, candles, ev, ev.direction, lookback)
         if movement is None:
             continue
-        detection = detect_entry_zones(candles, movement, pivots, ev.direction, cfg)
+        key = (ev.level_key, ev.kind, ev.stage, ev.occurred_at)
+        if key in context_bounds:
+            context_until = context_bounds[key]
+        else:
+            # Непривязанный слом: только зоны, подтверждённые к его закрытию.
+            # occurred_at — close_time, confirmed_at FVG — close_time + 1.
+            context_until = int(ev.occurred_at) + 1
+        detection = detect_entry_zones(
+            candles, movement, pivots, ev.direction, cfg,
+            context_until=context_until,
+        )
         for draft in detection.zones:
             if draft.formed_at > as_of:
                 continue
@@ -840,7 +886,10 @@ def assemble_h1_layers(
         if fact["reason"] not in ("ok", "data_gap", "unconfirmed"):
             zones[-1].update(lifecycle="ended", display_until=fact["excluded_at"], recently_taken=False)
     if candles:
-        for extra in _scan_zones(candidates, candles, events, cfg, moment, index):
+        for extra in _scan_zones(
+            candidates, candles, events, cfg, moment, index,
+            _context_bounds(db, instrument_id, links),
+        ):
             key = _geometry_key(
                 extra["type"], extra["direction"], extra["formed_at"],
                 extra["lower"], extra["upper"],

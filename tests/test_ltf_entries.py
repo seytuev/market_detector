@@ -72,13 +72,16 @@ def test_detect_all_suitable_zones_no_ranking():
     candles, avail, mv, cfg = _detection(DetectorConfig())
     det = detect_entry_zones(candles, mv, avail, Direction.BEAR, cfg)
     d = _by_bounds(det)
-    assert len(det.zones) == 10
-    # FVG-тройки движения
+    # FVG-тройки движения, включая тройку после свечи слома
     assert ("FVG", 13.8, 14.9) in d
     assert ("FVG", 13.2, 13.5) in d
     assert ("FVG", 12.8, 13.0) in d
     assert ("FVG", 11.8, 12.0) in d
     assert ("FVG", 10.5, 11.5) in d
+    late = d[("FVG", 11.8, 12.4)]
+    assert late.formed_at == T0 + 13 * H1_MS
+    assert late.evidence["relation"] == "after_break"
+    assert late.evidence["break_at"] == mv.end_at
     # OB — только с подтверждающим внешним FVG (§8.3)
     assert ("OB", 14.4, 15.6) in d   # база idx3 + тень импульсной idx4 (§9.3 HTF)
     assert ("OB", 13.5, 14.8) in d
@@ -86,19 +89,20 @@ def test_detect_all_suitable_zones_no_ranking():
     assert ("OB", 12.0, 13.2) in d
     # BSL — экстремум по тени, относящийся к движению (§8.4)
     assert ("BSL", 15.6, 15.6) in d
-    # неподходящие исключены с объяснением (п.9)
+    # неподходящие исключены с объяснением (п.9). «После слома» причиной отказа не бывает.
     assert any(r["type"] == "OB" and "внешнего FVG" in r["reason"]
                for r in det.rejected)
-    assert any(r["type"] == "FVG" and "вне причинного движения" in r["reason"]
-               and r["formed_at"] == T0 + 13 * H1_MS for r in det.rejected)
+    assert not any("после" in r["reason"] for r in det.rejected)
 
 
 def test_wrong_direction_excluded():
-    # п.9: зона не по направлению сценария исключается с объяснением
+    # п.9: зона не по направлению сценария исключается с объяснением.
+    # Бычий разрыв после слома остаётся: он совпадает с запрошенным направлением.
     candles, avail, mv, cfg = _detection(DetectorConfig())
     det = detect_entry_zones(candles, mv, avail, Direction.BULL, cfg)
-    assert [z for z in det.zones if z.type in ("FVG", "OB")] == []
+    assert [z for z in det.zones if z.direction != Direction.BULL] == []
     assert any("направление" in r["reason"] for r in det.rejected)
+    assert not any("после" in r["reason"] for r in det.rejected)
 
 
 def test_freshness_and_forming_candles():

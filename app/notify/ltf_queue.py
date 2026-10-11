@@ -43,6 +43,11 @@ _KIND_GROUP = {
     "sweep_confirmed": "sweep_outcome",
     "sweep_failed": "sweep_outcome",
     "cancellation": "cancellation",
+    # §10.3 (R46): уведомление об исправлении исходных данных — дельта по
+    # активному сигналу, не массовая рассылка истории
+    "correction": "cancellation",
+    # §9: смысловые переходы машины контекста (opposing/resumed/коррекция)
+    "context_transition": "bos_sms",
 }
 
 # §7 ТЗ 07.10.2026: виды, к которым обязателен собственный график H1 события

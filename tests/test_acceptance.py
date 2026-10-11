@@ -129,7 +129,12 @@ def test_n8_fvg_weakened_keeps_tracking_until_filled(db, cfg, instrument_id):
     # ослабленный FVG продолжает отслеживаться до полного перекрытия (§3)
     ev = scanner.on_price(instrument_id, 100.9, t + 4)
     assert [e.kind for e in ev] == [EventKind.FVG_FILLED]
-    assert db.get_zone(fvg.id).status == ZoneStatus.ARCHIVED
+    # правила v1 §7: заполнение — факт визита, зона НЕ архивируется;
+    # рыночную валидность меняет только закрытие собственного ТФ за границей
+    fresh = db.get_zone(fvg.id)
+    assert fresh.status == ZoneStatus.WEAKENED
+    assert fresh.market_validity == "active"
+    assert fresh.display_until is None
 
     kinds = [e.kind for e in db.get_events(fvg.id)]
     assert sorted(kinds, key=str) == sorted(

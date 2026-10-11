@@ -31,9 +31,11 @@ FVG_WEAKENED/FVG_FILLED, учёт заходов (Visit) — единый для
   преобразования (ровно 50% допустимо); отдельно сохраняется отмена по
   закрытию за дальней границей (scanner);
 - PRB: прежний порог 90% сохраняется — DEPTH_90 → status WORKED;
-- FVG: 50% → WEAKENED + FVG_WEAKENED; полное перекрытие → FVG_FILLED
-  (зона архивируется); касание связанного OB/PRB проверяется независимо
-  по его реальным границам в том же проходе scanner (§3);
+- FVG: 50% → WEAKENED + FVG_WEAKENED; полное перекрытие → FVG_FILLED —
+  факт визита (правила v1 §7: заполнение НЕ архивирует зону и не является
+  проходом; market_validity меняет только закрытие собственного ТФ за
+  дальней границей — проверка в scanner); касание связанного OB/PRB
+  проверяется независимо по его реальным границам в том же проходе scanner (§3);
 - прежняя отдельная ветка «H1: первое касание завершает зону» (§9.8) и
   запрет первой протестированной H1-зоны удалены (ТЗ §2/§6).
 """
@@ -100,12 +102,12 @@ def _kind_status(zone: Zone, kind: EventKind) -> Optional[ZoneStatus]:
 
     ТЗ §3/§6: OB (и ручные ob) по глубине не завершаются — None; прежнее
     правило 90% → WORKED сохраняется только для PRB и ручных зон без
-    типового правила; FVG — свои пороги.
+    типового правила. Правила v1 §7: FVG_FILLED — факт визита, терминального
+    статуса больше нет (проход FVG — только закрытием собственного ТФ за
+    дальней границей, scanner); WEAKENED — качественная пометка.
     """
     if kind == EventKind.FVG_WEAKENED:
         return ZoneStatus.WEAKENED
-    if kind == EventKind.FVG_FILLED:
-        return ZoneStatus.ARCHIVED
     if kind == EventKind.DEPTH_90:
         if zone.type == ZoneType.PRB or (
             zone.type == ZoneType.MANUAL and zone.zone_type != ZoneType.OB.value
@@ -246,6 +248,8 @@ def track_zone(
     detected_at: int,
     entered_at: Optional[int] = None,
     silent: bool = False,
+    prev_ts: Optional[int] = None,
+    price_kind: Optional[str] = None,
 ) -> list[Event]:
     """Обрабатывает одно наблюдение [lo,hi] в момент ts по диапазонной зоне.
 
@@ -256,10 +260,18 @@ def track_zone(
     silent=True — кандидат OB до подтверждения FVG (ТЗ §4): самостоятельные
     тесты пишутся в историю (визиты, max_test_depth), но события не эмитятся
     и уведомления задним числом не отправляются.
+
+    prev_ts — время предыдущего наблюдения цены (quote-путь): для прохода
+    всей зоны между двумя наблюдениями (JUMP_THROUGH) фиксируется интервал
+    наблюдений и неизвестный точный момент контакта (правила v1 §10.1).
     """
     created: list[Event] = []
     delayed = is_delayed(cfg, ts, detected_at)
     ev_base: dict = {"observed": observed}
+    if price_kind is not None:
+        # §10.1: вид цены контакта — «доказанная сделка» (trade) vs
+        # информационная цена (ticker/mid/…); mid/тикер сделку не подменяют
+        ev_base["price_kind"] = price_kind
     if not observed:
         # §11: порядок цен внутри исторической свечи неизвестен
         ev_base["intra_candle_order_unknown"] = True
@@ -317,6 +329,10 @@ def track_zone(
     existing_keys = set(keys)
     kind_thr = _kind_thresholds(cfg)
     visit = db.open_visit_for(zone.id, zone.cycle_id)
+    # §7: текущая независимая активация зоны (если есть) — факты визита
+    # привязываются к ней, глубина/заполнение текущего визита накапливаются
+    # в ней и НЕ завершают её (R17/R19)
+    activation = db.get_open_zone_activation(zone.id, zone.cycle_id)
     thresholds = (
         _fvg_thresholds(cfg) if zone.type == ZoneType.FVG else _block_thresholds(cfg)
     )
@@ -328,11 +344,29 @@ def track_zone(
             id=None, zone_id=zone.id, cycle_id=zone.cycle_id, kind=kind,
             occurred_at=ts, detected_at=detected_at, price=price,
             depth=depth_val, delayed=delayed, evidence=evidence,
+            visit_id=visit.id if visit is not None else None,
+            activation_id=activation["id"] if activation is not None else None,
         )
         if db.insert_event(ev) is not None:
             created.append(ev)
             existing.add(kind)
             existing_keys.add((kind, ts))
+
+    def track_activation() -> None:
+        if activation is None or visit is None:
+            return
+        depth_cur = max(float(activation["max_depth_current"]), visit.max_depth)
+        fill_cur = float(activation["fill_current"])
+        if zone.type == ZoneType.FVG and visit.max_depth >= 1.0:
+            fill_cur = max(fill_cur, 1.0)
+        if (depth_cur != float(activation["max_depth_current"])
+                or fill_cur != float(activation["fill_current"])):
+            db.update_zone_activation(
+                int(activation["id"]),
+                max_depth_current=depth_cur, fill_current=fill_cur,
+            )
+            activation["max_depth_current"] = depth_cur
+            activation["fill_current"] = fill_cur
 
     if geom.interval_intersects(zone, lo, hi):
         dmax = max(0.0, geom.max_depth_in_interval(zone, lo, hi))
@@ -340,6 +374,23 @@ def track_zone(
             (kind_thr[k] for k in existing if k in kind_thr),
             default=-1.0,
         )
+        # учёт захода (§8) — до emit, чтобы событие ссылалось на свой визит
+        if visit is None:
+            extreme0 = lo if zone.direction == Direction.BULL else hi
+            vid = db.open_visit(Visit(
+                id=None, zone_id=zone.id, cycle_id=zone.cycle_id,
+                entered_at=entered_at if entered_at is not None else ts,
+                max_depth=dmax, observed=observed,
+                extreme=extreme0, d_raw=float(geom.exact_depth(zone, extreme0)),
+            ))
+            visit = db.open_visit_for(zone.id, zone.cycle_id)
+        elif dmax > visit.max_depth:
+            extreme = _visit_extreme(zone, visit, lo, hi)
+            db.update_visit_depth(visit.id, dmax, extreme=extreme,
+                                  d_raw=float(geom.exact_depth(zone, extreme)))
+            visit.max_depth = dmax
+            visit.extreme = extreme
+        track_activation()
         new_kind: Optional[EventKind] = None
         for thr, kind in thresholds:
             if thr <= dmax and thr > achieved:
@@ -357,22 +408,6 @@ def track_zone(
                                  else "fvg_filled (§3)")
                 else:
                     db.update_zone(zone.id, status=status)
-        # учёт захода (§8): счётчик визитов и max_depth — разные данные
-        if visit is None:
-            extreme0 = lo if zone.direction == Direction.BULL else hi
-            vid = db.open_visit(Visit(
-                id=None, zone_id=zone.id, cycle_id=zone.cycle_id,
-                entered_at=entered_at if entered_at is not None else ts,
-                max_depth=dmax, observed=observed,
-                extreme=extreme0, d_raw=float(geom.exact_depth(zone, extreme0)),
-            ))
-            visit = db.open_visit_for(zone.id, zone.cycle_id)
-        elif dmax > visit.max_depth:
-            extreme = _visit_extreme(zone, visit, lo, hi)
-            db.update_visit_depth(visit.id, dmax, extreme=extreme,
-                                  d_raw=float(geom.exact_depth(zone, extreme)))
-            visit.max_depth = dmax
-            visit.extreme = extreme
         # ТЗ §3: статистика самостоятельных тестов OB (в т.ч. до подтверждения)
         if ob_like and visit is not None:
             _update_test_stats(db, cfg, zone, visit.extreme)
@@ -394,8 +429,9 @@ def track_zone(
             db.close_visit(visit.id, ts, visit.max_depth, exit_kind="invalidated",
                            extreme=visit.extreme)
             return created
-        # отработан / полностью перекрыт — заход завершён, касания прекращаются
-        # (для OB терминального статуса по глубине нет — заход продолжается)
+        # отработан (PRB 90%) — заход завершён, касания прекращаются.
+        # Для OB терминального статуса по глубине нет, а заполненный FVG
+        # (правила v1 §7) активацию не завершает — заход продолжается
         if (
             new_kind in (EventKind.DEPTH_90, EventKind.FVG_FILLED)
             and _kind_status(zone, new_kind) is not None
@@ -440,6 +476,8 @@ def track_zone(
                 break
         extreme = _visit_extreme(zone, visit, lo, hi)
         db.close_visit(visit.id, ts, dmax, exit_kind="beyond", extreme=extreme)
+        visit.max_depth = dmax
+        track_activation()
         if ob_like:
             _update_test_stats(db, cfg, zone, extreme)
         return created
@@ -449,13 +487,21 @@ def track_zone(
                        extreme=visit.extreme)
         visit = None
 
-    if geom.jumped_through(zone, prev_price, lo, hi):
-        # §6: проход насквозь — без обычного TOUCH
+    # jumped_through (§6, по направлению зоны) — подмножество общего
+    # пересечения всей зоны между наблюдениями (правила v1 §10.1, любая сторона)
+    if geom.crossed_between_observations(zone, prev_price, lo, hi):
+        # §6: проход насквозь — без обычного TOUCH. Правила v1 §10.1 (R42):
+        # это пересечение всей зоны МЕЖДУ наблюдениями — точная цена и момент
+        # контакта неизвестны и не выдумываются; такой контакт может запустить
+        # ожидание LTF, но не подтверждает BOS/SMS, sweep или проход своим ТФ
         if EventKind.JUMP_THROUGH not in existing:
             price = hi if zone.direction == Direction.BULL else lo
             emit(EventKind.JUMP_THROUGH, price, 0.0, {
                 **ev_base,
                 "prev_price": prev_price,
+                "contact_basis": "crossed_between_observations",
+                "observation_interval": [prev_ts, ts] if prev_ts is not None else [None, ts],
+                "exact_contact_unknown": True,
                 "note": "проход зоны насквозь без касания; обычный TOUCH не порождается",
             })
         return created

@@ -83,11 +83,15 @@ def _headline(snap, event: Event) -> str:
         return "Цена достигла середины зоны."
     if kind == NormalizedKind.DEPTH_90:
         return "Цена достигла 90% глубины зоны."
+    if raw == EventKind.FVG_FILLED:
+        # правила v1 §7: заполнение — не конец наблюдения
+        return "FVG полностью заполнен — наблюдение реакции продолжается."
     if kind == NormalizedKind.ZONE_INVALIDATED:
         return {
-            EventKind.FVG_FILLED: "FVG полностью заполнен — зона неактуальна.",
             EventKind.OB_INVALIDATED:
                 "Зона инвалидирована закрытием за границей.",
+            EventKind.SOURCE_PASSED:
+                "Источник пройден закрытием собственного ТФ за границей.",
             EventKind.BREAKER_ARCHIVED: "Breaker пробит и архивирован.",
             EventKind.PRB_ARCHIVED: "PRB пробит и архивирован.",
         }.get(raw, "Зона больше не актуальна.")

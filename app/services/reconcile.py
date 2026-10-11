@@ -100,13 +100,14 @@ def reconcile_zone(db, settings, zone_id: int) -> dict[str, Any]:
                 False, None, now_ms(), silent=False,
             )
             fresh = db.get_zone(zone_id)
-            reason = (fresh.end_reason or "") if fresh is not None else ""
-            if "fvg_filled" in reason:
+            # Правила v1 §7: заполнение — факт визита (событие), оно больше
+            # не завершает рисунок; результат сверки — по событию, а не по
+            # end_reason/display_until
+            if fresh is not None and fvg_has_fill_event(db, fresh):
                 result = {
                     "status": "resolved",
                     "outcome": "fill_recorded",
-                    "at": fresh.display_until,
-                    "end_reason": reason,
+                    "at": candle.close_time,
                     "zone_id": zone_id,
                 }
             else:

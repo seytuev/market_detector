@@ -115,17 +115,18 @@ def test_swept_level_not_revived_by_new_range_version():
 def test_context_exception_only_for_fvg_with_complete_context():
     entry = _entry("out_of_range", REASON_OUTSIDE_PD, eligible=False,
                    overlap="none")
+    # §6.3 (правила v1): PD — не фильтр; контекстное исключение как условие
+    # допуска не требуется — FVG вне Premium допускается по обычному правилу
     fe = evaluate_final(entry, _zone(type_="FVG"), allow_outside=True)
     assert fe.eligible_now is True
-    assert fe.admission_basis == ADMISSION_CONTEXT
+    assert fe.admission_basis == ADMISSION_RULE
     assert fe.blocking_reasons == ()
-    # без полного контекста — нет допуска
+    # allow_outside=False больше ничего не меняет
     fe_no = evaluate_final(entry, _zone(type_="FVG"), allow_outside=False)
-    assert fe_no.eligible_now is False
-    assert fe_no.blocking_reasons == (REASON_OUTSIDE_PD,)
-    # и только для FVG: OB вне половины не допускается контекстом
+    assert fe_no.eligible_now is True
+    # OB вне половины — тоже допускается (PD не фильтр для всех типов)
     fe_ob = evaluate_final(entry, _zone(type_="OB"), allow_outside=True)
-    assert fe_ob.eligible_now is False
+    assert fe_ob.eligible_now is True
 
 
 # ------------------------- согласованность проекций -------------------------
@@ -218,7 +219,7 @@ def _projection_ids(db, client, seeded, instrument_id):
         z.id for _, z, _ in admitted_scenario_entries(db, sc.id)
     }
     engine_ids = {
-        z.id for _, z, _out in engine._entry_candidates(sc)
+        z.id for _, z in engine._entry_candidates(sc)
     }
     fresh_ids = {z.id for _, z in _fresh_entries(db, sc.id)}
     r = client.get(
@@ -249,21 +250,22 @@ def _projection_ids(db, client, seeded, instrument_id):
 def test_single_admitted_set_across_projections(db, client, seeded,
                                                 instrument_id):
     ids = _projection_ids(db, client, seeded, instrument_id)
-    # без контекста: только OB по обычному правилу; глубокий тест и снятый
-    # уровень не подходят нигде
-    expected = {seeded["ok"].id}
+    # §6.3 (правила v1): PD — не фильтр: FVG вне Premium допускается во всех
+    # проекциях без контекстного исключения; глубокий тест и снятый уровень
+    # не подходят нигде
+    expected = {seeded["ok"].id, seeded["fvg"].id}
     assert ids["canonical"] == expected
     for name in ("engine", "fresh", "entries_view", "current", "chart",
                  "sql"):
         assert ids[name] == expected, name
-    assert ids["current_count"] == 1
+    assert ids["current_count"] == 2
 
 
 def test_single_admitted_set_with_context_exception(db, client, seeded,
                                                     instrument_id):
     _complete_context(db, seeded)
     ids = _projection_ids(db, client, seeded, instrument_id)
-    # полный контекст §18: FVG вне Premium допускается во всех проекциях;
+    # набор не зависит от контекста §18 (исключение больше не условие);
     # swept_level и tested_too_deep не возвращаются
     expected = {seeded["ok"].id, seeded["fvg"].id}
     assert ids["canonical"] == expected
@@ -271,11 +273,10 @@ def test_single_admitted_set_with_context_exception(db, client, seeded,
                  "sql"):
         assert ids[name] == expected, name
     assert ids["current_count"] == 2
-    # контекстный допуск явно помечен в карточке
+    # допуск — по обычному правилу (контекстное исключение не требуется)
     r = client.get(
         f"/api/ltf/instruments/{instrument_id}/current", headers=AUTH
     )
     rows = {row["entry_zone_id"]: row for row in r.json()["eligible_entries"]}
-    assert rows[seeded["fvg"].id]["admission_basis"] == ADMISSION_CONTEXT
-    assert rows[seeded["fvg"].id]["outside_premium"] is True
+    assert rows[seeded["fvg"].id]["admission_basis"] == ADMISSION_RULE
     assert rows[seeded["ok"].id]["admission_basis"] == ADMISSION_RULE

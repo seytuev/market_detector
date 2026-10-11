@@ -1720,6 +1720,10 @@ def create_app_from_env() -> FastAPI:
     ``uvicorn --factory app.web.api:create_app_from_env --host 127.0.0.1 --port 8000``"""
     settings = load_settings()
     db = Database(settings.db_path)
-    from ..services.htf_profile import migrate_saved_htf_profile
+    from ..services.htf_profile import (
+        migrate_saved_htf_profile,
+        migrate_saved_htf_profile_v3,
+    )
     migrate_saved_htf_profile(db, settings)
+    migrate_saved_htf_profile_v3(db, settings)
     return create_app(db, settings)

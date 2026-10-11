@@ -76,8 +76,9 @@ def test_htf_kind_mapping_mutex():
     _, zid = _mk(db, ZoneType.FVG, 100.0, 110.0)
     assert htf_snapshot(_view(db, zid, EventKind.FVG_WEAKENED, now_ms())).kind \
         == NormalizedKind.DEPTH_50
+    # правила v1 §7: заполнение FVG — факт визита, не инвалидация
     assert htf_snapshot(_view(db, zid, EventKind.FVG_FILLED, now_ms())).kind \
-        == NormalizedKind.ZONE_INVALIDATED
+        == NormalizedKind.INFO
     assert htf_snapshot(_view(db, zid, EventKind.TOUCH, now_ms())).kind \
         == NormalizedKind.TOUCH
 

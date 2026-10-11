@@ -183,9 +183,34 @@ async def test_bybit_catalog_cursor_pagination_and_trading_filter():
 
 
 async def test_bybit_last_price_from_ticker():
-    """last_price — lastPrice тикера того же источника (§11 п.1)."""
+    """last_price — основной путь recent-trade (trade, event_at); fallback —
+    тикер (price_kind=ticker, event_at=None, время ответа ≠ время сделки)."""
     adapter = BybitSpotAdapter(BYBIT)
     ts = now_ms()
+    trade_payload = {
+        "retCode": 0, "retMsg": "OK",
+        "result": {"category": "spot", "list": [
+            {"execId": "abc", "symbol": "PUMPUSDT", "price": "0.003521",
+             "size": "100", "side": "Buy", "time": ts - 500,
+            }]},
+        "time": ts,
+    }
+    with respx.mock:
+        respx.get(f"{BYBIT}/v5/market/recent-trade").respond(200, json=trade_payload)
+        tick = await adapter.last_price("PUMPUSDT")
+    assert (tick.price, tick.event_at) == (0.003521, ts - 500)
+    assert tick.price_kind == "trade"
+    assert tick.source_seq == "abc"
+    await adapter.aclose()
+
+
+async def test_bybit_last_price_ticker_fallback_no_fake_trade_time():
+    """R45: при недоступности сделок — тикер с price_kind=ticker и
+    event_at=None (время ответа сервера за время сделки не выдаётся)."""
+    adapter = BybitSpotAdapter(BYBIT)
+    ts = now_ms()
+    empty_trades = {"retCode": 0, "retMsg": "OK",
+                    "result": {"category": "spot", "list": []}, "time": ts}
     payload = {
         "retCode": 0, "retMsg": "OK",
         "result": {
@@ -196,9 +221,13 @@ async def test_bybit_last_price_from_ticker():
         "time": ts,
     }
     with respx.mock:
+        respx.get(f"{BYBIT}/v5/market/recent-trade").respond(200, json=empty_trades)
         respx.get(f"{BYBIT}/v5/market/tickers").respond(200, json=payload)
-        price, price_ts = await adapter.last_price("PUMPUSDT")
-    assert (price, price_ts) == (0.003521, ts)
+        tick = await adapter.last_price("PUMPUSDT")
+    assert tick.price == 0.003521
+    assert tick.price_kind == "ticker"
+    assert tick.event_at is None
+    assert tick.received_at == ts
     await adapter.aclose()
 
 

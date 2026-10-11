@@ -103,8 +103,9 @@ def test_candidates_queue_shows_unconfirmed_reason(db, client, instrument_id):
 # ----- LTF: невалидный родитель не порождает сценарии (T21) -----
 
 def test_parent_market_invalid_closes_observation(db, cfg, instrument_id):
-    """market_validity=invalid (close_beyond без смены status) закрывает
-    наблюдение наряду с CONVERTED/ARCHIVED."""
+    """Правила v1 §6.1 (R33): market_validity=invalid родителя — факт
+    (context_update), наблюдение и сценарий НЕ закрываются по статусу;
+    новые сценарии от невалидной зоны не открываются (T21 сохранён)."""
     engine = LtfEngine(db, cfg)
     candles = _series(SERIES_H_HL, SERIES_H_CLOSES, instrument_id)
     zid = _setup(db, instrument_id)
@@ -113,7 +114,7 @@ def test_parent_market_invalid_closes_observation(db, cfg, instrument_id):
     db.update_zone(zid, market_validity="invalid",
                    end_reason="close_beyond (ТЗ §3)", display_until=T0)
     assert engine.check_parent_validity(db.get_zone(zid)) is True
-    assert db.get_ltf_observation(obs.id).state == "closed_by_parent"
+    assert db.get_ltf_observation(obs.id).state == "active"
 
 
 # ----- идемпотентность replay: визиты (T22) -----

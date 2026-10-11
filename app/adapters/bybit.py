@@ -21,7 +21,7 @@ from typing import Optional
 import httpx
 
 from ..models import Candle, Instrument, now_ms
-from .base import TIMEFRAME_MS, AdapterError
+from .base import TIMEFRAME_MS, AdapterError, QuoteTick
 
 # Маппинг внутренних таймфреймов на коды Bybit V5
 INTERVAL_MAP = {"H1": "60", "H4": "240", "D1": "D", "W1": "W"}
@@ -176,16 +176,43 @@ class BybitSpotAdapter:
             )
         return candles
 
-    async def last_price(self, symbol: str) -> tuple[float, int]:
-        """Цена последней сделки (lastPrice тикера того же источника) — §11 п.1."""
+    async def last_price(self, symbol: str) -> QuoteTick:
+        """Тик котировки Bybit (правила v1 §10.1).
+
+        Основной путь — последняя сделка (/v5/market/recent-trade):
+        price_kind=trade, event_at — время сделки. Запасной — тикер
+        (price_kind=ticker, event_at=None): время ответа сервера за время
+        сделки НЕ выдаётся (R45)."""
+        try:
+            payload = await self._get_payload(
+                "/v5/market/recent-trade",
+                {"category": "spot", "symbol": symbol, "limit": 1},
+            )
+            rows = (payload.get("result") or {}).get("list", [])
+            if not rows:
+                raise AdapterError(f"bybit: нет сделок по {symbol}")
+            trade = rows[0]
+            return QuoteTick(
+                price=float(trade["price"]),
+                event_at=int(trade["time"]),
+                received_at=now_ms(),
+                price_kind="trade",
+                source_seq=str(trade.get("execId")) if trade.get("execId") else None,
+            )
+        except (AdapterError, httpx.HTTPError, KeyError, ValueError):
+            pass
         payload = await self._get_payload(
             "/v5/market/tickers", {"category": "spot", "symbol": symbol}
         )
         rows = (payload.get("result") or {}).get("list", [])
         if not rows:
             raise AdapterError(f"bybit: нет тикера по {symbol}")
-        ts = int(payload["time"]) if payload.get("time") else now_ms()
-        return float(rows[0]["lastPrice"]), ts
+        return QuoteTick(
+            price=float(rows[0]["lastPrice"]),
+            event_at=None,
+            received_at=int(payload["time"]) if payload.get("time") else now_ms(),
+            price_kind="ticker",
+        )
 
     async def status(self) -> dict:
         """Состояние подключения: время сервера + время отклика."""

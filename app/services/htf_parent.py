@@ -13,7 +13,8 @@ from typing import Optional
 from ..models import ZoneStatus
 
 PARENT_TIMEFRAMES = frozenset({"D1", "W1"})
-PARENT_TYPES = frozenset({"OB", "FVG"})
+# Правила v1 §3: источниками являются и диапазонные OB/FVG, и уровни BSL/SSL
+PARENT_TYPES = frozenset({"OB", "FVG", "BSL", "SSL"})
 # Статусы, которые предикат вообще может принять. Выборка воркера может
 # ограничиться ими: уже, чем этот набор, она отрезала бы подтверждённый
 # candidate (F01). Шире — не нужно, остальные статусы здесь не допускаются.
@@ -70,6 +71,24 @@ def _lifecycle_end_at(zone) -> Optional[int]:
         if v is not None
     ]
     return min(int(v) for v in ends) if ends else None
+
+
+def expected_direction_for_source(zone) -> str:
+    """Направление ожидания HTF-источника (правила v1 §3, R09).
+
+    Уровень задаёт ожидание реакции после снятия ликвидности: BSL → bear,
+    SSL → bull. Диапазонные OB/FVG — по направлению зоны. Ручная зона без
+    заданного направления — neutral до BOS H1."""
+    if zone is None:
+        return "neutral"
+    typ = context_type_name(zone)
+    if typ == "BSL":
+        return "bear"
+    if typ == "SSL":
+        return "bull"
+    direction = getattr(zone, "direction", None)
+    value = direction.value if hasattr(direction, "value") else str(direction)
+    return value if value in ("bull", "bear") else "neutral"
 
 
 def parent_decision(zone, policy, as_of: Optional[int] = None) -> ParentDecision:

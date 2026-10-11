@@ -7,7 +7,7 @@ from dataclasses import replace
 
 import pytest
 
-from app.adapters.base import AdapterError
+from app.adapters.base import AdapterError, QuoteTick
 from app.config import DetectorConfig, Settings
 from app.db import Database
 from app.models import (
@@ -37,7 +37,7 @@ class FakeAdapter:
     def __init__(self, symbols=None):
         self._symbols = list(symbols if symbols is not None else [s for _, s in SEED])
         self.candles = []
-        self.price = (110.0, now_ms())
+        self.price = QuoteTick(110.0, now_ms(), now_ms(), "trade")
         self.fail = False
         self.klines_calls = 0
 
@@ -139,7 +139,7 @@ async def test_poll_dispatches_market_event():
     db = Database(":memory:")
     adapter = FakeAdapter()
     adapter.candles = _fresh_candles(close=110.0)  # закрытия ВНЕ зоны
-    adapter.price = (99.0, now_ms())               # текущая цена — в зоне
+    adapter.price = QuoteTick(99.0, now_ms(), now_ms(), "trade")               # текущая цена — в зоне
     worker, sender = _make_worker(db, adapter)
     await worker.seed_instruments()
     ins = next(i for i in db.get_instruments() if i.symbol == "BTCUSDT")

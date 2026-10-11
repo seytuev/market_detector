@@ -97,7 +97,10 @@ def test_partial_take_keeps_extreme_active(db, cfg, instrument_id):
     assert extreme.status == ZoneStatus.ACTIVE
     assert extreme.evidence["part_taken"] is True  # качественный контекст, без баллов
     events = db.get_events(low_member.id)
-    assert [e.kind for e in events] == [EventKind.LEVEL_TAKEN]
+    # LEVEL_TAKEN — пересечение тенью; закрытие этой же D1 выше уровня —
+    # отдельный факт прохода источника (правила v1 §5). Оба occurred_at
+    # совпадают, порядок выборки по ним не определён — сравниваем множества
+    assert {e.kind for e in events} == {EventKind.LEVEL_TAKEN, EventKind.SOURCE_PASSED}
 
     # повторная обработка/перестроение не реактивирует снятый уровень (§13.4)
     scanner.on_closed_candle(make_candle(T0 + 12 * D1_MS, 100.0, 100.8, 99.0, 100.2, "D1"))

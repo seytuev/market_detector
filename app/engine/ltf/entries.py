@@ -1,13 +1,17 @@
 """§8/§9: Entry Zones H1 — причинное движение, обнаружение OB/FVG/BSL/SSL,
 свежесть (first_test_at) и пространственный фильтр Premium/Discount.
 
-Происхождение (§8.1): зона должна быть сформирована движением, приведшим к
-конкретному BOS/SMS. Нога — от последнего противоположного pivot до свечи
-слома; OB-основание у начальной опоры и подтверждающий импульс — одна
-цепочка, поэтому окно обнаружения расширено назад на глубину базы (точная
-нижняя граница многосвечной базы — открытый вопрос §16.3; исходные свечи
-сохраняются в evidence). Зоны последующих движений (formed_at после слома)
-отклоняются с явной причиной.
+Происхождение (§8.1): зона принадлежит движению, приведшему к конкретному
+BOS/SMS, и дальнейшему движению того же действующего контекста. Нога — от
+последнего противоположного pivot до свечи слома; OB-основание у начальной
+опоры и подтверждающий импульс — одна цепочка, поэтому окно обнаружения
+расширено назад на глубину базы (точная нижняя граница многосвечной базы —
+открытый вопрос §16.3; исходные свечи сохраняются в evidence). Время третьей
+свечи FVG относительно слома отказом не является: внешний FVG допускается до
+слома, на свече слома и после него. FVG, начавшийся раньше опоры ноги, и
+зона другого направления по-прежнему не принадлежат этому контексту. Для
+позднего подтверждения evidence хранит время слома отдельно от базы и
+подтверждения.
 
 Свежесть (§9): first_test_at ищется по всей доступной истории после рыночного
 подтверждения зоны. Формирующие свечи FVG/OB тестом не считаются (п.11).
@@ -232,18 +236,38 @@ def _first_level_test(
     return None
 
 
+def _timing(movement: MovementDraft, fvg_formed_at: int) -> dict[str, Any]:
+    """Время слома и отношение зоны к нему. Само по себе «после слома»
+    отказом не является; поздняя зона не записывается как уже бывшая
+    на первоначальном BOS/SMS."""
+    return {
+        "break_at": movement.end_at,
+        "movement_start_at": movement.start_at,
+        "relation": (
+            "after_break" if fvg_formed_at > movement.end_at
+            else "in_break_movement"
+        ),
+    }
+
+
 def detect_entry_zones(
     candles: list[Candle],
     movement: MovementDraft,
     pivots: list[PivotCandidate],
     direction: Direction,
     cfg: DetectorConfig,
+    *,
+    context_until: Optional[int] = None,
 ) -> EntryDetection:
-    """Все свежие/протестированные зоны причинного движения, без выбора
-    «лучшей» и без ранжирования (§8, приёмка п.9).
+    """Все свежие/протестированные зоны контекста, без выбора «лучшей»
+    и без ранжирования (§8, приёмка п.9).
 
-    candles — вся доступная история до текущего момента (свежесть считается
-    по ней, §9); обнаружение — только окно движения (§8.1).
+    candles — история, уже известная к моменту решения (свежесть считается
+    по ней, §9). FVG другого направления и FVG, чья первая свеча раньше
+    опоры ноги, контексту не принадлежат. ``context_until`` — включительная
+    граница подтверждения (та же шкала, что ``FvgRecord.confirmed_at``):
+    зона, подтверждённая позже, к уже завершённому контексту не относится.
+    None — контекст ещё действует, верхней отсечки нет.
     """
     closed = sorted((c for c in candles if c.closed), key=lambda c: c.open_time)
     zones: list[EntryZoneDraft] = []
@@ -256,17 +280,29 @@ def detect_entry_zones(
         if f.direction != direction:
             rejected.append({
                 "type": "FVG", "formed_at": f.formed_at,
+                "confirmed_at": f.confirmed_at,
                 "range": [f.lower, f.upper],
                 "reason": "направление не совпадает со сценарием (§8.3)",
             })
             continue
-        if f.candle_open_times[0] < movement.start_at or f.formed_at > movement.end_at:
+        if f.candle_open_times[0] < movement.start_at:
             rejected.append({
                 "type": "FVG", "formed_at": f.formed_at,
+                "confirmed_at": f.confirmed_at,
                 "range": [f.lower, f.upper],
-                "reason": "вне причинного движения слома (§8.1)",
+                "reason": "начало FVG раньше опоры движения (§8.1)",
             })
             continue
+        if context_until is not None and f.confirmed_at > context_until:
+            rejected.append({
+                "type": "FVG", "formed_at": f.formed_at,
+                "confirmed_at": f.confirmed_at,
+                "context_until": context_until,
+                "range": [f.lower, f.upper],
+                "reason": "контекст завершён до подтверждения зоны",
+            })
+            continue
+        timing = _timing(movement, f.formed_at)
         first_test, extreme = _range_test_stats(
             closed, f.lower, f.upper, direction, after_open=f.candle_open_times[2]
         )
@@ -276,12 +312,12 @@ def detect_entry_zones(
             first_test_at=first_test,
             validity="tested" if first_test is not None else "fresh",
             test_extreme=extreme,
-            evidence={"fvg_candles": list(f.candle_open_times)},
+            evidence={"fvg_candles": list(f.candle_open_times), **timing},
         )
         fz.max_test_depth = test_depth_of(fz, extreme)
         zones.append(fz)
         # OB: база перед FVG; без внешнего подтверждающего FVG — кандидат,
-        # не готовая зона (§8.3)
+        # не готовая зона (§8.3). Внутренний FVG OB не подтверждает.
         base = find_base(
             [c for c in closed if c.open_time <= f.candle_open_times[2]], f, cfg
         )
@@ -305,6 +341,8 @@ def detect_entry_zones(
                 "base_candles": base.source_candles,
                 "fvg_candles": list(f.candle_open_times),
                 "base_detail": base.evidence,
+                "base_at": base.formed_at,
+                **timing,
             },
         )
         oz.max_test_depth = test_depth_of(oz, ob_extreme)

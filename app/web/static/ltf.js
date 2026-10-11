@@ -105,6 +105,7 @@ const REASON_RU = {
   ok: 'подходит',
   outside_pd: 'вне Premium/Discount',
   tested_too_deep: 'тест ≥ 90% глубины',
+  historically_worked: 'отработана до активации (≥ 90% глубины)',
   type_disabled: 'тип отключён настройкой',
   invalid: 'зона невалидна',
   swept_level: 'уровень снят',
@@ -846,16 +847,14 @@ function zoneRowsHtml(rows, { withReason }) {
     const expanded = row.entry_zone_id === state.expandedEntryId;
     const depth = row.max_test_depth != null ? Math.round(row.max_test_depth * 100) + '%' : '—';
     const reasonTxt = REASON_RU[row.reason] || row.reason || '—';
-    // L01: дополнительные блокирующие причины и контекстный допуск (§18)
+    // L01: дополнительные блокирующие причины (§6.3: контекстный допуск §18 снят)
     const blocking = (row.blocking_reasons || [])
       .filter((r) => r && r !== row.reason)
       .map((r) => REASON_RU[r] || r);
-    const contextAdmitted = row.admission_basis === 'context_exception' || row.outside_premium;
     const colspan = withReason ? 9 : 8;
     const detail = `<tr class="entry-detail${expanded ? '' : ' hidden'}" data-detail-of="${row.entry_zone_id}"><td colspan="${colspan}"><dl>
       <dt>Почему ${withReason ? 'исключена' : 'показана'}</dt><dd>${esc(reasonTxt)}</dd>
       ${blocking.length ? `<dt>Также блокирует</dt><dd>${esc(blocking.join('; '))}</dd>` : ''}
-      ${contextAdmitted ? '<dt>Контекст §18</dt><dd>Зона вне Premium — допущена по контексту (снятие SSL/BSL + тест 50% D1 FVG); не критично для этого сценария</dd>' : ''}
       <dt>Сформирована</dt><dd>${fmtTime(row.formed_at)}</dd>
       <dt>Подтверждена</dt><dd>${fmtTime(row.confirmed_at)}</dd>
       <dt>Первое касание</dt><dd>${row.first_test_at ? fmtTime(row.first_test_at) : '—'}</dd>
@@ -867,11 +866,11 @@ function zoneRowsHtml(rows, { withReason }) {
       <td data-label="Тип">${esc(row.type)}</td>
       <td data-label="Направление" class="dir ${esc(row.direction)}">${row.direction === 'bull' ? '▲ Рост' : '▼ Снижение'}</td>
       <td data-label="Диапазон">${rangeTxt}</td>
-      <td data-label="P/D">${esc(row.half && row.half !== 'none' ? row.half : '—')}${row.partial ? ' · частично' : ''}${row.outside_premium ? ' <span class="badge ltf-badge-op">вне Premium</span>' : ''}</td>
+      <td data-label="P/D">${esc(row.half && row.half !== 'none' ? row.half : '—')}${row.partial ? ' · частично' : ''}</td>
       <td data-label="Глубина тестов">${depth}</td>
       <td data-label="Расстояние" class="col-dist" title="${DIST_TITLE}">${d ? d.pct.toFixed(2) + '%' : '—'}</td>
       <td data-label="Статус"><span class="badge es-${esc(row.state)}">${esc(ENTRY_STATE_RU[row.state] || row.state)}</span> ${liq}</td>
-      ${withReason ? `<td data-label="Причина">${esc(reasonTxt)}${contextAdmitted ? ' <span class="badge ltf-badge-op">допущена по контексту</span>' : ''}</td>` : ''}
+      ${withReason ? `<td data-label="Причина">${esc(reasonTxt)}</td>` : ''}
       <td data-label="Действия" class="row-actions">
         <button class="btn small" data-act="chart" title="Показать на графике">На графике</button>
         ${ins ? `<a class="btn small" target="_blank" href="${tradingviewUrl(ins)}" title="TradingView">TV</a>` : ''}
@@ -1623,7 +1622,7 @@ function drawLtfLayers() {
     let x1 = xOf(fromMs);
     if (x1 === null || x1 < 0) x1 = 0;
     const stateKey = e.entry_state || e.state || '';
-    const excluded = e.reason && e.reason !== 'ok' && !e.outside_premium;
+    const excluded = e.reason && e.reason !== 'ok';
     const cls = `ltf-entry ltf-entry-${String(e.type || '').toLowerCase()}` +
       ` dir-${e.direction === 'bear' ? 'bear' : 'bull'} es-${stateKey}` +
       (excluded ? ' ltf-entry-excluded' : '') +
@@ -1632,7 +1631,6 @@ function drawLtfLayers() {
     const title =
       `${e.type} H1 [${fmtPrice(e.lower)}–${fmtPrice(e.upper)}] · ${ENTRY_STATE_RU[stateKey] || stateKey}` +
       `${e.overlap === 'partial' || e.partial ? ' · частично' : ''}` +
-      `${e.outside_premium ? ' · вне Premium (допущено по контексту §18)' : ''}` +
       `${excluded ? ' · исключена: ' + (REASON_RU[e.reason] || e.reason) : ''}`;
     if (x1 > paneRight) continue;
     if (e.is_level) {

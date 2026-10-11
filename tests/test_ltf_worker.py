@@ -6,6 +6,7 @@ from dataclasses import replace
 
 import pytest
 
+from app.adapters.base import QuoteTick
 from app.config import DetectorConfig, Settings, load_detector_config
 from app.db import Database
 from app.engine.ltf import LtfEngine
@@ -37,7 +38,7 @@ class FakeAdapter:
 
     def __init__(self):
         self.candles = []
-        self.price = (110.0, now_ms())
+        self.price = QuoteTick(110.0, now_ms(), now_ms(), "trade")
 
     async def catalog(self):
         return [
@@ -98,7 +99,7 @@ async def test_htf_touch_starts_observation_idempotent():
         make_candle(now - W1_MS, 109, 111, 108, 110, "W1"),
         *_recent_h1([(10, 9), (11, 9), (12, 9), (13, 9), (12, 9), (11, 9), (10, 9)]),
     ]
-    adapter.price = (99.0, now)  # цена внутри зоны [90;100] → TOUCH
+    adapter.price = QuoteTick(99.0, now, now, "trade")  # цена внутри зоны [90;100] → TOUCH
     worker, _ = _make_worker(db, adapter)
     await worker.seed_instruments()
     ins = next(i for i in db.get_instruments() if i.symbol == "BTCUSDT")
@@ -291,7 +292,7 @@ async def test_ltf_analyze_flag_opens_without_touch():
     adapter.candles = _recent_h1(
         [(10, 9), (11, 9), (12, 9), (13, 9), (12, 9), (11, 9), (10, 9)]
     )
-    adapter.price = (150.0, now_ms())  # цена вне зон — касаний нет
+    adapter.price = QuoteTick(150.0, now_ms(), now_ms(), "trade")  # цена вне зон — касаний нет
     worker, _ = _make_worker(db, adapter)
     await worker.seed_instruments()
     ins = next(i for i in db.get_instruments() if i.symbol == "BTCUSDT")
@@ -333,7 +334,7 @@ async def test_ltf_disabled_noop():
         make_candle(now - W1_MS, 109, 111, 108, 110, "W1"),
         *_recent_h1([(10, 9), (11, 9), (12, 9), (13, 9), (12, 9), (11, 9), (10, 9)]),
     ]
-    adapter.price = (99.0, now)
+    adapter.price = QuoteTick(99.0, now, now, "trade")
     cfg = DetectorConfig(ltf_enabled=False)
     worker, engine = _make_worker(db, adapter, cfg=cfg)
     await worker.seed_instruments()
@@ -394,7 +395,7 @@ async def test_fvg_context_opens_observation_when_enabled():
     db = Database(":memory:")
     adapter = FakeAdapter()
     adapter.candles = h1
-    adapter.price = (95.0, now_ms())  # внутри FVG [90;100]
+    adapter.price = QuoteTick(95.0, now_ms(), now_ms(), "trade")  # внутри FVG [90;100]
     cfg = DetectorConfig(htf_context_types="OB,FVG")
     worker, _ = _make_worker(db, adapter, cfg=cfg)
     await worker.seed_instruments()
@@ -410,7 +411,7 @@ async def test_fvg_context_opens_observation_when_enabled():
     db2 = Database(":memory:")
     adapter2 = FakeAdapter()
     adapter2.candles = h1
-    adapter2.price = (95.0, now_ms())
+    adapter2.price = QuoteTick(95.0, now_ms(), now_ms(), "trade")
     worker2, _ = _make_worker(db2, adapter2)
     await worker2.seed_instruments()
     ins2 = next(i for i in db2.get_instruments() if i.symbol == "BTCUSDT")
@@ -470,9 +471,9 @@ async def test_fvg_weakened_stays_valid_parent():
 
 
 def test_htf_context_types_parser():
-    """§16.1: парсер настройки — только OB/FVG; PRB/Breaker/BSL/SSL
+    """§16.1 + правила v1 §3: парсер настройки — OB/FVG/BSL/SSL; PRB/Breaker
     отбрасываются (триггерами не являются)."""
-    assert DetectorConfig().htf_context_type_set() == {"OB", "FVG"}
+    assert DetectorConfig().htf_context_type_set() == {"OB", "FVG", "BSL", "SSL"}
     assert DetectorConfig(
         htf_context_types="OB,FVG"
     ).htf_context_type_set() == {"OB", "FVG"}
@@ -481,5 +482,5 @@ def test_htf_context_types_parser():
     ).htf_context_type_set() == {"OB", "FVG"}
     assert DetectorConfig(
         htf_context_types="OB,FVG,PRB,BREAKER,BSL,SSL"
-    ).htf_context_type_set() == {"OB", "FVG"}
+    ).htf_context_type_set() == {"OB", "FVG", "BSL", "SSL"}
     assert DetectorConfig(htf_context_types="").htf_context_type_set() == set()

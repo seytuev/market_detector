@@ -160,7 +160,7 @@ def test_instruments_one_row_per_instrument(client, db, seeded, instrument_id):
     assert row["instrument"]["venue"] == "binance"
     assert row["instrument"]["market_type"] == "spot"
     # счётчики: подходящие reason==ok текущей версии; контексты — активные
-    assert row["eligible_count"] == 2                    # FVG + OB
+    assert row["eligible_count"] == 3                    # FVG + OB + BSL (§6.3)
     assert row["contexts_count"] == 1 + 4                # obs1 + активные i%2
     assert row["htf_context"] == {"type": "ob", "timeframe": "D1"}
     assert row["last_event_at"] is not None
@@ -212,7 +212,7 @@ def test_instruments_counts_per_instrument(client, db, seeded, instrument_id):
         for r in client.get("/api/ltf/instruments", headers=AUTH)
         .json()["instruments"]
     }
-    assert rows["BTCUSDT"]["eligible_count"] == 2
+    assert rows["BTCUSDT"]["eligible_count"] == 3  # §6.3: PD не фильтр
     assert rows["ETHUSDT"]["eligible_count"] == 1
     assert rows["ETHUSDT"]["contexts_count"] == 1
 
@@ -321,8 +321,8 @@ def test_current_counts_and_state_version_consistent(client, db, seeded,
     cur = client.get(
         f"/api/ltf/instruments/{instrument_id}/current", headers=AUTH
     ).json()
-    assert cur["counts"]["eligible"] == len(cur["eligible_entries"]) == 2
-    assert cur["counts"]["excluded"] == 1      # BSL outside_pd
+    assert cur["counts"]["eligible"] == len(cur["eligible_entries"]) == 3  # §6.3
+    assert cur["counts"]["excluded"] == 0      # §6.3: PD не фильтр
     assert cur["counts"]["historical"] == 1    # строка v0
     assert cur["current_scenario"]["id"] == seeded["sc1"].id
     assert cur["range"]["lower"] == 90.0

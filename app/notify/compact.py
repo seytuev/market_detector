@@ -75,11 +75,17 @@ def ltf_text(ev, ctx, contexts=1):
         "entries_ready": "🎯 Новые зоны входа", "range_ready": "⏳ Диапазон готов · ждём зоны входа",
         "touch": "🎯 Цена коснулась зоны входа", "sweep_confirmed": "✅ Снятие ликвидности подтверждено",
         "sweep_failed": "⚠️ Уровень пройден с закреплением", "cancellation": "⚪ Сценарий отменён",
+        "correction": "✏️ Исправление исходных данных",
+        "context_transition": "🔀 Изменение контекста",
     }.get(ev.kind, ev.kind)
     if ev.kind == "sweep_failed" and p.get("outcome") == "equal_close":
         headline = "⚠️ Закрытие на уровне · снятие не подтверждено"
     lines = [title, headline]
-    if ev.kind == "cancellation":
+    if ev.kind in ("correction", "context_transition"):
+        # §9/§10.3: готовый смысловой текст события в payload
+        if p.get("text"):
+            lines.append(p["text"])
+    elif ev.kind == "cancellation":
         from ..texts_ru import LTF_CANCELLATION_RU
         lines.append(LTF_CANCELLATION_RU.get(p.get("reason"), p.get("reason", "")))
     else:

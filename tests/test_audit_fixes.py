@@ -261,13 +261,18 @@ def test_f10_engine_detects_candle_revision(db, cfg, instrument_id):
                      open=5, high=10, low=1, close=5, closed=True)
     db.insert_candles([new_bar])
     second = engine.process_h1_close(instrument_id, now_ms=new_bar.close_time)
-    assert second.processed == 1
+    # §10.3: причинный пересчёт с момента самой ранней ревизии (idx3..idx7),
+    # а не только новая свеча
+    assert second.processed == 5
     raw = db.get_meta(f"ltf:h1:revision:{instrument_id}")
     assert raw is not None
     revision = json.loads(raw)
     assert revision["open_time"] == corrected.open_time
     assert revision["previous"][1] == 12
     assert revision["current"][1] == 9
+    # факт записан и в журнал candle_revision (дедуп с upsert-путём)
+    rows = db.list_candle_revisions(instrument_id, "H1")
+    assert len(rows) == 1 and rows[0]["open_time"] == corrected.open_time
 
 
 def test_f10_structure_batch_recomputes_on_junction_ohlc_change():
@@ -337,6 +342,8 @@ def test_f12_aggregate_order_independent(db, cfg, instrument_id):
 # --------------------------------------------------------------------- #
 
 def test_f13_historical_invalidation_keeps_market_time(db, cfg, instrument_id):
+    # R33 (правила v1 §6.1): инвалидация родителя — информационный факт
+    # (context_update), не отмена; рыночное время и режим сохранены (F13)
     obs, sc = make_scenario(db, instrument_id)
     z = db.get_zone(obs.zone_id)
     db.update_zone(z.id, market_validity="invalid",
@@ -344,12 +351,13 @@ def test_f13_historical_invalidation_keeps_market_time(db, cfg, instrument_id):
                    end_reason="ob_invalidated")
     assert LtfEngine(db, cfg).check_parent_validity(db.get_zone(z.id)) is True
     event = next(e for e in db.list_ltf_events(observation_id=obs.id)
-                 if e.kind == "cancellation")
+                 if e.kind == "context_update")
     assert event.occurred_at == T + H
     assert event.processing_mode == "catchup"
     assert event.delayed is True
     stored = db.get_ltf_scenario(sc.id)
-    assert stored.cancelled_at == T + H
+    assert stored.state == "monitoring_entries"
+    assert stored.cancelled_at is None
 
 
 def test_f13_fresh_invalidation_stays_live(db, cfg, instrument_id):
@@ -362,10 +370,11 @@ def test_f13_fresh_invalidation_stays_live(db, cfg, instrument_id):
                    end_reason="ob_invalidated")
     assert LtfEngine(db, cfg).check_parent_validity(db.get_zone(z.id)) is True
     event = next(e for e in db.list_ltf_events(observation_id=obs.id)
-                 if e.kind == "cancellation")
+                 if e.kind == "context_update")
     assert event.occurred_at == now
     assert event.processing_mode == "live"
     assert event.delayed is False
+    assert db.get_ltf_scenario(sc.id).state == "monitoring_entries"
 
 
 # --------------------------------------------------------------------- #

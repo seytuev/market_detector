@@ -7,6 +7,7 @@ import os
 import pytest
 from fastapi.testclient import TestClient
 
+from app.adapters.base import QuoteTick
 from app.config import DetectorConfig, Settings
 from app.db import Database
 from app.engine.ltf import LtfEngine
@@ -119,7 +120,7 @@ async def test_a02_touch_opens_candidate_once():
         make_candle(now - 7 * 86_400_000, 109, 111, 108, 110, "W1"),
         *_recent_h1([(10, 9), (11, 9), (12, 9)]),
     ]
-    adapter.price = (99.0, now)
+    adapter.price = QuoteTick(99.0, now, now, "trade")
     worker, _ = _make_worker(db, adapter)
     await worker.seed_instruments()
     ins = next(i for i in db.get_instruments() if i.symbol == "BTCUSDT")

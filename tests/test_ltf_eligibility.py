@@ -73,7 +73,8 @@ def _test(entry_zone_id: int, state: str) -> LtfLiquidityTest:
 
 def test_reason_codes_stable():
     assert ELIGIBILITY_REASONS == (
-        "ok", "outside_pd", "tested_too_deep", "type_disabled", "invalid",
+        "ok", "outside_pd", "tested_too_deep", "historically_worked",
+        "type_disabled", "invalid",
         "swept_level", "level_broken", "fvg_filled", "origin_unresolved",
         "range_pending", "eligible_provisional",
     )
@@ -114,11 +115,13 @@ def test_midpoint_belongs_to_both_halves():
 
 
 def test_outside_pd():
+    # §6.3 (правила v1): PD — не фильтр. Зона вне половины диапазона
+    # допускается; пересечение (overlap) — описательная характеристика
     cfg = DetectorConfig()
     ev = evaluate_entry(_zone("OB", lower=80.0, upper=90.0),
                         Direction.BEAR, cfg, _rng())
-    assert (ev.reason, ev.state) == (REASON_OUTSIDE_PD, "out_of_range")
-    assert ev.eligible is False and ev.overlap == "none"
+    assert (ev.reason, ev.state) == (REASON_OK, "fresh")
+    assert ev.eligible is True and ev.overlap == "none"
 
 
 def test_invalid_never_back_to_fresh():

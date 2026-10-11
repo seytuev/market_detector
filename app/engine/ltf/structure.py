@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import bisect
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any, Optional
 
 from ...config import DetectorConfig
@@ -23,7 +24,7 @@ from .breaks import (
     StructureScanResult,
     detect_breaks,
 )
-from .pivots import PivotCandidate, confirmed_pivots, find_h1_pivots, pivot_candidates_at
+from .pivots import PivotCandidate, confirmed_pivots, find_h1_pivots, find_plateaus, pivot_candidates_at
 from .roles import RoleChange, assign_roles
 
 
@@ -90,12 +91,19 @@ class StructureBatch:
                     self.closed[-1].open_time if self.closed else None)
 
     def pivots_for(
-        self, candles: list[Candle], left: int, right: int
+        self, candles: list[Candle], left: int, right: int, tick: float = 0
     ) -> list[PivotCandidate]:
-        """Кандидаты pivots по закрытым свечам; инкрементально по хвосту."""
+        """Кандидаты pivots по закрытым свечам; инкрементально по хвосту.
+
+        tick > 0 — плато тик-равных экстремумов (§10.2): пересчёт хвоста на
+        каждый вызов (группа растёт только на хвосте, прежние группы
+        неизменны); avail заменяет ревизию по (kind, start_open)."""
         self.new_cands = []
         if self._fp is None or self._fp[0] != left or self._fp[1] != right:
             self._reset(candles, left, right)
+            if tick > 0:
+                self.cands = self.cands + find_plateaus(self.closed, left, right, tick)
+                self.cands.sort(key=lambda p: (p.pivot_at, p.kind))
             self.new_cands = list(self.cands)
             return self.cands
         _, _, prev_len, prev_last = self._fp
@@ -119,6 +127,9 @@ class StructureBatch:
         )
         if not same_prefix:
             self._reset(candles, left, right)
+            if tick > 0:
+                self.cands = self.cands + find_plateaus(self.closed, left, right, tick)
+                self.cands.sort(key=lambda p: (p.pivot_at, p.kind))
             self.new_cands = list(self.cands)
             return self.cands
         for c in candles[prev_len:]:
@@ -134,11 +145,47 @@ class StructureBatch:
         self.cands.extend(self.new_cands)
         self._fp = (left, right, len(closed),
                     closed[-1].open_time if closed else None)
+        if tick > 0:
+            # плато: полный пересчёт групп текущей истории (O(n) на свечу);
+            # ревизии хвостовой группы заменяют прежние формы той же группы
+            plateau = find_plateaus(closed, left, right, tick)
+            new_forms = {
+                (p.kind, p.evidence["start_open"], p.pivot_at, p.confirmed_at)
+                for p in plateau
+            }
+            kept: list[PivotCandidate] = []
+            for c in self.cands:
+                if not c.evidence.get("plateau"):
+                    kept.append(c)
+                    continue
+                form = (c.kind, c.evidence["start_open"], c.pivot_at,
+                        c.confirmed_at)
+                if form in new_forms:
+                    kept.append(c)  # та же форма той же группы
+                # форма группы изменилась: из cands уходит, но в avail прежняя
+                # опора остаётся ДО подтверждения новой ревизии (замена в
+                # avail_for, не задним числом)
+            kept_forms = {
+                (c.kind, c.evidence["start_open"], c.pivot_at, c.confirmed_at)
+                for c in kept
+                if c.evidence.get("plateau")
+            }
+            added = [
+                p for p in plateau
+                if (p.kind, p.evidence["start_open"], p.pivot_at, p.confirmed_at)
+                not in kept_forms
+            ]
+            self.cands = kept + added
+            self.cands.sort(key=lambda p: (p.pivot_at, p.kind))
+            self.new_cands.extend(added)
         return self.cands
 
     def avail_for(self, now_ms: int) -> list[PivotCandidate]:
         """Подтверждённые на now_ms pivots; новые кандидаты подтверждены
-        сразу (confirmed_at = закрытие последней свечи ≤ now) — append-only."""
+        сразу (confirmed_at = закрытие последней свечи ≤ now) — append-only.
+        Ревизия плато-группы (исправление свечи внутри префикса) приводит к
+        полному пересчёту пакета (_reset): новая форма группы с поздним
+        подтверждением, прежняя не датируется задним числом."""
         for p in self.new_cands:
             if p.state == "confirmed" and p.confirmed_at <= now_ms:
                 self.avail.append(p)
@@ -205,6 +252,32 @@ def _structure_calc_version_id(
     return cv_id
 
 
+def _instrument_tick(db: Database, instrument_id: int) -> float:
+    """Шаг цены инструмента из precision (§10.2: равенство в целых тиках).
+    0 — плато выключены (инструмент не найден)."""
+    ins = db.get_instrument(instrument_id)
+    if ins is None:
+        return 0.0
+    precision = int(getattr(ins, "precision", 8) or 0)
+    return float(Decimal(1).scaleb(-precision))
+
+
+def _persist_plateaus(db: Database, cands: list[PivotCandidate], now_ms: int) -> None:
+    """Метаданные плато-групп → ltf_plateau (§10.2): уровень, начало/конец,
+    участники, ревизия, время подтверждения. Расширение группы — новая
+    ревизия той же строки (start_open), подтверждение позже, не задним числом."""
+    for c in cands:
+        ev = c.evidence
+        if not ev.get("plateau"):
+            continue
+        db.insert_ltf_plateau(
+            instrument_id=c.instrument_id, side=c.kind, level=ev["level"],
+            start_open=ev["start_open"], end_open=ev["end_open"],
+            members=ev["members"], revision=ev["revision"], state=c.state,
+            confirmed_at=c.confirmed_at, created_at=now_ms,
+        )
+
+
 def sync_structure(
     db: Database,
     cfg: DetectorConfig,
@@ -232,7 +305,10 @@ def sync_structure(
         return _sync_structure_batch(
             db, cfg, instrument_id, candles, now_ms, persist_roles, batch
         )
-    cands = find_h1_pivots(candles, cfg.ltf_structure_left, cfg.ltf_structure_right)
+    cands = find_h1_pivots(candles, cfg.ltf_structure_left,
+                           cfg.ltf_structure_right,
+                           _instrument_tick(db, instrument_id))
+    _persist_plateaus(db, cands, now_ms)
 
     # --- pivots → БД; идемпотентность по (instrument_id, kind, pivot_at) ---
     cv_id = _structure_calc_version_id(db, cfg, now_ms)
@@ -330,7 +406,9 @@ def _sync_structure_batch(
       и пересоздаются полным прогоном на текущей свече.
     """
     cands = batch.pivots_for(candles, cfg.ltf_structure_left,
-                             cfg.ltf_structure_right)
+                             cfg.ltf_structure_right,
+                             _instrument_tick(db, instrument_id))
+    _persist_plateaus(db, batch.new_cands, now_ms)
 
     # --- pivots → БД; идемпотентность по (instrument_id, kind, pivot_at) ---
     # в пакете проверяются только новые кандидаты этой свечи: прежние уже
