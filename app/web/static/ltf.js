@@ -1624,7 +1624,8 @@ function drawLtfLayers() {
     if (x1 === null || x1 < 0) x1 = 0;
     const stateKey = e.entry_state || e.state || '';
     const excluded = e.reason && e.reason !== 'ok' && !e.outside_premium;
-    const cls = `ltf-entry ltf-entry-${String(e.type || '').toLowerCase()} es-${stateKey}` +
+    const cls = `ltf-entry ltf-entry-${String(e.type || '').toLowerCase()}` +
+      ` dir-${e.direction === 'bear' ? 'bear' : 'bull'} es-${stateKey}` +
       (excluded ? ' ltf-entry-excluded' : '') +
       (e.overlap === 'partial' || e.partial ? ' partial' : '') +
       (id === state.selectedEntryZoneId ? ' selected' : '');

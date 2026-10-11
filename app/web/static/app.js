@@ -529,7 +529,8 @@ function drawZones() {
       else if (keptLevel) continue; // снятие левее загруженных свечей — линию вправо не тянем
     }
     if (x2 <= x1) continue; // завершилась левее видимой области
-    const cls = `zone-rect z-${z.type} status-${z.status}` +
+    const cls = `zone-rect z-${z.type} dir-${z.direction === 'bear' ? 'bear' : 'bull'}` +
+      ` tf-${isHtf(z) ? 'htf' : 'ltf'} status-${z.status}` +
       (completed ? ' status-completed' : '') +
       (keptLevel ? ' level-kept' : '') +
       (foreignTf(z) ? ' tf-context' : '') +
@@ -593,7 +594,11 @@ function drawZones() {
     const title = ordered.map((z) =>
       `${z.type.toUpperCase()} ${z.timeframe} · ${fmtPrice(z.lower)}–${fmtPrice(z.upper)}` +
       ` · ${STATUS_RU[z.status] || z.status}`).join('\n');
-    const groupCls = 'zone-group' + (members.every(foreignTf) ? ' tf-context' : '');
+    const lead = ordered[0] || members[0] || {};
+    const groupCls = 'zone-group' +
+      (lead.direction === 'bear' ? ' dir-bear' : lead.direction === 'bull' ? ' dir-bull' : '') +
+      ` tf-${isHtf(lead) ? 'htf' : 'ltf'}` +
+      (members.every(foreignTf) ? ' tf-context' : '');
     let badgePlaced = false;
     for (const [lo, hi] of (segsByKey.get(key) || [])) {
       const div = makeBand(hi, lo, groupCls);
@@ -962,7 +967,7 @@ function renderZonesTable() {
       card.type = 'button';
       card.className = 'zone-card' + (z.id === state.selectedZoneId ? ' selected' : '');
       card.innerHTML =
-        `<span class="zc-top"><span class="swatch z-${esc(z.type)}"></span>` +
+        `<span class="zc-top"><span class="swatch dir-${z.direction === 'bear' ? 'bear' : 'bull'}"></span>` +
         `<span class="zc-type">${z.type.toUpperCase()} · ${z.timeframe}</span>` +
         `<span class="dir ${z.direction}" title="${z.direction === 'bear' ? 'Медвежья зона' : 'Бычья зона'}">${z.direction === 'bear' ? '↓' : '↑'}</span>` +
         `<span class="zc-status">${esc(STATUS_RU[z.status] || z.status)}${z.display_until ? ' · завершена' : ''}</span></span>` +
@@ -1769,7 +1774,8 @@ function drawReviewZone() {
   }
   if (x2 <= x1) return;
   const div = document.createElement('div');
-  div.className = `zone-rect z-${z.type} status-${z.status}` +
+  div.className = `zone-rect z-${z.type} dir-${z.direction === 'bear' ? 'bear' : 'bull'}` +
+    ` tf-${isHtf(z) ? 'htf' : 'ltf'} status-${z.status}` +
     (z.display_until ? ' status-completed' : '') + ' selected';
   div.style.top = top + 'px';
   div.style.height = Math.max(2, bottom - top) + 'px';

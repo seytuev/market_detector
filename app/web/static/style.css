@@ -45,6 +45,11 @@
   --c-bsl-border: rgba(102, 187, 106, 0.8);
   --c-manual: rgba(255, 213, 79, 0.14);
   --c-manual-border: rgba(255, 213, 79, 0.8);
+
+  /* Зоны красятся по направлению (бычьи — зелёные, медвежьи — красные),
+     а не по типу; HTF и LTF различаются плотностью заливки. */
+  --zone-bull-rgb: 22, 146, 100;
+  --zone-bear-rgb: 214, 69, 77;
 }
 
 [data-theme="dark"] {
@@ -60,6 +65,8 @@
   --lf-warning: #E9BD78;
   --lf-accent-ink: #0D2430;
   --lf-selected: #102B35;
+  --zone-bull-rgb: 74, 190, 145;
+  --zone-bear-rgb: 238, 122, 128;
   color-scheme: dark;
 }
 
@@ -198,21 +205,25 @@ select, input, textarea {
 
 /* ---------- зоны на графике ---------- */
 
+/* Цвет зоны задаёт направление (dir-bull/dir-bear), плотность заливки —
+   таймфрейм: HTF (D1/W1) плотнее, LTF (H1) заметно светлее. Тип зоны
+   (OB/FVG/BSL/SSL/…) остаётся в классе и подписи, но краску не выбирает. */
 .zone-rect {
+  --zc: 127, 140, 155;   /* нейтральный: направление не определено */
+  --za: .15;             /* заливка HTF */
+  --zb: .55;             /* граница HTF */
   position: absolute;
   pointer-events: auto;
   cursor: pointer;
   border: 1px solid;
   border-radius: 2px;
+  background: rgba(var(--zc), var(--za));
+  border-color: rgba(var(--zc), var(--zb));
 }
-
-.zone-rect.z-fvg     { background: var(--c-fvg);  border-color: var(--c-fvg-border); }
-.zone-rect.z-ob      { background: var(--c-ob);      border-color: var(--c-ob-border); }
-.zone-rect.z-prb     { background: var(--c-prb);     border-color: var(--c-prb-border); }
-.zone-rect.z-breaker { background: var(--c-breaker); border-color: var(--c-breaker-border); }
-.zone-rect.z-ssl     { background: var(--c-ssl);     border-color: var(--c-ssl-border); }
-.zone-rect.z-bsl     { background: var(--c-bsl);     border-color: var(--c-bsl-border); }
-.zone-rect.z-manual  { background: var(--c-manual);  border-color: var(--c-manual-border); }
+.zone-rect.dir-bull { --zc: var(--zone-bull-rgb); }
+.zone-rect.dir-bear { --zc: var(--zone-bear-rgb); }
+.zone-rect.tf-ltf   { --za: .07; --zb: .38; }
+.zone-rect.tf-context { --za: .06; --zb: .34; }
 
 .zone-rect.status-candidate { border-style: dashed; opacity: 0.28; }
 .zone-rect.status-candidate:hover { opacity: 0.8; }
@@ -227,19 +238,7 @@ select, input, textarea {
   outline: 2px solid var(--accent);
   outline-offset: 0;
   z-index: 5;
-  background: rgba(89, 133, 255, 0.14);
 }
-
-/* Чужой ТФ на графике (D1/W1 на H1 и наоборот): полоса остаётся,
-   но не заливает свечи. Выбранная зона читается поверх этого слоя. */
-.zone-rect.tf-context.z-fvg { background: rgba(69, 185, 165, 0.07); border-color: rgba(69, 185, 165, 0.45); }
-.zone-rect.tf-context.z-ob { background: rgba(91, 141, 239, 0.08); border-color: rgba(91, 141, 239, 0.5); }
-.zone-rect.tf-context.z-prb { background: rgba(168, 137, 229, 0.05); border-color: rgba(168, 137, 229, 0.4); }
-.zone-rect.tf-context.z-breaker { background: rgba(230, 184, 106, 0.05); border-color: rgba(230, 184, 106, 0.4); }
-.zone-rect.tf-context.z-ssl { background: rgba(239, 117, 115, 0.05); border-color: rgba(239, 117, 115, 0.4); }
-.zone-rect.tf-context.z-bsl { background: rgba(69, 185, 165, 0.05); border-color: rgba(69, 185, 165, 0.4); }
-.zone-rect.tf-context.z-manual { background: rgba(230, 184, 106, 0.05); border-color: rgba(230, 184, 106, 0.4); }
-.zone-rect.tf-context.selected { background: rgba(89, 133, 255, 0.14); }
 
 .review-block {
   margin-top: 12px;
@@ -298,16 +297,19 @@ select, input, textarea {
 
 /* визуальная группа пересекающихся зон (§10) */
 .zone-group {
+  --zc: 127, 140, 155;
   position: absolute;
   pointer-events: auto;
-  border: 1px dotted rgba(255, 255, 255, 0.5);
+  border: 1px dotted rgba(var(--zc), 0.5);
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(var(--zc), 0.05);
   cursor: pointer;
 }
+.zone-group.dir-bull { --zc: var(--zone-bull-rgb); }
+.zone-group.dir-bear { --zc: var(--zone-bear-rgb); }
 .zone-group.tf-context {
-  background: rgba(255, 255, 255, 0.02);
-  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(var(--zc), 0.02);
+  border-color: rgba(var(--zc), 0.28);
 }
 .zone-group-badge {
   position: absolute;
@@ -708,8 +710,8 @@ select, input, textarea {
   z-index: 8;
   opacity: 1;
 }
-.ltf-entry-fvg { background: rgba(69, 185, 165, 0.32); border-color: var(--c-fvg-border); }
-.ltf-entry-ob { background: rgba(91, 141, 239, 0.32); border-color: var(--c-ob-border); }
+.ltf-entry.dir-bull { background: rgba(var(--zone-bull-rgb), .12); border-color: rgba(var(--zone-bull-rgb), .5); }
+.ltf-entry.dir-bear { background: rgba(var(--zone-bear-rgb), .12); border-color: rgba(var(--zone-bear-rgb), .5); }
 .ltf-entry-bsl, .ltf-entry-ssl { background: transparent; }
 .ltf-level { border-top: 2px solid; height: 0; }
 .ltf-level.ltf-entry-bsl { border-color: var(--c-bsl-border); }
@@ -736,11 +738,15 @@ select, input, textarea {
 }
 .h1-zone.zone-rect {
   opacity: 1; z-index: 3; padding: 0; overflow: visible;
+  /* заливку зон H1 рисует канвас объединением (h1-zone-fills) — div только
+     рамка, иначе перекрывающиеся зоны темнят дважды */
   background: transparent; border-radius: 0;
   border-left-width: 2px; border-right: 0;
 }
-.h1-zone.zone-rect.z-ob { border-color: rgba(76,141,255,.5); }
-.h1-zone.zone-rect.z-fvg { border-color: rgba(38,166,154,.5); border-top-style: dashed; border-bottom-style: dashed; }
+.h1-zone.zone-rect.dir-bull { border-color: rgba(var(--zone-bull-rgb), .5); }
+.h1-zone.zone-rect.dir-bear { border-color: rgba(var(--zone-bear-rgb), .5); }
+/* форма остаётся подсказкой типа: FVG — пунктирные верх и низ */
+.h1-zone.zone-rect.z-fvg { border-top-style: dashed; border-bottom-style: dashed; }
 .h1-zone-fills { position: absolute; top: 0; left: 0; z-index: 2; pointer-events: none; }
 .h1-zone-mid { position: absolute; left: 0; right: 0; border-top: 1px dotted currentColor; color: var(--text-dim); opacity: .22; pointer-events: none; }
 .h1-zone.zone-rect.status-candidate, .h1-zone.zone-rect.status-completed { opacity: .4; border-style: dotted; }
@@ -759,8 +765,8 @@ select, input, textarea {
   content: ''; position: absolute; left: -3px; top: -3px;
   width: 5px; height: 5px; border-radius: 50%; background: currentColor;
 }
-.h1-liquidity.ltf-entry-bsl { color: var(--c-bsl-border); }
-.h1-liquidity.ltf-entry-ssl { color: var(--c-ssl-border); }
+.h1-liquidity.dir-bull { color: rgba(var(--zone-bull-rgb), .85); }
+.h1-liquidity.dir-bear { color: rgba(var(--zone-bear-rgb), .85); }
 .h1-liquidity.ltf-level.selected { outline: none; box-shadow: none; opacity: 1; border-top-width: 2px; }
 .h1-zone-tag {
   position: absolute; z-index: 5; height: 20px; box-sizing: border-box;
@@ -1224,12 +1230,8 @@ input[type="checkbox"] { min-height: auto; accent-color: var(--accent); }
 .zone-card:hover { border-color: var(--accent); }
 .zone-card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .zone-card .swatch { width: 14px; height: 14px; border-radius: 3px; border: 1px solid; flex: none; }
-.swatch.z-ob { background: rgba(89,133,255,.35); border-color: #5985FF; }
-.swatch.z-fvg { background: rgba(85,181,162,.35); border-color: #55B5A2; }
-.swatch.z-bsl, .swatch.z-ssl { background: transparent; border-color: var(--text-dim); }
-.swatch.z-prb { background: rgba(171,113,237,.35); border-color: #ab71ed; }
-.swatch.z-breaker { background: rgba(215,172,101,.35); border-color: var(--warning); }
-.swatch.z-manual { background: rgba(215,172,101,.25); border-color: var(--warning); }
+.swatch.dir-bull { background: rgba(var(--zone-bull-rgb), .25); border-color: rgba(var(--zone-bull-rgb), .8); }
+.swatch.dir-bear { background: rgba(var(--zone-bear-rgb), .25); border-color: rgba(var(--zone-bear-rgb), .8); }
 .zone-card .title { font-weight: 600; }
 .zone-card .role { color: var(--text-dim); font-size: 12px; }
 .zone-card .range { font-variant-numeric: tabular-nums; font-size: 13px; }

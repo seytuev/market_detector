@@ -478,6 +478,7 @@
             return;
           }
           const div = add('h1-liquidity ltf-level ltf-entry ltf-entry-' + String(zone.type).toLowerCase()
+            + ' dir-' + (zone.direction === 'bear' ? 'bear' : 'bull')
             + (zone.candidate ? ' status-candidate' : '') + (selected ? ' selected' : ''));
           div.style.top = y + 'px';
           div.style.left = x1 + 'px';
@@ -499,6 +500,8 @@
             return;
           }
           const div = add('h1-zone zone-rect z-' + String(zone.type).toLowerCase()
+            + ' dir-' + (zone.direction === 'bear' ? 'bear' : 'bull')
+            + ' tf-' + (['D1', 'W1'].includes(zone.timeframe) ? 'htf' : 'ltf')
             + (zone.candidate ? ' status-candidate' : '')
             + (zone.lifecycle === 'ended' ? ' status-completed' : '')
             + (selected ? ' selected' : ''));
@@ -508,7 +511,12 @@
           div.style.width = Math.max(8, x2 - x1) + 'px';
           div.title = title;
           div.onclick = () => ctx.onZone && ctx.onZone(zone, adm);
-          const color = zone.type === 'OB' ? 'rgba(76,141,255,0.075)' : 'rgba(38,166,154,0.075)';
+          // заливка — по направлению зоны, тон и темы берутся из CSS-токенов
+          const rgb = (name, fallback) =>
+            (String(getComputedStyle(doc.documentElement).getPropertyValue(name).trim()) || fallback);
+          const bull = rgb('--zone-bull-rgb', '22, 146, 100');
+          const bear = rgb('--zone-bear-rgb', '214, 69, 77');
+          const color = `rgba(${zone.direction === 'bear' ? bear : bull},0.09)`;
           const fillKey = zone.candidate || zone.lifecycle === 'ended' ? 'rgba(138,148,166,0.025)' : color;
           if (!fills[fillKey]) fills[fillKey] = [];
           fills[fillKey].push({ left: x1, top, width: x2 - x1, height: bottom - top });
