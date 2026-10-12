@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from typing import Optional
 
+import pytest
+
 from app.models_alt import AltEpisodeState, AltRangeEpisode
 from app.services.alt_overview import (
     EPISODE_RELEVANCE_WINDOW_MS,
@@ -127,6 +129,52 @@ def test_ambiguous_when_parity() -> None:
     ep2, reason2, alts2 = select_current_episode([b, a], 1.5, AS_OF)
     assert ep2 is None and reason2 == "ambiguous"
     assert [x.id for x in alts2] == [b.id, a.id]
+
+
+def test_effective_frame_manual_beats_episode_and_formulas() -> None:
+    from types import SimpleNamespace
+
+    from app.models_alt import AltRangeEpisode
+    from app.services.alt_overview import build_effective_range
+
+    episode = AltRangeEpisode(
+        id=4, asset_id=1, source_id=2, origin_key="v2:1:2:1",
+        lower=7, upper=10.8, width=3.8, mid=8.9,
+        anchor_start_open_time=1, base_start_open_time=1,
+        base_end_open_time=None, rules_version="alt-0.3",
+        detected_at_ms=50,
+    )
+    stored = SimpleNamespace(
+        id=9, lower=1, upper=2, width=1, mid=1.5,
+        start_anchor_open_time=10, mature_at_ms=20,
+    )
+    manual = SimpleNamespace(
+        id=3, source_kind="manual", lower=4.8, upper=9.7, mid=7.25, width=4.9,
+        base_start_open_time=100, base_end_open_time=200,
+        reason="уточнение", created_ms=300,
+    )
+    picked = build_effective_range(
+        manual=manual, episode=episode, stored=stored, source_id=2,
+    )
+    assert picked["geometry_source"] == "manual"
+    assert picked["lower"] == 4.8 and picked["upper"] == 9.7
+    assert picked["base_start_open_time"] == 100
+    assert picked["base_end_open_time"] == 200
+    assert picked["revision_id"] == 3
+    assert "range_id" in picked and picked["range_id"] is None
+    auto = build_effective_range(manual=None, episode=episode, stored=stored, source_id=2)
+    assert auto["geometry_source"] == "episode"
+    assert auto["lower"] == 7 and auto["upper"] == 10.8
+    assert auto["base_end_open_time"] is None
+    assert auto["available_at_ms"] == 50
+    width = 9.7 - 4.8
+    assert width == pytest.approx(4.9)
+    assert (4.8 + 9.7) / 2 == pytest.approx(7.25)
+    assert 9.7 + width == pytest.approx(14.6)
+    width2 = 10.8 - 7
+    assert width2 == pytest.approx(3.8)
+    assert (7 + 10.8) / 2 == pytest.approx(8.9)
+    assert 10.8 + width2 == pytest.approx(14.6)
 
 
 def test_narrowness_is_not_an_advantage() -> None:

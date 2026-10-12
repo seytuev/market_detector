@@ -535,7 +535,7 @@ def test_ranges_empty_v2_history(client, seeded):
     assert d["episodes_v2"] == []
     assert d["current"]["episode_id"] is None
     assert d["current"]["reason"] == "no_episodes"
-    assert d["rules_versions"] == {"v1": "alt-0.1", "v2": "alt-0.2"}
+    assert d["rules_versions"] == {"v1": "alt-0.1", "v2": "alt-0.3"}
     assert d["v1"]["rules_version"] == "alt-0.1"
     assert len(d["v1"]["ranges"]) == 1
     assert d["v1"]["ranges"][0]["rules_version"] == "alt-0.1"
@@ -543,7 +543,7 @@ def test_ranges_empty_v2_history(client, seeded):
 
 
 def test_ranges_v2_episodes_and_v1_block(client, db, seeded):
-    """Эпизоды v2 с выносом отдаются с версией alt-0.2 и не смешиваются
+    """Эпизоды v2 с выносом отдаются с текущей версией правил и не смешиваются
     с v1-диапазонами того же актива."""
     asset = seeded["assets"]["MAT"]
     source = next(
@@ -572,7 +572,7 @@ def test_ranges_v2_episodes_and_v1_block(client, db, seeded):
     # порядок — от старых к новым; версии различимы
     assert [e["id"] for e in d["episodes_v2"]] == [older.id, current.id]
     old_block, cur_block = d["episodes_v2"]
-    assert old_block["rules_version"] == "alt-0.2"
+    assert old_block["rules_version"] == "alt-0.3"
     assert old_block["state"] == "terminal"
     assert old_block["base_end_reason"] == "breakout_confirmed"
     assert old_block["base_end_reason_ru"] == "Подтверждённый выход"

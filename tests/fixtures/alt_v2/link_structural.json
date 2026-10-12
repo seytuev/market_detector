@@ -1,0 +1,76 @@
+{
+  "symbol": "LINKUSDT",
+  "venue": "binance",
+  "as_of": "2026-10-11",
+  "ohlc": "ohlc/LINK.json",
+  "ohlc_sha256": "f11b5f2ee7d1c7a70cfb8e064fcf13934860c4e79b5eb106b6fa1bd1634cb8fd",
+  "rules_version": "alt-0.3",
+  "line_tolerance_abs": 0.02,
+  "note": "Ориентиры пользователя около 4.8–9.7 и 7–10.8 не являются константами алгоритма и не читаются движком. Линия — медиана внешней полосы кластера значимых теней. Допуск 0.02 зафиксирован до проверки: он меньше разброса полосы и не дотягивается до выноса 4.761 и одиночной тени 10.870.",
+  "user_guides_not_constants": [
+    {"role": "base_2022", "lower_about": 4.8, "upper_about": 9.7},
+    {"role": "base_2026", "lower_about": 7.0, "upper_about": 10.8}
+  ],
+  "gaps": [
+    {
+      "date": "2023-06-10",
+      "price": 4.761,
+      "side": "low",
+      "why": "Пост-freeze вынос. Линия нижней опоры его не принимает: замороженная геометрия не расширяется будущими свечами."
+    },
+    {
+      "date": "2023-06-19",
+      "price": 4.993,
+      "side": "low",
+      "why": "Тот же вынос, девять дней спустя. В линию базы не входит."
+    },
+    {
+      "date": "2026-05-10",
+      "price": 10.87,
+      "side": "high",
+      "why": "Одиночная тень вне допуска кластера. Верхнюю линию не задаёт."
+    },
+    {
+      "date": "2022-05-05",
+      "price": 12.29,
+      "side": "high",
+      "why": "Тень снижения до базы. В заливку и рамку базы 2022 не входит."
+    }
+  ],
+  "episodes": [
+    {
+      "id": "link_base_2022",
+      "anchor_start": "2022-04-30",
+      "base_end": "2023-10-22",
+      "base_end_reason": "breakout_confirmed",
+      "lower": 5.41,
+      "upper": 9.57,
+      "lower_must_exceed": 5.0,
+      "upper_must_be_below": 10.0,
+      "lower_supports": [5.3, 5.41, 5.53],
+      "upper_supports": [9.5, 9.64],
+      "forbidden_in_lower_cluster_below": 5.0,
+      "forbidden_in_upper_cluster_at_or_above": 12.0,
+      "line_below_chain_median": true
+    },
+    {
+      "id": "link_base_2026",
+      "anchor_start": "2026-01-31",
+      "base_end": "2026-08-19",
+      "base_end_reason": "breakout_confirmed",
+      "lower": 7.043,
+      "upper": 10.057,
+      "lower_must_exceed": 6.5,
+      "upper_must_be_below": 10.4,
+      "lower_supports": [6.996, 7.01],
+      "upper_supports": [10.034, 10.08],
+      "forbidden_in_lower_cluster_below": 6.5,
+      "forbidden_in_upper_cluster_at_or_above": 10.5
+    }
+  ],
+  "separate_decline": {
+    "anchor_before": "2022-04-01",
+    "lower_above": 10.0,
+    "note": "Снижение начала 2022 — отдельный эпизод. Его тени не задают рамку базы мая 2022."
+  }
+}

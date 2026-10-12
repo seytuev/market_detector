@@ -13,7 +13,7 @@ from enum import Enum
 from typing import Optional
 
 ALT_RULE_VERSION = "alt-0.1"
-ALT_RULE_VERSION_V2 = "alt-0.2"  # эпизоды диапазонов v2 (R-09: версии не смешиваются)
+ALT_RULE_VERSION_V2 = "alt-0.3"  # внешняя пара, линия по внешней полосе, новая база после ухода
 
 ALT_CANCEL_MODES = ("wick_on_closed_d1", "close_on_closed_d1")
 

@@ -170,6 +170,26 @@ def test_cluster_tolerance_uses_max_of_atr_and_pct(alt_cfg):
     assert tol2 == pytest.approx(5.0)                          # ATR доминирует
 
 
+def test_boundary_line_uses_outer_band_not_chained_median():
+    """Цепочка шагов остаётся одной зоной, но линия — медиана внешней полосы."""
+    from app.alt.engine_v2 import boundary_line
+
+    lows = cluster_pivots(
+        [pv(5.30, 0), pv(5.41, 10), pv(5.53, 20), pv(5.70, 30), pv(6.20, 40)],
+        tol=0.55,
+    )
+    assert len(lows) == 1
+    assert boundary_line(lows[0], 0.30) == pytest.approx(5.41)
+    highs = cluster_pivots(
+        [pv(8.60, 0, ZoneType.BSL), pv(9.20, 10, ZoneType.BSL),
+         pv(9.50, 20, ZoneType.BSL), pv(10.03, 30, ZoneType.BSL),
+         pv(10.08, 40, ZoneType.BSL)],
+        tol=0.70,
+    )
+    assert len(highs) == 1
+    assert boundary_line(highs[0], 0.40) == pytest.approx(10.055)
+
+
 def test_cluster_pivots_tolerance_and_median_line():
     pivots = [pv(1.00, 0), pv(1.03, 20), pv(1.50, 40)]
     clusters = cluster_pivots(pivots, tol=0.05)
@@ -218,6 +238,46 @@ def test_choose_lu_pair_ignores_single_wick_and_history_extremes(alt_cfg):
     # без повторных реакций у верха пары нет вовсе
     highs_single = cluster_pivots([pv(2.0, 15)], tol=0.05)
     assert choose_lu_pair(lows, highs_single, candles, alt_cfg, atr) is None
+
+
+def test_choose_lu_pair_prefers_wider_outer_pair(alt_cfg):
+    """Доля закрытий внутри не перебивает более внешнюю пару с реакциями."""
+    candles = []
+    for day in range(80):
+        close = 2.2 if day % 17 == 0 else 1.7
+        candles.append(ac(T0 + day * DAY_MS, close, close, close, close))
+    lows = cluster_pivots(
+        [pv(0.5, 6), pv(0.55, 40), pv(1.5, 10), pv(1.52, 44)],
+        tol=0.08,
+    )
+    highs = cluster_pivots(
+        [pv(3.0, 16), pv(2.95, 50), pv(2.5, 20), pv(2.48, 54)],
+        tol=0.08,
+    )
+    atr = compute_atr(candles, alt_cfg.v2_atr_period)
+    pair = choose_lu_pair(lows, highs, candles, alt_cfg, atr)
+    assert pair is not None
+    assert pair.lower == pytest.approx(0.525)
+    assert pair.upper == pytest.approx(2.975)
+    assert pair.upper - pair.lower > 2.0
+
+
+def test_second_base_after_departure_ignores_expired_ath_window(alt_db):
+    """Уход из первой базы допускает вторую, даже если окно просадки ATH истекло."""
+    cfg = AltConfig(v2_admission_window_days=10)
+    AltEngineV2(alt_db, cfg).process_asset_history(1, 1, build_two_bases())
+    frozen = [
+        e for e in alt_db.list_alt_range_episodes(1)
+        if e.state in (
+            AltEpisodeState.MATURE.value,
+            AltEpisodeState.ACCOMPANIMENT.value,
+            AltEpisodeState.TERMINAL.value,
+        )
+    ]
+    assert len(frozen) == 2
+    assert frozen[1].anchor_start_open_time > frozen[0].anchor_start_open_time
+    assert frozen[0].upper == pytest.approx(1.9, abs=0.05)
+    assert frozen[1].lower == pytest.approx(3.6, abs=0.05)
 
 
 # ---------------------------------------------------------------------------
@@ -345,6 +405,53 @@ def test_engine_multi_candidate_after_impulse(alt_db, alt_cfg):
     # возраст ранней базы на позднюю не переносится (R-02)
     q_new = json.loads(new.quality_json)
     assert q_new["n_days"] == 101
+
+
+def build_inner_then_outer() -> list[AltCandle]:
+    """Узкая полка, затем более широкие реакции той же базы.
+
+    Якорь остаётся в узкой фазе (abs 6..45). Внешние экстремумы приходят
+    с abs 46 и успевают стабилизироваться до конца ряда. Старое правило
+    резало сегмент на первом выходе из полки и теряло внешнюю пару.
+    """
+    candles: list[AltCandle] = []
+    for i, p in enumerate([8.0, 9.0, 9.5, 9.8, 10.0]):
+        candles.append(ac(T0 + i * DAY_MS, p, p, p, p))
+    candles.append(ac(T0 + 5 * DAY_MS, 9.9, 9.9, 1.9, 2.5))
+    candles += osc_candles(40, 1.5, 0.12, 6)
+    # 160 дней широкой фазы: после расширения пары нужно окно
+    # v2_freeze_stable_days, иначе внешняя пара ещё forming.
+    candles += osc_candles(160, 1.5, 0.45, 46)
+    return candles
+
+
+def test_outer_pair_survives_inner_shelf(alt_db, alt_cfg):
+    """Плотная полка не заменяет внешнюю пару той же базы и не порождает
+    второй эпизод, пока база не ушла."""
+    eng = AltEngineV2(alt_db, alt_cfg)
+    eng.process_asset_history(1, 1, build_inner_then_outer())
+    frozen = [e for e in alt_db.list_alt_range_episodes(1)
+              if e.state in FROZEN_EPISODE_STATES]
+    assert len(frozen) == 1, [
+        (e.state, e.anchor_start_open_time, e.lower, e.upper) for e in frozen
+    ]
+    ep = frozen[0]
+    assert ep.anchor_start_open_time < T0 + 46 * DAY_MS
+    assert ep.lower == pytest.approx(1.05, abs=0.08)
+    assert ep.upper == pytest.approx(1.95, abs=0.08)
+
+
+def test_departed_episode_does_not_consume_candidate_slot(alt_db):
+    """Лимит живых кандидатов не удерживается базой, из которой уже вышли.
+    Иначе после нескольких циклов новая база того же актива не создаётся."""
+    cfg = AltConfig(v2_max_candidates=1, target_count=1)
+    eng = AltEngineV2(alt_db, cfg)
+    eng.process_asset_history(1, 1, build_two_bases())
+    frozen = [e for e in alt_db.list_alt_range_episodes(1)
+              if e.state in FROZEN_EPISODE_STATES]
+    assert len(frozen) == 2
+    assert frozen[0].origin_key != frozen[1].origin_key
+    assert frozen[1].lower == pytest.approx(3.6, abs=0.05)
 
 
 def test_admission_window_expiry_and_rearm(alt_db):

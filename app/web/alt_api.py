@@ -99,7 +99,7 @@ def register_alt_routes(app, db: Database, settings, require_auth,
     @app.get("/api/alt/asset/{asset_id}/ranges",
              dependencies=[Depends(require_auth)])
     def alt_asset_ranges(asset_id: int) -> dict[str, Any]:
-        """«История диапазонов» актива: эпизоды v2 (rules_version alt-0.2)
+        """«История диапазонов» актива: эпизоды v2 (rules_version alt-0.3)
         и отдельный v1-блок (alt-0.1) — версии и эпохи различимы (§8.12)."""
         with db.read_tx():
             data = alt_asset_ranges_history(db, asset_id)

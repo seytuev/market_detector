@@ -419,7 +419,7 @@ def test_should_run_no_retry_spam_after_error_in_slot(db):
 
 
 async def test_v2_flag_backfill_episodes_without_pending_events(db):
-    """engine_version=v2 пишет эпизоды alt-0.2 и не оставляет pending-события."""
+    """engine_version=v2 пишет эпизоды alt-0.3 и не оставляет pending-события."""
     base = build_accumulation(seg_len=120)
     venue = FakeVenue("binance", {"AAA": ["USDT"]},
                       {"AAAUSDT": _to_candles(base)})
@@ -432,7 +432,7 @@ async def test_v2_flag_backfill_episodes_without_pending_events(db):
     asset = db.get_alt_asset_by_cmc_id(11)
     episodes = db.list_alt_range_episodes(asset.id)
     assert episodes
-    assert all(e.rules_version == "alt-0.2" for e in episodes)
+    assert all(e.rules_version == "alt-0.3" for e in episodes)
     assert db.list_alt_setups(asset.id) == []
     assert db.pending_alt_events(limit=1000) == []
     entry = res["summary"]["per_asset"][0]

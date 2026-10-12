@@ -246,7 +246,7 @@ def test_acceptance_v1_freeze_unchanged_beside_v2():
     assert _v1_frozen_tuples(db) == before
     v2_rows = db.list_alt_range_episodes(1)
     assert v2_rows
-    assert all(e.rules_version == "alt-0.2" for e in v2_rows)
+    assert all(e.rules_version == "alt-0.3" for e in v2_rows)
     setups = db.list_alt_setups(1)
     assert setups
     db.close()

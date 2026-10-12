@@ -726,9 +726,8 @@
     return sorted[lo] + (sorted[hi] - sorted[lo]) * (i - lo);
   }
 
-  /* База у дна: низ — пол, на котором цена стоит, верх — потолок этой
-     консолидации. Одиночная тень и поздний импульс в рамку не входят.
-     Мало свечей — null, график остаётся на сохранённых L/U. */
+  /* Внутренняя полка. Не заменяет основную рамку: слой выключен, пока
+     вызывающий код сам не попросит её. Мало свечей — null. */
   function shelfRange(candles, startMs, lastMs) {
     const series = [];
     (candles || []).forEach((candle) => {
@@ -776,57 +775,145 @@
     return { lower, upper, endMs: kept[kept.length - 1].open_time + DAY_MS };
   }
 
-  /* Рамка на графике. Сохранённые L/U остаются внешним пределом: цели и
-     отмена считаются по ним. Заливка кончается на выходе из базы. */
-  function chartRange(detail, lastCandleOpenMs) {
-    const range = detail && (detail.frozen_range || detail.range);
-    if (!range || !(range.upper > range.lower)) return null;
-    const startMs = detail.anchors && detail.anchors.start
+  /* Цены и даты одной ревизии. Клиент не собирает новую рамку по свечам. */
+  function frameSource(detail) {
+    const eff = detail && detail.effective_range;
+    if (eff && eff.upper > eff.lower) return eff;
+    const rev = detail && detail.range_revision;
+    if (rev && rev.source_kind === 'manual' && rev.upper > rev.lower) return rev;
+    return (detail && (detail.frozen_range || detail.range)) || null;
+  }
+
+  function closedCandles(detail) {
+    const asOf = detail && detail.as_of_ms;
+    return ((detail && detail.candles) || []).filter((candle) =>
+      candle && (asOf == null || candle.open_time + DAY_MS <= asOf));
+  }
+
+  function frameStartMs(detail, frame) {
+    if (!frame) return null;
+    if (frame.base_start_open_time != null) return frame.base_start_open_time;
+    if (frame.start_anchor_open_time != null) return frame.start_anchor_open_time;
+    const rev = detail && detail.range_revision;
+    if (rev && rev.source_kind === 'manual') return null;
+    return detail && detail.anchors && detail.anchors.start
       ? detail.anchors.start.open_time : null;
-    const asOf = detail.as_of_ms;
-    const candles = (detail.candles || []).filter((candle) =>
-      asOf == null || candle.open_time + DAY_MS <= asOf);
+  }
+
+  function frameEndMs(detail, frame, lastCandleOpenMs) {
+    if (frame && frame.base_end_open_time != null) {
+      return frame.base_end_open_time + DAY_MS;
+    }
+    const candles = closedCandles(detail);
     const lastFromCandles = candles.length ? candles[candles.length - 1].open_time : null;
     const last = lastCandleOpenMs != null ? lastCandleOpenMs : lastFromCandles;
     let endMs = last != null ? last + DAY_MS : null;
-    if (detail.breakout && detail.breakout.closed_at != null) {
+    if (detail && detail.breakout && detail.breakout.closed_at != null) {
       endMs = endMs == null ? detail.breakout.closed_at : Math.min(endMs, detail.breakout.closed_at);
     }
-    let lower = range.lower;
-    let upper = range.upper;
-    let shelf = false;
-    if (startMs != null) {
-      const found = shelfRange(candles, startMs, last);
-      if (found) {
-        const nextLower = Math.max(found.lower, range.lower);
-        const nextUpper = Math.min(found.upper, range.upper);
-        if (nextUpper > nextLower) {
-          lower = nextLower;
-          upper = nextUpper;
-          shelf = true;
-          if (endMs == null || found.endMs < endMs) endMs = found.endMs;
-        }
-      }
-    }
+    return endMs;
+  }
+
+  /* Основная рамка. Завершённая база кончается на последней включённой
+     свече плюс D1. Незавершённая — на последней закрытой, и на выходе,
+     если сервер не задал конец. */
+  function chartRange(detail, lastCandleOpenMs) {
+    const frame = frameSource(detail);
+    if (!frame || !(frame.upper > frame.lower)) return null;
+    const lower = frame.lower;
+    const upper = frame.upper;
+    const mid = frame.mid != null ? frame.mid : (lower + upper) / 2;
     return {
-      lower, upper, mid: (lower + upper) / 2,
-      startMs, endMs, shelf,
+      lower, upper, mid,
+      width: frame.width != null ? frame.width : (upper - lower),
+      startMs: frameStartMs(detail, frame),
+      endMs: frameEndMs(detail, frame, lastCandleOpenMs),
+      shelf: false,
+      range_id: frame.range_id != null ? frame.range_id : (frame.id != null ? frame.id : null),
+      revision_id: frame.revision_id != null ? frame.revision_id : (
+        detail && detail.range_revision && detail.range_revision.source_kind === 'manual'
+          ? detail.range_revision.id : null
+      ),
+      rules_version: frame.rules_version || null,
+      geometry_source: frame.geometry_source || null,
     };
   }
 
-  /* Слои графика в виде данных для экрана и экспорта (ТЗ §6 UI-04). */
+  function episodeBox(episode, lastCandleOpenMs) {
+    if (!episode || !(episode.upper > episode.lower) || episode.base_start_open_time == null) {
+      return null;
+    }
+    // Распад или закрытый эпизод без конца базы — не открытая заливка
+    // до последней свечи. Незавершённая живая база по-прежнему рисуется до неё.
+    if (
+      (episode.state === 'decayed' || episode.state === 'terminal')
+      && episode.base_end_open_time == null
+    ) return null;
+    const endMs = episode.base_end_open_time != null
+      ? episode.base_end_open_time + DAY_MS
+      : (lastCandleOpenMs != null ? lastCandleOpenMs + DAY_MS : null);
+    if (endMs == null || !(endMs > episode.base_start_open_time)) return null;
+    return {
+      kind: 'range',
+      startMs: episode.base_start_open_time,
+      endMs,
+      upper: episode.upper,
+      lower: episode.lower,
+      shelf: false,
+      range_id: episode.id,
+      revision_id: null,
+      rules_version: episode.rules_version || null,
+      geometry_source: 'episode',
+    };
+  }
+
+  /* Слои графика в виде данных для экрана и экспорта. Цены всех слоёв
+     выбранной рамки — одна ревизия. История добавляет остальные эпизоды. */
   function collectBoxes(detail, view, lastCandleOpenMs) {
     const result = { boxes: [], retestNote: '' };
-    const range = detail && (detail.frozen_range || detail.range);
+    const range = detail && (detail.effective_range || detail.frozen_range || detail.range);
     if (!detail || !range) return result;
     const shown = chartRange(detail, lastCandleOpenMs);
     const last = lastCandleOpenMs == null ? null : lastCandleOpenMs;
+    const lu = shown || {
+      lower: range.lower, upper: range.upper,
+      mid: range.mid != null ? range.mid : (range.lower + range.upper) / 2,
+    };
     if (view.range && shown && shown.startMs != null && shown.endMs != null && shown.endMs > shown.startMs) {
       result.boxes.push({
         kind: 'range',
         startMs: shown.startMs, endMs: shown.endMs,
-        upper: shown.upper, lower: shown.lower, shelf: shown.shelf,
+        upper: shown.upper, lower: shown.lower, shelf: false,
+        range_id: shown.range_id, revision_id: shown.revision_id,
+        rules_version: shown.rules_version, geometry_source: shown.geometry_source,
       });
+    }
+    if (view.range && view.eventMode === 'history') {
+      (detail.range_episodes || []).forEach((episode) => {
+        if (
+          shown && shown.geometry_source === 'episode'
+          && shown.range_id != null && episode.id === shown.range_id
+        ) return;
+        const box = episodeBox(episode, last);
+        if (box) result.boxes.push(box);
+      });
+    }
+    if (view.shelf && shown && shown.startMs != null) {
+      const found = shelfRange(closedCandles(detail), shown.startMs, last);
+      if (found) {
+        const lower = Math.max(found.lower, shown.lower);
+        const upper = Math.min(found.upper, shown.upper);
+        if (upper > lower) {
+          result.boxes.push({
+            kind: 'shelf',
+            startMs: shown.startMs,
+            endMs: found.endMs,
+            upper, lower,
+            shelf: true,
+            parent_range_id: shown.range_id,
+          });
+        }
+      }
     }
     if (view.manipulation) {
       manipulationEpisodes(detail.manipulation_episodes, view.eventMode || 'setup', detail.as_of_ms)
@@ -838,7 +925,7 @@
           result.boxes.push({
             kind: 'manip',
             startMs: episode.started_candle_open_time, endMs: end,
-            upper: shown ? shown.lower : range.lower,
+            upper: lu.lower,
             lower: episode.min_price, minPrice: episode.min_price,
           });
         });
@@ -849,7 +936,7 @@
       else if (span) {
         result.boxes.push({
           kind: 'retest', startMs: span.startMs, endMs: span.endMs,
-          upper: range.upper, lower: range.mid,
+          upper: lu.upper, lower: lu.mid,
         });
       }
     }

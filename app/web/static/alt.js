@@ -165,6 +165,7 @@ function defaultPrefs() {
     layers: {
       range: true, entries: true, manipulation: true, targets: 'nearest',
       cancel: true, reverse: false, reverseUser: false, historyTypes: null,
+      shelf: false,
     },
     tableMode: false, columns: DEFAULT_COLUMNS.slice(), selected: null,
   };
@@ -498,12 +499,12 @@ function renderCard() {
   const why = [];
   if (anchors && anchors.start) why.push(`Старт ${fmtDate(anchors.start.open_time)}, доступен ${fmtTime(anchors.start.available_at_ms)}.`);
   if (anchors && anchors.rebound) why.push(`Отскок ${fmtDate(anchors.rebound.open_time)}.`);
-  if (range) why.push(`Диапазон L ${fmtPrice(range.lower)}, U ${fmtPrice(range.upper)}, M ${fmtPrice(range.mid)}.`);
   const shownRange = window.AltChart.chartRange(detail, null);
-  if (shownRange && shownRange.shelf && range &&
-      (Math.abs(shownRange.lower - range.lower) > range.lower * 0.01 ||
-       Math.abs(shownRange.upper - range.upper) > range.upper * 0.01)) {
-    why.push(`На графике база у дна ${fmtPrice(shownRange.lower)}–${fmtPrice(shownRange.upper)}: пол, где цена консолидируется.`);
+  const frame = shownRange || range;
+  if (frame) {
+    const id = frame.range_id != null ? ` #${frame.range_id}` : '';
+    const rev = frame.revision_id != null ? `, ревизия ${frame.revision_id}` : '';
+    why.push(`Рамка${id}${rev}: L ${fmtPrice(frame.lower)}, U ${fmtPrice(frame.upper)}, M ${fmtPrice(frame.mid)}.`);
   }
   if (detail.confirmation) why.push(`Подтверждение: ${detail.confirmation.event_type}.`);
   parts.push(`<p>${esc(why.join(' ') || 'Кратких опор в снимке нет.')}</p>`);
@@ -536,12 +537,24 @@ function rangeEditPayload() {
 function openRangeEditor() {
   const detail = state.detail;
   if (!detail || !state.selected) return;
-  const range = detail.frozen_range || detail.range;
+  const range = detail.frozen_range || detail.range || {};
   const revision = detail.range_revision || {};
-  $('range-edit-l').value = range.lower;
-  $('range-edit-u').value = range.upper;
-  $('range-edit-start').value = inputDate(revision.base_start_open_time || range.start_anchor_open_time || (detail.anchors && detail.anchors.start && detail.anchors.start.open_time));
-  $('range-edit-end').value = inputDate(revision.base_end_open_time);
+  const manual = revision.source_kind === 'manual' && revision.upper > revision.lower;
+  const prices = manual ? revision : (detail.effective_range || range);
+  $('range-edit-l').value = prices.lower;
+  $('range-edit-u').value = prices.upper;
+  $('range-edit-start').value = inputDate(
+    (manual ? revision.base_start_open_time : null)
+    || (detail.effective_range && detail.effective_range.base_start_open_time)
+    || revision.base_start_open_time
+    || range.start_anchor_open_time
+    || (detail.anchors && detail.anchors.start && detail.anchors.start.open_time)
+  );
+  $('range-edit-end').value = inputDate(
+    (manual ? revision.base_end_open_time : null)
+    || (detail.effective_range && detail.effective_range.base_end_open_time)
+    || revision.base_end_open_time
+  );
   $('range-edit-reason').value = '';
   $('alt-range-editor-meta').textContent = `${detail.asset.symbol} · ${state.selected.kind} · текущая ревизия ${revision.revision || 0}`;
   $('alt-range-preview').textContent = 'Измените значения и нажмите «Проверить».';
@@ -689,7 +702,10 @@ function renderNotes() {
       notes.push('В истории W1 есть недели с пропущенными D1.');
     }
   }
-  if (state.eventMode === 'history') notes.push('История относится к выбранному сетапу, не ко всем сетапам этой монеты.');
+  if (state.eventMode === 'history') notes.push('История показывает отдельные рамки доступных эпизодов этой монеты. События остаются у выбранного сетапа.');
+  if (state.detail && state.detail.candle_history && state.detail.candle_history.truncated) {
+    notes.push('Часть истории не загружена. Рамка не подменяется границами видимого фрагмента.');
+  }
   $('alt-chart-note').textContent = notes.filter(Boolean).join(' ');
 }
 
@@ -1156,12 +1172,18 @@ function paintBox(overlay, startMs, endMs, upper, lower, cls, title) {
   overlay.appendChild(box);
 }
 function boxTitles(box) {
+  if (box.kind === 'shelf') {
+    const parent = box.parent_range_id != null ? ` · база #${box.parent_range_id}` : '';
+    return {
+      cls: 'alt-shelf-box',
+      title: `Внутренняя полка ${fmtPrice(box.lower)}–${fmtPrice(box.upper)}${parent}`,
+    };
+  }
   if (box.kind === 'range') {
+    const id = box.range_id != null ? ` · #${box.range_id}` : '';
     return {
       cls: 'alt-range-box',
-      title: box.shelf
-        ? `База у дна ${fmtPrice(box.lower)}–${fmtPrice(box.upper)}`
-        : `Аккумуляция ${fmtPrice(box.lower)}–${fmtPrice(box.upper)}`,
+      title: `Аккумуляция ${fmtPrice(box.lower)}–${fmtPrice(box.upper)}${id}`,
     };
   }
   if (box.kind === 'manip') {
@@ -1177,6 +1199,7 @@ function layerView() {
     range: state.layers.range,
     manipulation: state.layers.manipulation,
     entries: state.layers.entries,
+    shelf: !!state.layers.shelf,
     eventMode: state.eventMode,
   };
 }
@@ -1376,6 +1399,7 @@ function cssVarValue(name, fallback) {
 function exportColors() {
   return {
     range: { fill: 'rgba(227, 179, 65, 0.12)', border: 'rgba(227, 179, 65, 0.7)' },
+    shelf: { fill: 'rgba(227, 179, 65, 0.08)', border: 'rgba(227, 179, 65, 0.45)' },
     manip: { fill: 'rgba(240, 141, 152, 0.16)', border: 'rgba(240, 141, 152, 0.8)' },
     retest: { fill: 'rgba(98, 201, 176, 0.14)', border: 'rgba(98, 201, 176, 0.8)' },
     line: {
@@ -1579,6 +1603,7 @@ function syncControls() {
     button.setAttribute('aria-pressed', button.dataset.tf === state.timeframe ? 'true' : 'false');
   });
   $('layer-range').checked = !!state.layers.range;
+  if ($('layer-shelf')) $('layer-shelf').checked = !!state.layers.shelf;
   $('layer-entries').checked = !!state.layers.entries;
   $('layer-manip').checked = !!state.layers.manipulation;
   $('layer-targets').value = state.layers.targets || 'nearest';
@@ -1797,6 +1822,7 @@ function bind() {
   };
   const layerChange = () => {
     state.layers.range = $('layer-range').checked;
+    state.layers.shelf = $('layer-shelf') ? $('layer-shelf').checked : false;
     state.layers.entries = $('layer-entries').checked;
     state.layers.manipulation = $('layer-manip').checked;
     state.layers.targets = $('layer-targets').value;

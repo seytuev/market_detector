@@ -9,9 +9,12 @@
   ATH-эпизода), новый ATH перед каждым эпизодом не требуется;
 - R-02: первый минимум — гипотеза, а не постоянная опора: до
   cfg.v2_max_alternatives альтернативных якорей на зону; самостоятельная
-  поздняя консолидация (отделена импульсом или разрывом >
-  cfg.v2_candidate_split_days без реакций у старых границ) — НОВЫЙ кандидат
-  со своими якорями и своим возрастом, сегмент старого закрывается;
+  поздняя консолидация отделяется разрывом >
+  cfg.v2_candidate_split_days без реакций у старых границ, а не
+  закрытиями за предварительной полкой. Иначе плотная внутренняя пара
+  режет ту же базу раньше внешних реакций, а похожие цены двух эпох
+  склеиваются. Завершённый эпизод и эпизод с подтверждённым выходом слот
+  cfg.v2_max_candidates не держат;
 - R-03: границы — кластеры ПОВТОРНЫХ подтверждённых реакций (pivots 3+3,
   та же доступность без будущего, что в v1). Допуск кластера
   tol = max(cfg.v2_cluster_atr_mult * ATR(cfg.v2_atr_period),
@@ -30,7 +33,7 @@
   оценку не улучшает и сжатие внутри базы не отменяет внешнюю рамку;
 - зрелость/freeze: пороги v1 (СТРОГО forming_min_days / mature_min_days,
   §5 ТЗ «сначала сохранить текущие 51/101»). На freeze персистится
-  AltRangeEpisode (rules_version alt-0.2, state mature, замороженные
+  AltRangeEpisode (rules_version alt-0.3, state mature, замороженные
   L/U/M/W, тени, quality_json с метриками);
 - R-05 (этап 5): уход под замороженный L — отдельный эпизод выноса
   (alt_sweep_episode: начало, минимум, длительность, возврат). Статусы:
@@ -198,6 +201,24 @@ def cluster_pivots(pivots: Sequence[PivotRecord], tol: float) -> list[PivotClust
     return out
 
 
+def boundary_line(cluster: PivotCluster, tol: float) -> float:
+    """Медиана внешней полосы кластера, а не всей склеенной полки.
+
+    В полосу входят pivot-цены не дальше tol от крайнего экстремума зоны
+    (минимум для опоры снизу, максимум для опоры сверху). Плотная внутренняя
+    часть той же цепочки медиану внешней границы не перетягивает.
+    """
+    prices = [p.price for p in cluster.pivots]
+    if not prices:
+        return cluster.price
+    if cluster.kind == "low":
+        extreme = min(prices)
+    else:
+        extreme = max(prices)
+    band = [x for x in prices if abs(x - extreme) <= tol]
+    return median(band) if band else median(prices)
+
+
 def count_independent_reactions(
     pivots: Sequence[PivotRecord],
     gap_ms: int,
@@ -250,6 +271,8 @@ class BoundaryChoice:
     span_days: int
     efficiency: float
     containment: float = 0.0
+    uncertainty: Optional[str] = None
+    alternative_pairs: list[dict[str, float]] = field(default_factory=list)
 
 
 def _count_mid_crossings(closes: Sequence[float], mid: float) -> int:
@@ -299,9 +322,12 @@ def choose_lu_pair(
     Требования к паре: ≥ cfg.v2_min_reactions независимых реакций у ОБЕИХ
     границ; возвраты между зонами (≥1 переход через середину); без
     выраженного направленного движения внутри (efficiency ≤ V2_MAX_EFFICIENCY).
-    Абсолютный High/Low истории и «самый узкий интервал» не выбираются:
-    ранжирование — по сбалансированности и числу реакций, переходам и
-    длительности; равные — по времени первых опор (детерминированно).
+    Абсолютный High/Low истории и «самый узкий интервал» не выбираются.
+    Среди пар, прошедших порог конверта, побеждает более внешняя (шире).
+    Доля закрытий внутри — порог и тай-брейк, не главный ранг. Число
+    реакций тоже только тай-брейк. Равные пары различаются временем
+    первых опор. Близкая по ширине альтернатива сохраняется как
+    неопределённость, а не подменяет внешнюю рамку.
     """
     if atr_value <= 0 or not candles:
         return None
@@ -322,6 +348,7 @@ def choose_lu_pair(
 
     best: Optional[BoundaryChoice] = None
     best_key: Optional[tuple] = None
+    passed: list[tuple[tuple, BoundaryChoice]] = []
     for lc in lows:
         for uc in highs:
             if lc.price >= uc.price:
@@ -356,19 +383,32 @@ def choose_lu_pair(
                 crossings=crossings, span_days=span_days, efficiency=eff,
                 containment=containment,
             )
-            # Сначала полнота объяснения (конверт). При равном охвате
-            # закрытий побеждает более широкая пара зон, а не самый
-            # густой внутренний кластер: узость не преимущество (R-03/R-04).
-            # Число реакций — только тай-брейк после конверта. Равные пары
-            # устойчиво различаются временем первых опор.
+            # Конверт — порог, не главный ранг. Более внешняя пара той же
+            # базы не уступает плотной внутренней, даже если у внутренней
+            # доля закрытий внутри округляется выше. Число реакций и
+            # длительность — тай-брейк. Равные пары различаются временем
+            # первых опор.
             key = (
-                round(containment, 2),
                 width,
+                round(containment, 2),
                 min(rl, ru), rl + ru, crossings, span_days,
                 -lc.first_formed_at, -uc.first_formed_at,
             )
+            passed.append((key, choice))
             if best_key is None or key > best_key:
                 best, best_key = choice, key
+    if best is not None and len(passed) > 1:
+        passed.sort(key=lambda item: item[0], reverse=True)
+        rival = passed[1][1]
+        best_width = best.upper - best.lower
+        if best_width > 0 and (rival.upper - rival.lower) >= best_width * 0.9:
+            best.uncertainty = "outer_pairs_close"
+            best.alternative_pairs = [{
+                "lower": rival.lower,
+                "upper": rival.upper,
+                "width": rival.upper - rival.lower,
+                "containment": rival.containment,
+            }]
     return best
 
 
@@ -836,6 +876,26 @@ class AltEngineV2:
                 return True
         return False
 
+    def _departed_prior(
+        self, candidates: Sequence[_CandidateV2], formed_at: int
+    ) -> bool:
+        """Подтверждённый уход из более ранней базы: выход, распад или
+        закрытый сегмент. Новая стабилизация после такого ухода — отдельный
+        эпизод, даже если окно глубокой просадки ATH уже истекло."""
+        for cand in candidates:
+            if cand.rejected_reason is not None or cand.start.formed_at >= formed_at:
+                continue
+            if cand.episode_terminal or cand.segment_end_idx is not None:
+                return True
+            ls = cand.lstate
+            if (
+                ls is not None
+                and ls.breakout_open_time is not None
+                and ls.breakout_open_time < formed_at
+            ):
+                return True
+        return False
+
     def _segment_open(self, cand: _CandidateV2, t: int) -> bool:
         return cand.segment_end_idx is None or t < cand.segment_end_idx
 
@@ -847,21 +907,18 @@ class AltEngineV2:
         candles: Sequence[Any],
         tol: Optional[float],
     ) -> bool:
-        """Самостоятельность поздней консолидации (R-02), оцениваемая на
-        момент САМОГО pivot (formed_at): разрыв >
-        cfg.v2_candidate_split_days без реакций у границ старого кандидата
-        ИЛИ импульсный выход — ≥3 Close за пределами текущих границ ± tol
-        (одиночный ложный вынос консолидацию не разделяет)."""
+        """Самостоятельность поздней консолидации (R-02) на момент pivot.
+
+        Разрыв > cfg.v2_candidate_split_days без реакций у старых границ
+        отделяет новую базу. Закрытия за полкой — нет, ни до заморозки,
+        ни после: одиночные и даже повторные закрытия внутри той же
+        стабилизации не создают вторую базу. Уход ценой, после которого
+        долго нет реакций у старых границ, открывает новый эпизод даже
+        при похожих ценах.
+        """
+        del pivot_idx, candles, tol
         last = cand.last_reaction_ms or cand.start.formed_at
-        if pivot.formed_at - last > self.cfg.v2_candidate_split_days * DAY_MS:
-            return True
-        if tol is not None and cand.lower is not None and cand.upper is not None:
-            seg = candles[cand.start_idx: pivot_idx + 1]
-            beyond_up = sum(1 for x in seg if x.close > cand.upper + tol)
-            beyond_dn = sum(1 for x in seg if x.close < cand.lower - tol)
-            if max(beyond_up, beyond_dn) >= 3:
-                return True
-        return False
+        return pivot.formed_at - last > self.cfg.v2_candidate_split_days * DAY_MS
 
     def _handle_pivot_low(
         self,
@@ -931,9 +988,26 @@ class AltEngineV2:
         elif covering:
             return None  # опора внутри/вблизи живой базы — дубликат
 
-        if not self._admission_valid(tracker, p.formed_at):
+        separated_from_prior = bool(covering) and all(sep for _c, sep in covering)
+        if not self._admission_valid(tracker, p.formed_at) and not (
+            self.cfg.v2_admit_after_departure and (
+                separated_from_prior or self._departed_prior(candidates, p.formed_at)
+            )
+        ):
             return None
-        live = sum(1 for c in candidates if c.rejected_reason is None)
+        # Слот — только ещё не завершённый поиск границ. Исторический
+        # эпизод и база с уже подтверждённым выходом новую стабилизацию
+        # не блокируют: иначе после нескольких циклов слоты кончаются
+        # навсегда и поздняя база того же актива не создаётся.
+        live = sum(
+            1 for c in candidates
+            if c.rejected_reason is None
+            and not c.episode_terminal
+            and not (
+                c.lstate is not None
+                and c.lstate.breakout_open_time is not None
+            )
+        )
         if live >= self.cfg.v2_max_candidates:
             return None
         anchor = candles[p_idx]
@@ -1005,6 +1079,22 @@ class AltEngineV2:
             elif self._stale(cand, candles[t].open_time):
                 self._reject(cand, "stale_reactions", detected_at)
             return
+        res = classify_sideways_v2(seg, pair.lower, pair.upper, self.cfg)
+        # Медиана всей склеенной зоны может сидеть в плотной полке.
+        # Сдвиг к внешней полосе принимается только если классификатор
+        # по-прежнему подтверждает боковик. Иначе остаётся медиана:
+        # отказ внешней полосы не должен уничтожать саму базу.
+        if res.ready and res.sideways:
+            nudged_l = boundary_line(pair.lower_cluster, tol)
+            nudged_u = boundary_line(pair.upper_cluster, tol)
+            if nudged_l < pair.lower - 1e-9 or nudged_u > pair.upper + 1e-9:
+                res_n = classify_sideways_v2(seg, nudged_l, nudged_u, self.cfg)
+                if res_n.ready and res_n.sideways:
+                    pair.lower, pair.upper = nudged_l, nudged_u
+                    pair.containment = _containment(
+                        [c.close for c in seg], nudged_l, nudged_u
+                    )
+                    res = res_n
         # Стабилизация freeze (§5): первая признанная пара не запускает
         # ожидание — зрелость наступает на первом дне строго после
         # mature_min_days (101 при пороге 100). Ожидание
@@ -1021,7 +1111,6 @@ class AltEngineV2:
         cand.pair = pair
         cand.lower, cand.upper = pair.lower, pair.upper
 
-        res = classify_sideways_v2(seg, pair.lower, pair.upper, self.cfg)
         cand.classifier = res
         if not (res.ready and res.sideways):
             if cand.segment_end_idx is not None:
@@ -1167,6 +1256,8 @@ class AltEngineV2:
                 "span_days": p.span_days,
                 "efficiency": p.efficiency,
                 "containment": p.containment,
+                "uncertainty": p.uncertainty,
+                "alternative_pairs": list(p.alternative_pairs),
                 "lower_cluster_pivots": [
                     {"formed_at": x.formed_at, "price": x.price}
                     for x in p.lower_cluster.pivots
@@ -1227,9 +1318,10 @@ class AltEngineV2:
                 "origin_key": cand.origin_key, "episode_id": row.id,
                 "state": row.state, "created": True,
             })
-        elif row.state in FORMING_EPISODE_STATES:
+        elif row.state in FORMING_EPISODE_STATES or row.rules_version != ALT_RULE_VERSION_V2:
             self.db.update_alt_range_episode(
                 row.id,
+                rules_version=ALT_RULE_VERSION_V2,
                 lower=cand.lower, upper=cand.upper,
                 width=cand.upper - cand.lower,
                 mid=(cand.lower + cand.upper) / 2,
@@ -1269,20 +1361,33 @@ class AltEngineV2:
             "origin_key": cand.origin_key, "episode_id": row.id,
             "state": row.state, "created": created,
         })
-        if not created and row.state in FORMING_EPISODE_STATES:
-            # переход forming → mature: финальная запись геометрии и качества
-            self.db.update_alt_range_episode(
-                row.id,
-                state=AltEpisodeState.MATURE.value,
-                lower=cand.lower, upper=cand.upper,
-                width=cand.upper - cand.lower,
-                mid=(cand.lower + cand.upper) / 2,
-                wick_low=cand.wick_low if math.isfinite(cand.wick_low) else None,
-                wick_high=cand.wick_high if cand.wick_high > 0 else None,
-                quality_json=json.dumps(self._quality(cand), ensure_ascii=False),
-                selection_rank_reason="mature_quality_ok",
-                updated_ms=detected_at,
-            )
+        if not created and (
+            row.state in FORMING_EPISODE_STATES
+            or row.rules_version != ALT_RULE_VERSION_V2
+        ):
+            # forming → mature, либо смена версии правил: новая автоматическая
+            # геометрия. Та же версия замороженную рамку не переписывает (R-09).
+            # Ручные ревизии лежат в другой таблице и сюда не попадают.
+            fields: dict[str, Any] = {
+                "rules_version": ALT_RULE_VERSION_V2,
+                "state": AltEpisodeState.MATURE.value,
+                "lower": cand.lower, "upper": cand.upper,
+                "width": cand.upper - cand.lower,
+                "mid": (cand.lower + cand.upper) / 2,
+                "wick_low": cand.wick_low if math.isfinite(cand.wick_low) else None,
+                "wick_high": cand.wick_high if cand.wick_high > 0 else None,
+                "quality_json": json.dumps(self._quality(cand), ensure_ascii=False),
+                "selection_rank_reason": "mature_quality_ok",
+                "updated_ms": detected_at,
+            }
+            if row.rules_version != ALT_RULE_VERSION_V2:
+                fields.update(
+                    base_end_open_time=None,
+                    base_end_reason=None,
+                    base_end_confirmed_at_ms=None,
+                    accompaniment_end_open_time=None,
+                )
+            self.db.update_alt_range_episode(row.id, **fields)
 
     def _reject(self, cand: _CandidateV2, reason: str, detected_at: int) -> None:
         """Отклонение кандидата с явной причиной (R-02: участок тренда,

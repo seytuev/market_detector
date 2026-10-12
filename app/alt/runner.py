@@ -515,6 +515,19 @@ class AltRunner:
         await asyncio.to_thread(
             engine.process_asset_history, asset.id, src.id, candles, now
         )
+        # Эпизоды v2 считаются и при флаге v1: график истории берёт их рамки.
+        # Уведомления v1 не помечаются и не рассылаются из-за этого прохода.
+        # Смена engine_version по-прежнему сама включает антиспам.
+        if self.cfg.engine_version != "v2":
+            try:
+                shadow = AltEngineV2(self.db, self.cfg)
+                await asyncio.to_thread(
+                    shadow.process_asset_history, asset.id, src.id, candles, now
+                )
+            except Exception:
+                log.exception(
+                    "эпизоды v2 не записаны, актив %s", asset.id
+                )
 
         marked: list[int] = []
         if backfill:

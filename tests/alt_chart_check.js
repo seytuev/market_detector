@@ -299,20 +299,104 @@ const shelfDetail = {
   ],
 };
 const shelfShown = ac.chartRange(shelfDetail, MON + 54 * DAY);
-check('база у дна: пол около 10, потолок около 14, без импульса',
-  shelfShown.shelf === true &&
-  shelfShown.lower === 10 && shelfShown.upper === 14 &&
-  shelfShown.endMs === MON + 40 * DAY);
+check('сохранённая рамка не сужается плотностью свечей',
+  shelfShown.shelf === false &&
+  shelfShown.lower === 8 && shelfShown.upper === 90 && shelfShown.mid === 49 &&
+  shelfShown.endMs === MON + 55 * DAY);
 const shelfBoxes = ac.collectBoxes(shelfDetail, {
   range: true, manipulation: true, entries: false, eventMode: 'setup',
 }, MON + 54 * DAY);
-check('заливка базы короче импульса, вынос стыкуется с полом',
-  shelfBoxes.boxes[0].kind === 'range' && shelfBoxes.boxes[0].endMs === MON + 40 * DAY &&
-  shelfBoxes.boxes[0].lower === 10 && shelfBoxes.boxes[0].upper === 14 &&
-  shelfBoxes.boxes[1].upper === 10 && shelfBoxes.boxes[1].lower === 8);
+check('заливка и вынос держат сохранённые L/U',
+  shelfBoxes.boxes.length === 2 &&
+  shelfBoxes.boxes[0].kind === 'range' && shelfBoxes.boxes[0].endMs === MON + 55 * DAY &&
+  shelfBoxes.boxes[0].lower === 8 && shelfBoxes.boxes[0].upper === 90 &&
+  shelfBoxes.boxes[1].upper === 8 && shelfBoxes.boxes[1].lower === 8);
 const shelfLevels = ac.collectLevels(shelfDetail, { range: true, targets: 'nearest', cancel: false }, 12);
-check('линии L/U/M совпадают с базой у дна',
-  shelfLevels.levels.map((level) => level.name + ':' + level.price).join(',') === 'L:10,U:14,M:12');
+check('линии L/U/M совпадают с сохранённой рамкой',
+  shelfLevels.levels.map((level) => level.name + ':' + level.price).join(',') === 'L:8,U:90,M:49');
+const inner = ac.collectBoxes(shelfDetail, {
+  range: true, shelf: true, manipulation: false, entries: false, eventMode: 'setup',
+}, MON + 54 * DAY);
+check('внутренняя полка не подменяет основную рамку',
+  inner.boxes[0].kind === 'range' && inner.boxes[0].lower === 8 && inner.boxes[0].upper === 90 &&
+  inner.boxes.some((box) => box.kind === 'shelf' && box.parent_range_id == null));
+const revised = ac.chartRange({
+  frozen_range: { lower: 8, upper: 90, mid: 49, start_anchor_open_time: MON },
+  anchors: { start: { open_time: MON } },
+  range_revision: {
+    id: 7, source_kind: 'manual', lower: 4.8, upper: 9.7, mid: 7.25, width: 4.9,
+    base_start_open_time: MON + 100 * DAY, base_end_open_time: MON + 200 * DAY,
+  },
+  candles: shelfCandles,
+}, MON + 400 * DAY);
+check('ручная ревизия задаёт цены и даты, якорь не перехватывает',
+  revised.lower === 4.8 && revised.upper === 9.7 && revised.mid === 7.25 &&
+  revised.startMs === MON + 100 * DAY && revised.endMs === MON + 201 * DAY &&
+  revised.revision_id === 7 && revised.shelf === false);
+function derived(l, u) {
+  const w = u - l;
+  return { w, m: (u + l) / 2, tp1: u + w, k: 2 * l - u };
+}
+const first = derived(4.8, 9.7);
+const second = derived(7, 10.8);
+check('формулы 4.8–9.7 и 7–10.8',
+  Math.abs(first.w - 4.9) < 1e-9 && Math.abs(first.m - 7.25) < 1e-9 && Math.abs(first.tp1 - 14.6) < 1e-9 &&
+  Math.abs(second.w - 3.8) < 1e-9 && Math.abs(second.m - 8.9) < 1e-9 && Math.abs(second.tp1 - 14.6) < 1e-9);
+const hist = ac.collectBoxes({
+  effective_range: {
+    lower: 4.8, upper: 9.7, mid: 7.25, width: 4.9,
+    base_start_open_time: MON, base_end_open_time: MON + 100 * DAY,
+    range_id: 1, geometry_source: 'episode', rules_version: 'alt-0.3',
+  },
+  frozen_range: { lower: 1, upper: 2, mid: 1.5 },
+  anchors: { start: { open_time: MON - 400 * DAY } },
+  range_episodes: [
+    { id: 1, lower: 4.8, upper: 9.7, base_start_open_time: MON, base_end_open_time: MON + 100 * DAY, rules_version: 'alt-0.3' },
+    { id: 2, lower: 7, upper: 10.8, base_start_open_time: MON + 400 * DAY, base_end_open_time: null, rules_version: 'alt-0.3' },
+  ],
+}, { range: true, manipulation: false, entries: false, eventMode: 'history' }, MON + 500 * DAY);
+check('история: выбранный эпизод и вторая база, без чужого якоря',
+  hist.boxes.length === 2 &&
+  hist.boxes[0].range_id === 1 && hist.boxes[0].lower === 4.8 && hist.boxes[0].startMs === MON &&
+  hist.boxes[0].endMs === MON + 101 * DAY &&
+  hist.boxes[1].range_id === 2 && hist.boxes[1].lower === 7 && hist.boxes[1].upper === 10.8 &&
+  hist.boxes[1].endMs === MON + 501 * DAY);
+const setupOnly = ac.collectBoxes({
+  effective_range: {
+    lower: 7, upper: 10.8, mid: 8.9,
+    base_start_open_time: MON + 400 * DAY, base_end_open_time: null,
+    range_id: 2, geometry_source: 'episode',
+  },
+  range_episodes: [
+    { id: 1, lower: 4.8, upper: 9.7, base_start_open_time: MON, base_end_open_time: MON + 100 * DAY },
+    { id: 2, lower: 7, upper: 10.8, base_start_open_time: MON + 400 * DAY },
+  ],
+}, { range: true, manipulation: false, entries: false, eventMode: 'setup' }, MON + 500 * DAY);
+check('сетап показывает одну выбранную рамку',
+  setupOnly.boxes.length === 1 && setupOnly.boxes[0].range_id === 2 && setupOnly.boxes[0].lower === 7);
+const decayedOpen = ac.collectBoxes({
+  effective_range: {
+    lower: 5.41, upper: 9.57, mid: 7.49,
+    base_start_open_time: MON, base_end_open_time: MON + 100 * DAY,
+    range_id: 1, geometry_source: 'episode',
+  },
+  range_episodes: [
+    { id: 1, state: 'terminal', lower: 5.41, upper: 9.57, base_start_open_time: MON, base_end_open_time: MON + 100 * DAY },
+    { id: 9, state: 'decayed', lower: 5.355, upper: 7.9, base_start_open_time: MON + 10 * DAY, base_end_open_time: null },
+    { id: 3, state: 'terminal', lower: 5.609, upper: 8.3165, base_start_open_time: MON + 20 * DAY, base_end_open_time: MON + 80 * DAY },
+  ],
+}, { range: true, manipulation: false, entries: false, eventMode: 'history' }, MON + 500 * DAY);
+check('распад без конца не тянет заливку, завершённый эпизод остаётся',
+  decayedOpen.boxes.length === 2 &&
+  decayedOpen.boxes.some((box) => box.range_id === 3 && box.endMs === MON + 81 * DAY) &&
+  !decayedOpen.boxes.some((box) => box.range_id === 9));
+const sameLevels = ac.collectLevels({
+  effective_range: { lower: 7, upper: 10.8, mid: 8.9, base_start_open_time: MON },
+  targets: [{ tp: 1, price: 14.6, hit: false, passed_at_confirmation: false }],
+  cancel: { price: 3.2 },
+}, { range: true, targets: 'all', cancel: true }, 9);
+check('L/U/M/TP/K одной ревизии',
+  sameLevels.levels.map((level) => level.name + ':' + level.price).join(',') === 'L:7,U:10.8,M:8.9,TP1:14.6,K:3.2');
 const breakOnly = ac.collectBoxes({
   frozen_range: { lower: 10, upper: 20, mid: 15 },
   anchors: { start: { open_time: MON } },

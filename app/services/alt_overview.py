@@ -423,6 +423,176 @@ def _cancel_block(setup: AltSetup) -> dict[str, Any]:
     }
 
 
+def _revision_payload(revision: Any) -> Optional[dict[str, Any]]:
+    if revision is None:
+        return None
+    return {
+        "id": revision.id,
+        "revision": revision.revision,
+        "source_kind": revision.source_kind,
+        "lower": revision.lower,
+        "upper": revision.upper,
+        "mid": revision.mid,
+        "width": revision.width,
+        "base_start_open_time": revision.base_start_open_time,
+        "base_end_open_time": revision.base_end_open_time,
+        "reason": revision.reason,
+        "created_ms": revision.created_ms,
+        "derived": _loads(revision.derived_json, {}),
+    }
+
+
+def _episode_overlap(
+    episodes: list[AltRangeEpisode],
+    start_ms: Optional[int],
+    included_candles: Optional[int],
+) -> Optional[AltRangeEpisode]:
+    """Эпизод v2, чья база дольше всего пересекает жизнь сетапа v1.
+
+    Нет пересечения — None: чужая эпоха не подменяет выбранный сетап.
+    """
+    if start_ms is None or not episodes:
+        return None
+    span = max(int(included_candles or 1), 1) * DAY_MS
+    end_ms = start_ms + span
+    best: Optional[AltRangeEpisode] = None
+    best_ov = 0
+    for episode in episodes:
+        if not (episode.upper > episode.lower) or episode.base_start_open_time is None:
+            continue
+        left = episode.base_start_open_time
+        right = (
+            episode.base_end_open_time
+            if episode.base_end_open_time is not None
+            else end_ms + 366 * DAY_MS
+        )
+        overlap = min(end_ms, right) - max(start_ms, left)
+        if overlap > best_ov:
+            best_ov = overlap
+            best = episode
+    return best if best_ov > 0 else None
+
+
+def _frame_from_episode(episode: AltRangeEpisode) -> dict[str, Any]:
+    quality = _loads(episode.quality_json, {})
+    pair = quality.get("pair") if isinstance(quality, dict) else None
+    return {
+        "range_id": episode.id,
+        "revision_id": None,
+        "source_id": episode.source_id,
+        "rules_version": episode.rules_version,
+        "lower": episode.lower,
+        "upper": episode.upper,
+        "mid": episode.mid,
+        "width": episode.width,
+        "base_start_open_time": episode.base_start_open_time,
+        "base_end_open_time": episode.base_end_open_time,
+        "available_at_ms": episode.detected_at_ms,
+        "geometry_source": "episode",
+        "boundary_evidence": pair if isinstance(pair, dict) else quality,
+    }
+
+
+def _frame_from_manual(revision: Any, source_id: Optional[int]) -> dict[str, Any]:
+    return {
+        "range_id": None,
+        "revision_id": revision.id,
+        "source_id": source_id,
+        "rules_version": ALT_RULE_VERSION_V2,
+        "lower": revision.lower,
+        "upper": revision.upper,
+        "mid": revision.mid,
+        "width": revision.width,
+        "base_start_open_time": revision.base_start_open_time,
+        "base_end_open_time": revision.base_end_open_time,
+        "available_at_ms": revision.created_ms,
+        "geometry_source": "manual",
+        "boundary_evidence": {
+            "reason": revision.reason,
+            "source_kind": revision.source_kind,
+        },
+    }
+
+
+def _frame_from_stored(
+    stored: Any,
+    *,
+    source_id: Optional[int],
+    geometry_source: str,
+    rules_version: str,
+    available_at_ms: Optional[int],
+) -> Optional[dict[str, Any]]:
+    if stored is None or not (stored.upper > stored.lower):
+        return None
+    start = getattr(stored, "start_anchor_open_time", None)
+    return {
+        "range_id": stored.id,
+        "revision_id": None,
+        "source_id": source_id,
+        "rules_version": rules_version,
+        "lower": stored.lower,
+        "upper": stored.upper,
+        "mid": stored.mid,
+        "width": stored.width,
+        "base_start_open_time": start,
+        "base_end_open_time": None,
+        "available_at_ms": available_at_ms,
+        "geometry_source": geometry_source,
+        "boundary_evidence": None,
+    }
+
+
+def build_effective_range(
+    *,
+    manual: Any = None,
+    episode: Optional[AltRangeEpisode] = None,
+    stored: Any = None,
+    source_id: Optional[int] = None,
+    geometry_source: str = "frozen",
+    rules_version: str = ALT_RULE_VERSION,
+    available_at_ms: Optional[int] = None,
+) -> Optional[dict[str, Any]]:
+    """Одна рамка одной ревизии. Ручная побеждает эпизод, эпизод — заморозку v1.
+
+    Поля разных источников не смешиваются.
+    """
+    if (
+        manual is not None
+        and getattr(manual, "source_kind", None) == "manual"
+        and manual.upper > manual.lower
+    ):
+        return _frame_from_manual(manual, source_id)
+    if episode is not None and episode.upper > episode.lower:
+        return _frame_from_episode(episode)
+    return _frame_from_stored(
+        stored,
+        source_id=source_id,
+        geometry_source=geometry_source,
+        rules_version=rules_version,
+        available_at_ms=available_at_ms,
+    )
+
+
+def _derived_targets(lower: float, upper: float) -> list[dict[str, Any]]:
+    width = upper - lower
+    return [
+        {
+            "tp": n,
+            "price": upper + n * width,
+            "hit": False,
+            "passed_at_confirmation": False,
+        }
+        for n in range(1, 5)
+    ]
+
+
+def _prices_match(left: Optional[float], right: Optional[float]) -> bool:
+    if left is None or right is None:
+        return False
+    scale = max(abs(left), abs(right), 1.0)
+    return abs(left - right) <= scale * 1e-9
+
+
 def _geometry_of(
     frozen: Optional[AltFrozenRange], candidate: Optional[AltRangeCandidate]
 ) -> Optional[dict[str, float]]:
@@ -1086,6 +1256,42 @@ def alt_setup_detail(db: Database, setup_id: int, settings: Settings) -> Optiona
 
     target_snapshot = flags.get("target_snapshot")
     manual_revision = db.active_alt_range_revision("setup", setup.id)
+    episodes = db.list_alt_range_episodes(setup.asset_id) if asset else []
+    range_episodes = [
+        _range_episode_to_dict(ep, db.list_alt_sweep_episodes(ep.id))
+        for ep in episodes
+    ]
+    matched_episode = _episode_overlap(
+        episodes,
+        frozen.start_anchor_open_time if frozen is not None else None,
+        frozen.included_candles if frozen is not None else None,
+    )
+    effective_range = build_effective_range(
+        manual=manual_revision,
+        episode=matched_episode,
+        stored=frozen,
+        source_id=source.id if source is not None else None,
+        geometry_source="frozen",
+        rules_version=ALT_RULE_VERSION,
+        available_at_ms=frozen.mature_at_ms if frozen is not None else None,
+    )
+    targets = _targets_block(setup, flags)
+    cancel = _cancel_block(setup)
+    if (
+        effective_range is not None
+        and effective_range["geometry_source"] == "episode"
+        and frozen is not None
+        and not (
+            _prices_match(effective_range["lower"], frozen.lower)
+            and _prices_match(effective_range["upper"], frozen.upper)
+        )
+    ):
+        targets = _derived_targets(effective_range["lower"], effective_range["upper"])
+        k_price = 2 * effective_range["lower"] - effective_range["upper"]
+        cancel = dict(cancel)
+        cancel["price"] = k_price
+        cancel["reachable"] = k_price > 0
+        cancel["nonpositive_text"] = K_NONPOSITIVE_TEXT if not cancel["reachable"] else None
     return {
         "kind": "setup",
         "setup_id": setup.id,
@@ -1113,14 +1319,9 @@ def alt_setup_detail(db: Database, setup_id: int, settings: Settings) -> Optiona
                 "range_version": frozen.range_version,
             } if frozen is not None else None
         ),
-        "range_revision": ({
-            "id": manual_revision.id, "revision": manual_revision.revision,
-            "source_kind": manual_revision.source_kind,
-            "base_start_open_time": manual_revision.base_start_open_time,
-            "base_end_open_time": manual_revision.base_end_open_time,
-            "reason": manual_revision.reason, "created_ms": manual_revision.created_ms,
-            "derived": _loads(manual_revision.derived_json, {}),
-        } if manual_revision else None),
+        "range_revision": _revision_payload(manual_revision),
+        "effective_range": effective_range,
+        "range_episodes": range_episodes,
         "range_versions": metrics.get("versions") or [],
         "anchors": anchors,
         "classifier": _classifier_block(candidate, settings),
@@ -1138,9 +1339,9 @@ def alt_setup_detail(db: Database, setup_id: int, settings: Settings) -> Optiona
              "bases": _loads(e.bases_json, [])}
             for e in entries
         ],
-        "targets": _targets_block(setup, flags),
+        "targets": targets,
         "target_snapshot": target_snapshot,
-        "cancel": _cancel_block(setup),
+        "cancel": cancel,
         "breakout": (
             {"close": setup.breakout_close, "closed_at": setup.breakout_closed_at,
              "retest_deadline_ms": setup.retest_deadline_ms}
@@ -1217,6 +1418,25 @@ def alt_candidate_detail(db: Database, candidate_id: int, settings: Settings) ->
         }
     last_run = db.get_latest_alt_run(statuses=("ok", "no_universe"))
     manual_revision = db.active_alt_range_revision("candidate", candidate.id)
+    episodes = db.list_alt_range_episodes(candidate.asset_id) if asset else []
+    range_episodes = [
+        _range_episode_to_dict(ep, db.list_alt_sweep_episodes(ep.id))
+        for ep in episodes
+    ]
+    matched_episode = _episode_overlap(
+        episodes,
+        candidate.start_anchor_open_time,
+        candidate.n_days,
+    )
+    effective_range = build_effective_range(
+        manual=manual_revision,
+        episode=matched_episode,
+        stored=candidate,
+        source_id=source.id if source is not None else None,
+        geometry_source="candidate",
+        rules_version=ALT_RULE_VERSION,
+        available_at_ms=candidate.updated_ms,
+    )
     return {
         "kind": "candidate",
         "candidate_id": candidate.id,
@@ -1229,14 +1449,9 @@ def alt_candidate_detail(db: Database, candidate_id: int, settings: Settings) ->
         "state_ru": STATE_RU.get(candidate.state, candidate.state),
         "terminal": False,
         "range": _geometry_of(None, candidate),
-        "range_revision": ({
-            "id": manual_revision.id, "revision": manual_revision.revision,
-            "source_kind": manual_revision.source_kind,
-            "base_start_open_time": manual_revision.base_start_open_time,
-            "base_end_open_time": manual_revision.base_end_open_time,
-            "reason": manual_revision.reason, "created_ms": manual_revision.created_ms,
-            "derived": _loads(manual_revision.derived_json, {}),
-        } if manual_revision else None),
+        "range_revision": _revision_payload(manual_revision),
+        "effective_range": effective_range,
+        "range_episodes": range_episodes,
         "n_days": candidate.n_days,
         "anchors": {
             "start": _anchor(candidate.start_anchor_open_time, cfg.pivot_right),

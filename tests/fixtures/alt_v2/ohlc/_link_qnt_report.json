@@ -1,0 +1,22 @@
+{
+ "as_of": "2026-10-11",
+ "source": "binance_spot",
+ "symbols": {
+  "LINK": {
+   "symbol": "LINKUSDT",
+   "candles": 2826,
+   "first": "2019-01-16",
+   "last": "2026-10-11",
+   "sha256": "f11b5f2ee7d1c7a70cfb8e064fcf13934860c4e79b5eb106b6fa1bd1634cb8fd",
+   "file": "tests\\fixtures\\alt_v2\\ohlc\\LINK.json"
+  },
+  "QNT": {
+   "symbol": "QNTUSDT",
+   "candles": 1901,
+   "first": "2021-07-29",
+   "last": "2026-10-11",
+   "sha256": "ef428fc2cf772566d24e7ba696e3c5b7f5969f42fcda0df60f7ac9f049167887",
+   "file": "tests\\fixtures\\alt_v2\\ohlc\\QNT.json"
+  }
+ }
+}
