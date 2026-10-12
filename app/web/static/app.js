@@ -3567,16 +3567,6 @@ async function main() {
   });
 
   initAppearance();
-  await loadInstruments();
-  syncInstrumentContext();
-  if (new URLSearchParams(location.search).get('mode') === 'h1') {
-    showView('desk');
-    setChartMode('h1');
-  } else {
-    paintChartMode();
-  }
-  await loadLabels();
-  await reloadAll();
   LFDataSync.init({
     selected: () => state.instrumentId,
     reload: async () => {
@@ -3592,6 +3582,16 @@ async function main() {
       else if (state.chartMode === 'h1' && state.h1Layers) applyH1LegFrame(state.h1Layers);
     },
   });
+  await loadInstruments();
+  syncInstrumentContext();
+  if (new URLSearchParams(location.search).get('mode') === 'h1') {
+    showView('desk');
+    setChartMode('h1');
+  } else {
+    paintChartMode();
+  }
+  await loadLabels();
+  await reloadAll();
   connectWs();
   registerWsHandler(deskOnWs);
   loadDeskExtras().catch((e) => console.warn('desk extras:', e));

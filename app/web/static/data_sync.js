@@ -93,12 +93,14 @@ window.LFDataSync = (() => {
       statusData = data;
       const job = data.job;
       const running = busy(job);
+      paint();
       if (job && job.finished_at && !running && (previousBusy || job.job_id !== lastCompletedJob)) {
-        lastCompletedJob = job.job_id;
         await snapshot({ force: true });
+        lastCompletedJob = job.job_id;
       }
       previousBusy = running;
       paint();
+      if (running) snapshot().catch((e) => console.warn('sync snapshot:', e));
       return data;
     }).finally(() => { statusRead = null; schedule(); });
     return statusRead;
@@ -107,6 +109,8 @@ window.LFDataSync = (() => {
   async function start() {
     const button = document.getElementById('btn-data-sync');
     button.disabled = true;
+    button.textContent = 'Обновление…';
+    document.getElementById('data-sync-status').textContent = 'Запускаем обновление данных…';
     try {
       const job = await HTF.api('/api/data-sync', { method: 'POST' });
       previousBusy = true;
@@ -141,7 +145,10 @@ window.LFDataSync = (() => {
     setInterval(() => {
       if (!document.hidden) snapshot({ force: true }).catch((e) => console.warn('snapshot recovery:', e));
     }, 30000);
-    readStatus().catch((e) => console.warn('sync status:', e));
+    readStatus().catch((e) => {
+      console.warn('sync status:', e);
+      document.getElementById('data-sync-status').textContent = `Не удалось получить свежесть данных: ${e.message}`;
+    });
   }
 
   async function recover() {

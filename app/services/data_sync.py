@@ -244,7 +244,7 @@ class DataSync:
         watcher = asyncio.create_task(watchdog())
         try:
             for ins in instruments:
-                for tf in (*tfs, "quote"):
+                for tf in ("quote", *tfs):
                     result = {"instrument_id": ins.id, "symbol": ins.symbol, "venue": ins.venue,
                               "timeframe": tf, "status": "processing"}
                     job["results"].append(result)

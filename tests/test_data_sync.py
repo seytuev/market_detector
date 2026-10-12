@@ -271,7 +271,9 @@ async def test_deadline_keeps_ownership_until_thread_finishes(market):
             await asyncio.sleep(.005)
         await asyncio.sleep(.07)
         status = read_json(worker.db, JOB_KEY)
-        assert status["status"] == "failed" and status["processing_continues"]
+        assert status["status"] == "partial" and status["processing_continues"]
+        assert status["results"][0]["timeframe"] == "quote"
+        assert status["results"][0]["status"] == "ok"
         assert sync.start()["job_id"] == job["job_id"]
         assert sync._locks[instruments[0].id].locked()
     finally:
@@ -395,7 +397,9 @@ async def test_shutdown_finishes_job_and_clears_processing_marker(market):
     await entered.wait()
     await worker.data_sync.shutdown()
     job = read_json(db, JOB_KEY)
-    assert job["status"] == "failed" and not job["processing_continues"]
-    assert job["results"][0]["error"] == "interrupted_by_shutdown"
+    assert job["status"] == "partial" and not job["processing_continues"]
+    assert job["results"][0]["timeframe"] == "quote"
+    assert db.get_quote_detail(instruments[0].id) is not None
+    assert job["results"][1]["error"] == "interrupted_by_shutdown"
     assert not read_json(db, f"data_sync:channel:{instruments[0].id}:D1")["processing"]
     assert db.get_meta(f"replaying:{instruments[0].id}") == "0"

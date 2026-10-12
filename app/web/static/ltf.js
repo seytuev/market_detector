@@ -2117,6 +2117,10 @@ async function main() {
     if (!isCompactLtf()) $('ltf-inspector').classList.remove('open');
   });
 
+  LFDataSync.init({ selected: () => state.instrumentId, reload: async () => {
+    await loadAssets();
+    if (state.instrumentId) await reloadCurrent({ keepRange: true });
+  } });
   await loadLabels();
   await loadAssets();
   const initial = await resolveDeepLink();
@@ -2128,10 +2132,6 @@ async function main() {
   }
   // после reconnect — полный снимок: пропущенные сообщения не должны
   // удерживать отменённый сценарий текущим (§14, п.18)
-  LFDataSync.init({ selected: () => state.instrumentId, reload: async () => {
-    await loadAssets();
-    if (state.instrumentId) await reloadCurrent({ keepRange: true });
-  } });
   state.ws = window.HTF.connectWs(handleWsMessage, $('ws-indicator'), async (isReconnect) => {
     if (!isReconnect) return;
     await LFDataSync.snapshot({ force: true });
