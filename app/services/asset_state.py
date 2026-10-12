@@ -22,6 +22,7 @@ _WORKED_INTERACTION = {"full_fill"}
 
 _QUALITY_RU = {
     "no_h1_candles": "нет закрытых свечей H1",
+    "current_candle_pending": "ожидается текущая свеча H1",
     "no_quote": "нет котировки",
     "quote_stale": "котировка устарела",
     "h1_stale": "свечи H1 устарели",

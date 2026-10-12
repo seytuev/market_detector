@@ -670,6 +670,8 @@ def create_app(
     register_alt_routes(app, db, settings, require_auth, alt_runner)
     from .events_api import register_events_routes
     register_events_routes(app, db, settings, require_auth)
+    from .data_sync_api import register_data_sync_routes
+    register_data_sync_routes(app, db, require_auth)
 
     # ------------------------- instruments -------------------------
 
@@ -1193,15 +1195,18 @@ def create_app(
         instrument_id: int,
         timeframe: str,
         limit: int = Query(default=300, ge=1, le=5000),
-    ) -> list[dict[str, Any]]:
+        with_version: bool = False,
+    ) -> Any:
         """Свечи для графика в формате lightweight-charts (time — unix sec)."""
-        candles = db.get_candles(
-            instrument_id, timeframe, closed_only=False)[-limit:]
-        return [
-            {"time": c.open_time // 1000, "open": c.open, "high": c.high,
-             "low": c.low, "close": c.close, "closed": c.closed}
-            for c in candles
-        ]
+        with db.read_tx():
+            candles = db.get_candles(
+                instrument_id, timeframe, closed_only=False)[-limit:]
+            payload = [
+                {"time": c.open_time // 1000, "open": c.open, "high": c.high,
+                 "low": c.low, "close": c.close, "closed": c.closed}
+                for c in candles
+            ]
+            return {"candles": payload, "state_version": db.get_state_seq()} if with_version else payload
 
     # ------------------------- настройки (§10) -------------------------
 

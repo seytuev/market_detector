@@ -184,6 +184,7 @@ async def async_main() -> None:
         alt_runner=alt_runner,
         alt_dispatcher=alt_dispatcher,
     )
+    app.state.data_sync = worker.data_sync
 
     server = uvicorn.Server(
         uvicorn.Config(app=app, host=settings.host, port=settings.port,
@@ -198,6 +199,7 @@ async def async_main() -> None:
         )
     finally:
         worker.stop()
+        await worker.data_sync.shutdown()
         db.close()
 
 

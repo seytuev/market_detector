@@ -35,7 +35,7 @@ from typing import Optional
 import httpx
 
 from ..models import Candle, Instrument, now_ms
-from .base import TIMEFRAME_MS, AdapterError, QuoteTick
+from .base import TIMEFRAME_MS, AdapterError, QuoteTick, retry_after_seconds
 
 # Маппинг внутренних таймфреймов на коды Hyperliquid
 INTERVAL_MAP = {"H1": "1h", "H4": "4h", "D1": "1d", "W1": "1w"}
@@ -72,7 +72,8 @@ class HyperliquidSpotAdapter:
             raise AdapterError(
                 f"hyperliquid: HTTP {resp.status_code} при {payload.get('type')}: "
                 f"{resp.text[:200]!r} (проверьте идентификатор спотовой пары, "
-                f"например '@142' для UBTC/USDC)"
+                f"например '@142' для UBTC/USDC)",
+                retry_after=retry_after_seconds(resp),
             )
         return resp
 

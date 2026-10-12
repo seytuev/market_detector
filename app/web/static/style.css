@@ -741,10 +741,10 @@ select, input, textarea {
   /* заливку зон H1 рисует канвас объединением (h1-zone-fills) — div только
      рамка, иначе перекрывающиеся зоны темнят дважды */
   background: transparent; border-radius: 0;
-  border-left-width: 2px; border-right: 0;
+  border-style: solid; border-width: 1.5px;
 }
-.h1-zone.zone-rect.dir-bull { border-color: rgba(var(--zone-bull-rgb), .5); }
-.h1-zone.zone-rect.dir-bear { border-color: rgba(var(--zone-bear-rgb), .5); }
+.h1-zone.zone-rect.dir-bull { border-color: rgba(var(--zone-bull-rgb), .85); }
+.h1-zone.zone-rect.dir-bear { border-color: rgba(var(--zone-bear-rgb), .85); }
 /* форма остаётся подсказкой типа: FVG — пунктирные верх и низ */
 .h1-zone.zone-rect.z-fvg { border-top-style: dashed; border-bottom-style: dashed; }
 .h1-zone-fills { position: absolute; top: 0; left: 0; z-index: 2; pointer-events: none; }
@@ -2867,3 +2867,10 @@ html[data-sidebar="collapsed"] .sidebar-toggle .ico-expand { display: block; }
   }
   #view-overview .desk-entries { max-height: 120px; }
 }
+.data-sync-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 8px 16px; border-bottom: 1px solid var(--border, #ddd); font-size: 12px; }
+.data-sync-bar details { position: relative; margin-left: auto; }
+.data-sync-bar summary { cursor: pointer; }
+#data-sync-details { position: absolute; top: 24px; right: 0; z-index: 110; width: min(440px, 85vw); padding: 12px; background: var(--bg, #fff); color: var(--text, #222); border: 1px solid var(--border, #ddd); border-radius: 6px; box-shadow: 0 4px 16px #0002; }
+#data-sync-details > div { padding: 4px 0; overflow-wrap: anywhere; }
+#data-sync-status[data-state="partial"], #data-sync-status[data-state="failed"] { color: #b85b25; }
+@media (max-width: 600px) { .data-sync-bar { gap: 8px; padding: 8px; } #data-sync-status { flex: 1 1 180px; } }

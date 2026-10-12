@@ -309,6 +309,8 @@ def select_headline(facts: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         return "Q05", {"scope": scope, "time": facts.get("consistent_at") or "—"}
     if reason == "no_h1_candles":
         return "Q02", {"reason": "загрузка свечей H1 ещё не выполнена"}
+    if reason == "current_candle_pending":
+        return "Q02", {"reason": "ожидается текущая свеча H1 от источника"}
     if reason == "history_gap":
         return "Q04", {
             "timeframe": "H1",

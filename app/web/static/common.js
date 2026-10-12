@@ -4,6 +4,7 @@
 'use strict';
 
 window.HTF = (() => {
+  let currentSocket = null;
   const TOKEN_KEY = 'htf_token';
   let urlTokenRead = false;
   let tokenDialogPromise = null;
@@ -171,10 +172,11 @@ window.HTF = (() => {
     const connect = () => {
       const ws = new WebSocket(
         `${proto}://${location.host}/ws?token=${encodeURIComponent(getToken())}`);
+      currentSocket = ws;
       ws.onopen = () => {
         setConnectionState(true);
         // onOpen(isReconnect): после reconnect окно может запросить полный снимок
-        if (onOpen) onOpen(opened);
+        if (onOpen) Promise.resolve(onOpen(opened)).catch((e) => console.warn('ws recovery:', e));
         opened = true;
       };
       ws.onclose = () => {
@@ -190,6 +192,30 @@ window.HTF = (() => {
       return ws;
     };
     return connect();
+  }
+
+  function captureChartRange(chart, candles) {
+    const logical = chart.timeScale().getVisibleLogicalRange();
+    if (!logical) return null;
+    return { logical, time: chart.timeScale().getVisibleRange(),
+      following: logical.to >= candles.length - 1,
+      lastTime: candles.length ? candles[candles.length - 1].time : null,
+      firstTime: candles.length ? candles[0].time : null };
+  }
+
+  function restoreChartRange(chart, candles, saved) {
+    if (!saved) return;
+    if (saved.following && saved.lastTime != null) {
+      // Keep the same viewport width and right margin after new bars arrive.
+      const index = candles.findIndex((c) => c.time === saved.lastTime);
+      const shift = index >= 0 ? candles.length - 1 - index : 0;
+      const first = candles.findIndex((c) => c.time === saved.firstTime);
+      const offset = first >= 0 ? first : 0;
+      chart.timeScale().setVisibleLogicalRange({ from: saved.logical.from + shift + offset,
+        to: saved.logical.to + shift + offset });
+    } else if (saved.time) {
+      chart.timeScale().setVisibleRange(saved.time);
+    } else chart.timeScale().setVisibleLogicalRange(saved.logical);
   }
 
   function fmtPrice(v) {
@@ -221,7 +247,9 @@ window.HTF = (() => {
   }
 
   return {
-    getToken, ensureToken, api, connectWs, fmtPrice, fmtTime, parseMskLocal, esc, tradingviewUrl,
+    getToken, ensureToken, api, connectWs, isWsConnected: () => !!currentSocket && currentSocket.readyState === 1,
+    fmtPrice, fmtTime, parseMskLocal, esc, tradingviewUrl,
+    captureChartRange, restoreChartRange,
     chartTheme, openModal, closeModal, setConnectionState,
     theme: { get: themeGet, set: themeSet, apply: themeApply },
   };

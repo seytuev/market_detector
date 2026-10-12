@@ -19,7 +19,7 @@ from typing import Optional
 import httpx
 
 from ..models import Candle, Instrument, now_ms
-from .base import TIMEFRAME_MS, AdapterError, QuoteTick
+from .base import TIMEFRAME_MS, AdapterError, QuoteTick, retry_after_seconds
 
 # Маппинг внутренних таймфреймов на коды Binance
 INTERVAL_MAP = {"H1": "1h", "H4": "4h", "D1": "1d", "W1": "1w"}
@@ -59,7 +59,8 @@ class BinanceSpotAdapter:
                     f"{params.get('symbol')} (код -1121)"
                 )
             raise AdapterError(
-                f"binance: HTTP {resp.status_code} при {path}: код={code} {msg}"
+                f"binance: HTTP {resp.status_code} при {path}: код={code} {msg}",
+                retry_after=retry_after_seconds(resp),
             )
         return resp
 

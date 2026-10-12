@@ -93,6 +93,7 @@ const DATA_STATE_RU = {
 const DATA_STATE_REASON_RU = {
   no_quote: 'нет котировки',
   no_h1_candles: 'нет свечей H1',
+  current_candle_pending: 'ожидается текущая свеча H1',
   quote_stale: 'котировка устарела',
   h1_stale: 'свечи H1 устарели',
   source_stale: 'источник недоступен',
@@ -438,7 +439,7 @@ async function reloadCurrent({ keepRange }) {
   // применяется только последний запрос и только для текущего инструмента
   const req = ++state.currentReqSeq;
   const stale = () => req !== state.currentReqSeq || id !== state.instrumentId;
-  const keep = keepRange && state.chart ? state.chart.timeScale().getVisibleLogicalRange() : null;
+  const keep = keepRange && state.chart ? HTF.captureChartRange(state.chart, state.candles) : null;
   const keepFocus = keepRange ? state.priceFocus : null;
   // F04/§13: снимок /current, слои (chart/journal) и список активов связаны
   // одной версией state_version (общий счётчик state_seq); расхождение
@@ -451,17 +452,19 @@ async function reloadCurrent({ keepRange }) {
     const h1q = window.H1Layers
       ? window.H1Layers.queryString(Object.assign({ context_id: obsId || undefined }, visibleWindowMs()))
       : '';
-    const [layers, candles, journal, assets, h1] = await Promise.all([
+    const [layers, candleBundle, journal, assets, h1] = await Promise.all([
       obsId ? api(`/api/ltf/observations/${obsId}/chart`) : Promise.resolve(null),
-      api(`/api/candles?instrument_id=${id}&timeframe=H1&limit=2500`),
+      api(`/api/candles?instrument_id=${id}&timeframe=H1&limit=2500&with_version=true`),
       obsId ? api(`/api/ltf/observations/${obsId}/journal`) : Promise.resolve(null),
       api('/api/ltf/instruments'),
       api(`/api/ltf/instruments/${id}/structure?${h1q}`).catch(() => ({ __error: true })),
     ]);
     if (stale()) return null;
-    return { view, layers, candles, journal, assets, h1 };
+    return { view, layers, candles: candleBundle.candles, candleVersion: candleBundle.state_version, journal, assets, h1 };
   };
   const mismatch = (b) =>
+    b.candleVersion !== b.view.state_version ||
+    (b.h1 && !b.h1.__error && b.h1.snapshot && b.h1.snapshot.state_version !== b.view.state_version) ||
     b.assets.state_version !== b.view.state_version ||
     (b.layers && b.layers.state_version !== b.view.state_version) ||
     (b.journal && b.journal.state_version !== b.view.state_version);
@@ -471,15 +474,11 @@ async function reloadCurrent({ keepRange }) {
     bundle = await loadBundle(); // один повтор всего пакета
     if (!bundle) return;
     if (mismatch(bundle)) {
-      // запись идёт непрерывно — применяем последний снимок /current и его
-      // слои; следующее WS-сообщение поднимет версию ещё раз
-      console.debug('ltf: state_version пакета расходятся после повтора',
-        { current: bundle.view.state_version,
-          assets: bundle.assets.state_version,
-          layers: bundle.layers && bundle.layers.state_version,
-          journal: bundle.journal && bundle.journal.state_version });
+      // Keep the last coherent snapshot. The recovery loop will retry.
+      throw new Error('Данные обновляются; повторное чтение снимка');
     }
   }
+  if (stale() || (state.appliedSeq && bundle.view.state_version < state.appliedSeq)) return;
   state.current = bundle.view;
   state.lastPrice = bundle.view.price;
   state.layers = bundle.layers;
@@ -1255,7 +1254,9 @@ function setCandles(opts = {}) {
     return;
   }
   const keep = opts.visibleRange;
-  if (keep && keep.from != null && keep.to != null) {
+  if (keep && keep.logical) {
+    HTF.restoreChartRange(state.chart, state.candles, keep);
+  } else if (keep && keep.from != null && keep.to != null) {
     // §4.1: ручной масштаб не сбрасываем на тиках/обновлениях
     state.chart.timeScale().setVisibleLogicalRange(keep);
   } else {
@@ -1678,11 +1679,14 @@ function drawLtfLayers() {
 
   if (!window.H1Layers || !state.h1Layers) return;
   const viewRange = ts.getVisibleRange();
+  let timeScaleHeight = 0;
+  try { timeScaleHeight = state.chart.timeScale().height() || 0; } catch (e) { timeScaleHeight = 0; }
+  const paneHeight = height - timeScaleHeight > 20 ? height - timeScaleHeight : height;
   let priceMin = null;
   let priceMax = null;
   const top = state.candleSeries.coordinateToPrice(0);
-  const bottom = state.candleSeries.coordinateToPrice(height);
-  if (top != null && bottom != null) {
+  const bottom = state.candleSeries.coordinateToPrice(Math.max(0, paneHeight - 1));
+  if (top != null && bottom != null && top !== bottom) {
     priceMin = Math.min(top, bottom);
     priceMax = Math.max(top, bottom);
   }
@@ -1692,7 +1696,7 @@ function drawLtfLayers() {
     xOf,
     yOf,
     paneRight,
-    height,
+    height: paneHeight,
     fmtPrice,
     fmtTime,
     view: {
@@ -1989,6 +1993,7 @@ function setupLtfWorkspace() {
 // ---------------------------------------------------------------------------
 
 function handleWsMessage(data) {
+  if (window.LFDataSync) LFDataSync.onWs(data);
   // F04: каждое WS-сообщение несёт state_seq; сообщение старше уже
   // применённого снимка — позднее эхо, перезагружать экран не нужно
   if (typeof data.state_seq === 'number' && state.appliedSeq &&
@@ -2119,10 +2124,13 @@ async function main() {
   }
   // после reconnect — полный снимок: пропущенные сообщения не должны
   // удерживать отменённый сценарий текущим (§14, п.18)
-  state.ws = window.HTF.connectWs(handleWsMessage, $('ws-indicator'), async (isReconnect) => {
-    if (!isReconnect) return;
+  LFDataSync.init({ selected: () => state.instrumentId, reload: async () => {
     await loadAssets();
     if (state.instrumentId) await reloadCurrent({ keepRange: true });
+  } });
+  state.ws = window.HTF.connectWs(handleWsMessage, $('ws-indicator'), async (isReconnect) => {
+    if (!isReconnect) return;
+    await LFDataSync.snapshot({ force: true });
   });
 }
 

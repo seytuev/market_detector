@@ -165,6 +165,16 @@ check('непостроенный PD не подменяет старые чис
     .includes('origin_unresolved'));
 check('график H1 кадрирует ногу в секундах',
   app.includes('function applyH1LegFrame') && app.includes('frame_from) / 1000'));
+check('кадр ноги не сбрасывается догрузкой, пока пользователь сам не сдвинул график',
+  app.includes('holdForLeg') && app.includes('keepUserRange') && app.includes('setVisibleLogicalRange'));
+check('заливка OB и FVG читается, div остаётся без своей заливки',
+  code.includes('0.28') && code.includes('0.22') && !code.includes(',0.09)'));
+check('кромка шкалы не считается зоной на экране',
+  H.clipZoneBox(-40, 3, 400) === null && H.clipZoneBox(396, 430, 400) === null
+  && H.clipZoneBox(10, 24, 400) && H.clipZoneBox(10, 24, 400).height === 14
+  && H.clipZoneBox(-30, 120, 400).height === 120);
+check('страница LTF мерит цены по панели, а не по шкале времени',
+  ltf.includes('paneHeight') && ltf.includes('coordinateToPrice(Math.max(0, paneHeight - 1))'));
 check('страница LTF предпочитает снимок ноги',
   ltf.indexOf('layers.setup') !== -1 && ltf.indexOf('layers.setup') < ltf.indexOf('const cur ='));
 

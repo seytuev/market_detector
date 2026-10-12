@@ -21,7 +21,7 @@ from typing import Optional
 import httpx
 
 from ..models import Candle, Instrument, now_ms
-from .base import TIMEFRAME_MS, AdapterError, QuoteTick
+from .base import TIMEFRAME_MS, AdapterError, QuoteTick, retry_after_seconds
 
 # Маппинг внутренних таймфреймов на коды Bybit V5
 INTERVAL_MAP = {"H1": "60", "H4": "240", "D1": "D", "W1": "W"}
@@ -64,7 +64,8 @@ class BybitSpotAdapter:
             raise AdapterError(f"bybit: сеть/таймаут при {path}: {e}") from e
         if resp.status_code != 200:
             raise AdapterError(
-                f"bybit: HTTP {resp.status_code} при {path}: {resp.text[:200]}"
+                f"bybit: HTTP {resp.status_code} при {path}: {resp.text[:200]}",
+                retry_after=retry_after_seconds(resp),
             )
         try:
             payload = resp.json()

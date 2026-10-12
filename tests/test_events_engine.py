@@ -352,22 +352,36 @@ def test_runner_is_idempotent_and_api_hides_the_key(tmp_path):
     settings.coinglass_api_key = "should-not-leak"
     settings.events_notify_enabled = False
 
-    def fetcher():
-        return {
-            "liq": [{
-                "time": T0 + 4 * DAY_MS,
-                "aggregated_long_liquidation_usd": "10",
-                "aggregated_short_liquidation_usd": "5",
-            }],
-            "oi_coin": [{"time": T0 + 4 * DAY_MS, "open": "1", "high": "1.2",
-                         "low": "0.9", "close": "1.1"}],
-            "oi_usd": [{"time": T0 + 4 * DAY_MS, "open": "10", "high": "12",
-                        "low": "9", "close": "11"}],
-            "funding": [{"time": T0 + 4 * DAY_MS, "open": "0.01", "high": "0.01",
-                         "low": "0.01", "close": "0.002"}],
-            "plan": {"level": "HOBBYIST"},
-            "limits": {"api-key-max-limit": "30"},
-        }
+    def fetcher_liq(_cg, symbol, interval, limit):
+        if interval != "1d" or symbol != "BTC":
+            return []
+        return [{
+            "time": T0 + 4 * DAY_MS,
+            "aggregated_long_liquidation_usd": "10",
+            "aggregated_short_liquidation_usd": "5",
+        }]
+
+    def fetcher_oi(_cg, symbol, unit, interval, limit):
+        if symbol != "BTC" or interval != "1d":
+            return []
+        if unit == "coin":
+            return [{"time": T0 + 4 * DAY_MS, "open": "1", "high": "1.2",
+                     "low": "0.9", "close": "1.1"}]
+        return [{"time": T0 + 4 * DAY_MS, "open": "10", "high": "12",
+                 "low": "9", "close": "11"}]
+
+    def fetcher_funding(_cg, exchange, symbol, interval, limit):
+        return [{"time": T0 + 4 * DAY_MS, "open": "0.01", "high": "0.01",
+                 "low": "0.01", "close": "0.002"}]
+
+    fetcher = {
+        "pairs": lambda _settings: {"BTCUSDT"},
+        "prices": lambda _settings, pairs, start, end: ({}, list(pairs)),
+        "liq": fetcher_liq,
+        "oi": fetcher_oi,
+        "funding": fetcher_funding,
+        "cmc_listings": lambda: None,
+    }
 
     first = run_cycle(db, settings, fetcher=fetcher, now_ms=NOW)
     written = len(list_journal(db, "BTC"))

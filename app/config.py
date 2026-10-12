@@ -478,11 +478,35 @@ class Settings:
     events_enabled: bool = field(
         default_factory=lambda: parse_bool(_env("EVENTS_ENABLED", "1")))
     events_notify_enabled: bool = field(
-        default_factory=lambda: parse_bool(_env("EVENTS_NOTIFY_ENABLED", "0")))
+        default_factory=lambda: parse_bool(_env("EVENTS_NOTIFY_ENABLED", "1")))
     events_strategy_gate_enabled: bool = field(
         default_factory=lambda: parse_bool(_env("EVENTS_STRATEGY_GATE_ENABLED", "1")))
     events_poll_seconds: int = field(
-        default_factory=lambda: int(_env("EVENTS_POLL_SECONDS", "900")))
+        default_factory=lambda: int(_env("EVENTS_POLL_SECONDS", "60")))
+    # Движок «События и время» v2 (спека 2026-10-11): память, корзина, пороги,
+    # группировка публикаций и бюджеты источников — проектные defaults (§1).
+    events_memory_hours: int = field(
+        default_factory=lambda: int(_env("EVENTS_MEMORY_HOURS", "240")))
+    events_basket_size: int = field(
+        default_factory=lambda: int(_env("EVENTS_BASKET_SIZE", "20")))
+    events_basket_min_coverage: float = field(
+        default_factory=lambda: float(_env("EVENTS_BASKET_MIN_COVERAGE", "0.8")))
+    events_basket_static: str = field(
+        default_factory=lambda: _env("EVENTS_BASKET_STATIC", ""))
+    events_group_seconds: int = field(
+        default_factory=lambda: int(_env("EVENTS_GROUP_SECONDS", "60")))
+    events_stats_min_n: int = field(
+        default_factory=lambda: int(_env("EVENTS_STATS_MIN_N", "100")))
+    events_stats_change_pp: float = field(
+        default_factory=lambda: float(_env("EVENTS_STATS_CHANGE_PP", "5")))
+    events_liq_baseline_days: int = field(
+        default_factory=lambda: int(_env("EVENTS_LIQ_BASELINE_DAYS", "30")))
+    events_liq_symbol_budget: int = field(
+        default_factory=lambda: int(_env("EVENTS_LIQ_SYMBOL_BUDGET", "8")))
+    events_digest_gap_seconds: int = field(
+        default_factory=lambda: int(_env("EVENTS_DIGEST_GAP_SECONDS", "600")))
+    events_price_max_age_seconds: int = field(
+        default_factory=lambda: int(_env("EVENTS_PRICE_MAX_AGE_SECONDS", "7200")))
 
     def effective_base_url(self) -> str:
         """URL для внешних ссылок. Без HTF_PUBLIC_BASE_URL — локальный;

@@ -241,6 +241,20 @@
     return null;
   }
 
+  // Прямоугольник в координатах панели. Край шкалы (зона целиком выше или
+  // ниже, либо только кромка в поле допуска) — не зона на экране: её место
+  // в счётчике «Вне экрана», иначе на широкой шкале остаются полоски.
+  function clipZoneBox(y1, y2, height) {
+    if (y1 == null || y2 == null || !(height > 0)) return null;
+    const rawTop = Math.min(y1, y2);
+    const rawBottom = Math.max(y1, y2);
+    if (rawBottom <= 0 || rawTop >= height) return null;
+    const top = Math.max(0, rawTop);
+    const bottom = Math.min(height, rawBottom);
+    if (bottom - top < 6 && (rawTop < 0 || rawBottom > height)) return null;
+    return { top, height: Math.max(1, bottom - top) };
+  }
+
   function inViewport(zone, view) {
     if (!view) return true;
     const from = zone.display_from || zone.formed_at || 0;
@@ -488,18 +502,13 @@
           div.onclick = () => ctx.onZone && ctx.onZone(zone, adm);
           decorate(div, zone, adm, { left: x1, right: x2, top: y, bottom: y }, title, selected);
         } else {
-          const y1 = yOf(zone.upper);
-          const y2 = yOf(zone.lower);
-          if (y1 == null && y2 == null) {
+          const box = clipZoneBox(yOf(zone.upper), yOf(zone.lower), height);
+          if (!box) {
             outside.push(zone);
             return;
           }
-          const top = Math.max(0, Math.min(y1 == null ? 0 : y1, y2 == null ? height : y2));
-          const bottom = Math.min(height, Math.max(y1 == null ? 0 : y1, y2 == null ? height : y2));
-          if (bottom <= 0 || top >= height) {
-            outside.push(zone);
-            return;
-          }
+          const top = box.top;
+          const bottom = top + box.height;
           const div = add('h1-zone zone-rect z-' + String(zone.type).toLowerCase()
             + ' dir-' + (zone.direction === 'bear' ? 'bear' : 'bull')
             + ' tf-' + (['D1', 'W1'].includes(zone.timeframe) ? 'htf' : 'ltf')
@@ -507,17 +516,19 @@
             + (zone.lifecycle === 'ended' ? ' status-completed' : '')
             + (selected ? ' selected' : ''));
           div.style.top = top + 'px';
-          div.style.height = Math.max(1, bottom - top) + 'px';
+          div.style.height = box.height + 'px';
           div.style.left = x1 + 'px';
           div.style.width = Math.max(8, x2 - x1) + 'px';
           div.title = title;
           div.onclick = () => ctx.onZone && ctx.onZone(zone, adm);
-          // заливка — по направлению зоны, тон и темы берутся из CSS-токенов
+          // Заливку пишет один канвас на цвет: пересечения одного типа не
+          // темнят дважды. Div остаётся прозрачным и держит только рамку.
           const rgb = (name, fallback) =>
             (String(getComputedStyle(doc.documentElement).getPropertyValue(name).trim()) || fallback);
           const bull = rgb('--zone-bull-rgb', '22, 146, 100');
           const bear = rgb('--zone-bear-rgb', '214, 69, 77');
-          const color = `rgba(${zone.direction === 'bear' ? bear : bull},0.09)`;
+          const alpha = String(zone.type || '').toLowerCase() === 'fvg' ? 0.22 : 0.28;
+          const color = `rgba(${zone.direction === 'bear' ? bear : bull},${alpha})`;
           const fillKey = zone.candidate || zone.lifecycle === 'ended' ? 'rgba(138,148,166,0.025)' : color;
           if (!fills[fillKey]) fills[fillKey] = [];
           fills[fillKey].push({ left: x1, top, width: x2 - x1, height: bottom - top });
@@ -762,6 +773,7 @@
     caption,
     breakPlan,
     zonePlan,
+    clipZoneBox,
     placeZoneLabel,
     mergeCaption,
     emptyZoneMessage,

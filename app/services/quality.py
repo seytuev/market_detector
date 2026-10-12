@@ -93,6 +93,25 @@ def _tf_channel(db: Database, settings, instrument_id: int,
         return _channel("missing", threshold_s=limit_ms / 1000,
                         reason=f"no_{tf.lower()}_candles")
     age_s = round((now - last.close_time) / 1000, 1)
+    from .data_sync import period_open, read_json
+    sync = read_json(db, f"data_sync:channel:{instrument_id}:{tf}")
+    if sync:
+        head = db.last_candle(instrument_id, tf, closed_only=False)
+        expected_open = period_open(tf, now, head.open_time if head else None)
+        details = {"expected_close": expected_open - 1, "last_attempt_at": sync.get("last_attempt_at"),
+                   "last_success_at": sync.get("last_success_at"), "error": sync.get("error")}
+        if sync.get("processing") or sync.get("error_stage") == "processing":
+            return _channel("lagging", last_at=last.close_time, age_s=age_s,
+                            reason="processing_lag", **details)
+        if sync.get("error"):
+            return _channel("stale", last_at=last.close_time, age_s=age_s,
+                            reason="source_stale", **details)
+        if last.close_time < expected_open - 1:
+            return _channel("stale", last_at=last.close_time, age_s=age_s,
+                            reason=f"{tf.lower()}_stale", **details)
+        if head is None or head.closed or head.open_time != expected_open:
+            return _channel("lagging", last_at=last.close_time, age_s=age_s,
+                            reason="current_candle_pending", **details)
     if now - last.close_time > limit_ms:
         return _channel("stale", last_at=last.close_time, age_s=age_s,
                         threshold_s=limit_ms / 1000,
@@ -171,6 +190,8 @@ def data_quality(db: Database, settings, instrument_id: int,
         return {"state": "replaying", "reason": "replay_in_progress", **out}
     if channels["h1"]["status"] == "missing":
         return {"state": "data_pending", "reason": "no_h1_candles", **out}
+    if channels["h1"]["status"] == "lagging":
+        return {"state": "data_pending", "reason": channels["h1"]["reason"], **out}
     if channels["quote"]["status"] == "missing":
         return {"state": "data_pending", "reason": "no_quote", **out}
     if channels["quote"]["status"] == "stale":

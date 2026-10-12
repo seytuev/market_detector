@@ -48,6 +48,11 @@
     </div>
   </aside>
   <div class="shell">
+    <div class="data-sync-bar" aria-label="Синхронизация данных">
+      <button type="button" id="btn-data-sync" class="btn" title="Свечи и котировки всех включённых основных активов">Обновить данные</button>
+      <span id="data-sync-status" role="status" aria-live="polite">Свечи и котировки всех включённых активов</span>
+      <details><summary>Свежесть данных</summary><div id="data-sync-details"></div></details>
+    </div>
     <div class="shell-main" id="main">
 
   <section id="view-now" class="view active">
@@ -456,6 +461,7 @@
   <button id="btn-settings" class="hidden" type="button"></button>
 
   <script src="/common.js"></script>
+  <script src="/data_sync.js"></script>
   <script src="/messages.js"></script>
   <script src="/h1_layers.js"></script>
   <script src="/app.js"></script>

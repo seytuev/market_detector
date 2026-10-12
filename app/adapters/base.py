@@ -13,6 +13,8 @@
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from dataclasses import dataclass
 from typing import Optional, Protocol
 
@@ -59,6 +61,26 @@ class QuoteTick:
 class AdapterError(Exception):
     """Явная ошибка адаптера: несуществующий инструмент, недоступность
     источника, неожиданный формат ответа. Фолбэков на другие рынки нет (§1)."""
+
+    def __init__(self, message, *, retry_after=None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+def retry_after_seconds(response):
+    """Exchange throttling, including HTTP-date Retry-After headers."""
+    if response.status_code not in (418, 429, 503):
+        return None
+    raw = response.headers.get("Retry-After")
+    if not raw:
+        return 15.0
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        try:
+            return max(0.0, (parsedate_to_datetime(raw) - datetime.now(timezone.utc)).total_seconds())
+        except (ValueError, TypeError, OverflowError):
+            return 15.0
 
 
 class MarketDataAdapter(Protocol):

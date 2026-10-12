@@ -21,6 +21,7 @@
   const DATA_STATE_REASON_RU = {
     no_quote: 'нет котировки',
     no_h1_candles: 'нет свечей H1',
+    current_candle_pending: 'ожидается текущая свеча H1',
     quote_stale: 'котировка устарела',
     h1_stale: 'свечи H1 устарели',
     source_stale: 'источник недоступен',

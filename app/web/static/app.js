@@ -54,6 +54,12 @@ const state = {
   h1HistoryTimer: null,
   h1Settings: null,
   loadedCandleTf: null,
+  loadedCandleInstrument: null,
+  candleReq: 0,
+  zoneReq: 0,
+  eventReq: 0,
+  candidateReq: 0,
+  candleVersion: 0,
 };
 
 // Режим «Проверка» (U04): собственный график + очередь + инспектор в одном
@@ -261,9 +267,12 @@ function initChart() {
       return { priceRange: { minValue: mid - span * 1.6, maxValue: mid + span * 1.6 } };
     },
   });
-  // перерисовка зон при прокрутке/масштабировании по времени
+  // Перерисовка зон при сдвиге времени. Свой кадр ноги и догрузка свечей
+  // тоже шлют это событие — прокруткой считаем только жест на графике.
   state.chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
-    if (!state.h1ApplyingFrame && state.h1FrameKey) state.h1UserPanned = true;
+    if (!state.h1ApplyingFrame && state.h1FrameKey && (state.pointerDown || state.h1WheelZoom)) {
+      state.h1UserPanned = true;
+    }
     drawZones();
     scheduleH1HistoryReload();
   });
@@ -282,6 +291,11 @@ function initChart() {
   });
   const chartWrap = $('chart-container');
   chartWrap.addEventListener('pointerdown', () => { state.pointerDown = true; });
+  chartWrap.addEventListener('wheel', () => {
+    state.h1WheelZoom = true;
+    clearTimeout(state.h1WheelTimer);
+    state.h1WheelTimer = setTimeout(() => { state.h1WheelZoom = false; }, 400);
+  }, { passive: true });
   window.addEventListener('pointerup', () => {
     if (!state.pointerDown) return;
     state.pointerDown = false;
@@ -321,22 +335,35 @@ function initChart() {
 
 async function loadCandles() {
   if (!state.instrumentId) return;
-  const limit = state.timeframe === 'H1' ? 1500 : 500;
-  const preserve = state.loadedCandleTf === 'H1' && state.timeframe === 'H1' && state.chart
+  const id = state.instrumentId;
+  const tf = state.timeframe;
+  const req = ++state.candleReq;
+  const limit = tf === 'H1' ? 1500 : 500;
+  const preserve = state.loadedCandleTf === tf && state.loadedCandleInstrument === id && state.chart
     && state.candles.length
-    ? state.chart.timeScale().getVisibleLogicalRange()
+    ? HTF.captureChartRange(state.chart, state.candles)
     : null;
-  state.candles = await api(
-    `/api/candles?instrument_id=${state.instrumentId}&timeframe=${state.timeframe}&limit=${limit}`);
-  state.loadedCandleTf = state.timeframe;
+  const response = await api(
+    `/api/candles?instrument_id=${id}&timeframe=${tf}&limit=${limit}&with_version=true`);
+  if (req !== state.candleReq || id !== state.instrumentId || tf !== state.timeframe) return;
+  if (state.loadedCandleInstrument === id && state.loadedCandleTf === tf && response.state_version < state.candleVersion) return;
+  state.candles = response.candles;
+  state.candleVersion = response.state_version;
+  state.loadedCandleTf = tf;
+  state.loadedCandleInstrument = id;
   state.candleSeries.setData(state.candles);
   if (state.candles.length) {
     state.lastPrice = state.candles[state.candles.length - 1].close;
     updateLastPrice();
   }
-  if (preserve && preserve.from != null && preserve.to != null) {
-    state.chart.timeScale().setVisibleLogicalRange(preserve);
-  } else {
+  // Пока пользователь не сдвинул H1 сам, диапазон задаёт кадр ноги.
+  // Иначе fitContent на 1500 свечей (и его восстановление после догрузки)
+  // снова растягивает шкалу, и зоны входа становятся полосками.
+  const holdForLeg = state.chartMode === 'h1' && !state.h1UserPanned
+    && state.h1Layers && state.h1Layers.setup && state.h1Layers.setup.frame_from != null;
+  if (!holdForLeg && preserve) {
+    HTF.restoreChartRange(state.chart, state.candles, preserve);
+  } else if (!holdForLeg) {
     state.chart.timeScale().fitContent();
   }
   // пересчёт координат зон после полного макета графика
@@ -349,10 +376,13 @@ async function loadCandles() {
 
 async function loadZones() {
   if (!state.instrumentId) return;
+  const id = state.instrumentId;
+  const req = ++state.zoneReq;
   const [zones, grouped] = await Promise.all([
-    api(`/api/zones?instrument_id=${state.instrumentId}`),
-    api(`/api/zones/grouped?instrument_id=${state.instrumentId}`),
+    api(`/api/zones?instrument_id=${id}`),
+    api(`/api/zones/grouped?instrument_id=${id}`),
   ]);
+  if (id !== state.instrumentId || req !== state.zoneReq) return;
   state.zones = zones;
   state.groups = grouped.groups.filter((g) => g.zones.length > 1);
   drawZones();
@@ -679,13 +709,20 @@ function showH1Card(html) {
   };
 }
 
-function h1VisibleView(height) {
+function h1PaneHeight(fullHeight) {
+  let timeH = 0;
+  try { timeH = state.chart.timeScale().height() || 0; } catch (e) { timeH = 0; }
+  const pane = fullHeight - timeH;
+  return pane > 20 ? pane : fullHeight;
+}
+
+function h1VisibleView(paneHeight) {
   const range = state.chart.timeScale().getVisibleRange();
   let priceMin = null;
   let priceMax = null;
   const top = state.candleSeries.coordinateToPrice(0);
-  const bottom = state.candleSeries.coordinateToPrice(height);
-  if (top != null && bottom != null) {
+  const bottom = state.candleSeries.coordinateToPrice(Math.max(0, paneHeight - 1));
+  if (top != null && bottom != null && top !== bottom) {
     priceMin = Math.min(top, bottom);
     priceMax = Math.max(top, bottom);
   }
@@ -706,6 +743,8 @@ function focusH1Zone(zone) {
   const first = state.candles[0].time;
   state.h1SelectedZoneId = zone.id;
   state.h1PriceFocus = { lower: zone.lower, upper: zone.upper };
+  state.h1UserPanned = true;
+  if (state.h1Layers && state.h1Layers.setup) state.h1FrameKey = state.h1Layers.setup.movement_id;
   state.chart.timeScale().setVisibleRange({
     from: Math.max(first, origin - 48 * 3600),
     to: Math.min(last + 4 * 3600, Math.max(origin + 96 * 3600, first + 3600)),
@@ -784,16 +823,17 @@ function drawH1Breaks(overlay, ts, paneRight, height) {
     hideH1Chrome();
     return;
   }
+  const paneHeight = h1PaneHeight(height);
   window.H1Layers.draw(overlay, {
     layers,
     settings: window.H1Layers.loadSettings(),
     xOf: (ms) => (ms == null ? null : ts.timeToCoordinate(Math.floor(Number(ms) / 1000))),
     yOf: (price) => state.candleSeries.priceToCoordinate(price),
     paneRight,
-    height,
+    height: paneHeight,
     fmtPrice,
     fmtTime,
-    view: h1VisibleView(height),
+    view: h1VisibleView(paneHeight),
     selectedZoneId: state.h1SelectedZoneId,
     loadError: state.h1LoadError,
     transitionEl: $('h1-transition'),
@@ -1380,6 +1420,8 @@ function showGroupMembers(group) {
 // ---------------------------------------------------------------------------
 
 async function loadEvents() {
+  const id = state.instrumentId;
+  const req = ++state.eventReq;
   const assetQ = state.instrumentId
     ? `/api/events?limit=50&instrument_id=${state.instrumentId}`
     : '/api/events?limit=50';
@@ -1387,6 +1429,7 @@ async function loadEvents() {
     api(assetQ),
     api('/api/events?limit=50'),
   ]);
+  if (id !== state.instrumentId || req !== state.eventReq) return;
   renderEvents(assetEvents, allEvents);
 }
 
@@ -1468,7 +1511,10 @@ function displayPair(symbol) {
 }
 
 async function loadCandidates() {
+  const id = state.instrumentId;
+  const req = ++state.candidateReq;
   const list = (await api('/api/candidates')).filter(isHtf); // только HTF
+  if (id !== state.instrumentId || req !== state.candidateReq) return;
   reviewState.all = list;
   const mine = state.instrumentId
     ? list.filter((z) => z.instrument_id === state.instrumentId)
@@ -2462,6 +2508,7 @@ const wsExtraHandlers = [];
 function registerWsHandler(fn) { wsExtraHandlers.push(fn); }
 
 function handleWsMessage(data) {
+  if (window.LFDataSync) LFDataSync.onWs(data);
   if (data.type === 'price') {
     if (data.instrument_id === state.instrumentId && data.price) {
       state.lastPrice = data.price;
@@ -2504,7 +2551,9 @@ function handleWsMessage(data) {
 
 function connectWs() {
   // соединение/переподключение/индикатор — в common.js (window.HTF)
-  state.ws = HTF.connectWs(handleWsMessage, $('ws-indicator'));
+  state.ws = HTF.connectWs(handleWsMessage, $('ws-indicator'), (isReconnect) => {
+    if (isReconnect && window.LFDataSync) return LFDataSync.snapshot({ force: true });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -2601,6 +2650,7 @@ const DESK_BASIS_RU = {
 const DESK_DATA_REASON_RU = {
   no_quote: 'нет котировки',
   no_h1_candles: 'нет свечей H1',
+  current_candle_pending: 'ожидается текущая свеча H1',
   quote_stale: 'котировка устарела',
   h1_stale: 'свечи H1 устарели',
   source_stale: 'источник недоступен',
@@ -3227,25 +3277,54 @@ function applyH1LegFrame(layers) {
     state.h1FrameInstrument = state.instrumentId;
     state.h1UserPanned = false;
     state.h1FrameKey = null;
+    state.h1FrameRetried = false;
   }
   if (state.h1UserPanned && state.h1FrameKey === setup.movement_id) return;
-  const from = Math.floor(Number(setup.frame_from) / 1000);
-  const first = state.candles[0].time;
-  const last = state.candles[state.candles.length - 1].time;
+  const fromSec = Math.floor(Number(setup.frame_from) / 1000);
+  const candles = state.candles;
+  let fromIdx = 0;
+  for (let i = 0; i < candles.length; i += 1) {
+    if (candles[i].time >= fromSec) { fromIdx = i; break; }
+  }
+  fromIdx = Math.max(0, fromIdx - 6);
+  // Запас справа только логическим индексом: setVisibleRange за последней
+  // свечой обрезается или бросает исключение, и кадр ноги не применяется.
+  const toIdx = candles.length - 1 + 10;
   state.h1ApplyingFrame = true;
+  state.h1PriceFocus = null;
   try {
-    state.chart.timeScale().setVisibleRange({
-      from: Math.max(first, from),
-      to: last + 4 * 3600,
-    });
+    state.chart.timeScale().setVisibleLogicalRange({ from: fromIdx, to: toIdx });
     state.h1FrameKey = setup.movement_id;
   } catch (e) { /* шкала ещё не готова */ }
-  state.h1ApplyingFrame = false;
+  const generation = (state.h1FrameGen = (state.h1FrameGen || 0) + 1);
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      if (generation !== state.h1FrameGen) return;
+      state.h1ApplyingFrame = false;
+      if (state.chartMode !== 'h1') return;
+      const range = state.chart.timeScale().getVisibleLogicalRange();
+      const wide = range && candles.length > 48 && (range.to - range.from) > candles.length * 0.85;
+      if (wide && !state.h1UserPanned && !state.h1FrameRetried && state.h1Layers) {
+        state.h1FrameRetried = true;
+        applyH1LegFrame(state.h1Layers);
+        return;
+      }
+      state.h1FrameRetried = false;
+      drawZones();
+    });
+  });
 }
 
 async function reloadAll() {
+  const id = state.instrumentId;
   await loadCandles();
+  if (id !== state.instrumentId) return;
   await Promise.all([loadZones(), loadEvents(), loadCandidates(), loadH1Markers()]);
+  if (id === state.instrumentId && state.chartMode === 'h1' && state.h1Layers && state.h1Layers.snapshot &&
+      state.h1Layers.snapshot.state_version != null && state.h1Layers.snapshot.state_version !== state.candleVersion) {
+    await loadCandles();
+    if (id === state.instrumentId) await loadH1Markers();
+  }
 }
 
 function initSettingsSections() {
@@ -3459,14 +3538,28 @@ async function main() {
   }
   await loadLabels();
   await reloadAll();
+  LFDataSync.init({
+    selected: () => state.instrumentId,
+    reload: async () => {
+      const saved = state.chart && state.candles.length ? HTF.captureChartRange(state.chart, state.candles) : null;
+      const keepUserRange = state.chartMode !== 'h1' || !!state.h1UserPanned;
+      const id = state.instrumentId;
+      await reloadAll();
+      await loadDeskExtras();
+      if (window.LFNow) await LFNow.refresh();
+      if (state.selectedZoneId) await loadZoneDetail(state.selectedZoneId, false);
+      if (id !== state.instrumentId || !state.chart) return;
+      if (keepUserRange && saved) HTF.restoreChartRange(state.chart, state.candles, saved);
+      else if (state.chartMode === 'h1' && state.h1Layers) applyH1LegFrame(state.h1Layers);
+    },
+  });
   connectWs();
   registerWsHandler(deskOnWs);
   loadDeskExtras().catch((e) => console.warn('desk extras:', e));
   // возраст котировки и резервный опрос, если WebSocket потерян
   setInterval(() => {
     if (isDeskActive()) renderDeskQuoteAge();
-    const ws = state.ws;
-    const down = !ws || ws.readyState !== 1;
+    const down = !HTF.isWsConnected();
     if (!down) return;
     if (isDeskActive()) loadDeskExtras().catch(() => {});
   }, 15000);
