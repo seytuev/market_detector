@@ -402,6 +402,16 @@ function swatchDirClass(z) {
   const invert = z.type === 'BSL' || z.type === 'SSL';
   return (bear !== invert) ? 'dir-bear' : 'dir-bull';
 }
+window.swatchDirClass = swatchDirClass;
+
+function safeSwatchClass(z) {
+  try {
+    const fn = typeof swatchDirClass === 'function' ? swatchDirClass : window.swatchDirClass;
+    return fn ? fn(z) : '';
+  } catch (err) {
+    return '';
+  }
+}
 
 function drawZones() {
   const overlay = $('zone-overlay');
@@ -1024,6 +1034,7 @@ const ZONE_EMPTY_RU = {
 function renderZonesTable() {
   const tbody = $('zones-table') && $('zones-table').querySelector('tbody');
   const list = $('zone-list');
+  try {
   const zones = filteredZones();
   const counts = zoneBucketCounts();
   if ($('rail-count-live')) $('rail-count-live').textContent = counts.live ? String(counts.live) : '';
@@ -1041,7 +1052,7 @@ function renderZonesTable() {
       card.type = 'button';
       card.className = 'zone-card' + (z.id === state.selectedZoneId ? ' selected' : '');
       card.innerHTML =
-        `<span class="zc-top"><span class="swatch ${swatchDirClass(z)}"></span>` +
+        `<span class="zc-top"><span class="swatch ${safeSwatchClass(z)}"></span>` +
         `<span class="zc-type">${z.type.toUpperCase()} · ${z.timeframe}</span>` +
         `<span class="dir ${z.direction}" title="${z.direction === 'bear' ? 'Медвежья зона' : 'Бычья зона'}">${z.direction === 'bear' ? '↓' : '↑'}</span>` +
         `<span class="zc-status">${esc(STATUS_RU[z.status] || z.status)}${z.display_until ? ' · завершена' : ''}</span></span>` +
@@ -1088,7 +1099,17 @@ function renderZonesTable() {
     tbody.appendChild(tr);
   }
   renderHeaderStats();
-  $('zones-count').textContent = zones.length;
+  if ($('zones-count')) $('zones-count').textContent = zones.length;
+  } catch (err) {
+    const id = 'LF-UI-' + Date.now().toString(36);
+    console.warn(id, err);
+    if (list) {
+      list.innerHTML = `<div class="ltf-empty">Список зон не собрался. Повторите загрузку. Код ${esc(id)}</div>` +
+        '<button type="button" class="btn" id="zones-retry">Повторить</button>';
+      const retry = document.getElementById('zones-retry');
+      if (retry) retry.onclick = () => renderZonesTable();
+    }
+  }
 }
 
 // Небольшая статистика в шапке по выбранному инструменту
@@ -1609,24 +1630,28 @@ function pluralTasks(n) {
   return 'задач';
 }
 
+function reviewLayoutIdle(on) {
+  const layout = document.querySelector('#view-review .review-layout');
+  if (layout) layout.classList.toggle('review-idle', !!on);
+}
+
 function renderReviewQueue() {
   const box = $('candidates-list');
   const visible = visibleCandidates();
   const done = [...reviewState.doneMap.values()]
     .filter((c) => !reviewState.tfFilter || c.timeframe === reviewState.tfFilter).length;
-  $('review-progress').textContent = `Проверено ${done} из ${done + visible.length}`;
+  if (!visible.length) {
+    renderReviewEmpty();
+    return;
+  }
+  reviewLayoutIdle(false);
+  $('review-progress').textContent = `Осталось ${visible.length} · проверено ${done} за сессию`;
   const countEl = $('review-count');
   if (countEl) {
-    countEl.innerHTML = `<span class="state-dot ${visible.length ? 'dot-warning' : 'dot-positive'}"></span>` +
+    countEl.innerHTML = `<span class="state-dot dot-warning"></span>` +
       `${visible.length} ${pluralTasks(visible.length)}`;
   }
   box.innerHTML = '';
-  if (!visible.length) {
-    box.innerHTML = '<div class="ltf-empty">Все доступные объекты проверены.</div>' +
-      '<button type="button" class="btn review-back-now" id="review-empty-back">Вернуться к наблюдению</button>';
-    $('review-empty-back').onclick = () => showView('now');
-    return;
-  }
   for (const c of visible) {
     const card = document.createElement('div');
     card.className = 'candidate-card' + (c.id === reviewState.currentId ? ' selected' : '');
@@ -1700,25 +1725,85 @@ function initReviewChart() {
 function renderReviewEmpty() {
   reviewState.currentId = null;
   reviewState.currentCand = null;
+  reviewLayoutIdle(true);
+  const all = reviewState.all || [];
+  const filter = reviewState.tfFilter;
+  const pending = all.filter((c) => !reviewState.doneMap.has(c.id));
+  const filteredOut = !!filter && pending.length > 0;
+  const sessionDone = reviewState.doneMap.size;
   const insp = $('review-inspector');
+  const progress = $('review-progress');
+  if (progress) {
+    progress.textContent = sessionDone
+      ? `Осталось 0 · проверено ${sessionDone} за сессию`
+      : 'Осталось 0';
+  }
+  const countEl = $('review-count');
+  if (countEl) {
+    countEl.innerHTML = '<span class="state-dot dot-positive"></span>0 задач';
+  }
+  let title;
+  let body;
+  let actions;
+  if (filteredOut) {
+    title = 'Нет зон для проверки по выбранным фильтрам';
+    body = 'Ноль задач по фильтру не означает, что проверена вся база.';
+    actions = '<button type="button" class="btn" id="rv-reset-filter">Сбросить фильтры</button>' +
+      '<button type="button" class="btn" id="rv-back-desk">Вернуться к анализу</button>';
+  } else {
+    title = 'Все доступные зоны проверены';
+    body = sessionDone
+      ? `Проверено ${sessionDone} за сессию. Ноль доступных задач не означает, что проверена вся база.`
+      : 'Новые задачи появятся после сканирования. Ноль доступных задач не означает, что проверена вся база.';
+    actions = '<button type="button" class="btn" id="rv-back-desk">Вернуться к анализу</button>';
+  }
   insp.innerHTML =
     '<div class="rv-task-over">Контроль разметки</div>' +
-    '<h3>Все доступные объекты проверены</h3>' +
-    '<p class="muted">Очередь пуста — новые задачи появятся после сканирования.</p>' +
-    '<button type="button" class="btn" id="rv-back-now">Вернуться к наблюдению</button>';
-  $('rv-back-now').onclick = () => showView('now');
+    `<h3>${title}</h3>` +
+    `<p class="muted">${body}</p>` +
+    actions;
+  const reset = $('rv-reset-filter');
+  if (reset) {
+    reset.onclick = () => {
+      reviewState.tfFilter = '';
+      const sel = $('review-tf-filter');
+      if (sel) sel.value = '';
+      renderReviewQueue();
+    };
+  }
+  const back = $('rv-back-desk');
+  if (back) back.onclick = () => showView('desk');
 }
 
 // Вход во вкладку «Проверка»: график при первом входе, очередь, автовыбор
 // первого кандидата, если текущий не выбран или уже выпал из очереди.
 async function enterReviewMode() {
-  if (!reviewState.chart) initReviewChart();
-  await loadCandidates();
+  try {
+    if (!reviewState.chart) initReviewChart();
+    await loadCandidates();
+  } catch (err) {
+    console.warn('review mode:', err);
+    reviewLayoutIdle(true);
+    const insp = $('review-inspector');
+    if (insp) {
+      insp.innerHTML = '<div class="rv-task-over">Контроль разметки</div>' +
+        '<h3>Очередь не загрузилась</h3>' +
+        '<p class="muted">Показан последний экран. Повторите загрузку.</p>' +
+        '<button type="button" class="btn" id="rv-retry">Повторить</button>' +
+        '<button type="button" class="btn" id="rv-back-desk">Вернуться к анализу</button>';
+      const retry = $('rv-retry');
+      if (retry) retry.onclick = () => enterReviewMode();
+      const back = $('rv-back-desk');
+      if (back) back.onclick = () => showView('desk');
+    }
+    return;
+  }
   const visible = visibleCandidates();
   if (!visible.length) {
     renderReviewEmpty();
     return;
   }
+  reviewLayoutIdle(false);
   if (!visible.some((c) => c.id === reviewState.currentId)) {
     openReviewCandidate(visible[0]);
   }
@@ -2286,7 +2371,8 @@ function renderAssetActiveButton() {
   }
   btn.hidden = false;
   const on = !!ins.enabled;
-  btn.textContent = on ? 'Выключить актив' : 'Включить актив';
+  btn.textContent = on ? 'Наблюдать' : 'Включить наблюдение';
+  btn.setAttribute('aria-pressed', on ? 'true' : 'false');
   btn.classList.toggle('primary', !on);
 }
 
@@ -2304,7 +2390,7 @@ function renderSettingsAssets() {
       `<div class="asset-sub">${esc(ins.venue)} · ${esc(ins.market_type || 'spot')}` +
       `${on ? '' : ' · выключен'}</div></div>` +
       `<button type="button" class="btn small${on ? '' : ' primary'}" data-active-id="${ins.id}" data-next="${on ? '0' : '1'}">` +
-      `${on ? 'Выключить' : 'Включить'}</button></div>`;
+      `${on ? 'Снять с наблюдения' : 'Наблюдать'}</button></div>`;
   }).join('');
   box.querySelectorAll('[data-active-id]').forEach((btn) => {
     btn.onclick = () => setInstrumentActive(
@@ -2319,7 +2405,7 @@ async function setInstrumentActive(id, active) {
   if (!active) {
     const name = displayPair(ins.symbol);
     const ok = window.confirm(
-      `Выключить ${name}? Свечи, котировки и расчёт по этому активу остановятся. История сохранится.`,
+      `Снять ${name} с наблюдения? История и уже рассчитанные объекты сохранятся. Новые свечи, котировки и расчёт остановятся.`,
     );
     if (!ok) return;
   }
@@ -2492,9 +2578,15 @@ const VIEW_IDS = {
   desk: 'view-overview',
   review: 'view-review',
   journal: 'view-journal',
+  help: 'view-help',
   settings: 'view-settings',
 };
-const VIEW_ALIASES = { overview: 'desk', events: 'journal' };
+const VIEW_ALIASES = {
+  overview: 'desk',
+  events: 'journal',
+  observation: 'now',
+  analysis: 'desk',
+};
 
 function showView(name) {
   name = VIEW_ALIASES[name] || name;
@@ -2504,7 +2596,7 @@ function showView(name) {
     el.classList.toggle('active', el.dataset.view === name);
   });
   const moreBtn = document.getElementById('nav-more');
-  if (moreBtn) moreBtn.classList.toggle('active', name === 'journal' || name === 'settings');
+  if (moreBtn) moreBtn.classList.toggle('active', name === 'journal' || name === 'settings' || name === 'help');
   const morePanel = document.getElementById('nav-more-panel');
   if (morePanel) morePanel.classList.add('hidden');
   if (moreBtn) moreBtn.setAttribute('aria-expanded', 'false');
@@ -2684,7 +2776,7 @@ const DESK_BASIS_RU = {
 const DESK_DATA_REASON_RU = {
   no_quote: 'нет котировки',
   no_h1_candles: 'нет свечей H1',
-  current_candle_pending: 'ожидается текущая свеча H1',
+  current_candle_pending: 'Ожидаем данные текущей свечи H1',
   quote_stale: 'котировка устарела',
   h1_stale: 'свечи H1 устарели',
   source_stale: 'источник недоступен',
@@ -3462,7 +3554,7 @@ async function main() {
     ['layer-tf-d1', 'layer-tf-w1'].forEach((id) => {
       if ($(id)) $(id).disabled = !state.showAllTf;
     });
-    const labels = [state.showAllTf && 'Все ТФ', state.showCandidates && 'Кандидаты'].filter(Boolean);
+    const labels = [state.showAllTf && 'Все таймфреймы', state.showCandidates && 'Кандидаты'].filter(Boolean);
     if ($('layer-count')) $('layer-count').textContent = labels.length ? '· ' + labels.join(' · ') : '';
     drawZones();
   };

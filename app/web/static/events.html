@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LevelFrame · Контекст рынка</title>
+  <title>LevelFrame · Рынок</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <script>(function(){try{var c=localStorage.getItem('lf:theme');var l=window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches;var t=(c==='dark'||c==='light')?c:(c==='system'?(l?'light':'dark'):'light');document.documentElement.dataset.theme=t;var sb=localStorage.getItem('lf:sidebar');if(sb==='collapsed'||sb==='expanded')document.documentElement.dataset.sidebar=sb;}catch(e){document.documentElement.dataset.theme='light';}})();</script>
   <link rel="stylesheet" href="/style.css">
@@ -30,14 +30,15 @@
     </div>
     <div class="nav-label">Анализ</div>
     <nav class="app-tabs" aria-label="Основная навигация">
-      <a href="/#now" class="app-tab"><span class="nav-full">Обзор</span><span class="nav-short">Обзор</span></a>
-      <a href="/#desk" class="app-tab"><span class="nav-full">Рабочее место</span><span class="nav-short">Место</span></a>
+      <a href="/#now" class="app-tab"><span class="nav-full">Наблюдение</span><span class="nav-short">Наблюдение</span></a>
+      <a href="/#desk" class="app-tab"><span class="nav-full">Анализ</span><span class="nav-short">Анализ</span></a>
       <a href="/#review" class="app-tab"><span class="nav-full">Проверка</span><span class="nav-short">Проверка</span></a>
       <a href="/alt.html" class="app-tab"><span class="nav-full">Скринер</span><span class="nav-short">Скринер</span></a>
       <a href="/#journal" class="app-tab"><span class="nav-full">Журнал</span><span class="nav-short">Журнал</span></a>
-      <a href="/events.html" class="app-tab current" aria-current="page"><span class="nav-full">Контекст рынка</span><span class="nav-short">Рынок</span></a>
+      <a href="/events.html" class="app-tab current" aria-current="page"><span class="nav-full">Рынок</span><span class="nav-short">Рынок</span></a>
     </nav>
     <div class="sidebar-bottom">
+      <a href="/#help" class="app-tab"><span class="nav-full">Справка</span><span class="nav-short">Справка</span></a>
       <a href="/#settings" class="app-tab"><span class="nav-full">Настройки</span><span class="nav-short">Настр.</span></a>
     </div>
   </aside>
@@ -46,16 +47,16 @@
   <div class="events-page" id="events-root">
     <header class="market-header">
       <div><p class="now-over">События · Время · Рыночный фон</p>
-      <h1 class="now-title">Контекст рынка</h1>
+      <h1 class="now-title">Рынок</h1>
       <p class="market-intro">Что влияет на рынок сейчас — и насколько полна картина.</p></div>
       <button type="button" class="btn" id="market-refresh">↻ Обновить</button>
     </header>
     <div class="events-modes" role="group" aria-label="Режим контекста">
       <button type="button" class="btn small" data-mode="now">Сейчас</button>
-      <button type="button" class="btn small" data-mode="feed">Что изменилось</button>
       <button type="button" class="btn small" data-mode="calendar">Календарь</button>
-      <button type="button" class="btn small" data-mode="rules">Как считается оценка</button>
-      <button type="button" class="btn small" data-mode="sources">Источники</button>
+      <a class="btn small" href="/?kind=market#journal">Что изменилось</a>
+      <a class="btn small" href="/#help">Как считается оценка</a>
+      <a class="btn small" href="/#settings">Источники</a>
     </div>
     <p id="market-status" class="market-status" role="status" aria-live="polite"></p>
     <div id="events-body" aria-busy="true"></div>
@@ -67,15 +68,16 @@
     </footer>
   </div>
   <nav class="mobile-nav" aria-label="Мобильная навигация">
-    <a href="/#now">Обзор</a>
-    <a href="/#desk">Место</a>
+    <a href="/#now">Наблюдение</a>
+    <a href="/#desk">Анализ</a>
     <a href="/#review">Проверка</a>
     <a href="/alt.html">Скринер</a>
     <button type="button" id="nav-more" class="active" aria-expanded="false" aria-controls="nav-more-panel" aria-current="page">Ещё</button>
   </nav>
   <div id="nav-more-panel" class="nav-more-panel hidden" role="menu">
-    <a href="/events.html" role="menuitem" aria-current="page">Контекст рынка</a>
+    <a href="/events.html" role="menuitem" aria-current="page">Рынок</a>
     <a href="/#journal" role="menuitem">Журнал</a>
+    <a href="/#help" role="menuitem">Справка</a>
     <a href="/#settings" role="menuitem">Настройки</a>
   </div>
   <script src="/common.js"></script>

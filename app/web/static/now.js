@@ -21,7 +21,7 @@
   const DATA_STATE_REASON_RU = {
     no_quote: 'нет котировки',
     no_h1_candles: 'нет свечей H1',
-    current_candle_pending: 'ожидается текущая свеча H1',
+    current_candle_pending: 'Ожидаем данные текущей свечи H1',
     quote_stale: 'котировка устарела',
     h1_stale: 'свечи H1 устарели',
     source_stale: 'источник недоступен',
@@ -104,51 +104,71 @@
   }
 
   function renderStats() {
-    const inZone = st.rows.filter((r) => r.attention === 'price_in_zone').length;
-    const eligible = st.rows.filter((r) => r.attention === 'eligible').length;
-    $('now-stat-review').textContent = st.candidates;
-    $('now-stat-review-note').textContent = st.candidates ? 'Открыть проверку' : 'Очередь пуста';
+    const attention = st.rows.filter(FILTERS.attention).length;
+    const inZone = st.rows.filter(FILTERS.zone).length;
+    const eligible = st.rows.filter(FILTERS.eligible).length;
+    $('now-stat-review').textContent = attention;
+    $('now-stat-review-note').textContent = attention ? 'Фильтр списка' : 'Нет таких активов';
     $('now-stat-zone').textContent = inZone;
     $('now-stat-eligible').textContent = eligible;
-    $('now-assets-count').textContent = st.rows.length;
+    $('now-assets-count').textContent = visibleRows().length;
   }
 
-  function rowStateHtml(r) {
-    const ds = r.data_state || {};
-    const governed = r.asset && r.asset.governs && r.market_stage;
-    if (!governed && ds.state && ds.state !== 'ok') {
-      return `<span class="state-dot dot-warning"></span>Данные задерживаются` +
-        `<div class="state-sub">${esc(DATA_STATE_REASON_RU[ds.reason] || ds.reason || '—')}</div>`;
-    }
-    const dot =
-      r.attention === 'price_in_zone' ? 'dot-brand'
-      : r.attention === 'eligible' ? 'dot-positive'
-      : r.attention === 'data_problem' ? 'dot-warning'
-      : 'dot-muted';
-    const main = r.market_stage || r.stage || '—';
+  function scenarioHtml(r) {
+    const titled = r.asset && r.asset.asset_state && r.asset.asset_state.title;
+    const main = titled || r.market_stage || r.stage || 'Сценарий не определён';
     const review = (r.review_state && r.review_state.needed)
-      ? `<div class="state-sub"><a href="#review">Нужна проверка · ${r.review_state.count}</a></div>`
+      ? `<div class="state-sub"><a href="#review" data-view="review">Нужна проверка · ${r.review_state.count}</a></div>`
       : '';
-    const known = governed && ds.state && ds.state !== 'ok' ? DATA_STATE_REASON_RU[ds.reason] : '';
-    const dataNote = known ? `<div class="state-sub">${esc(known)}</div>` : '';
-    return `<span class="state-dot ${dot}"></span>${esc(main)}` + dataNote + review;
+    return esc(main) + review;
+  }
+
+  function zoneRelationHtml(r) {
+    if (r.attention === 'price_in_zone') return 'Цена в зоне';
+    const ds = r.data_state || {};
+    const pending = ds.reason === 'current_candle_pending';
+    if ((!ds.state || ds.state === 'ok' || pending) && r.attention_reason && r.attention !== 'data_problem') {
+      return esc(r.attention_reason);
+    }
+    if (r.price == null) {
+      const why = DATA_STATE_REASON_RU[ds.reason] || 'нет котировки';
+      return `Не рассчитано<div class="state-sub">${esc(why)}</div>`;
+    }
+    return esc(r.attention_reason || '—');
+  }
+
+  function dataHtml(r) {
+    const ds = r.data_state || {};
+    if (!ds.state || ds.state === 'ok') {
+      return '<span class="state-dot dot-positive"></span>Актуальны';
+    }
+    if (ds.reason === 'current_candle_pending') {
+      return '<span class="state-dot dot-muted"></span>Текущая свеча формируется' +
+        `<div class="state-sub">${esc(DATA_STATE_REASON_RU[ds.reason])}</div>`;
+    }
+    const word = ds.state === 'stale' ? 'Устарели' : 'Неполные';
+    const why = DATA_STATE_REASON_RU[ds.reason] || ds.reason || '';
+    return `<span class="state-dot dot-warning"></span>${word}` +
+      (why ? `<div class="state-sub">${esc(why)}</div>` : '');
   }
 
   function rowHtml(r) {
     const ins = r.instrument;
     const [base, quote] = baseQuote(ins.symbol || '');
     const p = priceOf(ins.id);
-    return `<tr data-iid="${ins.id}" tabindex="0"` +
-      `${ins.id === st.selectedId ? ' class="selected"' : ''}>` +
+    const when = p && p.at ? ageText(p.at) : '';
+    return `<tr data-iid="${ins.id}" tabindex="0">` +
       `<td data-label="Актив / площадка">` +
       `<button type="button" class="asset-open" data-iid="${ins.id}">${esc(base)}${quote ? ' / ' + esc(quote) : ''}</button>` +
-      `<div class="asset-sub">${esc(ins.venue)} · ${esc(ins.market_type)}</div>` +
-      `<button type="button" class="asset-pick" data-iid="${ins.id}">Выбрать</button></td>` +
-      `<td data-label="Состояние">${rowStateHtml(r)}</td>` +
+      `<div class="asset-sub">${esc(ins.venue)} · ${esc(ins.market_type)}</div></td>` +
+      `<td data-label="Сценарий">${scenarioHtml(r)}</td>` +
+      `<td data-label="Цена и зона">${zoneRelationHtml(r)}</td>` +
+      `<td data-label="Данные">${dataHtml(r)}</td>` +
       `<td data-label="Цена, USDT" class="num">` +
       `<span class="price-val">${p ? esc(fmtPrice(p.price)) : '—'}</span>` +
-      `<div class="price-age">${p ? esc(ageText(p.at)) : ''}</div>` +
-      `<button type="button" class="btn small asset-off" data-off="${ins.id}">Выключить</button></td></tr>`;
+      `<div class="price-age" title="${p && p.at ? esc(new Date(p.at).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' })) : ''}">${esc(when)}</div></td>` +
+      `<td data-label="Наблюдение">` +
+      `<button type="button" class="btn small asset-off" aria-pressed="true" data-off="${ins.id}">Наблюдать</button></td></tr>`;
   }
 
   function visibleRows() {
@@ -162,10 +182,10 @@
     const empty = $('now-empty');
     if (!st.rows.length) {
       empty.classList.remove('hidden');
-      empty.innerHTML = 'Анализ выключен для всех активов. <a href="#settings" data-view="settings">Открыть настройки</a>';
+      empty.innerHTML = 'Вы пока не наблюдаете за активами. <a href="/alt.html">Найти в скринере</a>';
     } else if (!rows.length) {
       empty.classList.remove('hidden');
-      empty.innerHTML = 'По этому фильтру активов нет. <button type="button" id="now-filter-reset">Сбросить фильтр</button>';
+      empty.innerHTML = 'Нет активов. <button type="button" id="now-filter-reset">Сбросить фильтр</button>';
     } else {
       empty.classList.add('hidden');
       empty.textContent = '';
@@ -436,18 +456,16 @@
       st.filter = btn.dataset.filter || 'all';
       paintFilterButtons();
       renderTable();
+      renderStats();
     });
   });
 
   document.querySelectorAll('.metric-filter').forEach((btn) => {
     btn.addEventListener('click', () => {
-      if (btn.dataset.metric === 'review') {
-        if (typeof showView === 'function') showView('review');
-        return;
-      }
       st.filter = st.filter === btn.dataset.metric ? 'all' : btn.dataset.metric;
       paintFilterButtons();
       renderTable();
+      renderStats();
     });
   });
 
@@ -461,9 +479,11 @@
         box.innerHTML = '<li class="now-empty">Записей журнала пока нет.</li>';
         return;
       }
-      box.innerHTML = items.slice(0, 5).map((item) =>
-        `<li><span class="now-recent-time">${esc(ageText(item.at))}</span> ${esc(item.title || 'Запись')}</li>`
-      ).join('');
+      box.innerHTML = items.slice(0, 5).map((item) => {
+        const who = item.symbol ? `${esc(item.symbol)} · ` : '';
+        return `<li><button type="button" class="now-recent-open" data-view="journal">` +
+          `<span class="now-recent-time">${esc(ageText(item.at))}</span> ${who}${esc(item.title || 'Запись')}</button></li>`;
+      }).join('');
     } catch (e) {
       if (seq !== st.reqSeq) return;
       box.innerHTML = '<li class="now-empty">Журнал не прочитан. <button type="button" id="now-recent-retry">Повторить</button></li>';
@@ -475,8 +495,11 @@
       st.filter = 'all';
       paintFilterButtons();
       renderTable();
+      renderStats();
     }
     if (e.target.id === 'now-recent-retry') loadRecent(st.reqSeq);
+    const recent = e.target.closest('.now-recent-open');
+    if (recent && typeof showView === 'function') showView('journal');
   });
 
   async function loadCurrent(id, seq) {
@@ -511,6 +534,10 @@
     else loadCurrent(st.selectedId, st.reqSeq);
   }
 
+  function openObserved(id) {
+    if (window.LFDesk && id) window.LFDesk.openInstrument(Number(id));
+  }
+
   $('now-tbody').addEventListener('click', (e) => {
     const off = e.target.closest('.asset-off');
     if (off) {
@@ -521,30 +548,18 @@
       }
       return;
     }
-    const open = e.target.closest('.asset-open');
-    if (open && window.LFDesk) {
-      e.preventDefault();
-      window.LFDesk.openInstrument(Number(open.dataset.iid));
-      return;
-    }
-    const pick = e.target.closest('.asset-pick');
-    if (pick) {
-      e.preventDefault();
-      selectRow(pick.closest('tr'));
-      return;
-    }
-    selectRow(e.target.closest('tr'));
+    const tr = e.target.closest('tr');
+    if (!tr || e.target.closest('a')) return;
+    e.preventDefault();
+    openObserved(tr.dataset.iid);
   });
   $('now-tbody').addEventListener('keydown', (e) => {
-    if (e.target.closest('button')) return;
+    if (e.target.closest('button, a, input, textarea, select')) return;
     const tr = e.target.closest('tr');
     if (!tr) return;
-    if (e.key === 'Enter' && window.LFDesk) {
+    if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
-      window.LFDesk.openInstrument(Number(tr.dataset.iid));
-    } else if (e.key === ' ') {
-      e.preventDefault();
-      selectRow(tr);
+      openObserved(tr.dataset.iid);
     }
   });
 

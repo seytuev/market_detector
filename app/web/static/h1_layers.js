@@ -712,11 +712,19 @@
     if (ctx.offscreenEl) {
       const count = outside.length;
       ctx.offscreenEl.classList.toggle('hidden', count === 0);
-      ctx.offscreenEl.textContent = 'Вне экрана: ' + count;
+      ctx.offscreenEl.textContent = 'Вне видимого диапазона: ' + count + ' ' + zonesWord(count);
       ctx.offscreenEl.onclick = () => {
         if (outside[0] && ctx.onShowZone) ctx.onShowZone(outside[0]);
       };
     }
+  }
+
+  function zonesWord(n) {
+    const n100 = n % 100;
+    const n10 = n % 10;
+    if (n10 === 1 && n100 !== 11) return 'зона';
+    if (n10 >= 2 && n10 <= 4 && (n100 < 12 || n100 > 14)) return 'зоны';
+    return 'зон';
   }
 
   function actionButton(doc, parent, text, handler) {

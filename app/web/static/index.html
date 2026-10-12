@@ -32,14 +32,15 @@
     </div>
     <div class="nav-label">Анализ</div>
     <nav class="app-tabs" aria-label="Основная навигация">
-      <a href="#now" data-view="now" class="app-tab active"><span class="nav-full">Обзор</span><span class="nav-short">Обзор</span></a>
-      <a href="#desk" data-view="desk" class="app-tab"><span class="nav-full">Рабочее место</span><span class="nav-short">Место</span></a>
+      <a href="#now" data-view="now" class="app-tab active"><span class="nav-full">Наблюдение</span><span class="nav-short">Наблюдение</span></a>
+      <a href="#desk" data-view="desk" class="app-tab"><span class="nav-full">Анализ</span><span class="nav-short">Анализ</span></a>
       <a href="#review" data-view="review" class="app-tab"><span class="nav-full">Проверка</span><span class="nav-short">Проверка</span></a>
       <a href="/alt.html" class="app-tab"><span class="nav-full">Скринер</span><span class="nav-short">Скринер</span></a>
       <a href="#journal" data-view="journal" class="app-tab"><span class="nav-full">Журнал</span><span class="nav-short">Журнал</span></a>
-      <a href="/events.html" class="app-tab"><span class="nav-full">Контекст рынка</span><span class="nav-short">Рынок</span></a>
+      <a href="/events.html" class="app-tab"><span class="nav-full">Рынок</span><span class="nav-short">Рынок</span></a>
     </nav>
     <div class="sidebar-bottom">
+      <a href="#help" data-view="help" class="app-tab"><span class="nav-full">Справка</span><span class="nav-short">Справка</span></a>
       <a href="#settings" data-view="settings" class="app-tab"><span class="nav-full">Настройки</span><span class="nav-short">Настр.</span></a>
       <span class="conn-status">
         <span id="ws-indicator" class="ws-dot offline" title="Нет соединения"></span>
@@ -59,27 +60,27 @@
     <div class="now-page">
       <header class="now-head">
         <div class="now-over">Среда рыночного анализа</div>
-        <h1 class="now-title">Обзор</h1>
+        <h1 class="now-title">Наблюдение</h1>
         <p class="now-sub" id="now-subline">ваш список наблюдения</p>
       </header>
-      <div class="now-stats" role="group" aria-label="Счётчики наблюдения">
-        <button type="button" class="metric-filter" data-metric="review">
-          <span class="stat-label">На проверку</span>
+      <div class="now-stats" role="group" aria-label="Фильтры наблюдения">
+        <button type="button" class="metric-filter" data-metric="attention">
+          <span class="stat-label">Требуют внимания</span>
           <span class="stat-value" id="now-stat-review">—</span>
-          <span class="stat-note" id="now-stat-review-note">Очередь пуста</span>
+          <span class="stat-note" id="now-stat-review-note">Фильтр списка</span>
         </button>
         <button type="button" class="metric-filter" data-metric="zone">
           <span class="stat-label">Цена в зоне</span>
           <span class="stat-value" id="now-stat-zone">—</span>
-          <span class="stat-note">Фильтр таблицы, статусы не меняются</span>
+          <span class="stat-note">Фильтр списка</span>
         </button>
         <button type="button" class="metric-filter" data-metric="eligible">
           <span class="stat-label">Сценарий подтверждён</span>
           <span class="stat-value" id="now-stat-eligible">—</span>
-          <span class="stat-note">Фильтр таблицы, статусы не меняются</span>
+          <span class="stat-note">Фильтр списка</span>
         </button>
       </div>
-      <div class="now-layout">
+      <div class="now-layout now-single">
         <section class="now-assets" aria-label="Активы">
           <div class="now-assets-head">
             <h2>Активы / <span id="now-assets-count">0</span></h2>
@@ -91,18 +92,18 @@
           </div>
           <table class="asset-table" id="now-table">
             <thead>
-              <tr><th>Актив / площадка</th><th>Состояние</th><th class="num">Цена, USDT</th></tr>
+              <tr><th>Актив / площадка</th><th>Сценарий</th><th>Цена и зона</th><th>Данные</th><th class="num">Цена, USDT</th><th>Наблюдение</th></tr>
             </thead>
             <tbody id="now-tbody"></tbody>
           </table>
           <div id="now-empty" class="now-empty hidden">По выбранному фильтру активов нет.</div>
         </section>
-        <aside class="now-card" id="now-card" aria-label="Выбранный актив"></aside>
+        <aside class="now-card hidden" id="now-card" aria-label="Выбранный актив" hidden></aside>
       </div>
       <section class="now-recent" aria-labelledby="now-recent-title">
         <div class="now-assets-head">
           <h2 id="now-recent-title">Последние изменения</h2>
-          <a href="#journal" data-view="journal">Журнал</a>
+          <a href="#journal" data-view="journal">Все события</a>
         </div>
         <ul id="now-recent" class="now-recent-list"></ul>
       </section>
@@ -130,7 +131,7 @@
     </div>
     <div class="workbar">
       <select id="instrument-select" title="Инструмент"></select>
-      <button type="button" id="asset-active-btn" class="btn small">Выключить актив</button>
+      <button type="button" id="asset-active-btn" class="btn small" aria-pressed="true">Наблюдать</button>
       <span id="instrument-meta" class="work-meta">—</span>
       <span id="last-price" class="last-price">—</span>
       <span id="price-change" class="price-change"></span>
@@ -148,7 +149,7 @@
             <legend>Контекст</legend>
             <label><input type="checkbox" id="layer-tf-d1" checked> Зоны D1</label>
             <label><input type="checkbox" id="layer-tf-w1" checked> Зоны W1</label>
-            <label><input type="checkbox" id="tf-all"> Все ТФ на графике</label>
+            <label><input type="checkbox" id="tf-all"> Все таймфреймы</label>
             <label><input type="checkbox" id="show-candidates"> Кандидаты HTF</label>
             <label><input type="checkbox" id="layer-history"> История HTF</label>
             <div class="h1-layer-controls">
@@ -210,7 +211,7 @@
             <div id="h1-transition" class="h1-transition hidden"></div>
             <div id="h1-event-card" class="h1-event-card hidden"></div>
             <div id="h1-layer-status" class="h1-layer-status hidden"></div>
-            <button type="button" id="h1-offscreen" class="btn small h1-offscreen hidden">Вне экрана: 0</button>
+            <button type="button" id="h1-offscreen" class="btn small h1-offscreen hidden">Вне видимого диапазона: 0</button>
           </div>
           <div id="draw-hint" class="draw-hint hidden">Первый клик задаёт начало зоны и первую цену, второй — вторую цену. <button id="draw-cancel" class="btn small" type="button">Отмена</button></div>
           <section id="desk-entries" class="desk-entries hidden" aria-label="Зоны сценария"></section>
@@ -326,9 +327,9 @@
         </div>
         <div class="now-filters" id="journal-filters" role="group" aria-label="Тип записи">
           <button type="button" class="now-filter active" data-kind="all" aria-pressed="true">Все</button>
-          <button type="button" class="now-filter" data-kind="market" aria-pressed="false">Рынок</button>
+          <button type="button" class="now-filter" data-kind="market" aria-pressed="false">Рыночные события</button>
           <button type="button" class="now-filter" data-kind="decisions" aria-pressed="false">Решения</button>
-          <button type="button" class="now-filter" data-kind="delivery" aria-pressed="false">Доставка</button>
+          <button type="button" class="now-filter" data-kind="delivery" aria-pressed="false">Уведомления</button>
         </div>
       </header>
       <div class="journal-tools">
@@ -337,9 +338,47 @@
         <label>По дату <input id="journal-to" type="date"></label>
         <label>Текст <input id="journal-query" type="search" placeholder="По загруженным записям"></label>
       </div>
-      <p class="field-desc" id="journal-scope">Фильтр действует на загруженные записи, не на всю историю базы.</p>
+      <p class="field-desc" id="journal-scope">Поиск в загруженных событиях. Вся история базы этим полем не охватывается.</p>
       <button type="button" id="journal-new" class="btn hidden">Новые записи</button>
       <div id="journal-list" class="journal-list" aria-live="polite"></div>
+    </div>
+  </section>
+
+  <section id="view-help" class="view">
+    <div class="now-page help-page">
+      <header class="now-head">
+        <div class="now-over">Термины и методики</div>
+        <h1 class="now-title">Справка</h1>
+        <p class="now-sub">Подписи экрана. Расчёт и пороги от этой страницы не меняются.</p>
+      </header>
+      <section class="now-assets help-block">
+        <div class="now-assets-head"><h2>Термины</h2></div>
+        <dl class="help-dl">
+          <dt>BOS</dt><dd>Пробой структуры: закрытие свечи за опорой.</dd>
+          <dt>OB</dt><dd>Ордер-блок, зона, от которой считался импульс.</dd>
+          <dt>FVG</dt><dd>Ценовой разрыв между свечами.</dd>
+          <dt>BSL / SSL</dt><dd>Ликвидность над максимумами и под минимумами.</dd>
+          <dt>PD</dt><dd>Диапазон Premium/Discount текущей ноги.</dd>
+          <dt>Ликвидации</dt><dd>Принудительное закрытие позиций.</dd>
+          <dt>Открытый интерес</dt><dd>Объём ещё не закрытых контрактов.</dd>
+          <dt>Ставка финансирования</dt><dd>Плата между сторонами бессрочного контракта.</dd>
+        </dl>
+      </section>
+      <section class="now-assets help-block">
+        <div class="now-assets-head"><h2>Группы скринера</h2></div>
+        <dl class="help-dl">
+          <dt>Активные</dt><dd>Действующие условия по текущим правилам.</dd>
+          <dt>Новые условия входа</dt><dd>Свежие условия, которые ещё не отработаны.</dd>
+          <dt>Ожидают ретеста</dt><dd>Цена ещё не вернулась к зоне.</dd>
+          <dt>Требуют проверки</dt><dd>Разметка ждёт решения.</dd>
+          <dt>История</dt><dd>Завершённые сетапы. Исторический вход — не живая возможность.</dd>
+        </dl>
+        <p class="field-desc">Счётчик группы — это размер отфильтрованного списка, не сумма других групп.</p>
+      </section>
+      <section class="now-assets help-block">
+        <div class="now-assets-head"><h2>Архив методик</h2></div>
+        <p class="field-desc">Сетапы биткоина A, B, V и G — архив. Они не задают текущую оценку рынка и не являются вероятностью движения цены. Если наблюдений мало, на экране рынка это пишется отдельно: недостаточно наблюдений для статистической оценки.</p>
+      </section>
     </div>
   </section>
 
@@ -347,7 +386,7 @@
     <div class="settings-page">
       <header class="review-head">
         <div>
-          <div class="review-over">Ваше рабочее место</div>
+          <div class="review-over">Параметры</div>
           <h1 class="review-title">Настройки</h1>
           <p class="review-sub">Наблюдение, правила анализа и отображение.</p>
         </div>
@@ -412,15 +451,16 @@
   </div>
 
   <nav class="mobile-nav" aria-label="Мобильная навигация">
-    <a href="#now" data-view="now">Обзор</a>
-    <a href="#desk" data-view="desk">Место</a>
+    <a href="#now" data-view="now">Наблюдение</a>
+    <a href="#desk" data-view="desk">Анализ</a>
     <a href="#review" data-view="review">Проверка</a>
     <a href="/alt.html">Скринер</a>
     <button type="button" id="nav-more" aria-expanded="false" aria-controls="nav-more-panel">Ещё</button>
   </nav>
   <div id="nav-more-panel" class="nav-more-panel hidden" role="menu">
-    <a href="/events.html" role="menuitem">Контекст рынка</a>
+    <a href="/events.html" role="menuitem">Рынок</a>
     <a href="#journal" data-view="journal" role="menuitem">Журнал</a>
+    <a href="#help" data-view="help" role="menuitem">Справка</a>
     <a href="#settings" data-view="settings" role="menuitem">Настройки</a>
   </div>
 

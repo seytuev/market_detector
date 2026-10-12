@@ -1073,7 +1073,7 @@ def _attention_group(
         return "eligible"
     if stage in (STAGE_WAIT_BOS, STAGE_WAIT_RANGE):
         return "awaiting"
-    if ds["state"] != "ok":
+    if ds["state"] != "ok" and ds.get("reason") != "current_candle_pending":
         return "data_problem"
     return "none"
 

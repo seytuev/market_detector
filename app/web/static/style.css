@@ -1323,6 +1323,12 @@ html[data-eventstrip="collapsed"] .strip-toggle .strip-chev { transform: rotate(
   grid-template-columns: 264px minmax(0,1fr) 360px;
   gap: 12px; padding: 12px 16px;
 }
+.review-layout.review-idle {
+  grid-template-columns: minmax(0, 1fr);
+}
+.review-layout.review-idle .review-queue,
+.review-layout.review-idle .review-chart-block { display: none; }
+.review-layout.review-idle .review-inspector { max-width: 640px; }
 .review-queue, .review-inspector {
   background: var(--bg-panel); border: 1px solid var(--border); border-radius: 8px;
   overflow: auto; padding: 12px;
@@ -1406,8 +1412,14 @@ html[data-eventstrip="collapsed"] .strip-toggle .strip-chev { transform: rotate(
     padding-bottom: env(safe-area-inset-bottom);
   }
   .app-body { padding-bottom: 56px; }
+  .mobile-nav {
+    overflow-x: auto;
+  }
+  .mobile-nav a, .mobile-nav button {
+    flex: 1 0 auto;
+  }
   .mobile-nav a {
-    flex: 1; text-align: center; padding: 12px 2px 16px; color: var(--text-dim);
+    flex: 1 0 auto; text-align: center; padding: 12px 6px 16px; color: var(--text-dim);
     text-decoration: none; font-size: 11px; line-height: 1.2;
     min-height: 44px;
   }
@@ -1808,11 +1820,12 @@ html[data-eventstrip="collapsed"] .strip-toggle .strip-chev { transform: rotate(
   display: grid; grid-template-columns: minmax(0, 1fr) 340px;
   gap: 16px; align-items: start;
 }
+.now-layout.now-single { grid-template-columns: minmax(0, 1fr); }
 .now-assets, .now-card {
   background: var(--lf-surface); border: 1px solid var(--lf-border);
   border-radius: var(--lf-radius-panel);
 }
-.now-assets { overflow: hidden; }
+.now-assets { overflow-x: auto; }
 .now-assets-head {
   display: flex; align-items: center; justify-content: space-between;
   gap: 12px; padding: 12px 16px; flex-wrap: wrap;
@@ -1862,6 +1875,17 @@ html[data-eventstrip="collapsed"] .strip-toggle .strip-chev { transform: rotate(
   overflow-x: hidden;
 }
 .now-card { padding: 16px; }
+.help-block { margin-top: 16px; padding: 4px 16px 16px; }
+.help-dl { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 8px 16px; margin: 0; }
+.help-dl dt { font-weight: 600; }
+.help-dl dd { margin: 0; color: var(--lf-text2); }
+.now-recent-open {
+  appearance: none; background: none; border: 0; padding: 0; color: inherit;
+  font: inherit; text-align: left; cursor: pointer; min-height: 32px;
+}
+@media (max-width: 767px) {
+  .help-dl { grid-template-columns: minmax(0, 1fr); }
+}
 
 /* Карточка актива: точка направления у заголовка (long/short приходят
    с сервера в asset_state.direction) и ряды «подпись — значение». */

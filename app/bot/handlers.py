@@ -952,7 +952,7 @@ def register_bot_handlers(app, settings, db: Database):
             )
         elif text == MENU_OPEN_APP:
             await update.message.reply_text(
-                f"Рабочее место: {settings.effective_base_url()}"
+                f"Анализ: {settings.effective_base_url()}"
             )
         elif text == MENU_ALERTS:
             await update.message.reply_text(

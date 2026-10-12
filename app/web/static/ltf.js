@@ -63,7 +63,7 @@ const state = {
 // Локальные fallback-формулировки; актуальные — GET /api/labels (texts_ru)
 let LTF_KIND_RU = {
   bos: 'слом BOS', sms: 'слом SMS', range_ready: 'диапазон готов',
-  entries_ready: 'новые Entry Zones', touch: 'касание Entry Zone',
+  entries_ready: 'новые Entry Zones', touch: 'цена коснулась зоны входа',
   sweep_confirmed: 'снятие подтверждено', sweep_failed: 'исход снятия уровня',
   cancellation: 'отмена сценария', note: 'заметка',
 };

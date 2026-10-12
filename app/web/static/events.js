@@ -202,35 +202,12 @@
     const market = data.market;
     if (!market) { renderSideLegacy(data); return; }
 
-    const coverage = market.coverage;
-    const coverageText = coverage && coverage.total != null
-      ? ` · покрытие ${coverage.ok}/${coverage.total}` : '';
-    const checked = `Проверено ${fmtMsk(market.evaluated_at)}${coverageText} · качество: ${qualityWord(market.quality)}`;
     const stale = data.market_stale
       ? '<p class="events-warn">Снимок устарел — показана последняя сохранённая оценка.</p>' : '';
-    const nextReview = market.next_review_at
-      ? `<p class="events-service">Следующий пересмотр: ${esc(fmtMsk(market.next_review_at))}</p>` : '';
-    const reasons = pickReasons(market).map(reasonLine).join('');
-
-    const details = `<details class="events-facts">
-      <summary>Факты и статистика</summary>
-      ${factsListHtml(market.active_facts)}
-      ${statsHtml(market.statistics)}
-      ${factorAgreementHtml(market.factor_agreement)}
-      ${unknownDepsHtml(market.unknown_dependencies)}
-      ${btcBackgroundHtml(market)}
-    </details>`;
-
-    box.innerHTML = `<div class="side-card-head"><strong>События и время · Крипторынок</strong></div>
-      <div class="events-side-state">${stateChip(market)}</div>
-      <p class="side-market-line">${esc(market.subtitle || 'Направление по событиям и времени')}</p>
-      ${conflictHtml(market)}
-      ${reasons}
-      <p class="events-service">${esc(checked)}</p>
+    box.innerHTML = `<div class="side-card-head"><strong>Рыночный фон</strong></div>
+      <p class="side-market-line">${stateChip(market)}</p>
       ${stale}
-      ${nextReview}
-      ${details}
-      <a class="btn small side-open" href="/events.html">Открыть контекст рынка</a>`;
+      <a class="btn small side-open" href="/events.html">Открыть рынок</a>`;
   }
 
   // ---- полный раздел: «Сейчас» --------------------------------------------
@@ -423,8 +400,8 @@
   // ---- legacy-экраны (когда overview.market отсутствует) ---------------------
   const GATE_STATUS = {
     passed: 'выполнено',
-    blocked: 'заблокировано',
-    not_applicable: 'не применимо',
+    blocked: 'Проверка условия заблокирована',
+    not_applicable: 'Условие не применимо',
     watch_matched: 'условия наблюдения совпали',
     failed: 'не выполнено',
     unknown: 'неизвестно',
@@ -621,13 +598,13 @@
     const box = document.getElementById('h1-events-context');
     if (!box || !window.HTF || document.getElementById('events-root')) return;
     if (!HTF.getToken()) {
-      box.innerHTML = '<p>События и время появятся после входа.</p>';
+      box.innerHTML = '<p>Рыночный фон появится после входа.</p>';
       return;
     }
     try {
       renderSideMarket(await HTF.api('/api/events/overview'));
     } catch (err) {
-      box.innerHTML = '<p>События и время сейчас недоступны.</p>';
+      box.innerHTML = '<p>Рыночный фон сейчас недоступен. <a href="/events.html">Открыть рынок</a></p>';
     }
   }
 
@@ -639,10 +616,11 @@
     body.setAttribute('aria-busy', 'true');
     if (status) status.textContent = 'Обновляем данные…';
     const endpoint = { now: 'overview', feed: 'journal', calendar: 'calendar', rules: 'rules', sources: 'health' }[mode] || 'overview';
+    let data = null;
     try {
       if (!HTF.getToken()) await HTF.ensureToken('Нужен токен владельца.');
       if (version !== requestVersion) return;
-      const data = await requestData(endpoint);
+      data = await requestData(endpoint);
       if (version !== requestVersion) return;
       let html;
       if (mode === 'feed') html = renderFeedBundles(data) || renderFeedLegacy(data);
@@ -672,7 +650,12 @@
         body.innerHTML = '<section class="events-card"><h2>Данные недоступны</h2><p>Повторите загрузку кнопкой «Обновить».</p></section>';
         body._marketHtml = null;
       }
-      if (status) status.textContent = `Не удалось обновить данные. ${err.message || 'Проверьте подключение.'}`;
+      const saved = data && data.market && data.market.evaluated_at ? fmtMsk(data.market.evaluated_at) : '';
+      if (status) {
+        status.textContent = saved
+          ? `Обновление не завершено. Показаны данные на ${saved}. Повторить`
+          : 'Обновление не завершено. Повторить';
+      }
     } finally {
       if (version === requestVersion) body.setAttribute('aria-busy', 'false');
     }

@@ -244,7 +244,9 @@ def test_07_unproven_bos_is_not_confirmed_with_blank_time(db, instrument_id):
     )
     asset = _view(db, instrument_id)
     text = (asset["asset_state"]["title"] or "") + " " + " ".join(asset["compact"])
-    assert asset["asset_state"]["title"] == "Данные H1 неполные"
+    assert asset["asset_state"]["title"] == "Происхождение перехода неполное"
+    assert asset["asset_state"]["reason_code"] == "provenance_incomplete"
+    assert asset["next_action"]["kind"] == "blocked"
     assert asset["structure"]["proven"] is False
     assert "подтверждён" not in text
     assert "—" not in text
@@ -383,10 +385,13 @@ def test_17_stale_h1_blocks_entry_and_names_the_last_trustworthy_time(db, instru
         db, instrument_id, price=81500,
         data={"state": "stale", "reason": "h1_stale"},
     )
-    assert asset["asset_state"]["title"] == "Данные H1 неполные"
+    assert asset["asset_state"]["title"].startswith("LONG")
+    assert asset["asset_state"]["direction"] == "long"
+    assert "Данные H1 неполные" not in (asset["asset_state"]["title"] or "")
     assert asset["next_action"]["kind"] == "blocked"
     text = " ".join(asset["compact"])
     assert "устарели" in text
+    assert "приостановлены" in text
     assert fmt_time_msk(_close(20)) in text
     assert "в зоне входа" not in text
 
@@ -544,3 +549,35 @@ def test_short_time_today_vs_other_day():
     assert "сегодня" in _short_time(ms, ms)
     other = _short_time(ms, ms + 86_400_000)
     assert "сегодня" not in other and " · " in other
+
+
+def test_forming_h1_is_not_incomplete_history(db, instrument_id):
+    zone = _zone(db, instrument_id, Direction.BULL, 60000, 66000)
+    obs = _obs(db, instrument_id, zone, Direction.BULL, "active", _open(1))
+    _scenario(db, obs, Direction.BULL, created=_close(21))
+    _leg(db, instrument_id, "bull", LEVEL, 20)
+    _entry(db, instrument_id, "bull", 81000, 82000, _open(16))
+    asset = _view(
+        db, instrument_id, price=81500,
+        data={"state": "data_pending", "reason": "current_candle_pending"},
+    )
+    assert asset["data_quality"] == "forming"
+    assert asset["asset_state"]["direction"] == "long"
+    title = asset["asset_state"]["title"] or ""
+    assert "неполн" not in title.lower()
+    assert title.startswith("LONG")
+    text = " ".join(asset["compact"])
+    assert "формируется" in text
+    assert "Ожидаем данные текущей свечи H1" in text
+    assert asset["next_action"]["kind"] != "blocked"
+
+
+def test_stale_without_saved_scenario_has_no_direction(db, instrument_id):
+    asset = _view(
+        db, instrument_id,
+        data={"state": "stale", "reason": "h1_stale"},
+    )
+    assert asset["asset_state"]["title"] == "Недостаточно данных для оценки"
+    assert asset["asset_state"]["direction"] is None
+    assert asset["next_action"]["kind"] == "blocked"
+    assert "приостановлены" in " ".join(asset["compact"])

@@ -74,6 +74,7 @@ def project_asset(
     revision = revision_at(db, int(leg["id"]), moment) if leg else None
     pd = _pd(leg, revision, setup)
     quality_bad, quality_text = _quality(data_state)
+    forming_note = _forming_note(data_state)
     bull = bool(leg and leg.get("direction") == "bull")
     sides = _sides(db, instrument_id, moment, leg)
     zones = _zones(db, instrument_id, leg, pd, setup) if leg and proven else []
@@ -86,11 +87,11 @@ def project_asset(
     )
     compact = _compact(
         state, transition if proven else None, evidence, zones, pd,
-        invalidation, quality_text, leg, quality_bad,
+        invalidation, quality_text, leg, quality_bad, forming_note,
     )
     compact_rows = _compact_rows(
         state, transition if proven else None, evidence, zones, pd,
-        invalidation, quality_text, leg, quality_bad, moment,
+        invalidation, quality_text, leg, quality_bad, forming_note, moment,
     )
     snapshot_id = "asset:{iid}:{as_of}:{move}:{key}:{code}".format(
         iid=instrument_id,
@@ -137,8 +138,8 @@ def project_asset(
         "history_summary": history["summary"],
         "as_of": moment,
         "snapshot_id": snapshot_id,
-        "data_quality": "incomplete" if quality_bad or not proven and leg else (
-            "ok" if not quality_bad else "incomplete"
+        "data_quality": _data_quality_label(
+            quality_bad, forming_note, leg, proven,
         ),
         "pd": pd,
         "compact": compact,
@@ -261,13 +262,32 @@ def _pd(leg, revision, setup) -> Optional[dict[str, Any]]:
     }
 
 
+def _forming_note(data_state: Optional[dict]) -> str:
+    """Текущая незакрытая H1 — не дыра в истории закрытых свечей."""
+    if data_state and data_state.get("reason") == "current_candle_pending":
+        return "Текущая свеча формируется. Ожидаем данные текущей свечи H1."
+    return ""
+
+
+def _data_quality_label(quality_bad: bool, forming_note: str, leg, proven: bool) -> str:
+    if forming_note and not quality_bad and not (leg and not proven):
+        return "forming"
+    if quality_bad or (leg and not proven):
+        return "incomplete"
+    return "ok"
+
+
 def _quality(data_state: Optional[dict]) -> tuple[bool, str]:
     if not data_state:
+        return False, ""
+    reason = data_state.get("reason")
+    if reason == "current_candle_pending":
         return False, ""
     state = data_state.get("state")
     if state in (None, "ok"):
         return False, ""
-    reason = data_state.get("reason")
+    if reason == "no_h1_candles":
+        return True, "Не хватает свечей H1"
     text = _QUALITY_RU.get(reason) or "данные H1 неполные"
     return True, text
 
@@ -568,21 +588,50 @@ def _invalidation(leg, transition) -> dict[str, Any]:
     }
 
 
+def _pause_entries(packed: dict, quality_text: str) -> dict:
+    """Сценарий и направление сохраняются. Новые входы при плохих данных не обещаются."""
+    why = quality_text or "данные неполные"
+    blockers = list(packed.get("blockers") or [])
+    if "data_incomplete" not in blockers:
+        blockers.append("data_incomplete")
+    out = dict(packed)
+    out["action"] = "blocked"
+    out["blockers"] = blockers
+    out["explanation"] = f"Уведомления о новых условиях входа приостановлены: {why}."
+    return out
+
+
 def _state(leg, proven, quality_bad, sides, zones, price, pd, data_state) -> dict[str, Any]:
-    if quality_bad:
-        return _pack(
-            True, "data_incomplete", None, "Данные H1 неполные", "data_incomplete",
-            "blocked", "Входовые сигналы не отправляются, пока качество данных не восстановлено.",
-            ["data_incomplete"], "blocked",
+    quality_text = ""
+    if quality_bad and data_state:
+        reason = data_state.get("reason")
+        quality_text = (
+            "Не хватает свечей H1" if reason == "no_h1_candles"
+            else (_QUALITY_RU.get(reason) or "данные H1 неполные")
         )
     if leg and not proven:
+        blockers = ["provenance_incomplete"]
+        explanation = "Происхождение перехода неполное: нет опоры, свечи или времени."
+        if quality_bad:
+            blockers.append("data_incomplete")
+            if quality_text:
+                explanation = explanation + " " + quality_text + "."
         return _pack(
-            True, "data_incomplete", None, "Данные H1 неполные", "provenance_incomplete",
-            "blocked", "Происхождение перехода неполное: нет опоры, свечи или времени.",
-            ["provenance_incomplete"], "blocked",
+            True, "data_incomplete", None, "Происхождение перехода неполное",
+            "provenance_incomplete", "blocked", explanation, blockers, "blocked",
         )
     if leg and proven:
-        return _proven_state(leg, sides, zones, price, pd, data_state)
+        packed = _proven_state(leg, sides, zones, price, pd, data_state)
+        if quality_bad:
+            return _pause_entries(packed, quality_text)
+        return packed
+    if quality_bad:
+        return _pack(
+            True, "data_incomplete", None, "Недостаточно данных для оценки",
+            "data_incomplete", "blocked",
+            "Сохранённого сценария нет, поэтому направление не назначается.",
+            ["data_incomplete"], "blocked",
+        )
     return _no_leg_state(sides)
 
 
@@ -650,7 +699,9 @@ def _price_inside(price, zones, data_state) -> bool:
     if price is None or not zones:
         return False
     if data_state and data_state.get("state") not in (None, "ok"):
-        return False
+        # Незакрытая текущая H1 не отменяет уже известную котировку.
+        if data_state.get("reason") != "current_candle_pending":
+            return False
     for zone in zones:
         admitted = zone.get("admitted")
         if admitted and admitted[0] <= float(price) <= admitted[1]:
@@ -725,7 +776,7 @@ def _pack(governs, code, trade, title, reason, action, explanation, blockers, se
     }
 
 
-def _compact(state, transition, evidence, zones, pd, invalidation, quality_text, leg, quality_bad) -> list[str]:
+def _compact(state, transition, evidence, zones, pd, invalidation, quality_text, leg, quality_bad, forming_note="") -> list[str]:
     if not state.get("governs"):
         return []
     lines: list[str] = []
@@ -733,8 +784,12 @@ def _compact(state, transition, evidence, zones, pd, invalidation, quality_text,
         lines.append(f"Качество: {quality_text}.")
         if transition and transition.get("proven"):
             lines.append("Последнее достоверное: " + _bos_line(transition))
-        lines.append("Новые входы не отправляются.")
+        lines.append(
+            f"Уведомления о новых условиях входа приостановлены: {quality_text}."
+        )
         return lines[:5]
+    if forming_note:
+        lines.append(forming_note)
     if transition and transition.get("proven"):
         lines.append(_bos_line(transition))
     grounds = _grounds_summary(evidence)
@@ -875,7 +930,10 @@ def _shrink(lines: list[str], blocker: str) -> list[str]:
     if len(merged) <= 5:
         return merged
     if blocker:
-        kept = [line for line in merged if line == blocker or line.startswith(("BOS ", "SMS ", "Качество:", "Последнее", "Причина:", "Происхождение"))]
+        kept = [line for line in merged if line == blocker or line.startswith((
+            "BOS ", "SMS ", "Качество:", "Последнее", "Причина:", "Происхождение",
+            "Текущая", "Уведомления",
+        ))]
         rest = [line for line in merged if line not in kept]
         return (kept + rest)[:5] if blocker in kept else merged[:4] + [blocker]
     return merged[:5]
@@ -895,7 +953,7 @@ def _short_time(ms: int, now_ms: int) -> str:
 
 
 def _compact_rows(state, transition, evidence, zones, pd, invalidation,
-                  quality_text, leg, quality_bad, now_ms) -> list[dict]:
+                  quality_text, leg, quality_bad, forming_note, now_ms) -> list[dict]:
     """Те же факты, что в compact, но подпись + значение + тип ряда.
 
     Фронтенд рисует их сеткой и красит по kind; рынок не пересчитывает.
@@ -908,9 +966,13 @@ def _compact_rows(state, transition, evidence, zones, pd, invalidation,
         if transition and transition.get("proven"):
             rows.append({"kind": "bos", "dir": _bos_dir(transition),
                          "k": _bos_label(transition), "v": _bos_value(transition, now_ms)})
-        rows.append({"kind": "blocker", "k": "Режим",
-                     "v": "Новые входы не отправляются"})
+        rows.append({
+            "kind": "blocker", "k": "Режим",
+            "v": f"Уведомления о новых условиях входа приостановлены: {quality_text}",
+        })
         return rows
+    if forming_note:
+        rows.append({"kind": "quality", "k": "Свеча", "v": forming_note})
     if transition and transition.get("proven"):
         rows.append({"kind": "bos", "dir": _bos_dir(transition),
                      "k": _bos_label(transition), "v": _bos_value(transition, now_ms)})

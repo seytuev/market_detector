@@ -64,7 +64,7 @@ const state = {
     range: true, entries: true, manipulation: true, targets: 'nearest',
     cancel: true, reverse: false, reverseUser: false, historyTypes: null,
   },
-  tableMode: false, columns: DEFAULT_COLUMNS.slice(),
+  tableMode: true, columns: DEFAULT_COLUMNS.slice(),
   pane: 'list',
   timeframe: 'D1',
   candles: [], rawCandles: [], viewCandles: [], candleByTime: new Map(),
@@ -167,13 +167,18 @@ function defaultPrefs() {
       cancel: true, reverse: false, reverseUser: false, historyTypes: null,
       shelf: false,
     },
-    tableMode: false, columns: DEFAULT_COLUMNS.slice(), selected: null,
+    tableMode: true, tableMigrated: 2, columns: DEFAULT_COLUMNS.slice(), selected: null,
   };
 }
 function loadPrefs() {
   let saved = null;
   try { saved = JSON.parse(localStorage.getItem(PREF_KEY) || 'null'); } catch (e) { saved = null; }
   const prefs = saved && saved.v === 1 ? saved : defaultPrefs();
+  if (saved && saved.v === 1 && saved.tableMigrated !== 2) {
+    prefs.tableMode = true;
+    prefs.tableMigrated = 2;
+    try { localStorage.setItem(PREF_KEY, JSON.stringify(prefs)); } catch (e) { /* приватный режим */ }
+  }
   state.bucket = prefs.bucket || 'eligible';
   state.venue = prefs.venue || '';
   state.search = prefs.search || '';
@@ -184,7 +189,7 @@ function loadPrefs() {
   state.eventMode = prefs.eventMode || 'setup';
   state.timeframe = prefs.timeframe === 'W1' ? 'W1' : 'D1';
   state.layers = Object.assign(defaultPrefs().layers, prefs.layers || {});
-  state.tableMode = !!prefs.tableMode;
+  state.tableMode = prefs.tableMode == null ? true : !!prefs.tableMode;
   state.columns = Array.isArray(prefs.columns) && prefs.columns.length ? prefs.columns.filter((id) => COLUMNS.some((col) => col.id === id)) : DEFAULT_COLUMNS.slice();
   if (prefs.selected && prefs.selected.kind && prefs.selected.id != null) state.savedSelected = prefs.selected;
 }
@@ -194,6 +199,7 @@ function savePrefs() {
     rankMin: state.rankMin, rankMax: state.rankMax, ageMin: state.ageMin, ageMax: state.ageMax,
     ddMin: state.ddMin, ddMax: state.ddMax, structure: state.structure, stage: state.stage,
     eventMode: state.eventMode, layers: state.layers, tableMode: state.tableMode,
+    tableMigrated: 2,
     timeframe: state.timeframe,
     columns: state.columns,
     selected: state.selected ? { kind: state.selected.kind, id: state.selected.id } : null,

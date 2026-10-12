@@ -247,7 +247,7 @@ async def test_menu_open_app_sends_url(db):
     app = build_application(_settings(), db)
     update, replies = _msg_update("Открыть рабочее место")
     await _text_handler(app)(update, SimpleNamespace(user_data={}))
-    assert replies == [(f"Рабочее место: {_settings().effective_base_url()}", None)]
+    assert replies == [(f"Анализ: {_settings().effective_base_url()}", None)]
 
 
 async def test_pending_note_wins_over_menu_button(db, seeded):

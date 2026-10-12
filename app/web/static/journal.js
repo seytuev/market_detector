@@ -27,9 +27,13 @@ window.LFJournal = (() => {
   }
 
   const STATUS_RU = {
-    sent: ['sent', 'Доставлено'],
-    failed: ['failed', 'Ошибка'],
-    pending: ['pending', 'Ожидание'],
+    sent: ['sent', 'Отправлено'],
+    failed: ['failed', 'Не удалось отправить'],
+    pending: ['pending', 'Ожидает отправки'],
+    suppressed: ['pending', 'Канал отключён'],
+    skipped: ['pending', 'Канал отключён'],
+    disabled: ['pending', 'Канал отключён'],
+    channel_off: ['pending', 'Канал отключён'],
   };
 
   function canOpen(item) {
@@ -116,6 +120,29 @@ window.LFJournal = (() => {
     return true;
   }
 
+  function stableId(item) {
+    const ref = item.ref || {};
+    const id = ref.event_id || ref.review_id || ref.delivery_id;
+    if (id == null || id === '') return '';
+    return `${item.category || ''}:${id}`;
+  }
+
+  function dedupe(items) {
+    const seen = new Set();
+    const out = [];
+    items.forEach((item) => {
+      const id = stableId(item);
+      if (!id) {
+        out.push(item);
+        return;
+      }
+      if (seen.has(id)) return;
+      seen.add(id);
+      out.push(item);
+    });
+    return out;
+  }
+
   function groupsOf(items) {
     const groups = [];
     items.forEach((item) => {
@@ -156,12 +183,12 @@ window.LFJournal = (() => {
       return;
     }
     if (!visible.length) {
-      list.innerHTML = '<p class="journal-empty">По фильтру среди загруженных записей ничего нет.</p>';
+      list.innerHTML = `<p class="journal-empty">Поиск в ${items.length} загруженных событиях ничего не нашёл. Вся история базы этим полем не охватывается.</p>`;
       renderedSigs = new Set(items.map(sig));
       return;
     }
     list.innerHTML = '';
-    groupsOf(visible).forEach((group) => {
+    groupsOf(dedupe(visible)).forEach((group) => {
       if (group.items.length === 1) {
         const row = document.createElement('article');
         row.className = 'journal-row';
@@ -225,6 +252,22 @@ window.LFJournal = (() => {
     }
   }
 
+  function applyKindFromUrl() {
+    let stored = '';
+    try {
+      stored = sessionStorage.getItem('lf:journalKind') || '';
+      if (stored) sessionStorage.removeItem('lf:journalKind');
+    } catch (err) { stored = ''; }
+    const query = new URLSearchParams(location.search).get('kind') || '';
+    const pick = stored || query;
+    if (['all', 'market', 'decisions', 'delivery'].includes(pick)) kind = pick;
+    document.querySelectorAll('#journal-filters [data-kind]').forEach((btn) => {
+      const on = btn.dataset.kind === kind;
+      btn.classList.toggle('active', on);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+  }
+
   function setKind(next) {
     kind = next;
     renderedSigs = new Set();
@@ -265,5 +308,10 @@ window.LFJournal = (() => {
   const view = $('view-journal');
   if (view && view.classList.contains('active')) load();
 
-  return { show: load };
+  return {
+    show() {
+      applyKindFromUrl();
+      return load();
+    },
+  };
 })();
