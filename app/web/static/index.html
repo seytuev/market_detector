@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>LevelFrame · Среда рыночного анализа</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-  <script>(function(){try{var c=localStorage.getItem('lf:theme');var l=window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches;var t=(c==='dark'||c==='light')?c:(c==='system'?(l?'light':'dark'):'light');document.documentElement.dataset.theme=t;var sb=localStorage.getItem('lf:sidebar');if(sb==='collapsed'||sb==='expanded')document.documentElement.dataset.sidebar=sb;}catch(e){document.documentElement.dataset.theme='light';}})();</script>
+  <script>(function(){try{var c=localStorage.getItem('lf:theme');var l=window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches;var t=(c==='dark'||c==='light')?c:(c==='system'?(l?'light':'dark'):'light');document.documentElement.dataset.theme=t;var sb=localStorage.getItem('lf:sidebar');if(sb==='collapsed'||sb==='expanded')document.documentElement.dataset.sidebar=sb;var es=localStorage.getItem('lf:eventstrip');if(es==='collapsed')document.documentElement.dataset.eventstrip=es;}catch(e){document.documentElement.dataset.theme='light';}})();</script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
   <link rel="stylesheet" href="/style.css">
@@ -272,8 +272,14 @@
       </div>
     </div>
 
-    <footer class="event-strip">
-      <div class="strip-head"><span id="events-strip-label">События актива</span><a href="#journal" data-view="journal">Журнал · все активы →</a></div>
+    <footer class="event-strip" id="event-strip">
+      <div class="strip-head">
+        <button type="button" id="events-strip-toggle" class="strip-toggle" aria-expanded="true" aria-controls="events-list" title="Свернуть ленту событий">
+          <svg class="strip-chev" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span id="events-strip-label">События актива</span>
+        </button>
+        <a href="#journal" data-view="journal">Журнал · все активы →</a>
+      </div>
       <ul id="events-list" class="events strip-events"></ul>
     </footer>
   </section>

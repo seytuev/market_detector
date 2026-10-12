@@ -299,6 +299,29 @@ window.HTF = (() => {
   }
 })();
 
+/* Лента «События актива» сворачивается, освобождая место графику и «Зонам H1».
+   Выбор хранится в lf:eventstrip и применяется до загрузки стилей
+   inline-скриптом в <head> (см. index.html). */
+(() => {
+  const btn = document.getElementById('events-strip-toggle');
+  if (!btn) return;
+  const apply = (state) => {
+    const collapsed = state === 'collapsed';
+    if (collapsed) document.documentElement.dataset.eventstrip = 'collapsed';
+    else delete document.documentElement.dataset.eventstrip;
+    localStorage.setItem('lf:eventstrip', state);
+    btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    btn.title = collapsed ? 'Развернуть ленту событий' : 'Свернуть ленту событий';
+  };
+  btn.addEventListener('click', () => {
+    apply(document.documentElement.dataset.eventstrip === 'collapsed' ? 'expanded' : 'collapsed');
+  });
+  if (document.documentElement.dataset.eventstrip === 'collapsed') {
+    btn.setAttribute('aria-expanded', 'false');
+    btn.title = 'Развернуть ленту событий';
+  }
+})();
+
 /* Сплиттеры: перетаскивание границы меняет ширину правой панели и высоту
    нижней. Размеры действуют только в текущей сессии (без сохранения). */
 (() => {

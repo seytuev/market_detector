@@ -244,37 +244,35 @@
     const legacy = data.legacy_methodology
       ? `<section class="events-card"><h2>${esc(data.legacy_methodology)}</h2>${renderNowLegacy(data)}</section>` : '';
 
-    return `<section class="events-card">
+    const facts = market.active_facts || [];
+    const ratio = coverage && coverage.total > 0
+      ? Math.max(0, Math.min(100, Math.round(Number(coverage.ok || 0) / coverage.total * 100))) : null;
+    const groupCard = (label, direction, symbol, description) => `<section class="events-card market-factor ${directionClass(direction)}">
+      <span class="market-icon" aria-hidden="true">${symbol}</span><h2>${label}</h2>
+      ${groupDirectionHtml('Направление', direction)}<p class="events-service">${description}</p></section>`;
+    return `<section class="events-card market-hero ${directionClass(market.direction)}">
+        <p class="market-eyebrow">Общая картина · Крипторынок</p>
         <div class="events-side-state">${stateChip(market)}</div>
         <p class="events-line">${esc(market.subtitle || 'Направление по событиям и времени')}</p>
         ${conflictHtml(market)}
-        ${pickReasons(market).map(reasonLine).join('')}
+        <div class="market-reasons"><h2>Почему такой контекст</h2>${pickReasons(market).map(reasonLine).join('') || '<p class="events-service">Причины пока не представлены.</p>'}</div>
+        <p class="events-service">Проверено ${esc(fmtMsk(market.evaluated_at))}${esc(age)}</p>${stale}
       </section>
-      <section class="events-card">
-        <h2>Направления групп</h2>
-        ${groupDirectionHtml('События', market.events_direction)}
-        ${groupDirectionHtml('Время', market.time_direction)}
-        ${market.contradictory ? '<p class="events-conflict">Группы расходятся — контекст противоречивый, показаны обе причины.</p>' : ''}
-      </section>
-      <section class="events-card">
-        <h2>Активные факты десятидневного окна</h2>
-        ${factsListHtml(market.active_facts)}
-      </section>
-      ${upcomingReviewsHtml(market)}
-      ${btcBackgroundHtml(market)}
-      <section class="events-card">
-        <h2>Статистика</h2>
-        ${statsHtml(market.statistics)}
-        ${factorAgreementHtml(market.factor_agreement)}
-      </section>
-      <section class="events-card">
-        <h2>Покрытие и качество</h2>
-        ${coverageLine}
-        <p>Качество данных: ${esc(qualityWord(market.quality))}</p>
-        <p class="events-service">Проверено ${esc(fmtMsk(market.evaluated_at))}${esc(age)}</p>
-        ${stale}
-        ${unknownDepsHtml(market.unknown_dependencies)}
-      </section>
+      <div class="market-metrics">
+        ${groupCard('События', market.events_direction, '↗', 'Направление по рыночным событиям и активным фактам.')}
+        ${groupCard('Время', market.time_direction, '◷', 'Влияние дня недели и временных условий по МСК.')}
+        <section class="events-card market-quality"><span class="market-icon" aria-hidden="true">◉</span><h2>Качество данных</h2>
+          <p class="market-quality-value">${esc(qualityWord(market.quality))}</p>
+          ${coverageLine}${ratio != null ? `<meter min="0" max="100" value="${ratio}" aria-label="Покрытие корзины">${ratio}%</meter>` : ''}
+          ${unknownDepsHtml(market.unknown_dependencies)}</section>
+      </div>
+      <div class="market-detail-grid">
+        <section class="events-card market-facts"><p class="market-eyebrow">Основания оценки</p><h2>Активные факты <span class="market-count">${facts.length}</span></h2>
+          <p class="events-service">События, которые учитываются в окне последних 10 дней.</p>${factsListHtml(facts)}</section>
+        <div>${upcomingReviewsHtml(market)}${btcBackgroundHtml(market)}
+          <section class="events-card"><h2>Статистика и согласованность</h2>${statsHtml(market.statistics)}${factorAgreementHtml(market.factor_agreement)}</section></div>
+      </div>
+      <p class="market-footnote">LONG и SHORT обозначают направление контекста. Контекст помогает оценить условия рынка и не является сигналом для входа.</p>
       ${legacy}`;
   }
 
@@ -583,6 +581,7 @@
 
   // ---- загрузка режимов ------------------------------------------------------
   let currentMode = 'now';
+  let requestVersion = 0;
 
   async function loadSide() {
     const box = document.getElementById('h1-events-context');
@@ -601,39 +600,38 @@
   async function show(mode) {
     const body = document.getElementById('events-body');
     if (!body) return;
-    if (!HTF.getToken()) await HTF.ensureToken('Нужен токен владельца.');
-    if (mode === 'feed') {
-      const data = await HTF.api('/api/events/journal');
-      body.innerHTML = renderFeedBundles(data) || renderFeedLegacy(data);
-      return;
-    }
-    if (mode === 'calendar') {
-      const data = await HTF.api('/api/events/calendar');
-      const marketHtml = renderCalendarMarket(data.market);
-      const legacyHtml = renderCalendarLegacy(data);
-      body.innerHTML = marketHtml + legacyHtml
+    const version = ++requestVersion;
+    const status = document.getElementById('market-status');
+    body.setAttribute('aria-busy', 'true');
+    if (status) status.textContent = 'Обновляем данные…';
+    const endpoint = { now: 'overview', feed: 'journal', calendar: 'calendar', rules: 'rules', sources: 'health' }[mode] || 'overview';
+    try {
+      if (!HTF.getToken()) await HTF.ensureToken('Нужен токен владельца.');
+      if (version !== requestVersion) return;
+      const data = await HTF.api(`/api/events/${endpoint}`);
+      if (version !== requestVersion) return;
+      let html;
+      if (mode === 'feed') html = renderFeedBundles(data) || renderFeedLegacy(data);
+      else if (mode === 'calendar') html = renderCalendarMarket(data.market) + renderCalendarLegacy(data)
         || `<p>${esc(data.empty_reason || 'Нет данных календаря.')}</p>`;
-      return;
+      else if (mode === 'sources') html = renderSources(data);
+      else if (mode === 'rules') {
+        const registry = data.registry || [];
+        html = (data.note ? `<p class="events-service">${esc(data.note)}</p>` : '')
+          + (registry.length ? registry.map(ruleRegistryCard).join('') : (data.rules || []).map((rule) =>
+            `<article class="events-card"><h2>${esc(rule.text)}</h2><p>ID ${esc(rule.id)} · ${esc(CLASS_RU[rule.class] || rule.class || '—')}</p></article>`).join(''))
+          + `<section class="events-card"><h2>Статистика</h2>${statsHtml(data.statistics)}</section>`;
+      } else html = data.market ? renderNowMarket(data) : renderNowLegacy(data);
+      body.innerHTML = html;
+      body.dataset.mode = mode;
+      if (status) status.textContent = 'Данные обновлены · время указано по МСК';
+    } catch (err) {
+      if (version !== requestVersion) return;
+      if (body.dataset.mode !== mode) body.innerHTML = '<section class="events-card"><h2>Данные недоступны</h2><p>Повторите загрузку кнопкой «Обновить».</p></section>';
+      if (status) status.textContent = `Не удалось обновить данные. ${err.message || 'Проверьте подключение.'}`;
+    } finally {
+      if (version === requestVersion) body.setAttribute('aria-busy', 'false');
     }
-    if (mode === 'rules') {
-      const data = await HTF.api('/api/events/rules');
-      const note = data.note ? `<p class="events-service">${esc(data.note)}</p>` : '';
-      const registry = data.registry || [];
-      const cards = registry.length
-        ? registry.map(ruleRegistryCard).join('')
-        : (data.rules || []).map((rule) =>
-          `<article class="events-card"><h2>${esc(rule.text)}</h2><p>ID ${esc(rule.id)} · ${esc(CLASS_RU[rule.class] || rule.class || '—')}</p><p class="events-service">Класс: ${esc(rule.class || '—')}</p></article>`
-        ).join('');
-      body.innerHTML = note + cards
-        + `<section class="events-card"><h2>Статистика</h2>${statsHtml(data.statistics)}</section>`;
-      return;
-    }
-    if (mode === 'sources') {
-      body.innerHTML = renderSources(await HTF.api('/api/events/health'));
-      return;
-    }
-    const data = await HTF.api('/api/events/overview');
-    body.innerHTML = data.market ? renderNowMarket(data) : renderNowLegacy(data);
   }
 
   function refresh() {
@@ -645,14 +643,17 @@
   }
 
   function scheduleRefresh() {
-    setInterval(refresh, 60000);
+    setInterval(() => { if (document.visibilityState === 'visible') refresh(); }, 60000);
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') refresh();
     });
   }
 
+  document.getElementById('market-refresh')?.addEventListener('click', refresh);
+
   // ---- инициализация ----------------------------------------------------------
   document.querySelectorAll('[data-mode]').forEach((button) => {
+    button.setAttribute('aria-pressed', 'false');
     button.addEventListener('click', () => {
       document.querySelectorAll('[data-mode]').forEach((item) => {
         const on = item === button;

@@ -7,6 +7,7 @@
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <script>(function(){try{var c=localStorage.getItem('lf:theme');var l=window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches;var t=(c==='dark'||c==='light')?c:(c==='system'?(l?'light':'dark'):'light');document.documentElement.dataset.theme=t;var sb=localStorage.getItem('lf:sidebar');if(sb==='collapsed'||sb==='expanded')document.documentElement.dataset.sidebar=sb;}catch(e){document.documentElement.dataset.theme='light';}})();</script>
   <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/market-context.css">
 </head>
 <body class="app-body">
   <a class="skip" href="#main">К содержимому</a>
@@ -43,8 +44,12 @@
   <div class="shell">
     <div class="shell-main" id="main">
   <div class="events-page" id="events-root">
-    <p class="now-over">Наблюдение, без заявок</p>
-    <h1 class="now-title">Контекст рынка</h1>
+    <header class="market-header">
+      <div><p class="now-over">События · Время · Рыночный фон</p>
+      <h1 class="now-title">Контекст рынка</h1>
+      <p class="market-intro">Что влияет на рынок сейчас — и насколько полна картина.</p></div>
+      <button type="button" class="btn" id="market-refresh">↻ Обновить</button>
+    </header>
     <div class="events-modes" role="group" aria-label="Режим контекста">
       <button type="button" class="btn small" data-mode="now">Сейчас</button>
       <button type="button" class="btn small" data-mode="feed">Лента</button>
@@ -52,7 +57,8 @@
       <button type="button" class="btn small" data-mode="rules">Правила и статистика</button>
       <button type="button" class="btn small" data-mode="sources">Источники</button>
     </div>
-    <div id="events-body"></div>
+    <p id="market-status" class="market-status" role="status" aria-live="polite"></p>
+    <div id="events-body" aria-busy="true"></div>
   </div>
     </div>
     <footer class="app-footer">
