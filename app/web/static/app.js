@@ -395,6 +395,14 @@ async function loadZones() {
   renderZonesTable();
 }
 
+// BSL/SSL: цвет инвертирован относительно направления движения
+// (BSL — зелёная, SSL — красная), совпадает с графиком и тегами.
+function swatchDirClass(z) {
+  const bear = z.direction === 'bear';
+  const invert = z.type === 'BSL' || z.type === 'SSL';
+  return (bear !== invert) ? 'dir-bear' : 'dir-bull';
+}
+
 function drawZones() {
   const overlay = $('zone-overlay');
   overlay.innerHTML = '';
@@ -418,14 +426,6 @@ function drawZones() {
   // Полоса по ценовому диапазону с обрезкой по видимой области графика.
   // Координаты за пределами панели обрезаем — иначе зоны вне видимого
   // ценового диапазона «сваливаются» на край контейнера.
-  // BSL/SSL: цвет инвертирован относительно направления движения
-  // (BSL — зелёная, SSL — красная), совпадает с графиком и тегами
-  const swatchDirClass = (z) => {
-    const bear = z.direction === 'bear';
-    const invert = z.type === 'BSL' || z.type === 'SSL';
-    return (bear !== invert) ? 'dir-bear' : 'dir-bull';
-  };
-
   // FVG: перекрытая движением часть не заливается, линии границ остаются
   // на всю длину. Глубина — max_test_depth от стороны входа (0..1).
   const appendPartialFill = (div, z, completed) => {
