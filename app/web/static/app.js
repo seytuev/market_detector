@@ -418,6 +418,25 @@ function drawZones() {
   // Полоса по ценовому диапазону с обрезкой по видимой области графика.
   // Координаты за пределами панели обрезаем — иначе зоны вне видимого
   // ценового диапазона «сваливаются» на край контейнера.
+  // FVG: перекрытая движением часть не заливается, линии границ остаются
+  // на всю длину. Глубина — max_test_depth от стороны входа (0..1).
+  const appendPartialFill = (div, z, completed) => {
+    if (z.type !== 'FVG' || completed || z.is_level) return;
+    const depth = Math.max(0, Math.min(1, Number(z.max_test_depth) || 0));
+    if (depth <= 0) return; // нетронутая зона заливается целиком
+    div.classList.add('fvg-partial');
+    const fill = document.createElement('span');
+    fill.className = 'zone-fill';
+    if (z.direction === 'bull') {
+      fill.style.top = (depth * 100).toFixed(2) + '%';
+      fill.style.bottom = '0';
+    } else {
+      fill.style.top = '0';
+      fill.style.bottom = (depth * 100).toFixed(2) + '%';
+    }
+    div.appendChild(fill);
+  };
+
   const makeBand = (upper, lower, cls) => {
     const y1 = state.candleSeries.priceToCoordinate(upper);
     const y2 = state.candleSeries.priceToCoordinate(lower);
@@ -581,6 +600,7 @@ function drawZones() {
       const div = makeBand(hi, lo, cls);
       if (!div) continue;
       div.dataset.zoneId = z.id;
+      appendPartialFill(div, z, completed);
       div.style.left = x1 + 'px';
       div.style.width = Math.max(8, x2 - x1) + 'px';
       div.onclick = () => openZoneDetail(z.id);
@@ -3011,9 +3031,14 @@ async function toggleDeskWatch() {
 function renderDeskEntries() {
   const el = $('desk-entries');
   if (!el) return;
+  // Зоны идут по приближенности к текущей цене (цена внутри зоны — первой),
+  // а не в порядке выдачи сервера.
+  const price = state.lastPrice;
+  const byProximity = (a, b) => (price == null ? 0 : distanceToZone(a, price) - distanceToZone(b, price));
   if (state.chartMode === 'h1' && state.h1Layers && window.H1Layers) {
     const H = window.H1Layers;
     const entries = H.selectedZones(state.h1Layers, H.loadSettings());
+    entries.sort(byProximity);
     el.classList.remove('hidden');
     el.innerHTML = `<div class="desk-entries-head"><h2>Зоны H1 / ${entries.length}</h2>` +
       '<span class="muted">Тот же отбор, что на графике · обе стороны</span></div>' +
@@ -3036,7 +3061,7 @@ function renderDeskEntries() {
       '<div class="ltf-empty">Активного сценария нет.</div>';
     return;
   }
-  const entries = v.eligible_entries || [];
+  const entries = (v.eligible_entries || []).slice().sort(byProximity);
   const rows = entries.map((e) => `
     <div class="desk-entry">
       <span class="desk-entry-name">${esc(e.type)} · H1<span class="desk-entry-sub"> / текущий сценарий</span></span>

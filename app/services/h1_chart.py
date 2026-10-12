@@ -585,6 +585,7 @@ def _zone_payload(
     index: _CandleIndex,
     as_of: int,
     candidate: bool,
+    evidence: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     ghost = LtfEntryZone(
         id=None, instrument_id=0, type=type_, direction=direction,
@@ -619,6 +620,12 @@ def _zone_payload(
         and crossed is not None
         and 0 <= as_of - crossed <= DISPLAY_WINDOW_MS
     )
+    # §15.1.7 и для H1: FVG рисуется от центральной свечи тройки
+    display_from = formed_at
+    if type_ == "FVG" and evidence:
+        triple = evidence.get("fvg_candles")
+        if isinstance(triple, list) and len(triple) >= 2 and triple[1]:
+            display_from = int(triple[1])
     return {
         "id": zone_id,
         "type": type_,
@@ -629,7 +636,7 @@ def _zone_payload(
         "is_level": type_ in ("BSL", "SSL") or lower == upper,
         "formed_at": formed_at,
         "confirmed_at": None if candidate else confirmed_at,
-        "display_from": formed_at,
+        "display_from": display_from,
         "display_until": display_until,
         "lifecycle": lifecycle,
         "fill": fill,
@@ -640,6 +647,7 @@ def _zone_payload(
         "display_window_label": DISPLAY_WINDOW_LABEL if recently else None,
         "first_test_at": first_test_at,
         "max_test_depth": max_test_depth,
+        "test_extreme": test_extreme,
         "validity": validity,
         "provenance": provenance,
         "source": source,
@@ -737,6 +745,7 @@ def _scan_zones(
                 validity=draft.validity, provenance="ltf_h1",
                 source="h1_scan", rule_version=RULE_VERSION_LTF,
                 index=index, as_of=as_of, candidate=False,
+                evidence=draft.evidence,
             ))
     return found
 
@@ -878,6 +887,7 @@ def assemble_h1_layers(
             lower=zone.lower, upper=zone.upper, formed_at=zone.formed_at,
             confirmed_at=zone.confirmed_at, first_test_at=first,
             max_test_depth=depth, test_extreme=extreme, validity=zone.validity,
+            evidence=zone.evidence,
             provenance="ltf_entry", source=zone.source,
             rule_version=zone.rule_version, index=index, as_of=moment,
             candidate=zone.confirmed_at is None,

@@ -530,8 +530,23 @@
           const alpha = String(zone.type || '').toLowerCase() === 'fvg' ? 0.22 : 0.28;
           const color = `rgba(${zone.direction === 'bear' ? bear : bull},${alpha})`;
           const fillKey = zone.candidate || zone.lifecycle === 'ended' ? 'rgba(138,148,166,0.025)' : color;
+          // FVG: заливается только нетронутая часть (перекрытая движением —
+          // пусто, линии границ остаются на всю длину); depth от стороны входа
+          let fillTop = top;
+          let fillBottom = bottom;
+          if (zone.type === 'FVG' && fillKey === color) {
+            const depth = Math.max(0, Math.min(1, Number(zone.max_test_depth) || 0));
+            const h = bottom - top;
+            if (depth > 0 && h > 0) {
+              if (zone.direction === 'bull') fillTop = top + depth * h;
+              else fillBottom = bottom - depth * h;
+            }
+          }
           if (!fills[fillKey]) fills[fillKey] = [];
-          fills[fillKey].push({ left: x1, top, width: x2 - x1, height: bottom - top });
+          fills[fillKey].push({
+            left: x1, top: fillTop, width: x2 - x1,
+            height: Math.max(0, fillBottom - fillTop),
+          });
           const mid = yOf(zone.mid != null ? zone.mid : (zone.lower + zone.upper) / 2);
           if (mid != null && mid > top + 8 && mid < bottom - 8) {
             const line = doc.createElement('span');

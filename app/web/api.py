@@ -181,6 +181,9 @@ def zone_to_dict(z: Zone) -> dict[str, Any]:
         "name": z.evidence.get("name", ""),
         "comment": z.evidence.get("comment", ""),
         "boundary_version": z.evidence.get("boundary_version", 1),
+        # глубина проникновения цены в зону — для заливки нетронутой части FVG
+        "max_test_depth": z.max_test_depth,
+        "test_extreme": z.test_extreme,
         # ТЗ 06.10.2026 §4 (T09): основание подтверждения — FVG, только
         # ручное одобрение владельца или отсутствует
         "confirmation_state": (
