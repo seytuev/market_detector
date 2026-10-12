@@ -155,6 +155,8 @@ async def async_main() -> None:
         )
     else:
         sender = LogSender()
+    from .events import publish as events_publish
+    events_publish.wire(db, sender, settings)
     # §11 п.7: снимки зон для Telegram складываем рядом с БД
     charts_dir = str(Path(settings.db_path).parent / "charts")
     dispatcher = EventDispatcher(

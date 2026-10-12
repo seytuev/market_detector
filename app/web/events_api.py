@@ -2,20 +2,35 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException
 
 from ..events.evaluate import RULES, market_direction, relation_to_h1
 from ..events.mathutil import RULE_VERSION
+from ..events.rules import ENGINE_RULE_VERSION, RULE_REGISTRY
 from ..events.runner import run_cycle
 from ..events.store import (
+    assessment_as_of,
+    bundle_publications,
     gate_history,
+    get_assessment,
+    get_source_states,
+    latest_assessment,
     latest_snapshot,
+    list_bundles,
+    list_deliveries,
     list_journal,
     list_situations,
     snapshot_as_of,
 )
+from ..models import now_ms
+
+# Старые BTC-снимки сохранены как прежняя методика (§11.8): подпись явная.
+LEGACY_METHODOLOGY = "legacy BTC / прежняя методика"
+
+_DEFAULT_CYCLE_SECONDS = 60
 
 
 def register_events_routes(app: FastAPI, db, settings, require_auth) -> None:
@@ -23,6 +38,8 @@ def register_events_routes(app: FastAPI, db, settings, require_auth) -> None:
     def overview() -> dict[str, Any]:
         snap = latest_snapshot(db, "BTC")
         health = _health(db)
+        market = latest_assessment(db)
+        age, stale = _market_timing(market, health)
         if snap is None:
             return {
                 "ready": False,
@@ -35,27 +52,68 @@ def register_events_routes(app: FastAPI, db, settings, require_auth) -> None:
                 "health": health,
                 "rule_version": RULE_VERSION,
                 "study_percents_on_card": False,
+                "market": market,
+                "market_age_seconds": age,
+                "market_stale": stale,
+                "legacy_methodology": None,
             }
-        return _public(snap, health)
+        payload = _public(snap, health)
+        # Рыночная область — рядом; legacy market_line (BTC) не трогаем (§10, AC04)
+        payload["market"] = market
+        payload["market_age_seconds"] = age
+        payload["market_stale"] = stale
+        payload["legacy_methodology"] = LEGACY_METHODOLOGY
+        return payload
 
     @app.get("/api/events/health", dependencies=[Depends(require_auth)])
     def health() -> dict[str, Any]:
-        return _health(db)
+        return _health_payload(db)
 
     @app.get("/api/events/journal", dependencies=[Depends(require_auth)])
     def journal(limit: int = 50) -> dict[str, Any]:
-        return {"items": list_journal(db, "BTC", min(limit, 200))}
+        return {
+            "items": list_journal(db, "BTC", min(limit, 200)),
+            "bundles": _bundles(db),
+        }
 
     @app.get("/api/events/calendar", dependencies=[Depends(require_auth)])
     def calendar() -> dict[str, Any]:
         snap = latest_snapshot(db, "BTC")
         if snap is None:
-            return {"ready": False, "empty_reason": "Оценка ещё не выполнялась"}
-        return snap.get("calendar") or {}
+            payload = {"ready": False, "empty_reason": "Оценка ещё не выполнялась"}
+        else:
+            payload = dict(snap.get("calendar") or {})
+        payload["market"] = _market_calendar(latest_assessment(db))
+        return payload
 
     @app.get("/api/events/rules", dependencies=[Depends(require_auth)])
     def rules() -> dict[str, Any]:
-        return {"rules": RULES, "note": "Проценты источника на карточку не выводятся"}
+        market = latest_assessment(db)
+        return {
+            "rules": RULES,
+            "note": "Проценты источника на карточку не выводятся",
+            "rule_version": ENGINE_RULE_VERSION,
+            "registry": [asdict(rule) for rule in RULE_REGISTRY],
+            "statistics": None if market is None else market.get("statistics"),
+        }
+
+    @app.get("/api/events/market/history", dependencies=[Depends(require_auth)])
+    def market_history(at: str | None = None) -> dict[str, Any]:
+        captured = _parse_at(at)
+        return {
+            "captured_at": captured,
+            # «Известно тогда» (§8.2): available_at <= captured, без будущих данных
+            "known_then": assessment_as_of(db, captured),
+            "current": latest_assessment(db),
+        }
+
+    @app.get("/api/events/market/assessment/{assessment_id}",
+             dependencies=[Depends(require_auth)])
+    def market_assessment(assessment_id: str) -> dict[str, Any]:
+        assessment = get_assessment(db, assessment_id)
+        if assessment is None:
+            raise HTTPException(status_code=404, detail="Оценка не найдена")
+        return assessment
 
     @app.get("/api/events/derivatives", dependencies=[Depends(require_auth)])
     def derivatives() -> dict[str, Any]:
@@ -142,6 +200,120 @@ def _health(db) -> dict:
         return json.loads(raw)
     except json.JSONDecodeError:
         return {"quality": "unknown"}
+
+
+def _health_payload(db) -> dict:
+    """Доступность по зависимостям (§10): возраст каждого источника отдельно."""
+    health = _health(db)
+    now = now_ms()
+    payload = dict(health)
+    sources = health.get("sources") or get_source_states(db)
+    with_age = {}
+    for name, state in sources.items():
+        entry = dict(state or {})
+        updated = entry.get("updated_at")
+        entry["age_seconds"] = (
+            None if updated is None else (now - int(updated)) // 1000
+        )
+        with_age[name] = entry
+    payload["sources"] = with_age
+    payload["evaluated_at"] = health.get("evaluated_at")
+    payload["cycle_seconds"] = health.get("cycle_seconds") or _DEFAULT_CYCLE_SECONDS
+    return payload
+
+
+def _market_timing(market: dict | None, health: dict) -> tuple[int | None, bool | None]:
+    """Возраст последней оценки; устаревший снимок не представлять актуальным (§11.4)."""
+    if market is None:
+        return None, None
+    age = (now_ms() - int(market["evaluated_at"])) // 1000
+    cycle = health.get("cycle_seconds") or _DEFAULT_CYCLE_SECONDS
+    return age, age > 2 * int(cycle)
+
+
+def _bundles(db, limit: int = 50) -> list[dict]:
+    """Пакеты публикаций: обнаружение, публикация и доставка — раздельно (AC15)."""
+    out = []
+    for bundle in list_bundles(db, limit=limit):
+        publications = []
+        for pub in bundle_publications(db, bundle["id"]):
+            payload = pub.get("payload") or {}
+            publications.append({
+                "kind": pub.get("kind"),
+                "text": payload.get("text"),
+                "rule_id": payload.get("rule_id"),
+                "created_at": pub.get("created_at"),
+                "window_ms": pub.get("window_ms"),
+                "assessment_id": pub.get("assessment_id"),
+            })
+        deliveries = [
+            {
+                "channel": delivery.get("channel"),
+                "recipient": delivery.get("recipient"),
+                "status": delivery.get("status"),
+                "delivered_at": delivery.get("delivered_at"),
+                "detail": delivery.get("detail"),
+            }
+            for delivery in list_deliveries(db, bundle_id=bundle["id"])
+        ]
+        out.append({
+            "id": bundle["id"],
+            "kind": bundle["kind"],
+            "status": bundle["status"],
+            "opened_at": bundle["opened_at"],
+            "closes_at": bundle["closes_at"],
+            "published_at": bundle["published_at"],
+            "publications": publications,
+            "deliveries": deliveries,
+        })
+    return out
+
+
+def _market_calendar(market: dict | None) -> dict | None:
+    """Реальные будущие переключения из снимка: граница дня МСК и истечения
+    активных фактов. Будущие ликвидации не прогнозируются (§8.2)."""
+    if market is None:
+        return None
+    time_ctx = market.get("time_context") or {}
+    upcoming = []
+    next_day = time_ctx.get("next_day_start_ms")
+    if next_day is not None:
+        upcoming.append({
+            "at": int(next_day),
+            "kind": "msk_day_boundary",
+            "label": "Смена дня МСК",
+        })
+    for fact in market.get("active_facts") or []:
+        valid_until = fact.get("valid_until")
+        if valid_until is None:
+            continue
+        upcoming.append({
+            "at": int(valid_until),
+            "kind": "fact_expiry",
+            "label": "Событие больше не учитывается",
+            "fact_key": fact.get("fact_key"),
+        })
+    upcoming.sort(key=lambda item: item["at"])
+    return {
+        "time_context": time_ctx,
+        "next_review_at": market.get("next_review_at"),
+        "upcoming": upcoming,
+    }
+
+
+def _parse_at(at: str | None) -> int:
+    if at is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Параметр at обязателен: метка времени, мс",
+        )
+    try:
+        return int(str(at).strip())
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=400,
+            detail="Параметр at должен быть целым числом миллисекунд",
+        )
 
 
 def _service_from_health(health: dict) -> str:

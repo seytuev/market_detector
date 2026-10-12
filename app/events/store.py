@@ -603,6 +603,25 @@ def bundle_publications(db, bundle_id: int) -> list[dict]:
     ]
 
 
+def get_publication(db, pub_id: int) -> dict | None:
+    """Публикация по id (finish-колбэк outbox получает publication id)."""
+    row = db.conn.execute(
+        "SELECT * FROM events_publication WHERE id=?", (pub_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "id": row["id"],
+        "pub_key": row["pub_key"],
+        "bundle_id": row["bundle_id"],
+        "kind": row["kind"],
+        "assessment_id": row["assessment_id"],
+        "window_ms": row["window_ms"],
+        "payload": json.loads(row["payload_json"]),
+        "created_at": row["created_at"],
+    }
+
+
 def upsert_delivery(db, *, bundle_id: int, recipient: str, channel: str,
                     status: str, at_ms: int, detail: str | None = None,
                     delivered_at: int | None = None) -> None:
