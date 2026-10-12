@@ -839,6 +839,27 @@
     };
   }
 
+  function structuralBox(frame) {
+    if (!frame || !(frame.upper > frame.lower) || frame.base_start_open_time == null) {
+      return null;
+    }
+    if (frame.base_end_open_time == null) return null;
+    const endMs = frame.base_end_open_time + DAY_MS;
+    if (!(endMs > frame.base_start_open_time)) return null;
+    return {
+      kind: 'range',
+      startMs: frame.base_start_open_time,
+      endMs,
+      upper: frame.upper,
+      lower: frame.lower,
+      shelf: false,
+      range_id: frame.range_id,
+      revision_id: frame.revision_id,
+      rules_version: frame.rules_version || null,
+      geometry_source: 'structural',
+    };
+  }
+
   function episodeBox(episode, lastCandleOpenMs) {
     if (!episode || !(episode.upper > episode.lower) || episode.base_start_open_time == null) {
       return null;
@@ -889,29 +910,61 @@
       });
     }
     if (view.range && view.eventMode === 'history') {
-      (detail.range_episodes || []).forEach((episode) => {
+      (detail.structural_ranges || []).forEach((frame) => {
         if (
-          shown && shown.geometry_source === 'episode'
-          && shown.range_id != null && episode.id === shown.range_id
+          shown && shown.geometry_source === 'structural'
+          && shown.range_id != null && frame.range_id === shown.range_id
         ) return;
-        const box = episodeBox(episode, last);
+        const box = structuralBox(frame);
         if (box) result.boxes.push(box);
       });
+      if (!(shown && shown.geometry_source === 'structural')) {
+        (detail.range_episodes || []).forEach((episode) => {
+          if (
+            shown && shown.geometry_source === 'episode'
+            && shown.range_id != null && episode.id === shown.range_id
+          ) return;
+          const box = episodeBox(episode, last);
+          if (box) result.boxes.push(box);
+        });
+      }
     }
     if (view.shelf && shown && shown.startMs != null) {
-      const found = shelfRange(closedCandles(detail), shown.startMs, last);
-      if (found) {
-        const lower = Math.max(found.lower, shown.lower);
-        const upper = Math.min(found.upper, shown.upper);
-        if (upper > lower) {
+      const serverChildren = shown.geometry_source === 'structural'
+        ? ((detail.effective_range && detail.effective_range.children) || [])
+        : [];
+      if (serverChildren.length) {
+        serverChildren.forEach((child) => {
+          if (child.local_exit_open_time == null || !(child.upper > (child.lower || shown.lower))) return;
+          const lower = Math.max(child.lower != null ? child.lower : shown.lower, shown.lower);
+          const upper = child.upper;
+          if (!(upper > lower)) return;
           result.boxes.push({
             kind: 'shelf',
             startMs: shown.startMs,
-            endMs: found.endMs,
+            endMs: child.local_exit_open_time + DAY_MS,
             upper, lower,
             shelf: true,
+            parent_structure_id: child.parent_structure_id != null
+              ? child.parent_structure_id : shown.range_id,
             parent_range_id: shown.range_id,
           });
+        });
+      } else if (shown.geometry_source !== 'structural') {
+        const found = shelfRange(closedCandles(detail), shown.startMs, last);
+        if (found) {
+          const lower = Math.max(found.lower, shown.lower);
+          const upper = Math.min(found.upper, shown.upper);
+          if (upper > lower) {
+            result.boxes.push({
+              kind: 'shelf',
+              startMs: shown.startMs,
+              endMs: found.endMs,
+              upper, lower,
+              shelf: true,
+              parent_range_id: shown.range_id,
+            });
+          }
         }
       }
     }

@@ -507,6 +507,20 @@ function renderCard() {
   if (anchors && anchors.rebound) why.push(`Отскок ${fmtDate(anchors.rebound.open_time)}.`);
   const shownRange = window.AltChart.chartRange(detail, null);
   const frame = shownRange || range;
+  const eff = detail.effective_range;
+  if (detail.structure_note) why.push(detail.structure_note);
+  if (eff && eff.base_start_open_time) {
+    const start = fmtDate(eff.base_start_open_time);
+    const end = eff.base_end_open_time ? fmtDate(eff.base_end_open_time) : null;
+    why.push(end ? `Период ${start} — ${end}.` : `Период с ${start}.`);
+  }
+  if (eff) {
+    const avail = eff.available_at_ms ? `, доступна с ${fmtTime(eff.available_at_ms)}` : '';
+    why.push(`Состояние ${eff.state || '—'}, версия ${eff.rules_version || '—'}${avail}.`);
+    if (eff.geometry_source && eff.geometry_source !== 'structural' && eff.geometry_source !== 'manual') {
+      why.push('Показан результат предыдущей версии.');
+    }
+  }
   if (frame) {
     const id = frame.range_id != null ? ` #${frame.range_id}` : '';
     const rev = frame.revision_id != null ? `, ревизия ${frame.revision_id}` : '';

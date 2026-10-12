@@ -24,6 +24,7 @@ from datetime import datetime, timedelta
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
+from ..alt.store_v04 import list_structures, select_frame
 from ..config import Settings
 from ..db import Database
 from ..models import close_boundary_ms, now_ms
@@ -551,10 +552,14 @@ def build_effective_range(
     geometry_source: str = "frozen",
     rules_version: str = ALT_RULE_VERSION,
     available_at_ms: Optional[int] = None,
+    structural: Optional[dict[str, Any]] = None,
 ) -> Optional[dict[str, Any]]:
-    """Одна рамка одной ревизии. Ручная побеждает эпизод, эпизод — заморозку v1.
+    """Одна рамка одной ревизии.
 
-    Поля разных источников не смешиваются.
+    Ручная ревизия побеждает. Иначе берётся доступная структура alt-0.4.
+    Эпизод v2 и заморозка v1 остаются, если новой структуры нет, и помечаются
+    своим geometry_source. Поля разных источников не смешиваются.
+    Перекрытие по времени эпизод больше не выбирает, когда есть структура.
     """
     if (
         manual is not None
@@ -562,6 +567,13 @@ def build_effective_range(
         and manual.upper > manual.lower
     ):
         return _frame_from_manual(manual, source_id)
+    if (
+        isinstance(structural, dict)
+        and structural.get("upper") is not None
+        and structural.get("lower") is not None
+        and structural["upper"] > structural["lower"]
+    ):
+        return structural
     if episode is not None and episode.upper > episode.lower:
         return _frame_from_episode(episode)
     return _frame_from_stored(
@@ -571,6 +583,21 @@ def build_effective_range(
         rules_version=rules_version,
         available_at_ms=available_at_ms,
     )
+
+
+def _structural_view(
+    db: Database, asset: Any, source: Any, as_of_ms: Optional[int],
+) -> tuple[Optional[dict[str, Any]], list[dict[str, Any]], Optional[str]]:
+    """Выбранная ревизия alt-0.4, список структур и причина, если выбора нет."""
+    if asset is None or source is None:
+        return None, [], "Надёжной структуры alt-0.4 нет."
+    frames = list_structures(db, asset.id, source.id)
+    selected = select_frame(db, asset.id, source.id, as_of_ms)
+    if selected is not None:
+        return selected, frames, None
+    if frames:
+        return None, frames, "Доступной ревизии alt-0.4 на эту дату нет."
+    return None, [], "Надёжной структуры alt-0.4 нет."
 
 
 def _derived_targets(lower: float, upper: float) -> list[dict[str, Any]]:
@@ -1266,8 +1293,12 @@ def alt_setup_detail(db: Database, setup_id: int, settings: Settings) -> Optiona
         frozen.start_anchor_open_time if frozen is not None else None,
         frozen.included_candles if frozen is not None else None,
     )
+    structural, structural_ranges, structure_note = _structural_view(
+        db, asset, source, last_run.as_of_ms if last_run else None,
+    )
     effective_range = build_effective_range(
         manual=manual_revision,
+        structural=structural,
         episode=matched_episode,
         stored=frozen,
         source_id=source.id if source is not None else None,
@@ -1279,7 +1310,7 @@ def alt_setup_detail(db: Database, setup_id: int, settings: Settings) -> Optiona
     cancel = _cancel_block(setup)
     if (
         effective_range is not None
-        and effective_range["geometry_source"] == "episode"
+        and effective_range["geometry_source"] in ("episode", "structural")
         and frozen is not None
         and not (
             _prices_match(effective_range["lower"], frozen.lower)
@@ -1321,6 +1352,8 @@ def alt_setup_detail(db: Database, setup_id: int, settings: Settings) -> Optiona
         ),
         "range_revision": _revision_payload(manual_revision),
         "effective_range": effective_range,
+        "structural_ranges": structural_ranges,
+        "structure_note": structure_note,
         "range_episodes": range_episodes,
         "range_versions": metrics.get("versions") or [],
         "anchors": anchors,
@@ -1428,8 +1461,12 @@ def alt_candidate_detail(db: Database, candidate_id: int, settings: Settings) ->
         candidate.start_anchor_open_time,
         candidate.n_days,
     )
+    structural, structural_ranges, structure_note = _structural_view(
+        db, asset, source, last_run.as_of_ms if last_run else None,
+    )
     effective_range = build_effective_range(
         manual=manual_revision,
+        structural=structural,
         episode=matched_episode,
         stored=candidate,
         source_id=source.id if source is not None else None,
@@ -1451,6 +1488,8 @@ def alt_candidate_detail(db: Database, candidate_id: int, settings: Settings) ->
         "range": _geometry_of(None, candidate),
         "range_revision": _revision_payload(manual_revision),
         "effective_range": effective_range,
+        "structural_ranges": structural_ranges,
+        "structure_note": structure_note,
         "range_episodes": range_episodes,
         "n_days": candidate.n_days,
         "anchors": {

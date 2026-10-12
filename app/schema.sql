@@ -785,6 +785,56 @@ CREATE TABLE IF NOT EXISTS alt_range_revision (
 CREATE INDEX IF NOT EXISTS ix_alt_range_revision_active
     ON alt_range_revision(subject_kind, subject_id, active);
 
+-- Структуры alt-0.4. Старые эпизоды и ручные ревизии не переписываются.
+-- Повторный прогон заменяет только строки этой версии.
+CREATE TABLE IF NOT EXISTS alt_structure (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_id INTEGER NOT NULL,
+    source_id INTEGER NOT NULL,
+    structure_key TEXT NOT NULL,
+    rules_version TEXT NOT NULL,
+    state TEXT NOT NULL,
+    eligible INTEGER NOT NULL DEFAULT 0,
+    lower REAL,
+    upper REAL,
+    base_start_open_time INTEGER,
+    base_end_open_time INTEGER,
+    available_at_ms INTEGER,
+    computed_at_ms INTEGER NOT NULL DEFAULT 0,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    UNIQUE(source_id, structure_key, rules_version)
+);
+CREATE INDEX IF NOT EXISTS ix_alt_structure_asset
+    ON alt_structure(asset_id, source_id, rules_version);
+
+CREATE TABLE IF NOT EXISTS alt_structure_revision (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    structure_id INTEGER NOT NULL,
+    revision_id TEXT NOT NULL,
+    rules_version TEXT NOT NULL,
+    geometry_kind TEXT NOT NULL,
+    lower REAL NOT NULL,
+    upper REAL NOT NULL,
+    mid REAL NOT NULL,
+    width REAL NOT NULL,
+    base_start_open_time INTEGER,
+    base_end_open_time INTEGER,
+    base_end_confirmed_at_ms INTEGER,
+    available_at_ms INTEGER NOT NULL,
+    computed_at_ms INTEGER NOT NULL,
+    supersedes_revision_id TEXT,
+    revision_reason TEXT NOT NULL,
+    state TEXT NOT NULL,
+    boundary_evidence_json TEXT NOT NULL DEFAULT '{}',
+    quality_json TEXT NOT NULL DEFAULT '{}',
+    selection_reason TEXT NOT NULL DEFAULT '',
+    data_coverage_json TEXT NOT NULL DEFAULT '{}',
+    params_json TEXT NOT NULL DEFAULT '{}',
+    UNIQUE(structure_id, revision_id)
+);
+CREATE INDEX IF NOT EXISTS ix_alt_structure_revision_avail
+    ON alt_structure_revision(structure_id, available_at_ms);
+
 -- Presentation outbox: additive migration, never replays delivered history.
 CREATE TABLE IF NOT EXISTS notification_packet (
     id INTEGER PRIMARY KEY,

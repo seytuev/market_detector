@@ -60,6 +60,7 @@ from ..models_alt import (
 )
 from .engine import AltEngine
 from .engine_v2 import AltEngineV2
+from .store_v04 import persist_candles
 from .universe import refresh_universe
 
 log = logging.getLogger(__name__)
@@ -528,6 +529,16 @@ class AltRunner:
                 log.exception(
                     "эпизоды v2 не записаны, актив %s", asset.id
                 )
+        # alt-0.4 считается параллельно. version_key и очередь уведомлений
+        # не меняются: исторический пересчёт ничего не рассылает.
+        try:
+            await asyncio.to_thread(
+                persist_candles, self.db, asset.id, src.id, candles, now
+            )
+        except Exception:
+            log.exception(
+                "структуры alt-0.4 не записаны, актив %s", asset.id
+            )
 
         marked: list[int] = []
         if backfill:
