@@ -460,7 +460,11 @@ async function reloadCurrent({ keepRange }) {
       api(`/api/ltf/instruments/${id}/structure?${h1q}`).catch(() => ({ __error: true })),
     ]);
     if (stale()) return null;
-    return { view, layers, candles: candleBundle.candles, candleVersion: candleBundle.state_version, journal, assets, h1 };
+    const versioned = candleBundle && !Array.isArray(candleBundle);
+    const candleRows = versioned ? (candleBundle.candles || []) : (Array.isArray(candleBundle) ? candleBundle : []);
+    const candleVersion = versioned && candleBundle.state_version != null
+      ? candleBundle.state_version : view.state_version;
+    return { view, layers, candles: candleRows, candleVersion, journal, assets, h1 };
   };
   const mismatch = (b) =>
     b.candleVersion !== b.view.state_version ||

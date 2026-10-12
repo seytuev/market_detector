@@ -340,15 +340,21 @@ async function loadCandles() {
   const req = ++state.candleReq;
   const limit = tf === 'H1' ? 1500 : 500;
   const preserve = state.loadedCandleTf === tf && state.loadedCandleInstrument === id && state.chart
-    && state.candles.length
+    && state.candles && state.candles.length
     ? HTF.captureChartRange(state.chart, state.candles)
     : null;
   const response = await api(
     `/api/candles?instrument_id=${id}&timeframe=${tf}&limit=${limit}&with_version=true`);
   if (req !== state.candleReq || id !== state.instrumentId || tf !== state.timeframe) return;
-  if (state.loadedCandleInstrument === id && state.loadedCandleTf === tf && response.state_version < state.candleVersion) return;
-  state.candles = response.candles;
-  state.candleVersion = response.state_version;
+  // Новый ответ — {candles, state_version}. Старый процесс отдаёт сам список:
+  // нельзя записывать undefined, иначе график гаснет на .length.
+  const versioned = response && !Array.isArray(response);
+  const candles = versioned ? (response.candles || []) : (Array.isArray(response) ? response : []);
+  const version = versioned && response.state_version != null ? response.state_version : null;
+  if (version != null && state.loadedCandleInstrument === id && state.loadedCandleTf === tf
+      && version < state.candleVersion) return;
+  state.candles = candles;
+  if (version != null) state.candleVersion = version;
   state.loadedCandleTf = tf;
   state.loadedCandleInstrument = id;
   state.candleSeries.setData(state.candles);
@@ -392,7 +398,7 @@ async function loadZones() {
 function drawZones() {
   const overlay = $('zone-overlay');
   overlay.innerHTML = '';
-  if (!state.candleSeries || !state.candles.length) return;
+  if (!state.candleSeries || !state.candles || !state.candles.length) return;
   const chartEl = $('chart');
   const width = chartEl.clientWidth;
   const height = chartEl.clientHeight;
@@ -2513,7 +2519,7 @@ function handleWsMessage(data) {
     if (data.instrument_id === state.instrumentId && data.price) {
       state.lastPrice = data.price;
       const bar = data.candles && data.candles[state.timeframe];
-      if (bar && state.candleSeries) {
+      if (bar && state.candleSeries && state.candles) {
         state.candleSeries.update(bar);
         const last = state.candles[state.candles.length - 1];
         if (last && last.time === bar.time) state.candles[state.candles.length - 1] = bar;
