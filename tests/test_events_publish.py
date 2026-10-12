@@ -8,6 +8,7 @@ from app.config import Settings
 from app.db import Database
 from app.events import memory, publish, store
 from app.events.rules import ENGINE_RULE_VERSION
+from app.events.runner import _set_source
 
 T0 = 1_800_000_000_000
 DAY = 86_400_000
