@@ -224,6 +224,10 @@ select, input, textarea {
 .zone-rect.dir-bear { --zc: var(--zone-bear-rgb); }
 .zone-rect.tf-ltf   { --za: .07; --zb: .38; }
 .zone-rect.tf-context { --za: .06; --zb: .34; }
+/* BSL/SSL: условность отображения — BSL зелёная, SSL красная
+   (направление движения у них обратное: BSL медвежья, SSL бычья) */
+.zone-rect.z-bsl { --zc: var(--zone-bull-rgb); }
+.zone-rect.z-ssl { --zc: var(--zone-bear-rgb); }
 
 /* FVG: перекрытая движением часть не заливается — полоса прозрачна,
    нетронутая часть рисует вложенный слой; линии границ на всю длину. */
@@ -721,6 +725,8 @@ select, input, textarea {
 }
 .ltf-entry.dir-bull { background: rgba(var(--zone-bull-rgb), .12); border-color: rgba(var(--zone-bull-rgb), .5); }
 .ltf-entry.dir-bear { background: rgba(var(--zone-bear-rgb), .12); border-color: rgba(var(--zone-bear-rgb), .5); }
+.ltf-entry.ltf-entry-bsl { background: rgba(var(--zone-bull-rgb), .12); border-color: rgba(var(--zone-bull-rgb), .5); }
+.ltf-entry.ltf-entry-ssl { background: rgba(var(--zone-bear-rgb), .12); border-color: rgba(var(--zone-bear-rgb), .5); }
 .ltf-entry-bsl, .ltf-entry-ssl { background: transparent; }
 .ltf-level { border-top: 2px solid; height: 0; }
 .ltf-level.ltf-entry-bsl { border-color: var(--c-bsl-border); }
@@ -754,6 +760,8 @@ select, input, textarea {
 }
 .h1-zone.zone-rect.dir-bull { border-color: rgba(var(--zone-bull-rgb), .85); }
 .h1-zone.zone-rect.dir-bear { border-color: rgba(var(--zone-bear-rgb), .85); }
+.h1-zone.zone-rect.z-bsl { border-color: rgba(var(--zone-bull-rgb), .85); }
+.h1-zone.zone-rect.z-ssl { border-color: rgba(var(--zone-bear-rgb), .85); }
 /* форма остаётся подсказкой типа: FVG — пунктирные верх и низ */
 .h1-zone.zone-rect.z-fvg { border-top-style: dashed; border-bottom-style: dashed; }
 .h1-zone-fills { position: absolute; top: 0; left: 0; z-index: 2; pointer-events: none; }
@@ -776,6 +784,8 @@ select, input, textarea {
 }
 .h1-liquidity.dir-bull { color: rgba(var(--zone-bull-rgb), .85); }
 .h1-liquidity.dir-bear { color: rgba(var(--zone-bear-rgb), .85); }
+.h1-liquidity.ltf-entry-bsl { color: rgba(var(--zone-bull-rgb), .85); }
+.h1-liquidity.ltf-entry-ssl { color: rgba(var(--zone-bear-rgb), .85); }
 .h1-liquidity.ltf-level.selected { outline: none; box-shadow: none; opacity: 1; border-top-width: 2px; }
 .h1-zone-tag {
   position: absolute; z-index: 5; height: 20px; box-sizing: border-box;

@@ -418,6 +418,14 @@ function drawZones() {
   // Полоса по ценовому диапазону с обрезкой по видимой области графика.
   // Координаты за пределами панели обрезаем — иначе зоны вне видимого
   // ценового диапазона «сваливаются» на край контейнера.
+  // BSL/SSL: цвет инвертирован относительно направления движения
+  // (BSL — зелёная, SSL — красная), совпадает с графиком и тегами
+  const swatchDirClass = (z) => {
+    const bear = z.direction === 'bear';
+    const invert = z.type === 'BSL' || z.type === 'SSL';
+    return (bear !== invert) ? 'dir-bear' : 'dir-bull';
+  };
+
   // FVG: перекрытая движением часть не заливается, линии границ остаются
   // на всю длину. Глубина — max_test_depth от стороны входа (0..1).
   const appendPartialFill = (div, z, completed) => {
@@ -1033,7 +1041,7 @@ function renderZonesTable() {
       card.type = 'button';
       card.className = 'zone-card' + (z.id === state.selectedZoneId ? ' selected' : '');
       card.innerHTML =
-        `<span class="zc-top"><span class="swatch dir-${z.direction === 'bear' ? 'bear' : 'bull'}"></span>` +
+        `<span class="zc-top"><span class="swatch ${swatchDirClass(z)}"></span>` +
         `<span class="zc-type">${z.type.toUpperCase()} · ${z.timeframe}</span>` +
         `<span class="dir ${z.direction}" title="${z.direction === 'bear' ? 'Медвежья зона' : 'Бычья зона'}">${z.direction === 'bear' ? '↓' : '↑'}</span>` +
         `<span class="zc-status">${esc(STATUS_RU[z.status] || z.status)}${z.display_until ? ' · завершена' : ''}</span></span>` +

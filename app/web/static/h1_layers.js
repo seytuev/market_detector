@@ -528,7 +528,11 @@
           const bull = rgb('--zone-bull-rgb', '22, 146, 100');
           const bear = rgb('--zone-bear-rgb', '214, 69, 77');
           const alpha = String(zone.type || '').toLowerCase() === 'fvg' ? 0.22 : 0.28;
-          const color = `rgba(${zone.direction === 'bear' ? bear : bull},${alpha})`;
+          // BSL/SSL: цвет инвертирован относительно направления движения
+          const colorDir = (zone.type === 'BSL' || zone.type === 'SSL')
+            ? (zone.direction === 'bear' ? bull : bear)
+            : (zone.direction === 'bear' ? bear : bull);
+          const color = `rgba(${colorDir},${alpha})`;
           const fillKey = zone.candidate || zone.lifecycle === 'ended' ? 'rgba(138,148,166,0.025)' : color;
           // FVG: заливается только нетронутая часть (перекрытая движением —
           // пусто, линии границ остаются на всю длину); depth от стороны входа
