@@ -10,13 +10,14 @@
   // ---- словари русских подписей -------------------------------------------
   const ARROW_GLYPH = { up: '↑', down: '↓', flat: '↔', conflict: '！', unknown: '—' };
   const DIRECTION_WORD = {
-    long: 'LONG', short: 'SHORT', neutral: 'нейтрально',
-    mixed: 'противоречиво', unknown: 'неизвестно',
+    long: 'В пользу роста', short: 'В пользу снижения', neutral: 'Без явного перевеса',
+    mixed: 'Есть аргументы в обе стороны', unknown: 'Недостаточно данных',
+    none: 'Без направления', conditional: 'Зависит от условий',
   };
   const GROUP_RU = { events: 'События', time: 'Время' };
   const QUALITY_RU = {
-    ok: 'полное', partial: 'частичное', stale: 'устаревшее',
-    unavailable: 'недоступно', unknown: 'неизвестно',
+    ok: 'Данные полные', partial: 'Есть пробелы в данных', stale: 'Данные устарели',
+    unavailable: 'Данные недоступны', unknown: 'Ещё не проверено',
   };
   const FACT_STATE_RU = {
     provisional: 'предварительное', confirmed: 'подтверждено',
@@ -28,11 +29,13 @@
   };
   const CONFIRMATION_RU = {
     confirmed: 'подтверждено', unconfirmed: 'не подтверждено',
-    experimental: 'экспериментальное',
+    experimental: 'правило пробное, статистически не доказано',
+    validated: 'проверено', unvalidated: 'правило ещё не проверено',
   };
   const SOURCE_RU = {
-    price: 'Цены', liquidations: 'Ликвидации', oi: 'Открытый интерес',
-    funding: 'Фандинг', calendar: 'Календарь', basket: 'Корзина',
+    price: 'Цены', liquidations: 'Принудительное закрытие сделок', oi: 'Объём открытых контрактов',
+    funding: 'Плата за удержание позиции', calendar: 'Календарь', basket: 'Набор монет',
+    basket_history: 'История цен набора монет',
   };
   const BUNDLE_KIND_RU = { changes: 'Изменения', downtime_digest: 'Сводка после простоя' };
   const CHANNEL_RU = { feed: 'лента', telegram: 'telegram', push: 'push' };
@@ -40,7 +43,37 @@
     delivered: 'доставлено', sent: 'отправлено', pending: 'ожидает',
     unavailable: 'недоступна', failed: 'ошибка', shadow: 'теневая запись',
   };
-  const UPCOMING_KIND_RU = { day_boundary: 'Граница дня', fact_expiry: 'Истечение факта' };
+  const UPCOMING_KIND_RU = { day_boundary: 'Начало нового дня', fact_expiry: 'Событие перестанет влиять на оценку' };
+  const RULE_NAME = {
+    LIQ_PRESSURE: 'Давление из-за закрытия сделок', LIQ_RECOVERY: 'Восстановление после массового закрытия сделок',
+    LIQ_FACT: 'Массовое закрытие сделок', TIME_WEEKDAY: 'Влияние дня недели',
+    TIME_WINDOW: 'Влияние времени суток', SEQ_WEEK_START: 'Рост в начале недели',
+    SRC_DEGRADED: 'Данные стали менее полными', SRC_RECOVERED: 'Данные снова доступны',
+  };
+  const RULE_DESCRIPTION = {
+    LIQ_PRESSURE: 'Когда позиции на рост массово закрываются принудительно, а цены продолжают падать, это условие учитывается в пользу снижения.',
+    LIQ_RECOVERY: 'Когда массовое закрытие позиций стихает, а цены восстанавливаются, это условие учитывается в пользу роста.',
+    LIQ_FACT: 'Записывает массовое принудительное закрытие позиций. Само по себе событие не указывает на рост или снижение.',
+    TIME_WEEKDAY: 'Проверяет влияние дня недели. Пока методика не подтверждена, это правило не меняет оценку рынка.',
+    TIME_WINDOW: 'Проверяет влияние времени суток. Для расчёта нужны заданные часы и проверенная методика.',
+    SEQ_WEEK_START: 'Проверяет рост в завершённые понедельник и вторник. Правило пробное: влияние на следующие дни ещё не доказано.',
+    SRC_DEGRADED: 'Отмечает ухудшение качества данных. Само по себе не указывает на рост или снижение цены.',
+    SRC_RECOVERED: 'Отмечает восстановление источников данных. Само по себе не указывает на рост или снижение цены.',
+  };
+  function readable(value) {
+    const plain = { LONG: 'Условия в пользу роста', SHORT: 'Условия в пользу снижения',
+      'Нейтрально': 'Нет явного перевеса', 'Противоречивый контекст': 'Есть аргументы в обе стороны',
+      'Направление неизвестно': 'Недостаточно данных для оценки',
+      'Крипторынок: направление неизвестно. Доступен фон BTC': 'Для оценки всего рынка мало данных. Доступна оценка биткоина.' };
+    return plain[value] || String(value ?? '').replace(/Контекст поддерживает LONG/g, 'Условия в пользу роста')
+      .replace(/Контекст поддерживает SHORT/g, 'Условия в пользу снижения')
+      .replace(/\bLONG\b/g, 'рост').replace(/\bSHORT\b/g, 'снижение')
+      .replace(/лонг-ликвидаций/gi, 'принудительных закрытий позиций на рост')
+      .replace(/Фон BTC/g, 'Ситуация с биткоином').replace(/Направление по событиям и времени/g, 'Оценка влияния событий и времени на рынок')
+      .replace(/Контекст противоречивый/g, 'События и время дают разные оценки');
+  }
+  const copy = (value) => esc(readable(value));
+  const ruleName = (id) => RULE_NAME[id] || RULE_TITLE[id] || 'Рыночное событие';
 
   // ---- форматтеры ----------------------------------------------------------
   function fmtMsk(ms) {
@@ -64,13 +97,6 @@
     return n.toLocaleString('ru-RU', { maximumFractionDigits: 4 });
   }
 
-  function signWord(sign) {
-    const n = Number(sign);
-    if (n > 0) return '+';
-    if (n < 0) return '−';
-    return '0';
-  }
-
   function qualityWord(quality) {
     return QUALITY_RU[quality] || quality || 'неизвестно';
   }
@@ -81,23 +107,20 @@
   }
 
   // ---- общие блоки рыночного снимка ---------------------------------------
-  // Итоговый индикатор: глиф стрелки + строка сервера. LONG/SHORT всегда
-  // подписаны как направление контекста, цвет дублируется словами.
+  // Итог приходит с сервера; меняем только подписи, сохраняя смысл оценки.
+  // Цвет направления всегда дублируется словами.
   function stateChip(market) {
     const direction = (market && market.direction) || 'unknown';
     const glyph = ARROW_GLYPH[(market && market.arrow)] || '';
     const raw = String((market && market.market_line) || 'Направление неизвестно');
     const line = glyph ? raw.replace(/^[↑↓↔！]+\s*/, '') : raw;
-    const text = glyph ? `${glyph} ${line}` : line;
-    const note = (direction === 'long' || direction === 'short')
-      ? `<span class="side-state-note">контекст поддерживает ${direction === 'long' ? 'LONG' : 'SHORT'}</span>`
-      : '';
-    return `<span class="side-state ${directionClass(direction)}">${esc(text)}</span>${note}`;
+    const text = glyph ? `${glyph} ${readable(line)}` : readable(line);
+    return `<span class="side-state ${directionClass(direction)}">${copy(text)}</span>`;
   }
 
   function conflictHtml(market) {
     if (!market || !market.conflict_note) return '';
-    return `<p class="events-conflict">${esc(market.conflict_note)}</p>`;
+    return `<p class="events-conflict">${copy(market.conflict_note)}</p>`;
   }
 
   // До двух причин; при противоречии — по одной причине каждой стороны (AC11).
@@ -112,62 +135,63 @@
 
   function reasonLine(item) {
     const group = GROUP_RU[item.group] || 'Фактор';
-    const side = item.side === 'long' ? ' · LONG' : item.side === 'short' ? ' · SHORT' : '';
-    return `<p class="events-reason">${esc(group)}${esc(side)}: ${esc(item.text || '')}</p>`;
+    const side = item.side === 'long' ? 'За рост' : item.side === 'short' ? 'За снижение' : 'Без перевеса';
+    const text = readable(item.text || '').replace(/^(События|Время):\s*/, '');
+    return `<div class="market-reason ${directionClass(item.side)}"><span class="market-reason-label">${esc(group)} · ${side}</span><p class="events-reason">${esc(text)}</p></div>`;
   }
 
   function factLine(fact) {
     const state = FACT_STATE_RU[fact.state] || fact.state || '—';
-    const dir = fact.direction === 'long' ? 'LONG'
-      : fact.direction === 'short' ? 'SHORT' : 'без направления';
-    const until = fact.valid_until ? ` · учитывается до ${fmtMsk(fact.valid_until)}` : '';
-    const summary = fact.summary ? ` — ${fact.summary}` : '';
-    return `<li><strong>${esc(fact.rule_id || '—')}</strong> · направление контекста: ${esc(dir)} · ${esc(state)}<br>
-      <span class="events-service">${esc(fmtMsk(fact.occurred_at))}${esc(until)}${esc(summary)}</span></li>`;
+    const dir = DIRECTION_WORD[fact.direction] || 'Без направления';
+    return `<li class="market-fact ${directionClass(fact.direction)}"><div class="market-fact-head"><strong>${esc(ruleName(fact.rule_id))}</strong><span class="market-tag">${esc(dir)}</span></div>
+      ${fact.summary ? `<p>${copy(fact.summary)}</p>` : ''}
+      <p class="events-service">${esc(state)} · ${esc(fmtMsk(fact.occurred_at))}</p>
+      ${fact.valid_until ? `<p class="events-service">Влияет на оценку до ${esc(fmtMsk(fact.valid_until))}</p>` : ''}
+      <details class="market-technical" data-persist="fact-${esc(fact.fact_key || `${fact.rule_id}-${fact.occurred_at}`)}"><summary>Данные события</summary><p>Код правила: ${esc(fact.rule_id || '—')}</p></details></li>`;
   }
 
   function factsListHtml(facts) {
     const list = facts || [];
-    if (!list.length) return '<p>Активных фактов десятидневного окна нет.</p>';
-    return `<ul>${list.map(factLine).join('')}</ul>`;
+    if (!list.length) return '<p class="market-empty">За последние 10 дней нет событий, которые сейчас влияют на оценку.</p>';
+    const more = list.length > 4 ? `<details class="market-more" data-persist="more-facts"><summary>Ещё событий: ${list.length - 4}</summary><ul>${list.slice(4).map(factLine).join('')}</ul></details>` : '';
+    return `<ul>${list.slice(0, 4).map(factLine).join('')}</ul>${more}`;
   }
 
   // Частота и калиброванная вероятность подписаны раздельно; калиброванная
   // показывается только при kind == 'calibrated_probability' (AC13).
   function statsHtml(stats) {
-    if (!stats || !stats.available) return '<p>Статистика недостаточна.</p>';
+    if (!stats || !stats.available) return '<p class="market-empty">Пока мало наблюдений для надёжной статистики.</p>';
     const label = stats.kind === 'calibrated_probability'
-      ? 'калиброванная вероятность' : 'историческая частота';
-    const n = stats.n != null ? ` · n=${fmtNum(stats.n)}` : '';
+      ? 'вероятность с поправкой по прошлым результатам' : 'как часто это происходило в прошлом';
+    const n = stats.n != null ? ` · наблюдений: ${fmtNum(stats.n)}` : '';
     const unc = stats.uncertainty
       ? ` · интервал ${fmtNum(stats.uncertainty.low)}–${fmtNum(stats.uncertainty.high)}` : '';
-    return `<p>${esc(stats.text || '')}</p>
+    return `<p>${copy(stats.text || '')}</p>
       <p class="events-service">${esc(label)}${esc(n)}${esc(unc)}${stats.period ? esc(` · период ${stats.period}`) : ''}</p>`;
   }
 
   function factorAgreementHtml(agreement) {
     if (!agreement) return '';
-    const label = agreement.label || 'Согласованность факторов';
-    return `<p>${esc(label)}: ${esc(fmtNum(agreement.long))}:${esc(fmtNum(agreement.short))}</p>`;
+    return `<div class="market-votes"><span>За рост <strong>${esc(fmtNum(agreement.long))}</strong></span><span>За снижение <strong>${esc(fmtNum(agreement.short))}</strong></span></div><p class="events-service">Количество учтённых условий, а не вероятность движения цены.</p>`;
   }
 
   function unknownDepsHtml(deps) {
     const list = deps || [];
     if (!list.length) return '';
     const names = list.map((name) => SOURCE_RU[name] || name).join(', ');
-    return `<p class="events-service">Не проверено: ${esc(names)}</p>`;
+    return `<p class="events-service">Не удалось проверить: ${esc(names)}</p>`;
   }
 
   function btcBackgroundHtml(market) {
     const bg = market && market.btc_background;
     if (!bg || !bg.direction_note) return '';
     const note = bg.direction_note;
-    const side = note.side === 'long' ? 'LONG' : note.side === 'short' ? 'SHORT' : 'без направления';
-    return `<section class="events-card">
-      <h2>${esc(bg.label || 'Фон BTC')}</h2>
-      <p class="events-service">Компонент, а не вывод по всему рынку.</p>
-      <p>Направление контекста: ${esc(side)}</p>
-      ${note.text ? `<p>${esc(note.text)}</p>` : ''}
+    const side = DIRECTION_WORD[note.side] || 'Без направления';
+    return `<section class="events-card market-bitcoin">
+      <h2>Ситуация с биткоином</h2>
+      <p class="events-service">Оценка только биткоина. Другие монеты могут двигаться иначе.</p>
+      <p>${esc(side)}</p>
+      ${note.text ? `<p>${copy(note.text)}</p>` : ''}
     </section>`;
   }
 
@@ -210,69 +234,67 @@
   }
 
   // ---- полный раздел: «Сейчас» --------------------------------------------
-  function groupDirectionHtml(label, direction) {
+  function groupDirectionHtml(direction) {
     const word = DIRECTION_WORD[direction] || 'неизвестно';
-    const text = direction === 'long' || direction === 'short'
-      ? `контекст поддерживает ${word}` : word;
-    return `<p>${esc(label)}: ${esc(text)}</p>`;
+    return `<p class="market-direction">${esc(word)}</p>`;
   }
 
   function upcomingReviewsHtml(market) {
     const items = [];
     if (market.next_review_at) {
-      items.push(`<li>Следующий пересмотр — ${esc(fmtMsk(market.next_review_at))}</li>`);
+      items.push(`<li><strong>Следующая проверка</strong><span>${esc(fmtMsk(market.next_review_at))}</span></li>`);
     }
     const expiries = (market.active_facts || [])
       .filter((fact) => fact && fact.valid_until)
       .sort((a, b) => a.valid_until - b.valid_until)
       .slice(0, 3)
-      .map((fact) => `<li>${esc(fact.rule_id || 'Факт')}: больше не учитывается с ${esc(fmtMsk(fact.valid_until))}</li>`);
+      .map((fact) => `<li><strong>${esc(ruleName(fact.rule_id))}</strong><span>Перестанет учитываться ${esc(fmtMsk(fact.valid_until))}</span></li>`);
     items.push(...expiries);
     if (!items.length) return '';
-    return `<section class="events-card"><h2>Ближайшие переключения</h2><ul>${items.join('')}</ul></section>`;
+    return `<section class="events-card market-upcoming"><h2>Когда изменится оценка</h2><p class="events-service">Ближайшие проверки и сроки действия событий.</p><ul class="market-timeline">${items.join('')}</ul></section>`;
   }
 
   function renderNowMarket(data) {
     const market = data.market;
     const coverage = market.coverage;
     const coverageLine = coverage && coverage.total != null
-      ? `<p>Покрытие корзины: ${coverage.ok}/${coverage.total} (${fmtNum(Math.round((coverage.ratio || 0) * 100))}%) — ${coverage.sufficient ? 'достаточно' : 'недостаточно'}</p>`
-      : '<p>Покрытие корзины не оценено.</p>';
-    const age = data.market_age_seconds != null ? ` · возраст ${fmtAge(data.market_age_seconds)}` : '';
+      ? `<p>Проверено монет: <strong>${esc(fmtNum(coverage.ok))} из ${esc(fmtNum(coverage.total))}</strong></p><p class="events-service">${coverage.sufficient ? 'Данных по монетам достаточно для общей оценки.' : 'Монет с данными слишком мало для полной картины рынка.'}</p>`
+      : '<p class="events-service">Число проверенных монет пока неизвестно.</p>';
+    const age = data.market_age_seconds != null ? ` · обновлено ${fmtAge(data.market_age_seconds)}` : '';
     const stale = data.market_stale
-      ? '<p class="events-warn">Снимок устарел — показана последняя сохранённая оценка.</p>' : '';
+      ? '<p class="events-warn">Оценка устарела. Показан последний сохранённый результат.</p>' : '';
     const legacy = data.legacy_methodology
       ? `<section class="events-card"><h2>${esc(data.legacy_methodology)}</h2>${renderNowLegacy(data)}</section>` : '';
 
     const facts = market.active_facts || [];
-    const ratio = coverage && coverage.total > 0
-      ? Math.max(0, Math.min(100, Math.round(Number(coverage.ok || 0) / coverage.total * 100))) : null;
-    const groupCard = (label, direction, symbol, description) => `<section class="events-card market-factor ${directionClass(direction)}">
-      <span class="market-icon" aria-hidden="true">${symbol}</span><h2>${label}</h2>
-      ${groupDirectionHtml('Направление', direction)}<p class="events-service">${description}</p></section>`;
+    const ratio = coverage && coverage.ok != null && Number.isFinite(Number(coverage.ok)) && Number(coverage.total) > 0 && Number.isFinite(Number(coverage.total))
+      ? Math.max(0, Math.min(100, Math.round(Number(coverage.ok) / Number(coverage.total) * 100))) : null;
+    const groupCard = (label, direction, symbol, description, kind) => `<section class="events-card market-factor market-${kind} ${directionClass(direction)}">
+      <div class="market-card-head"><span class="market-icon" aria-hidden="true">${symbol}</span><h2>${label}</h2></div>
+      ${groupDirectionHtml(direction)}<p class="events-service">${description}</p></section>`;
     return `<section class="events-card market-hero ${directionClass(market.direction)}">
         <p class="market-eyebrow">Общая картина · Крипторынок</p>
         <div class="events-side-state">${stateChip(market)}</div>
-        <p class="events-line">${esc(market.subtitle || 'Направление по событиям и времени')}</p>
+        <p class="events-line">${copy(market.subtitle || 'Оценка влияния событий и времени на рынок')}</p>
         ${conflictHtml(market)}
-        <div class="market-reasons"><h2>Почему такой контекст</h2>${pickReasons(market).map(reasonLine).join('') || '<p class="events-service">Причины пока не представлены.</p>'}</div>
+        <div class="market-reasons"><h2>Что повлияло на оценку</h2>${pickReasons(market).map(reasonLine).join('') || `<p class="events-service">${market.direction === 'neutral' ? 'Учтённые условия не дают явного перевеса в пользу роста или снижения.' : 'Причины оценки пока недоступны.'}</p>`}</div>
         <p class="events-service">Проверено ${esc(fmtMsk(market.evaluated_at))}${esc(age)}</p>${stale}
       </section>
       <div class="market-metrics">
-        ${groupCard('События', market.events_direction, '↗', 'Направление по рыночным событиям и активным фактам.')}
-        ${groupCard('Время', market.time_direction, '◷', 'Влияние дня недели и временных условий по МСК.')}
-        <section class="events-card market-quality"><span class="market-icon" aria-hidden="true">◉</span><h2>Качество данных</h2>
+        ${groupCard('Что происходит на рынке', market.events_direction, '↗', 'Как недавние события влияют на общую оценку.', 'events')}
+        ${groupCard('Влияние времени', market.time_direction, '◷', 'Что дают условия дня недели и времени суток по Москве.', 'time')}
+        <section class="events-card market-quality"><div class="market-card-head"><span class="market-icon" aria-hidden="true">◉</span><h2>Насколько полны данные</h2></div>
           <p class="market-quality-value">${esc(qualityWord(market.quality))}</p>
-          ${coverageLine}${ratio != null ? `<meter min="0" max="100" value="${ratio}" aria-label="Покрытие корзины">${ratio}%</meter>` : ''}
+          ${coverageLine}${ratio != null ? `<div class="market-coverage"><meter min="0" max="100" value="${ratio}" aria-label="Доля монет с данными">${ratio}%</meter><span>${ratio}%</span></div>` : ''}
           ${unknownDepsHtml(market.unknown_dependencies)}</section>
       </div>
       <div class="market-detail-grid">
-        <section class="events-card market-facts"><p class="market-eyebrow">Основания оценки</p><h2>Активные факты <span class="market-count">${facts.length}</span></h2>
-          <p class="events-service">События, которые учитываются в окне последних 10 дней.</p>${factsListHtml(facts)}</section>
+        <section class="events-card market-facts"><p class="market-eyebrow">Основания оценки</p><h2>Что ещё влияет на рынок <span class="market-count">${facts.length}</span></h2>
+          <p class="events-service">События за последние 10 дней, срок действия которых ещё не закончился.</p>${factsListHtml(facts)}</section>
         <div>${upcomingReviewsHtml(market)}${btcBackgroundHtml(market)}
-          <section class="events-card"><h2>Статистика и согласованность</h2>${statsHtml(market.statistics)}${factorAgreementHtml(market.factor_agreement)}</section></div>
+          <section class="events-card market-statistics"><h2>Что показывают прошлые наблюдения</h2>${statsHtml(market.statistics)}${factorAgreementHtml(market.factor_agreement)}</section></div>
       </div>
-      <p class="market-footnote">LONG и SHORT обозначают направление контекста. Контекст помогает оценить условия рынка и не является сигналом для входа.</p>
+      <p class="market-footnote">Оценка показывает, какие условия сейчас в пользу роста или снижения. Это не прогноз цены и не команда открыть сделку.</p>
       ${legacy}`;
   }
 
@@ -282,7 +304,7 @@
     const publications = (bundle.publications || []).map((pub) => {
       const link = pub.assessment_id
         ? ` · <a href="/events.html?assessment=${encodeURIComponent(pub.assessment_id)}">оценка</a>` : '';
-      return `<li>${esc(pub.text || '')} <span class="events-service">${esc(fmtMsk(pub.created_at))}</span>${link}</li>`;
+      return `<li>${copy(pub.text || '')} <span class="events-service">${esc(fmtMsk(pub.created_at))}</span>${link}</li>`;
     }).join('');
     const deliveries = (bundle.deliveries || []).map((delivery) =>
       `<span class="events-delivery">${esc(CHANNEL_RU[delivery.channel] || delivery.channel || '—')}: ${esc(DELIVERY_RU[delivery.status] || delivery.status || '—')}</span>`
@@ -308,7 +330,7 @@
     const word = DIRECTION_WORD[assessment.direction] || 'неизвестно';
     return `<section class="events-card events-saved-assessment">
       <h2>Сохранённая оценка</h2>
-      <p class="events-line">${esc(assessment.market_line || '')}</p>
+      <p class="events-line">${copy(assessment.market_line || '')}</p>
       <p>Направление: ${esc(word)} · проверено ${esc(fmtMsk(assessment.evaluated_at))}</p>
       <p class="events-service">Текущая оценка может отличаться.</p>
     </section>`;
@@ -333,24 +355,25 @@
   function renderCalendarMarket(market) {
     if (!market) return '';
     const tc = market.time_context || {};
+    const dayMove = (sign) => sign == null ? 'нет данных' : Number(sign) > 0 ? 'рост' : Number(sign) < 0 ? 'снижение' : 'без изменения';
     const days = (tc.completed_days || []).map((day) =>
-      `<li>${esc(fmtMsk(day.day_start_ms))} · ${esc(day.weekday_name || day.weekday || '')} · знак ${esc(signWord(day.sign))}${day.median_return != null ? esc(` · медиана ${fmtNum(day.median_return)}`) : ''}</li>`
+      `<li>${esc(fmtMsk(day.day_start_ms))} · ${esc(day.weekday_name || day.weekday || '')} · ${dayMove(day.sign)}${day.median_return != null ? `<details class="market-technical"><summary>Числовой результат дня</summary><p>Изменение цены в середине набора монет: ${esc(fmtNum(day.median_return))} (медиана)</p></details>` : ''}</li>`
     ).join('');
     const seq = tc.week_seq;
     const seqText = seq
-      ? `Понедельник ${signWord(seq.mon_sign)}, вторник ${signWord(seq.tue_sign)} — условие комбинации ${seq.condition_met ? 'выполнено' : 'не выполнено'}.`
-      : 'Недельная комбинация пока не оценивается.';
+      ? `Понедельник: ${dayMove(seq.mon_sign)}. Вторник: ${dayMove(seq.tue_sign)}. Условие роста в начале недели ${seq.condition_met ? 'выполнено' : 'не выполнено'}.`
+      : 'Рост в начале недели пока не проверялся.';
     const upcoming = (market.upcoming || []).map((item) =>
       `<li>${esc(UPCOMING_KIND_RU[item.kind] || item.kind || '—')}: ${esc(item.label || '')} — ${esc(fmtMsk(item.at_ms))}</li>`
     ).join('');
     const hour = tc.hour_msk != null ? ` · час МСК: ${tc.hour_msk}` : '';
     return `<article class="events-card">
-      <h2>Текущие условия МСК</h2>
+      <h2>День и время по Москве</h2>
       <p>День недели: ${esc(tc.weekday_name || '—')}${esc(hour)}</p>
       ${days ? `<h3>Завершённые дни</h3><ul>${days}</ul>` : ''}
       <p>${esc(seqText)}</p>
-      ${upcoming ? `<h3>Ближайшие переключения</h3><ul>${upcoming}</ul>` : ''}
-      <p class="events-service">Будущие ликвидации в календаре не отмечаются.</p>
+      ${upcoming ? `<h3>Ближайшие изменения оценки</h3><ul>${upcoming}</ul>` : ''}
+      <p class="events-service">Календарь показывает сроки проверки условий. Массовое закрытие сделок заранее не известно.</p>
     </article>`;
   }
 
@@ -359,15 +382,18 @@
     const cls = RULE_CLASS_RU[rule.rule_class] || rule.rule_class || '—';
     const confirmation = CONFIRMATION_RU[rule.confirmation] || rule.confirmation || '—';
     const enabled = rule.enabled === false ? 'выключено' : 'включено';
-    const direction = rule.direction === 'long' ? 'контекст LONG'
-      : rule.direction === 'short' ? 'контекст SHORT' : (rule.direction || '—');
-    return `<article class="events-card">
-      <h2>${esc(rule.rule_id || '—')}</h2>
-      <p>${esc(cls)} · ${esc(confirmation)} · ${esc(enabled)}</p>
-      <p>Направление: ${esc(direction)} · окно: ${esc(rule.window || '—')}</p>
-      ${rule.origin ? `<p>Происхождение: ${esc(rule.origin)}</p>` : ''}
-      ${rule.formula ? `<p>Формула: ${esc(rule.formula)}</p>` : ''}
-      ${rule.explanation ? `<p class="events-service">${esc(rule.explanation)}</p>` : ''}
+    const direction = DIRECTION_WORD[rule.direction] || 'Без направления';
+    return `<article class="events-card market-rule">
+      <h2>${esc(ruleName(rule.rule_id))}</h2>
+      <p><span class="market-tag">${esc(direction)}</span> <span class="market-tag">${rule.enabled === false ? 'Не учитывается' : 'Включено'}</span></p>
+      <p class="events-service">${esc(cls)} · ${esc(confirmation)}</p>
+      <p>${copy(RULE_DESCRIPTION[rule.rule_id] || rule.explanation || 'Описание условия пока недоступно.')}</p>
+      <details class="market-technical" data-persist="rule-${esc(rule.rule_id)}"><summary>Как проверяется условие</summary>
+      <p>Код: ${esc(rule.rule_id || '—')} · ${esc(enabled)}</p>
+      <p>Период проверки: ${copy(rule.window || '—')}</p>
+      ${rule.explanation && RULE_DESCRIPTION[rule.rule_id] ? `<p>${copy(rule.explanation)}</p>` : ''}
+      ${rule.origin ? `<p>Источник правила: ${esc(({project_default: 'Начальные настройки проекта', owner_answer: 'Методика владельца', previous_spec: 'Предыдущая методика'})[rule.origin] || rule.origin)}</p>` : ''}
+      ${rule.formula ? `<p>Условие: ${copy(rule.formula)}</p>` : ''}</details>
     </article>`;
   }
 
@@ -381,11 +407,12 @@
       return `<div class="events-src-row">
         <strong>${esc(SOURCE_RU[name] || name)}</strong>
         <span>${esc(qualityWord(src.quality))}</span>
-        <span class="events-service${capability ? ' events-warn' : ''}">${esc(src.detail || '')}</span>
         <span class="events-service">обновлено ${esc(fmtMsk(src.updated_at))}${esc(age)}</span>
+        ${capability ? '<p class="events-warn">Источник не предоставляет необходимые данные.</p>' : ''}
+        ${src.detail ? `<details class="market-technical" data-persist="source-${esc(name)}"><summary>Подробнее об источнике</summary><p>${esc(src.detail)}</p></details>` : ''}
       </div>`;
     }).join('');
-    return `<article class="events-card">
+    return `<article class="events-card market-sources">
       <h2>Источники данных</h2>
       <p>Качество: ${esc(qualityWord(data.quality))}</p>
       <p class="events-service">${esc(data.detail || '')}</p>
@@ -582,6 +609,13 @@
   // ---- загрузка режимов ------------------------------------------------------
   let currentMode = 'now';
   let requestVersion = 0;
+  const pendingRequests = new Map();
+  function requestData(endpoint) {
+    if (pendingRequests.has(endpoint)) return pendingRequests.get(endpoint);
+    const request = HTF.api(`/api/events/${endpoint}`).finally(() => pendingRequests.delete(endpoint));
+    pendingRequests.set(endpoint, request);
+    return request;
+  }
 
   async function loadSide() {
     const box = document.getElementById('h1-events-context');
@@ -608,7 +642,7 @@
     try {
       if (!HTF.getToken()) await HTF.ensureToken('Нужен токен владельца.');
       if (version !== requestVersion) return;
-      const data = await HTF.api(`/api/events/${endpoint}`);
+      const data = await requestData(endpoint);
       if (version !== requestVersion) return;
       let html;
       if (mode === 'feed') html = renderFeedBundles(data) || renderFeedLegacy(data);
@@ -622,12 +656,22 @@
             `<article class="events-card"><h2>${esc(rule.text)}</h2><p>ID ${esc(rule.id)} · ${esc(CLASS_RU[rule.class] || rule.class || '—')}</p></article>`).join(''))
           + `<section class="events-card"><h2>Статистика</h2>${statsHtml(data.statistics)}</section>`;
       } else html = data.market ? renderNowMarket(data) : renderNowLegacy(data);
-      body.innerHTML = html;
+      // Сохраняем раскрытые детали при обновлении; одинаковый результат не перерисовываем.
+      if (body.dataset.mode !== mode || body._marketHtml !== html) {
+        const opened = body.dataset.mode === mode
+          ? [...body.querySelectorAll('details[open][data-persist]')].map(item => item.dataset.persist) : [];
+        body.innerHTML = html;
+        body.querySelectorAll('details[data-persist]').forEach(item => { item.open = opened.includes(item.dataset.persist); });
+        body._marketHtml = html;
+      }
       body.dataset.mode = mode;
       if (status) status.textContent = 'Данные обновлены · время указано по МСК';
     } catch (err) {
       if (version !== requestVersion) return;
-      if (body.dataset.mode !== mode) body.innerHTML = '<section class="events-card"><h2>Данные недоступны</h2><p>Повторите загрузку кнопкой «Обновить».</p></section>';
+      if (body.dataset.mode !== mode) {
+        body.innerHTML = '<section class="events-card"><h2>Данные недоступны</h2><p>Повторите загрузку кнопкой «Обновить».</p></section>';
+        body._marketHtml = null;
+      }
       if (status) status.textContent = `Не удалось обновить данные. ${err.message || 'Проверьте подключение.'}`;
     } finally {
       if (version === requestVersion) body.setAttribute('aria-busy', 'false');
