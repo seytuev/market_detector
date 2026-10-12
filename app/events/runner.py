@@ -434,10 +434,10 @@ def _funding_fn(fetcher: dict):
     )
 
 
-def _liq_rotation(db, basket: Basket, budget: int) -> list[str]:
+def _liq_rotation(db, members: list, budget: int) -> list[str]:
     """BTC всегда + участники с самым старым available_at бакетов 4h."""
     candidates = []
-    for member in basket.members:
+    for member in members:
         rows = load_buckets(
             db, scope_id("coinglass", "liq-4h", member.symbol), "liq", interval="4h",
         )

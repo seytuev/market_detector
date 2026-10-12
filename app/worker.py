@@ -1048,6 +1048,10 @@ class Worker:
         except Exception:
             log.exception("миграция taken_levels не удалась (не критично для старта)")
         await self.seed_instruments()
+        # Координатор доступен после захвата расчётного владельца и загрузки
+        # инструментов. Начальный backfill может занимать минуты или ждать
+        # биржу, но ручная синхронизация уже должна быть доступна в это время.
+        self.data_sync.ready = True
         # текущий незакрытый D1/W1 — на график сразу, не ждать backfill/migrate
         await self._load_forming_candles()
         # §15.1.3: довычисление display-полей для зон, созданных до этих
@@ -1066,7 +1070,6 @@ class Worker:
         # §13 LTF: восстановить наблюдения/сценарии/диапазоны после перезапуска
         await self._ltf_restore_all()
         log.info("воркер запущен, опрос каждые %s с", self.settings.poll_seconds)
-        self.data_sync.ready = True
         loops = [self._main_loop(), self.ltf_loop(), self.data_sync.boundary_loop()]
         if self.alt_runner is not None:
             # дневной job «Altcoins D1 accumulation» — независимый цикл (§4)
