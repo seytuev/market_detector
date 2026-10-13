@@ -26,6 +26,14 @@ const pause = ms => new Promise(resolve => setTimeout(resolve,ms));
         measurements.push({name,width,...geometry});
         assert.equal(geometry.overflow,false,`${name} ${width}: horizontal overflow (${geometry.width})`);
         if (name === 'analysis') assert.ok(geometry.chart.width >= 260 && geometry.chart.height >= 220,JSON.stringify(geometry));
+        if (name === 'analysis' && width < 600) {
+          await page.click('[data-analysis-pane="list"]');
+          assert.notEqual(await page.$eval('#desk-assets',el => getComputedStyle(el).display),'none');
+          await page.click('[data-analysis-pane="scenario"]');
+          assert.notEqual(await page.$eval('.desk-side',el => getComputedStyle(el).display),'none');
+          await page.screenshot({path:path.join(output,'scenario-mobile.png')});
+          await page.click('[data-analysis-pane="chart"]');
+        }
         if (name === 'review') assert.equal(await page.$eval('.review-chart-block',el => getComputedStyle(el).display),'none');
         if (name === 'screener') assert.equal(await page.$eval('#alt-work',el => getComputedStyle(el).display),'none');
         if (name === 'market') assert.equal(await page.evaluate(() => document.querySelector('#events-body').textContent.includes('legacy BTC')),false);
@@ -63,6 +71,13 @@ const pause = ms => new Promise(resolve => setTimeout(resolve,ms));
       });
       await pause(250);
       await page.screenshot({path:path.join(output,`setup-${width}.png`)});
+      if (width < 600) {
+        await page.click('[data-analysis-pane="scenario"]');
+        assert.notEqual(await page.$eval('#alt-card',el => getComputedStyle(el).display),'none');
+        await page.click('[data-analysis-pane="events"]');
+        assert.equal(await page.$eval('#chart-container',el => getComputedStyle(el).display),'none');
+        await page.click('[data-analysis-pane="chart"]');
+      }
       await page.goBack({waitUntil:'networkidle2'});
       await page.waitForFunction(() => document.querySelector('#alt-page').dataset.screen === 'list');
       assert.equal(await page.$eval('#alt-search',el => el.value),'AAA');
@@ -73,6 +88,30 @@ const pause = ms => new Promise(resolve => setTimeout(resolve,ms));
       assert.equal(await page.$eval('#alt-search',el => el.value),'AAA');
       await page.close();
     }
+    const review = await browser.newPage();
+    review.on('pageerror',e => errors.push(e.message));
+    await review.setViewport({width:1440,height:900});
+    await review.goto(base+'/?token=dev-token#review',{waitUntil:'networkidle2'});
+    await review.evaluate(async () => { const response = await fetch('/__test/review-candidate',{method:'POST'});
+      if (!response.ok) throw new Error('Fixture candidate request failed: '+response.status); await enterReviewMode(); });
+    await review.waitForSelector('[data-review="fix_boundaries"]');
+    await review.setRequestInterception(true);
+    review.on('request',req => {
+      if (req.method() === 'POST' && /\/api\/zones\/\d+\/review/.test(req.url())) req.respond({status:503,contentType:'application/json',body:'{"detail":"fixture save failure"}'});
+      else req.continue();
+    });
+    const candidateId = await review.evaluate(() => reviewState.currentId);
+    await review.click('[data-review="fix_boundaries"]');
+    await review.$eval('#bounds-lower',el => {el.value='97';});
+    await review.$eval('#bounds-upper',el => {el.value='103';});
+    await review.click('#bounds-save');
+    await review.waitForFunction(() => document.querySelector('#rv-verdict').textContent.includes('ID LF-'));
+    assert.equal(await review.evaluate(() => reviewState.currentId),candidateId);
+    await review.click('[data-review="fix_boundaries"]');
+    assert.equal(await review.$eval('#bounds-lower',el => el.value),'97');
+    assert.equal(await review.$eval('#bounds-upper',el => el.value),'103');
+    await review.click('#bounds-cancel');
+    await review.close();
     assert.deepEqual(errors,[]);
     fs.writeFileSync(path.join(output,'browser-results.json'),JSON.stringify({errors,measurements},null,2));
     console.log(`PASS: 3 sizes, 9 pages, navigation, journal details, calendar, screener return. Screenshots: ${output}`);

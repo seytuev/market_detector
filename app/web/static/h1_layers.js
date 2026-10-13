@@ -179,6 +179,63 @@
     });
   }
 
+  // Нижняя панель — участки входа текущего PD, а не весь архив разметки.
+  function currentEntryZones(layers, settings, price) {
+    const setup = layers && layers.setup;
+    if (!setup || setup.history || setup.lower == null || setup.upper == null || setup.eq == null) return [];
+    const bull = setup.direction === 'bull';
+    const half = bull ? 'discount' : 'premium';
+    const halfLow = bull ? setup.lower : setup.eq;
+    const halfHigh = bull ? setup.eq : setup.upper;
+    const zones = selectedZones(layers, settings);
+    let regions = Array.isArray(setup.eligible_regions) && setup.eligible_regions.length
+      ? setup.eligible_regions : setup.candidates;
+    if (!Array.isArray(regions)) {
+      if (Array.isArray(setup.eligible_regions)) regions = [];
+      else {
+        const origin = setup.origin_anchor && setup.origin_anchor.at;
+        const start = setup.window_start ?? (origin == null ? Infinity : origin - 20 * 3600000);
+        regions = zones.filter(z => z.formed_at >= start && z.direction === setup.direction)
+          .map(z => ({ ...z, admitted: [Math.max(z.lower, halfLow), Math.min(z.upper, halfHigh)], reason: 'ok' }));
+      }
+    }
+    const seen = new Set();
+    const rows = [];
+    regions.forEach(region => {
+      if (!typeOn(settings, region) || !settings.zones || region.status === 'forming'
+          || !['ok', 'eligible_provisional', undefined].includes(region.reason)) return;
+      const admitted = region.admitted;
+      if (!admitted || admitted[0] > admitted[1]) return;
+      const same = z => z.type === region.type && z.direction === (region.direction || setup.direction)
+        && z.lower === region.lower && z.upper === region.upper
+        && (region.formed_at == null || z.formed_at === region.formed_at);
+      const zone = zones.find(z => same(z) && z.lifecycle !== 'ended' && !z.candidate
+        && (!z.relevance || z.relevance.relevant));
+      // Текущий расчёт может ещё не иметь отдельной записи в архиве.
+      const source = zone || region;
+      if (source.lifecycle === 'ended' || source.lifecycle === 'candidate' || source.candidate
+          || source.confirmed_at == null
+          || source.relevance && !source.relevance.relevant
+          || source.type === 'FVG' && source.max_test_depth >= 1) return;
+      const key = [source.type, admitted[0], admitted[1]].join(':');
+      if (seen.has(key)) return;
+      seen.add(key);
+      rows.push({ ...source, ...region, id: source.id ?? ('pd:' + setup.movement_id + ':' + key),
+        direction: setup.direction, lower: region.lower, upper: region.upper,
+        lifecycle: source.lifecycle || (region.confirmed_at != null ? 'active' : 'candidate'),
+        admitted, pdHalf: half, entryReady: setup.setup_status === 'trade' });
+    });
+    const distance = row => price == null ? 0
+      : Math.max(row.admitted[0] - price, price - row.admitted[1], 0);
+    return rows.sort((a, b) => distance(a) - distance(b));
+  }
+
+  function currentFrame(candleCount, paneWidth) {
+    const history = paneWidth >= 1000 ? 96 : paneWidth >= 600 ? 72 : 48;
+    const last = Math.max(0, candleCount - 1);
+    return { from: Math.max(0, last - history), to: last + Math.round(history * .65) };
+  }
+
   function ideaLabel(idea) {
     return (idea.direction === 'bull' ? '↑ Покупки' : '↓ Продажи') + ' · '
       + String(idea.parent_type || '').toUpperCase() + ' ' + idea.parent_timeframe
@@ -820,6 +877,8 @@
     zoneCard,
     pdCaption,
     selectedZones,
+    currentEntryZones,
+    currentFrame,
     ideaLabel,
     reasonText,
     relevanceText,

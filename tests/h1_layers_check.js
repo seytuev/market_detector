@@ -163,8 +163,10 @@ check('исторический снимок помечен', H.pdCaption({
 check('непостроенный PD не подменяет старые числа',
   H.pdCaption({ lower: null, reason: 'origin_unresolved' }, String)
     .includes('origin_unresolved'));
-check('график H1 кадрирует ногу в секундах',
-  app.includes('function applyH1LegFrame') && app.includes('frame_from) / 1000'));
+const frame = H.currentFrame(1500, 1740);
+check('H1 открывает последние четыре дня с местом справа',
+  frame.from === 1403 && frame.to === 1561);
+check('короткая история не создаёт отрицательное начало', H.currentFrame(20, 900).from === 0);
 check('кадр ноги не сбрасывается догрузкой, пока пользователь сам не сдвинул график',
   app.includes('holdForLeg') && app.includes('keepUserRange') && app.includes('setVisibleLogicalRange'));
 check('заливка OB и FVG читается, div остаётся без своей заливки',
@@ -177,6 +179,29 @@ check('страница LTF мерит цены по панели, а не по 
   ltf.includes('paneHeight') && ltf.includes('coordinateToPrice(Math.max(0, paneHeight - 1))'));
 check('страница LTF предпочитает снимок ноги',
   ltf.indexOf('layers.setup') !== -1 && ltf.indexOf('layers.setup') < ltf.indexOf('const cur ='));
+
+const currentRegion = { type: 'FVG', direction: 'bull', lower: 98, upper: 100,
+  formed_at: 200, confirmed_at: 300, admitted: [98, 100], reason: 'ok' };
+const currentLayers = {
+  setup: { movement_id: 2, direction: 'bull', lower: 95, upper: 105, eq: 100,
+    setup_status: 'trade', eligible_regions: [currentRegion, { ...currentRegion }],
+    candidates: [currentRegion] },
+  detected_zones: [...Array(535)].map((_, i) => ({ id: i, type: 'OB', direction: 'bear',
+    lower: 120 + i, upper: 121 + i, formed_at: 10, lifecycle: 'active' })).concat([
+      { ...currentRegion, id: 'scan:FVG:200', lifecycle: 'active' },
+      { ...currentRegion, id: 999, lifecycle: 'active' },
+    ]),
+};
+const currentEntries = H.currentEntryZones(currentLayers, H.DEFAULTS, 101);
+check('535 посторонних зон и дубли не попадают в текущие входы',
+  currentEntries.length === 1 && currentEntries[0].pdHalf === 'discount'
+  && currentEntries[0].id === 'scan:FVG:200');
+check('выключенный тип скрывает текущий вход',
+  H.currentEntryZones(currentLayers, { ...H.DEFAULTS, fvg: false }, 101).length === 0);
+check('пустой текущий PD не подменяется архивными зонами',
+  H.currentEntryZones({ ...currentLayers, setup: { ...currentLayers.setup, eligible_regions: [], candidates: [] } }, H.DEFAULTS, 101).length === 0);
+check('исторический PD не назначает текущие входы',
+  H.currentEntryZones({ ...currentLayers, setup: { ...currentLayers.setup, history: true } }, H.DEFAULTS, 101).length === 0);
 
 if (failed) {
   console.error('failed', failed);

@@ -48,6 +48,21 @@ body { font-size: var(--lf-reading); }
 .desk-entries { resize: vertical; min-height: 56px; }
 .desk-entries button.desk-entry { width: 100%; text-align: left; font: inherit; color: inherit; background: transparent; border: 0; border-bottom: 1px solid var(--lf-border); cursor: pointer; }
 .desk-entries button.desk-entry:hover { background: var(--lf-selected); }
+.desk-entry-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
+.desk-entry-grid button.current-entry {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+  padding: 10px 12px; min-width: 0; border: 1px solid var(--lf-border); border-radius: 6px;
+}
+.current-entry .desk-entry-name { display: flex; gap: 8px; align-items: center; }
+.current-entry .desk-entry-range { margin-left: 0; font-size: 13px; white-space: nowrap; }
+.desk-entry-half, .desk-entry-count { font-size: 11px; font-weight: 500; color: var(--lf-text2); background: var(--lf-selected); border-radius: 4px; padding: 2px 5px; }
+.desk-entry-more { margin: 8px 0 0; font-size: 12px; color: var(--lf-text2); }
+#view-overview .desk-entries:has(.desk-entry-grid) { max-height: 240px; resize: none; }
+#desk-data-details { margin-top: 8px; margin-bottom: 4px; }
+@media (max-width: 600px) {
+  .desk-entry-grid { grid-template-columns: minmax(0, 1fr); }
+  .desk-entries-head { flex-wrap: wrap; }
+}
 .desk-panel #zone-list, .desk-panel .inspector { overflow: visible; max-height: none; }
 .lf-chart-expanded .overview-layout { grid-template-columns: minmax(0,1fr); }
 .lf-chart-expanded .desk-main { grid-template-columns: minmax(0,1fr); }
@@ -56,7 +71,7 @@ body { font-size: var(--lf-reading); }
 .lf-reference-body { padding: 16px; }
 .lf-reference-body .events-card { background: var(--lf-surface); border-color: var(--lf-border); }
 .lf-analysis-bottom-tabs { display: flex; gap: 8px; align-items: center; }
-.lf-analysis-bottom-tabs button[aria-pressed="true"] { background: var(--lf-brand); color: white; }
+.lf-analysis-bottom-tabs button[aria-pressed="true"] { background: var(--lf-brand); color: var(--lf-accent-ink); }
 #view-overview[data-bottom="events"] .desk-entries,
 #view-overview[data-bottom="zones"] .event-strip { display: none; }
 .journal-tools { flex-wrap: wrap; }
@@ -96,7 +111,7 @@ body { font-size: var(--lf-reading); }
 .lf-calendar-head h2 { flex: 1; margin: 0; text-align: center; text-transform: capitalize; }
 .lf-calendar-grid { display: grid; grid-template-columns: repeat(7, minmax(0,1fr)); gap: 6px; }
 .lf-calendar-grid .btn { flex-direction: column; min-height: 64px; padding: 8px; }
-.lf-calendar-grid .btn[aria-pressed="true"] { background: var(--lf-brand); color: white; }
+.lf-calendar-grid .btn[aria-pressed="true"] { background: var(--lf-brand); color: var(--lf-accent-ink); }
 .lf-calendar-grid small { font-size: 11px; }
 .lf-calendar-grid > span { text-align: center; font-size: 12px; padding: 4px; }
 .lf-calendar-agenda { margin-top: 24px; border-top: 1px solid var(--lf-border); padding-top: 16px; }

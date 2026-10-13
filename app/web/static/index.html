@@ -133,9 +133,8 @@
       </div>
     </div>
     <div class="workbar">
-      <div class="lf-analysis-actions"><a class="btn small" href="/alt.html">Сетапы D1/W1</a><button type="button" id="desk-side-toggle" class="btn small" aria-pressed="true">Сценарий</button><button type="button" id="desk-expand" class="btn small" aria-pressed="false">Развернуть</button></div>
+      <div class="lf-analysis-actions"><button type="button" id="desk-side-toggle" class="btn small" aria-pressed="true">Сценарий</button><button type="button" id="desk-expand" class="btn small" aria-pressed="false">Развернуть</button></div>
       <select id="instrument-select" title="Инструмент"></select>
-      <button type="button" id="asset-active-btn" class="btn small" aria-pressed="true">Наблюдать</button>
       <span id="instrument-meta" class="work-meta">—</span>
       <span id="last-price" class="last-price">—</span>
       <span id="price-change" class="price-change"></span>
@@ -143,7 +142,6 @@
         <select id="tf-select" title="Таймфрейм свечей">
           <option value="D1" selected>D1</option>
           <option value="W1">W1</option>
-          <option value="H1">Свечи H1</option>
         </select>
       </div>
       <details class="layer-menu">
@@ -207,7 +205,6 @@
               <button type="button" class="mode-tab active" id="mode-context" data-chart-mode="context" aria-current="page">Контекст</button>
               <button type="button" class="mode-tab" id="lnk-ltf" data-chart-mode="h1">Структура H1</button>
             </div>
-            <span id="candle-tf-label" class="work-meta">Свечи D1</span>
             <button type="button" id="desk-assets-toggle" class="btn small" aria-expanded="true" aria-controls="desk-assets">Активы</button>
           </div>
           <div id="chart-container">

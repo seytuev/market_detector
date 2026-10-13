@@ -554,6 +554,26 @@ def test_every_h1_entry_has_its_type_and_pd_half():
         assert all(row["note"] == f"в {half}" for row in rows)
 
 
+def test_history_recovery_keeps_entry_zones_visible_but_pauses_actions(db, instrument_id):
+    zone = _zone(db, instrument_id, Direction.BULL, 60000, 66000)
+    obs = _obs(db, instrument_id, zone, Direction.BULL, "active", _open(1))
+    _scenario(db, obs, Direction.BULL, created=_close(21))
+    _leg(db, instrument_id, "bull", LEVEL, 20)
+    _entry(db, instrument_id, "bull", 81000, 82000, _open(16))
+    ready = _view(db, instrument_id)
+    paused = _view(db, instrument_id, data={"state": "stale", "reason": "replay_in_progress"})
+    assert paused["next_action"]["kind"] == "blocked"
+    assert paused["asset_state"]["direction"] == "long"
+    rows = paused["compact_rows"]
+    entries = [row for row in rows if row["kind"] == "entry"]
+    assert entries
+    assert [row["v"] for row in entries] == [row["v"] for row in ready["compact_rows"] if row["kind"] == "entry"]
+    assert all("данные уточняются" in row["note"] for row in entries)
+    assert any(row["kind"] == "pd" for row in rows)
+    assert any(row["kind"] == "blocker" and "приостановлены" in row["v"] for row in rows)
+    assert "Сохранённые зоны" in " ".join(paused["compact"])
+
+
 def test_short_time_today_vs_other_day():
     from app.services.asset_state import _short_time
     ms = _close(12)

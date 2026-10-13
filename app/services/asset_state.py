@@ -787,6 +787,13 @@ def _compact(state, transition, evidence, zones, pd, invalidation, quality_text,
         lines.append(
             f"Уведомления о новых условиях входа приостановлены: {quality_text}."
         )
+        if transition and transition.get("proven"):
+            entry = _entry_line(zones, leg)
+            if entry:
+                lines.insert(-1, "Сохранённые зоны: " + entry.removeprefix("Вход: "))
+            pd_line = _pd_line(pd)
+            if pd_line:
+                lines.insert(-1, pd_line)
         return lines[:5]
     if forming_note:
         lines.append(forming_note)
@@ -966,6 +973,14 @@ def _compact_rows(state, transition, evidence, zones, pd, invalidation,
         if transition and transition.get("proven"):
             rows.append({"kind": "bos", "dir": _bos_dir(transition),
                          "k": _bos_label(transition), "v": _bos_value(transition, now_ms)})
+            entries = _entry_rows(zones, leg)
+            for row in entries:
+                row["note"] += " · данные уточняются"
+            rows.extend(entries)
+            parts = _pd_parts(pd)
+            if parts:
+                rows.append({"kind": "pd", "k": "PD H1", "v": parts["v"],
+                             "note": "данные уточняются"})
         rows.append({
             "kind": "blocker", "k": "Режим",
             "v": f"Уведомления о новых условиях входа приостановлены: {quality_text}",

@@ -707,13 +707,16 @@ select, input, textarea {
   line-height: 12px;
   color: var(--text-dim, #8b95a3);
   white-space: nowrap;
-  pointer-events: none;
+  pointer-events: auto;
   padding: 2px 5px;
   border-radius: 3px;
   background: var(--bg-panel, #fff);
   color: var(--text);
   box-shadow: 0 0 0 1px rgba(122, 162, 255, 0.3);
+  opacity: .25;
+  transition: opacity .15s ease;
 }
+.h1-pd-label:hover { opacity: 1; }
 .ltf-range-mid { border-top-style: dotted; }
 .ltf-entry {
   border: 1px solid;

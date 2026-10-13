@@ -77,6 +77,7 @@ const reviewState = {
   saving: false,
   advanceTimer: null,
   pointerDown: false,
+  boundsDrafts: new Map(),
 };
 
 // Статусы, видимые на графике по умолчанию
@@ -374,9 +375,11 @@ async function loadCandles() {
   // Пока пользователь не сдвинул H1 сам, диапазон задаёт кадр ноги.
   // Иначе fitContent на 1500 свечей (и его восстановление после догрузки)
   // снова растягивает шкалу, и зоны входа становятся полосками.
-  const holdForLeg = state.chartMode === 'h1' && !state.h1UserPanned
-    && state.h1Layers && state.h1Layers.setup && state.h1Layers.setup.frame_from != null;
-  if (!holdForLeg && preserve) {
+  if (state.chartMode === 'h1' && state.h1FrameInstrument !== id) state.h1UserPanned = false;
+  const holdForLeg = state.chartMode === 'h1' && !state.h1UserPanned;
+  if (holdForLeg) {
+    applyH1LegFrame(state.h1Layers);
+  } else if (preserve) {
     HTF.restoreChartRange(state.chart, state.candles, preserve);
   } else if (!holdForLeg) {
     state.chart.timeScale().fitContent();
@@ -455,6 +458,8 @@ function drawZones() {
   // правый край зон — граница области графика, без налезания на шкалу цен
   const paneRight = width - state.chart.priceScale('right').width();
   const ts = state.chart.timeScale();
+  // Слой H1 готовится независимо от отбора и отрисовки HTF-контекста.
+  drawH1Breaks(overlay, ts, paneRight, height);
   // по умолчанию на графике только зоны выбранного ТФ; «Все ТФ» показывает
   // оба, а чекбоксы слоёв позволяют скрыть конкретный ТФ в этом режиме
   const tfOn = (tf) => {
@@ -753,7 +758,6 @@ function drawZones() {
       overlay.appendChild(div);
     }
   }
-  drawH1Breaks(overlay, ts, paneRight, height);
 }
 
 function hideH1Chrome() {
@@ -1266,12 +1270,12 @@ window.reviewZoneAction = reviewZoneAction;
 
 let boundsResolve = null;
 let boundsOriginal = null; // {lower, upper} — для предпросмотра «было → станет»
-function askBounds(lower, upper, anchorEnabled) {
+function askBounds(lower, upper, anchorEnabled, draft = null) {
   $('bounds-title').textContent = anchorEnabled ? 'Исправить границы зоны' : 'Исправить кандидата';
   boundsOriginal = { lower, upper };
-  $('bounds-lower').value = lower;
-  $('bounds-upper').value = upper;
-  setBoundsAnchor(null);
+  $('bounds-lower').value = draft ? draft.lower : lower;
+  $('bounds-upper').value = draft ? draft.upper : upper;
+  setBoundsAnchor(draft?.anchor_candle_open_time ?? null);
   updateBoundsPreview();
   $('bounds-anchor-wrap').classList.toggle('hidden', !anchorEnabled);
   $('bounds-error').textContent = '';
@@ -2091,8 +2095,9 @@ async function submitReviewDecision(decision) {
   const textEl = $('rv-comment');
   const body = { decision, text: textEl ? textEl.value.trim() : '' };
   if (decision === 'fix_boundaries') {
-    const bounds = await askBounds(z.lower, z.upper, true);
+    const bounds = await askBounds(z.lower, z.upper, true, reviewState.boundsDrafts.get(z.id));
     if (!bounds) return;
+    reviewState.boundsDrafts.set(z.id,bounds);
     Object.assign(body, bounds);
   }
   reviewState.saving = true;
@@ -2108,10 +2113,12 @@ async function submitReviewDecision(decision) {
   } catch (err) {
     reviewState.saving = false;
     btns.forEach((b) => { b.disabled = false; });
-    if (vEl) vEl.textContent = 'Ошибка: ' + err.message + ' — кандидат остался в очереди.';
+    const diagnostic = LFUI.error(err,'Не удалось сохранить проверку',() => submitReviewDecision(decision));
+    if (vEl) vEl.textContent = `Не удалось сохранить. Кандидат и введённые границы сохранены. ID ${diagnostic}`;
     return;
   }
   reviewState.saving = false;
+  reviewState.boundsDrafts.delete(z.id);
   const cand = reviewState.all.find((c) => c.id === z.id) || z;
   reviewState.doneMap.set(z.id, cand);
   if (vEl && res.assessment) {
@@ -3572,13 +3579,13 @@ function renderDeskScenario() {
       simpleTradeTitle: true,
     }) +
       `<button type="button" id="desk-watch-btn" class="btn desk-watch ${watching ? 'is-on' : 'is-off'}" aria-pressed="${watching}">${watching ? '✓ Наблюдение включено' : 'Наблюдение выключено'}</button>` +
+      '<button type="button" class="btn small" id="desk-data-details">Качество и время данных</button>' +
       `<details class="desk-basis"><summary>Основания и качество данных</summary><dl>` +
       `<dt>Показан контекст</dt><dd>${esc(DESK_BASIS_RU[v.selected_context_basis] || v.selected_context_basis || '—')}</dd>` +
       `<dt>Качество данных</dt><dd>${esc(ds.state === 'ok' ? 'Данные актуальны' : (DESK_DATA_REASON_RU[ds.reason] || ds.reason || ds.state || '—'))}</dd>` +
       `<dt>Версия состояния</dt><dd>${v.state_version != null ? v.state_version : '—'}</dd>` +
       `</dl></details>`;
     $('desk-watch-btn').onclick = toggleDeskWatch;
-    el.insertAdjacentHTML('beforeend','<button type="button" class="btn small" id="desk-data-details">Качество и время данных</button>');
     $('desk-data-details').onclick = () => LFUI.openDrawer('Данные актива',LFUI.channelsHtml(ds));
     return;
   }
@@ -3602,6 +3609,7 @@ function renderDeskScenario() {
       ${cancel ? `<dt class="qa-q">Условие отмены</dt><dd class="qa-a">${esc(cancel)}</dd>` : ''}
     </dl>
     <button type="button" id="desk-watch-btn" class="btn desk-watch ${watching ? 'is-on' : 'is-off'}" aria-pressed="${watching}">${watching ? '✓ Наблюдение включено' : 'Наблюдение выключено'}</button>
+    <button type="button" class="btn small" id="desk-data-details">Качество и время данных</button>
     <details class="desk-basis">
       <summary>Основания и качество данных</summary>
       <dl>
@@ -3614,6 +3622,7 @@ function renderDeskScenario() {
       </dl>
     </details>`;
   $('desk-watch-btn').onclick = toggleDeskWatch;
+  $('desk-data-details').onclick = () => LFUI.openDrawer('Данные актива', LFUI.channelsHtml(ds));
 }
 
 async function toggleDeskWatch() {
@@ -3629,22 +3638,29 @@ async function toggleDeskWatch() {
 function renderDeskEntries() {
   const el = $('desk-entries');
   if (!el) return;
+  deskData.entryZones = new Map();
   // Зоны идут по приближенности к текущей цене (цена внутри зоны — первой),
   // а не в порядке выдачи сервера.
   const price = state.lastPrice;
   const byProximity = (a, b) => (price == null ? 0 : distanceToZone(a, price) - distanceToZone(b, price));
   if (state.chartMode === 'h1' && state.h1Layers && window.H1Layers) {
     const H = window.H1Layers;
-    const entries = H.selectedZones(state.h1Layers, H.loadSettings());
-    entries.sort(byProximity);
+    const entries = H.currentEntryZones(state.h1Layers, H.loadSettings(), price);
+    const shown = entries.slice(0, 8);
+    shown.forEach(z => deskData.entryZones.set(String(z.id), z));
+    const quality = deskData.current?.data_state;
+    const paused = quality && quality.state && quality.state !== 'ok' && quality.reason !== 'current_candle_pending';
     el.classList.remove('hidden');
-    el.innerHTML = `<div class="desk-entries-head"><h2>Зоны H1 / ${entries.length}</h2>` +
-      '<span class="muted">Тот же отбор, что на графике · обе стороны</span></div>' +
-      entries.map((z) => `<button type="button" class="desk-entry" data-analysis-zone="${z.id}"><span>${esc(z.type)} H1 · ${z.direction === 'bull' ? '↑' : '↓'}</span>` +
-        `<span>${fmtPrice(z.lower)} — ${fmtPrice(z.upper)}</span><span>` +
-        (z.idea_links || []).map((i) => esc(H.ideaLabel(i)) + '<br>' + esc(H.reasonText(i.entry_reason))).join('<br>') +
-        `</span><span>Тест ${Math.round((z.max_test_depth || 0) * 100)}% · ${esc(H.relevanceText(z.relevance))}</span></button>`).join('') +
-      (entries.length ? '' : '<div class="ltf-empty">Нет зон для выбранного отбора.</div>');
+    el.innerHTML = `<div class="desk-entries-head"><h2>Зоны текущего движения <span class="desk-entry-count">${entries.length}</span></h2>` +
+      '<span class="muted">Участки входа в PD · клик покажет зону</span></div>' +
+      '<div class="desk-entry-grid">' + shown.map(z =>
+        `<button type="button" class="desk-entry current-entry" data-analysis-zone="${esc(z.id)}">` +
+        `<span class="desk-entry-name">${esc(z.type)} H1 <span class="desk-entry-half">${esc(z.pdHalf)}</span></span>` +
+        `<span class="desk-entry-range">${fmtPrice(z.admitted[0])}${z.admitted[0] === z.admitted[1] ? '' : '–' + fmtPrice(z.admitted[1])}</span>` +
+        `<span class="desk-entry-status${z.entryReady && !paused ? ' ok' : ''}">${paused ? 'Данные уточняются' : z.entryReady ? 'Допущена к входу' : 'Наблюдение'} · тест ${Math.round((z.max_test_depth || 0) * 100)}%</span></button>`
+      ).join('') + '</div>' +
+      (entries.length > shown.length ? `<p class="desk-entry-more">Показаны ${shown.length} ближайших из ${entries.length}. Остальные — на графике.</p>` : '') +
+      (entries.length ? '' : `<div class="ltf-empty">${state.h1Layers.setup ? 'В текущем PD подходящих зон пока нет.' : 'Ждём расчёт текущего движения H1.'}</div>`);
     return;
   }
   const v = deskData.current;
@@ -3830,6 +3846,7 @@ function paintChartMode() {
     else el.removeAttribute('aria-current');
   });
   const tf = $('tf-select');
+  if (tf) tf.closest('.tf-switch')?.classList.toggle('hidden', state.chartMode === 'h1');
   const candleLabel = $('candle-tf-label');
   const hidden = $('chart-tf-label');
   if (state.chartMode === 'h1') {
@@ -3851,6 +3868,12 @@ function paintChartMode() {
 
 function setChartMode(mode) {
   const next = mode === 'h1' ? 'h1' : 'context';
+  if (next === 'h1' && state.chartMode !== 'h1') {
+    state.h1UserPanned = false;
+    state.h1FrameKey = null;
+    state.h1PriceFocus = null;
+    state.h1FrameGen = (state.h1FrameGen || 0) + 1;
+  }
   if (next === 'h1' && state.timeframe !== 'H1') {
     state.savedTimeframe = state.timeframe || 'D1';
     state.timeframe = 'H1';
@@ -3877,8 +3900,19 @@ async function loadH1Markers() {
     hideH1Chrome();
     return;
   }
-  const token = ++state.h1Req;
   const q = window.H1Layers.queryString(h1QueryExtra());
+  const key = JSON.stringify([id, mode, q, state.candleVersion, deskData.current?.state_version]);
+  if (state.h1Pending && state.h1Pending.key === key) return state.h1Pending.promise;
+  const pending = { key };
+  state.h1Pending = pending;
+  pending.promise = fetchH1Markers(id, mode, q).finally(() => {
+    if (state.h1Pending === pending) state.h1Pending = null;
+  });
+  return pending.promise;
+}
+
+async function fetchH1Markers(id, mode, q) {
+  const token = ++state.h1Req;
   let layers = null;
   try {
     layers = await api(`/api/ltf/instruments/${id}/structure?${q}`);
@@ -3907,29 +3941,24 @@ async function loadH1Markers() {
 
 function applyH1LegFrame(layers) {
   const setup = layers && layers.setup;
-  if (!setup || setup.frame_from == null || !state.chart || !state.candles.length) return;
+  if (!state.chart || !state.candles.length || !window.H1Layers) return;
   if (state.h1FrameInstrument !== state.instrumentId) {
     state.h1FrameInstrument = state.instrumentId;
     state.h1UserPanned = false;
     state.h1FrameKey = null;
     state.h1FrameRetried = false;
   }
-  if (state.h1UserPanned && state.h1FrameKey === setup.movement_id) return;
-  const fromSec = Math.floor(Number(setup.frame_from) / 1000);
+  const frameKey = setup?.movement_id ?? 'recent';
+  if (state.h1UserPanned && state.h1FrameKey === frameKey) return;
   const candles = state.candles;
-  let fromIdx = 0;
-  for (let i = 0; i < candles.length; i += 1) {
-    if (candles[i].time >= fromSec) { fromIdx = i; break; }
-  }
-  fromIdx = Math.max(0, fromIdx - 6);
-  // Запас справа только логическим индексом: setVisibleRange за последней
-  // свечой обрезается или бросает исключение, и кадр ноги не применяется.
-  const toIdx = candles.length - 1 + 10;
+  const width = Math.max(0, $('chart').clientWidth - state.chart.priceScale('right').width());
+  // Несколько дней текущей структуры и место справа для зон отката.
+  const frame = window.H1Layers.currentFrame(candles.length, width);
   state.h1ApplyingFrame = true;
   state.h1PriceFocus = null;
   try {
-    state.chart.timeScale().setVisibleLogicalRange({ from: fromIdx, to: toIdx });
-    state.h1FrameKey = setup.movement_id;
+    state.chart.timeScale().setVisibleLogicalRange(frame);
+    state.h1FrameKey = frameKey;
   } catch (e) { /* шкала ещё не готова */ }
   const generation = (state.h1FrameGen = (state.h1FrameGen || 0) + 1);
   requestAnimationFrame(() => {
@@ -3937,13 +3966,6 @@ function applyH1LegFrame(layers) {
       if (generation !== state.h1FrameGen) return;
       state.h1ApplyingFrame = false;
       if (state.chartMode !== 'h1') return;
-      const range = state.chart.timeScale().getVisibleLogicalRange();
-      const wide = range && candles.length > 48 && (range.to - range.from) > candles.length * 0.85;
-      if (wide && !state.h1UserPanned && !state.h1FrameRetried && state.h1Layers) {
-        state.h1FrameRetried = true;
-        applyH1LegFrame(state.h1Layers);
-        return;
-      }
       state.h1FrameRetried = false;
       drawZones();
     });
@@ -4025,14 +4047,14 @@ function initAnalysisPanels() {
   paintBottom();
   $('desk-entries').addEventListener('click',async event => {
     const button = event.target.closest('[data-analysis-zone]'); if (!button) return;
-    const id = Number(button.dataset.analysisZone);
-    const initial = deskData.current?.eligible_entries?.find(e => e.entry_zone_id === id);
+    const id = button.dataset.analysisZone;
+    const initial = deskData.entryZones?.get(id)
+      || deskData.current?.eligible_entries?.find(e => String(e.entry_zone_id) === id);
     if (state.chartMode !== 'h1') { setChartMode('h1'); await reloadAll(); }
-    const zone = (state.h1Layers?.detected_zones || []).find(z => z.id === id) || (initial ? {...initial,id} : null);
+    const zone = (state.h1Layers?.detected_zones || []).find(z => String(z.id) === id) || (initial ? {...initial,id} : null);
     if (!zone) { LFUI.openDrawer('Зона недоступна','<p>Зона больше не входит в текущую загруженную разметку. Обновите анализ.</p>'); return; }
     focusH1Zone(zone);
-    LFUI.openDrawer('Зона H1',`<h3>${esc(zone.type)} H1 · ${zone.direction === 'bull' ? 'Рост' : 'Снижение'}</h3><dl class="lf-facts"><dt>Границы</dt><dd>${fmtPrice(zone.lower)}–${fmtPrice(zone.upper)}</dd><dt>Подтверждение</dt><dd>${esc(fmtTime(zone.confirmed_at))}</dd><dt>Глубина теста</dt><dd>${Math.round((zone.max_test_depth || 0)*100)}%</dd></dl>` +
-      (zone.idea_links || []).map(link => `<p>${esc(H1Layers.ideaLabel(link))}<br>${esc(H1Layers.reasonText(link.entry_reason))}</p>`).join(''));
+    LFUI.openDrawer('Зона H1', H1Layers.zoneCard(zone, null, h1CardFormat()));
     requestAnimationFrame(drawZones);
   });
   bottom.querySelectorAll('[data-bottom]').forEach(button => button.onclick = () => { view.dataset.bottom = button.dataset.bottom; localStorage.setItem('lf:analysis:bottom',button.dataset.bottom); paintBottom(); });
