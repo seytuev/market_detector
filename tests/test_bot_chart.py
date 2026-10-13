@@ -245,7 +245,7 @@ async def test_chart_caption_matches_snapshot(db, chart_seeded, tmp_path,
     assert captured["observation_id"] == chart_seeded["obs_bear"].id
     markup = photos[0]["reply_markup"]
     callbacks = [b.callback_data for row in markup.inline_keyboard for b in row]
-    assert f"nav:chartgo:{chart_seeded['eth']}:D1:0:{DEFAULT_MASK}" in callbacks
+    assert f"nav:chartgo:{chart_seeded['eth']}:D1:0:{DEFAULT_MASK}:{captured['observation_id']}" in callbacks
     assert f"nav:asset:{chart_seeded['eth']}" in callbacks
 
 
@@ -295,9 +295,9 @@ async def test_nav_chart_one_click_and_layers(db, chart_seeded, tmp_path,
     # на сообщении с графиком — периоды, слои, обновление (§8)
     callbacks = [b.callback_data for row in photos[0]["reply_markup"].inline_keyboard
                  for b in row if b.callback_data]
-    assert f"nav:chartgo:{eth}:H1:3:{DEFAULT_MASK}" in callbacks
-    assert f"nav:chartgo:{eth}:H1:7:{DEFAULT_MASK}" in callbacks
-    assert f"nav:chartlay:{eth}:H1:3:{DEFAULT_MASK}" in callbacks
+    assert f"nav:chartgo:{eth}:H1:3:{DEFAULT_MASK}:{captured['observation_id']}" in callbacks
+    assert f"nav:chartgo:{eth}:H1:7:{DEFAULT_MASK}:{captured['observation_id']}" in callbacks
+    assert f"nav:chartlay:{eth}:H1:3:{DEFAULT_MASK}:{captured['observation_id']}" in callbacks
     # переключатель слоя: mask 15 ^ 2 (bos) = 13
     update, _, edits, _, _ = _cb_photo_update(f"nav:charttg:{eth}:H1:7:15:2")
     await _nav_callback(app)(update, _context())

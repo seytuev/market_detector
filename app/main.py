@@ -167,6 +167,7 @@ async def async_main() -> None:
             settings.telegram_chat_id,
             db,
             site_base_url=settings.effective_base_url(),
+            auth_token=settings.auth_token,
         )
     else:
         sender = LogSender()
