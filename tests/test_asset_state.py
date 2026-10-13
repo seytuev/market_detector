@@ -568,10 +568,87 @@ def test_history_recovery_keeps_entry_zones_visible_but_pauses_actions(db, instr
     entries = [row for row in rows if row["kind"] == "entry"]
     assert entries
     assert [row["v"] for row in entries] == [row["v"] for row in ready["compact_rows"] if row["kind"] == "entry"]
-    assert all("данные уточняются" in row["note"] for row in entries)
+    assert all(row["note"] == "в discount" for row in entries)
+    assert "данные уточняются" not in " ".join(row.get("note") or "" for row in rows)
     assert any(row["kind"] == "pd" for row in rows)
     assert any(row["kind"] == "blocker" and "приостановлены" in row["v"] for row in rows)
     assert "Сохранённые зоны" in " ".join(paused["compact"])
+
+
+def test_entry_price_inside_is_a_quote_fact_even_during_history_recovery(db, instrument_id):
+    _leg(db, instrument_id, "bull", LEVEL, 20)
+    _entry(db, instrument_id, "bull", 81000, 82000, _open(16))
+    inside = _view(db, instrument_id, price=81500,
+                   data={"state": "replaying", "reason": "replay_in_progress"})
+    row = next(r for r in inside["compact_rows"] if r["kind"] == "entry")
+    assert row["zone"]["price_inside"]
+    assert row["note"] == "в discount"
+    for price in (80999, 82001):
+        outside = _view(db, instrument_id, price=price)
+        assert not next(r for r in outside["compact_rows"] if r["kind"] == "entry")["zone"]["price_inside"]
+    stale = _view(db, instrument_id, price=81500, data={"state": "stale", "reason": "quote_stale"})
+    assert not next(r for r in stale["compact_rows"] if r["kind"] == "entry")["zone"]["price_inside"]
+
+
+def test_zone_close_beyond_far_boundary_marks_obsolete_and_removes_entry(db, instrument_id):
+    _leg(db, instrument_id, "bull", LEVEL, 20)
+    _entry(db, instrument_id, "bull", 81000, 82000, _open(16))
+    wick = make_candle(_open(17), 81500, 82100, 80900, 81500, "H1", instrument_id)
+    db.insert_candles([wick])
+    before = _view(db, instrument_id, price=81500)
+    assert next(r for r in before["compact_rows"] if r["kind"] == "entry")["zone"]["invalidated_at"] is None
+    forming = make_candle(_open(22), 81500, 82100, 80900, 80950, "H1", instrument_id, closed=False)
+    db.insert_candles([forming])
+    assert next(r for r in _view(db, instrument_id)["compact_rows"] if r["kind"] == "entry")["zone"]["invalidated_at"] is None
+    closed = make_candle(_open(22), 81500, 82100, 80900, 80950, "H1", instrument_id)
+    db.insert_candles([closed])
+    after = _view(db, instrument_id, price=80950)
+    row = next(r for r in after["compact_rows"] if r["kind"] == "entry")
+    assert row["zone"]["invalidated_at"] == closed.close_time
+    assert not row["zone"]["price_inside"]
+    assert not after["next_action"]["zones"]
+
+
+def test_rejected_setup_zone_keeps_closed_break_tag_without_reentering_actions(db, instrument_id):
+    leg_id = _leg(db, instrument_id, "bull", LEVEL, 20)
+    closed = make_candle(_open(22), 81500, 82100, 80900, 80950, "H1", instrument_id)
+    db.insert_candles([closed])
+    setup = {"movement_id": leg_id, "lower": 80400, "upper": 83600, "eq": 82000,
+             "eligible_regions": [], "candidates": [
+                 {"type": "FVG", "lower": 81000, "upper": 82000, "admitted": [81000, 82000],
+                  "formed_at": _open(16), "confirmed_at": _open(17), "status": "confirmed", "reason": "fvg_filled"}]}
+    asset = project_asset(db, instrument_id, _close(40), setup=setup, price=81500, data_state={"state": "ok"})
+    row = next(r for r in asset["compact_rows"] if r["kind"] == "entry")
+    assert row["zone"]["invalidated_at"] == closed.close_time
+    assert row["zone"]["price_inside"]  # Факт возврата цены не восстанавливает пригодность.
+    assert not asset["next_action"]["zones"]
+
+
+def test_price_inside_tag_uses_full_zone_while_entry_stays_clipped_to_pd(db, instrument_id):
+    leg_id = _leg(db, instrument_id, "bull", LEVEL, 20, origin=81033.66, end=84168)
+    setup = {"movement_id": leg_id, "lower": 81033.66, "upper": 84168, "eq": 82600.83,
+             "eligible_regions": [{"type": "FVG", "lower": 82471.18, "upper": 82783,
+                                   "admitted": [82471.18, 82600.83], "formed_at": _open(16),
+                                   "confirmed_at": _open(17)}]}
+    asset = project_asset(db, instrument_id, _close(40), setup=setup, price=82700, data_state={"state": "ok"})
+    row = next(r for r in asset["compact_rows"] if r["kind"] == "entry")
+    assert row["zone"]["price_inside"]
+    assert row["zone"]["upper"] == 82783
+    assert asset["next_action"]["zones"][0]["admitted"] == [82471.18, 82600.83]
+
+
+def test_bear_zone_requires_close_strictly_above_full_upper_boundary(db, instrument_id):
+    _leg(db, instrument_id, "bear", 80000, 20, origin=85000, end=79000)
+    _entry(db, instrument_id, "bear", 82000, 84000, _open(16))
+    equality = make_candle(_open(22), 83900, 84100, 83800, 84000, "H1", instrument_id)
+    db.insert_candles([equality])
+    first = _view(db, instrument_id, price=83000)
+    assert next(r for r in first["compact_rows"] if r["kind"] == "entry")["zone"]["invalidated_at"] is None
+    beyond = make_candle(_open(23), 84000, 84200, 83900, 84100, "H1", instrument_id)
+    db.insert_candles([beyond])
+    after = _view(db, instrument_id, price=84100)
+    assert next(r for r in after["compact_rows"] if r["kind"] == "entry")["zone"]["invalidated_at"] == beyond.close_time
+    assert not after["next_action"]["zones"]
 
 
 def test_short_time_today_vs_other_day():

@@ -73,6 +73,33 @@ const puppeteer = require('../tools/node_modules/puppeteer-core');
     assert.equal(result.on, 'rgb(40, 119, 84)');
     assert.equal(result.off, 'rgb(173, 63, 73)');
     assert.equal(result.historicalPdCount, 0);
+    const zoneTags = await page.evaluate(() => {
+      const card = document.createElement('div');
+      document.body.appendChild(card);
+      card.innerHTML = LFCopy.card({ asset: { governs: true,
+        asset_state: { title: 'LONG', direction: 'long' }, compact_rows: [
+          { kind: 'entry', k: 'Вход', v: 'FVG: 81 959–82 148', note: 'в discount',
+            zone: { lower: 81959, upper: 82148, price_inside: false, invalidated_at: null } },
+          { kind: 'entry', k: '', v: 'OB: 81 033–81 959', note: 'в discount',
+            zone: { lower: 81033, upper: 81959, price_inside: false, invalidated_at: 1 } },
+        ] } }, { hideDetails: true });
+      const rows = card.querySelector('.msg-rows');
+      const inside = card.querySelector('.msg-zone-inside');
+      LFCopy.updatePrice(card, 82000);
+      const entered = !inside.hidden && getComputedStyle(inside).display !== 'none';
+      LFCopy.updatePrice(card, 82149);
+      const left = inside.hidden && getComputedStyle(inside).display === 'none';
+      LFCopy.updatePrice(card, 82148);
+      const boundary = !inside.hidden;
+      LFCopy.updatePrice(card, null);
+      const missing = inside.hidden;
+      const stale = card.querySelector('.msg-zone-invalid').textContent;
+      const stable = rows === card.querySelector('.msg-rows');
+      card.remove();
+      return { entered, left, boundary, missing, stale, stable };
+    });
+    assert.ok(zoneTags.entered && zoneTags.left && zoneTags.boundary && zoneTags.missing && zoneTags.stable);
+    assert.equal(zoneTags.stale, 'Неактуальна · закреп за зоной');
     const labels = await page.$$('.h1-pd-label');
     assert.equal(labels.length, 3);
     for (const label of labels) {

@@ -1176,7 +1176,7 @@ function renderHeaderStats() {
     `<span class="hs-item">${k}: <b>${v}</b></span>`).join('');
 }
 
-function updateLastPrice() {
+function updateLastPrice(live = false) {
   if ($('last-price')) $('last-price').textContent = fmtPrice(state.lastPrice);
   if ($('desk-price') && state.lastPrice != null) {
     $('desk-price').textContent = fmtPrice(state.lastPrice);
@@ -1186,6 +1186,7 @@ function updateLastPrice() {
     $('instrument-meta').textContent = `${ins.venue} · ${ins.market_type || 'spot'}`;
   }
   updateZonePosBars();
+  if (live && window.LFCopy) LFCopy.updatePrice($('desk-scenario'), state.lastPrice);
 }
 
 // ---------------------------------------------------------------------------
@@ -3145,7 +3146,7 @@ function handleWsMessage(data) {
       }
       // AC16: тик двигает цену, текущий бар и маркеры «зона—цена» — и всё;
       // drawZones()/сценарий/снимки пересчитываются по смене версий доменов
-      updateLastPrice();
+      updateLastPrice(true);
     }
   } else if (data.type === 'event') {
     const foreign = data.instrument_id != null

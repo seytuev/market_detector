@@ -1941,6 +1941,9 @@ html[data-eventstrip="collapsed"] .strip-toggle .strip-chev { transform: rotate(
   font-size: 11px; line-height: 16px; vertical-align: 1px; white-space: nowrap;
 }
 .now-card .sc-visual { margin: 12px 0 4px; height: 130px; }
+.msg-zone-inside { background: var(--lf-selected); color: var(--lf-brand); }
+.msg-zone-inside[hidden] { display: none; }
+.msg-zone-invalid { color: var(--lf-negative); white-space: normal; }
 
 .msg-block { margin: 10px 0 0; }
 .msg-k { color: var(--lf-text2); font-size: 12px; }
