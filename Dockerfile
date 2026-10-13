@@ -12,7 +12,10 @@ RUN python tools/build_static.py && pip install --no-cache-dir --constraint requ
 ENV HTF_DB_PATH=/data/htf_zones.db
 RUN useradd --uid 10001 --create-home htf && mkdir -p /data && chown htf:htf /data
 ENV HTF_HOST=0.0.0.0
-USER htf
+# Том Railway монтируется поверх /data уже после сборки и принадлежит root.
+# USER здесь нельзя: процесс не смог бы создать WAL рядом с существующей базой.
+COPY tools/docker_entrypoint.py /srv/tools/docker_entrypoint.py
+ENTRYPOINT ["python", "/srv/tools/docker_entrypoint.py"]
 
 EXPOSE 8000
 CMD ["python", "-m", "app.main"]
