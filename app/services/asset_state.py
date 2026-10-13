@@ -78,6 +78,8 @@ def project_asset(
     bull = bool(leg and leg.get("direction") == "bull")
     sides = _sides(db, instrument_id, moment, leg)
     zones = _zones(db, instrument_id, leg, pd, setup) if leg and proven else []
+    display_zones = _entry_zone_states(db, instrument_id, zones, leg, setup, moment, price, data_state) if proven else []
+    zones = [z for z in display_zones if z.get("eligible", True) and z.get("invalidated_at") is None]
     evidence = _evidence_rows(db, sides, leg)
     liquidity = _liquidity(db, instrument_id, moment)
     history = _history(db, instrument_id, moment, leg, evidence)
@@ -90,7 +92,7 @@ def project_asset(
         invalidation, quality_text, leg, quality_bad, forming_note,
     )
     compact_rows = _compact_rows(
-        state, transition if proven else None, evidence, zones, pd,
+        state, transition if proven else None, evidence, display_zones, pd,
         invalidation, quality_text, leg, quality_bad, forming_note, moment,
     )
     snapshot_id = "asset:{iid}:{as_of}:{move}:{key}:{code}".format(
@@ -400,6 +402,9 @@ def _zones(db, instrument_id: int, leg, pd, setup) -> list[dict]:
                 "lower": row.get("lower"),
                 "upper": row.get("upper"),
                 "admitted": [admitted[0], admitted[1]],
+                "formed_at": row.get("formed_at"),
+                "confirmed_at": row.get("confirmed_at"),
+                "eligible": True,
             })
         return regions
     if not pd or pd.get("lower") is None or pd.get("eq") is None or pd.get("upper") is None:
@@ -410,10 +415,9 @@ def _zones(db, instrument_id: int, leg, pd, setup) -> list[dict]:
     origin = leg.get("origin_at")
     window = None if origin is None else int(origin) - _LOOKBACK_BARS * H1_MS
     rows = db.conn.execute(
-        """SELECT type, lower, upper, formed_at
+        """SELECT type, lower, upper, formed_at, confirmed_at, validity
            FROM ltf_entry_zone
-           WHERE instrument_id=? AND direction=? AND confirmed_at IS NOT NULL
-             AND validity!='invalid'""",
+           WHERE instrument_id=? AND direction=? AND confirmed_at IS NOT NULL""",
         (instrument_id, direction),
     ).fetchall()
     found = []
@@ -436,8 +440,64 @@ def _zones(db, instrument_id: int, leg, pd, setup) -> list[dict]:
             "lower": row["lower"],
             "upper": row["upper"],
             "admitted": [lo, hi],
+            "formed_at": formed,
+            "confirmed_at": row["confirmed_at"],
+            "eligible": row["validity"] != "invalid",
         })
     return found
+
+
+def _entry_zone_states(db, instrument_id, zones, leg, setup, as_of, price, data_state):
+    """Факты для карточки: котировка внутри и первое закрытие за дальней границей.
+
+    Неактуальная зона остаётся видимой, но в next_action и торговое состояние
+    больше не попадает. Один проход по свечам текущего окна, без записи в БД.
+    """
+    if not leg:
+        return []
+    candidates = list(zones)
+    if setup and setup.get("movement_id") == leg.get("id"):
+        for row in setup.get("candidates") or []:
+            if row.get("status") == "forming" or not row.get("admitted"):
+                continue
+            candidates.append({**row, "eligible": False})
+    unique = {}
+    for zone in candidates:
+        if zone.get("confirmed_at") is not None and zone["confirmed_at"] > as_of:
+            continue
+        key = (zone["type"], *zone["admitted"])
+        unique.setdefault(key, zone)
+    if not unique:
+        return []
+    start = min(z.get("confirmed_at") or z.get("formed_at") or as_of for z in unique.values())
+    candles = db.get_candles(instrument_id, "H1", start_ms=int(start), end_ms=as_of, closed_only=True)
+    bull = leg.get("direction") == "bull"
+    quote_reason = (data_state or {}).get("reason")
+    quote_status = ((data_state or {}).get("channels") or {}).get("quote", {}).get("status")
+    price_known = price is not None and quote_status not in ("stale", "missing") and quote_reason not in (
+        "no_quote", "quote_stale", "quote_processing_failed", "quote_processing_lag",
+    )
+    display = []
+    for zone in unique.values():
+        invalidated_at = None
+        confirmed = zone.get("confirmed_at") or zone.get("formed_at") or as_of
+        far = zone.get("lower") if bull else zone.get("upper")
+        if far is not None:
+            for candle in candles:
+                if candle.open_time < confirmed or candle.close_time > as_of:
+                    continue
+                beyond = candle.close < far if bull else candle.close > far
+                if beyond:
+                    invalidated_at = candle.close_time
+                    break
+        if not zone.get("eligible", True) and invalidated_at is None:
+            continue
+        lo, hi = zone.get("lower"), zone.get("upper")
+        if lo is None or hi is None:
+            lo, hi = zone["admitted"]
+        display.append({**zone, "invalidated_at": invalidated_at,
+                        "price_inside": bool(price_known and lo <= price <= hi)})
+    return display
 
 
 def _evidence_rows(db, sides, leg) -> list[dict]:
@@ -974,13 +1034,11 @@ def _compact_rows(state, transition, evidence, zones, pd, invalidation,
             rows.append({"kind": "bos", "dir": _bos_dir(transition),
                          "k": _bos_label(transition), "v": _bos_value(transition, now_ms)})
             entries = _entry_rows(zones, leg)
-            for row in entries:
-                row["note"] += " · данные уточняются"
             rows.extend(entries)
             parts = _pd_parts(pd)
             if parts:
                 rows.append({"kind": "pd", "k": "PD H1", "v": parts["v"],
-                             "note": "данные уточняются"})
+                             "note": parts.get("note")})
         rows.append({
             "kind": "blocker", "k": "Режим",
             "v": f"Уведомления о новых условиях входа приостановлены: {quality_text}",
@@ -1055,6 +1113,10 @@ def _entry_rows(zones, leg) -> list[dict]:
             "k": "Вход" if i == 0 else "",
             "v": f"{name}: {span}",
             "note": half,
+            "zone": {"lower": zone.get("lower") if zone.get("lower") is not None else zone["admitted"][0],
+                     "upper": zone.get("upper") if zone.get("upper") is not None else zone["admitted"][1],
+                     "price_inside": bool(zone.get("price_inside")),
+                     "invalidated_at": zone.get("invalidated_at")},
         })
     return rows
 

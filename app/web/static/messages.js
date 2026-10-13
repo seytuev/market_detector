@@ -114,10 +114,13 @@ window.LFCopy = (() => {
     if (Array.isArray(rows) && rows.length) {
       return '<div class="msg-rows">' + rows.map((row) =>
         '<div class="msg-row kind-' + esc(row.kind || 'info') +
-        (row.dir ? ' dir-' + esc(row.dir) : '') + '">' +
+        (row.dir ? ' dir-' + esc(row.dir) : '') + '"' +
+        (row.zone ? ' data-zone-lower="' + esc(row.zone.lower) + '" data-zone-upper="' + esc(row.zone.upper) + '"' : '') + '>' +
         '<span class="msg-k">' + esc(row.k) + '</span>' +
         '<span class="msg-v">' + esc(row.v) +
         (row.note ? ' <span class="msg-note">' + esc(row.note) + '</span>' : '') +
+        (row.zone ? ' <span class="msg-note msg-zone-inside"' + (row.zone.price_inside ? '' : ' hidden') + '>Цена внутри</span>'
+          + (row.zone.invalidated_at != null ? ' <span class="msg-note msg-zone-invalid">Неактуальна · закреп за зоной</span>' : '') : '') +
         '</span></div>'
       ).join('') + '</div>';
     }
@@ -126,6 +129,16 @@ window.LFCopy = (() => {
       html += `<p class="asset-line">${esc(line)}</p>`;
     });
     return html;
+  }
+
+  function updatePrice(container, price) {
+    if (!container) return;
+    const value = price == null ? NaN : Number(price);
+    container.querySelectorAll('[data-zone-lower][data-zone-upper]').forEach(row => {
+      const tag = row.querySelector('.msg-zone-inside');
+      if (tag) tag.hidden = !Number.isFinite(value)
+        || value < Number(row.dataset.zoneLower) || value > Number(row.dataset.zoneUpper);
+    });
   }
 
   /* Схема «зона — цена»: полоса цены, зона контекста, зоны входа, отмена.
@@ -248,5 +261,5 @@ window.LFCopy = (() => {
     }
   });
 
-  return { card, visual };
+  return { card, visual, updatePrice };
 })();

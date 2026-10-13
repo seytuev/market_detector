@@ -315,6 +315,8 @@
         footHtml:
           `<div class="now-card-foot">Котировка · <span class="price-age">${esc(p ? ageText(p.at) : '—')}</span></div>`,
       });
+      const tick = st.prices.get(ins.id);
+      if (tick) LFCopy.updatePrice(el, Date.now() - tick.at <= 60000 ? tick.price : null);
       return;
     }
     const cancel = cancelText(v);
