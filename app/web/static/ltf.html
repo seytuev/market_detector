@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
   <link rel="stylesheet" href="/style.css">
-  <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+  <script src="/vendor/lightweight-charts.js"></script>
 </head>
 <body class="app-body">
   <script>
@@ -53,6 +53,7 @@
       <span class="conn-status">
         <span id="ws-indicator" class="ws-dot offline" title="Нет соединения"></span>
         <span id="connection-label" class="connection-label">Нет соединения</span>
+        <span id="warmup-indicator" class="connection-label hidden" role="status"></span>
       </span>
     </div>
   </aside>

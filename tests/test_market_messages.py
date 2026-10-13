@@ -33,7 +33,7 @@ def _pivot(price, kind, role, t, pid):
 
 
 def test_catalog_covers_every_code():
-    assert len(CATALOG_CODES) == 56
+    assert len(CATALOG_CODES) == 58
     for code in CATALOG_CODES:
         msg = render(code, {"types": "OB", "timeframes": "D1"})
         assert msg["headline"]

@@ -181,7 +181,7 @@ def test_touch_at_full_zone_edge_not_cut(db: Database, cfg, instrument_id: int):
                         "out_of_range", False, "none")
     engine = LtfEngine(db, cfg)
     t1 = T0 + 500 * H1_MS
-    c1 = make_candle(t1, 99.5, 99.0, 97.5, 98.2, timeframe="H1",
+    c1 = make_candle(t1, 99.5, 99.5, 97.5, 98.2, timeframe="H1",
                      instrument_id=instrument_id)
     db.insert_candles([c1])
     engine.process_h1_close(instrument_id, now_ms=c1.close_time)

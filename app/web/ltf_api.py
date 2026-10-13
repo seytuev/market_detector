@@ -274,11 +274,18 @@ def register_ltf_routes(app, db: Database, settings, require_auth, ltf_engine=No
         eligible_count/stage — тем же циклом допуска, что /current (§13).
         Вычисление — app/services/overview.py. Чтение — в одной
         read-транзакции (D01): state_version — из того же счётчика
-        state_seq, что у /current (клиент сверяет версии пакета)."""
+        state_seq, что у /current (клиент сверяет версии пакета).
+        §13 (этап 6a): versions — вектор доменов снимка (scenario/quote —
+        карты по инструментам, zones — глобальный счётчик)."""
         with db.read_tx():
             rows = instruments_overview(db, settings)
             seq = db.get_state_seq()
-        return {"state_version": seq, "instruments": rows}
+            dv = db.domain_versions()
+        return {"state_version": seq, "instruments": rows, "versions": {
+            "scenario": dv.get("scenario", {}),
+            "zones": dv.get("zones", 0),
+            "quote": dv.get("quote", {}),
+        }}
 
     @app.get("/api/ltf/instruments/{instrument_id}/current",
              dependencies=[Depends(require_auth)])
@@ -289,9 +296,15 @@ def register_ltf_routes(app, db: Database, settings, require_auth, ltf_engine=No
         сценарий текущим не удерживается.
         Вычисление — app/services/overview.py. Чтение — в одной
         read-транзакции (D01): серия запросов снимка видит одну версию
-        состояния."""
+        состояния. §13 (этап 6a): versions — домены снимка инструмента."""
         with db.read_tx():
             data = instrument_current(db, settings, instrument_id)
+            if data is not None:
+                data["versions"] = {
+                    "scenario": db.get_domain(f"seq:scenario:{instrument_id}"),
+                    "zones": db.get_domain("seq:zones"),
+                    "quote": db.get_domain(f"seq:quote:{instrument_id}"),
+                }
         if data is None:
             raise HTTPException(status_code=404, detail="Инструмент не найден")
         return data

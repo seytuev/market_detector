@@ -2,6 +2,8 @@
 window.LFDataSync = (() => {
   let reload = null;
   let selected = () => null;
+  let syncStale = null;   // (versions, {immediate}) => Promise — точечный рефетч изменённых доменов (§14)
+  let onRecover = null;   // хук после объединённого recovery (AC17)
   let activeRead = null;
   let lastRead = 0;
   let statusRead = null;
@@ -10,6 +12,9 @@ window.LFDataSync = (() => {
   let nextAllowed = 0;
   let lastCompletedJob = null;
   let previousBusy = false;
+  let recovering = null;   // single-flight объединённого восстановления (AC17)
+  let lastStatusOkAt = 0;  // последняя успешная проверка свежести (§15)
+  let displayError = null; // ошибка обновления экрана — отдельно от итога задания (§15)
   const reasons = {
     missing_close: 'ожидается закрытая свеча', missing_current: 'ожидается текущая свеча',
     history_gap: 'пропуски истории', processing_lag: 'обработка не завершена',
@@ -19,9 +24,19 @@ window.LFDataSync = (() => {
     interrupted_by_restart: 'обновление прервано перезапуском',
     deadline_exceeded_processing_continues: 'превышено время ожидания; обработка продолжается',
   };
+  // Этапы ручного задания (§15): job.stages из статуса
+  const STAGE_RU = {
+    quotes: 'Котировки', fresh_candles: 'Свежие свечи',
+    calculation: 'Расчёт', history: 'Восстановление истории',
+  };
+  const STAGE_STATUS_RU = {
+    pending: 'ожидает', running: 'выполняется…', completed: 'готово', failed: 'ошибка',
+    waiting_source: 'Ожидание источника', waiting_calculation: 'Ожидание расчёта',
+  };
   const describe = (value) => reasons[value] || value || 'нет данных';
   const format = (at) => new Date(at).toLocaleTimeString('ru-RU', { timeZone: 'Europe/Moscow', hour12: false }) + ' МСК';
   const busy = (job) => job && (['queued', 'running'].includes(job.status) || job.processing_continues);
+  const stageText = (s) => `${STAGE_RU[s.name] || s.name}: ${STAGE_STATUS_RU[s.status] || s.status}`;
 
   function paint() {
     const button = document.getElementById('btn-data-sync');
@@ -35,8 +50,13 @@ window.LFDataSync = (() => {
     button.setAttribute('aria-busy', String(!!running));
     let message = 'Свечи и котировки всех включённых активов';
     if (!statusData.available) message = 'Обновление недоступно: обработчик данных не работает';
-    else if (running) message = `Обновление: ${job.channels_completed} из ${job.channels_total}` +
-      (job.processing_continues ? ' · обработка продолжается' : '');
+    else if (running) {
+      message = `Обновление: ${job.channels_completed} из ${job.channels_total}` +
+        (job.processing_continues ? ' · обработка продолжается' : '');
+      // §15: текущий этап задания в строке статуса
+      const active = (job.stages || []).find((s) => !['completed', 'failed'].includes(s.status));
+      if (active) message += ` · ${stageText(active)}`;
+    }
     else if (job) {
       if (job.status === 'succeeded') message = `Данные обновлены в ${format(job.finished_at)}`;
       else if (job.status === 'partial') message = `Обновлено частично: ${job.results.filter((r) => r.status === 'ok').length} из ${job.channels_total}`;
@@ -54,6 +74,14 @@ window.LFDataSync = (() => {
     label.dataset.state = running ? 'running' : job && job.status || 'idle';
     if (detail) {
       detail.replaceChildren();
+      // §15: этапы задания (котировки → свежие свечи → восстановление истории)
+      // с различением waiting_source / waiting_calculation
+      for (const s of (job && job.stages) || []) {
+        const row = document.createElement('div');
+        row.dataset.stage = s.name;
+        row.textContent = stageText(s);
+        detail.append(row);
+      }
       for (const c of channels) {
         const row = document.createElement('div');
         const syncTime = c.last_success_at ? format(c.last_success_at) : 'ещё не было';
@@ -68,6 +96,12 @@ window.LFDataSync = (() => {
       for (const error of job && job.errors || []) {
         const row = document.createElement('div');
         row.textContent = `${error.symbol || ''} ${error.timeframe || ''}: ${describe(error.error)}`;
+        detail.append(row);
+      }
+      if (displayError) {
+        // сбой точечного обновления экрана — отдельно от итога задания
+        const row = document.createElement('div');
+        row.textContent = `Обновление экрана: ${displayError}`;
         detail.append(row);
       }
     }
@@ -87,23 +121,100 @@ window.LFDataSync = (() => {
     }, busy(statusData && statusData.job) ? 2000 : 30000);
   }
 
-  async function readStatus() {
+  async function readStatus({ diff = true } = {}) {
     if (statusRead) return statusRead;
     statusRead = HTF.api('/api/data-sync/status').then(async (data) => {
       statusData = data;
+      lastStatusOkAt = Date.now();
       const job = data.job;
       const running = busy(job);
       paint();
-      if (job && job.finished_at && !running && (previousBusy || job.job_id !== lastCompletedJob)) {
-        await snapshot({ force: true });
-        lastCompletedJob = job.job_id;
+      if (diff && data.versions) {
+        if (job && job.finished_at && !running && (previousBusy || job.job_id !== lastCompletedJob)) {
+          lastCompletedJob = job.job_id;
+          // §15: после terminal job — точечный рефетч доменов с изменившейся
+          // версией (не полный reloadAll); ждём его до показа итога
+          await refreshStale(data.versions, true);
+        } else {
+          // фоновая сверка доменов на каждом чтении статуса: idle-поллинг
+          // заменяет прежний принудительный 30-секундный снимок (AC17)
+          refreshStale(data.versions, false);
+        }
       }
       previousBusy = running;
       paint();
-      if (running) snapshot().catch((e) => console.warn('sync snapshot:', e));
       return data;
     }).finally(() => { statusRead = null; schedule(); });
     return statusRead;
+  }
+
+  async function refreshStale(versions, immediate) {
+    if (!versions || !syncStale) return;
+    try {
+      await syncStale(versions, { immediate });
+      if (displayError) { displayError = null; paint(); }
+    } catch (e) {
+      displayError = (e && e.message) || String(e);
+      paint();
+      console.warn('stale domains refresh:', e);
+    }
+  }
+
+  // AC17: WS reconnect / visibilitychange→visible / online — ОДНО
+  // объединённое восстановление: одно чтение статуса + рефетч только
+  // доменов с изменившейся версией. Параллельные триггеры делят промис.
+  function recover() {
+    if (recovering) return recovering;
+    recovering = (async () => {
+      // текущее чтение статуса могло начаться до reconnect — дожидаемся его
+      // и читаем заново, чтобы diff версий видел свежее состояние
+      if (statusRead) await statusRead.catch(() => {});
+      const data = await readStatus({ diff: false });
+      await refreshStale(data && data.versions, true);
+      if (onRecover) { try { onRecover(); } catch (e) { console.warn('recover hook:', e); } }
+    })().finally(() => { recovering = null; });
+    return recovering;
+  }
+
+  // Прогрев данных (§11, AC01): страница рендерит сохранённый снимок сразу;
+  // пока сервер не прогрет — видимый индикатор фазы и прогресса истории.
+  const WARMUP_PHASE_RU = {
+    starting: 'запуск', web: 'запуск веба', realtime: 'подключение котировок',
+    history: 'восстановление истории', calc: 'расчёт',
+  };
+  let warmupTimer = null;
+
+  function warmupPaint(payload) {
+    const el = document.getElementById('warmup-indicator');
+    if (!el) {
+      if (warmupTimer) { clearInterval(warmupTimer); warmupTimer = null; }
+      return;
+    }
+    const phases = (payload && payload.phases) || {};
+    const done = !!(payload && payload.ready && phases.history && phases.calc);
+    if (done) {
+      el.classList.add('hidden');
+      if (warmupTimer) { clearInterval(warmupTimer); warmupTimer = null; }
+      document.dispatchEvent(new CustomEvent('lf-warmup', { detail: { done: true, text: null } }));
+      return;
+    }
+    const backfill = payload && payload.backfill;
+    const progress = backfill && backfill.total ? ` · история ${backfill.completed}/${backfill.total}` : '';
+    const text = `Прогрев данных: ${WARMUP_PHASE_RU[payload && payload.phase] || 'запуск'}${progress}`;
+    el.textContent = text;
+    el.classList.remove('hidden');
+    document.dispatchEvent(new CustomEvent('lf-warmup', { detail: { done: false, text } }));
+  }
+
+  async function warmupPoll() {
+    try { warmupPaint(await HTF.api('/api/ready')); }
+    catch (e) { /* веб ещё не отвечает — индикатор остаётся как был */ }
+  }
+
+  function warmupStart() {
+    if (warmupTimer || !document.getElementById('warmup-indicator')) return;
+    warmupPoll();
+    warmupTimer = setInterval(warmupPoll, 5000); // пока не ready — §11 п.5с
   }
 
   async function start() {
@@ -120,7 +231,9 @@ window.LFDataSync = (() => {
     } catch (e) {
       await readStatus().catch(() => {});
       const label = document.getElementById('data-sync-status');
-      label.textContent = typeof e.message === 'string' && e.message !== '[object Object]' ? e.message : 'Повторите обновление через 15 секунд';
+      // §15: ошибка API текстом + время последней успешной проверки
+      label.textContent = (typeof e.message === 'string' && e.message !== '[object Object]' ? e.message : 'Повторите обновление через 15 секунд') +
+        (lastStatusOkAt ? ` · последняя успешная проверка: ${format(lastStatusOkAt)}` : '');
       nextAllowed = Date.now() + 15000;
       button.disabled = true;
       setTimeout(paint, 15000);
@@ -130,6 +243,8 @@ window.LFDataSync = (() => {
   function init(options) {
     reload = options.reload;
     selected = options.selected || selected;
+    syncStale = options.syncStale || syncStale;
+    onRecover = options.onRecover || onRecover;
     lastRead = Date.now();
     document.getElementById('btn-data-sync').addEventListener('click', start);
     document.addEventListener('change', (event) => {
@@ -142,17 +257,13 @@ window.LFDataSync = (() => {
       if (!document.hidden) recover().catch((e) => console.warn('visibility recovery:', e));
     });
     window.addEventListener('online', () => recover().catch((e) => console.warn('online recovery:', e)));
-    setInterval(() => {
-      if (!document.hidden) snapshot({ force: true }).catch((e) => console.warn('snapshot recovery:', e));
-    }, 30000);
+    warmupStart();
     readStatus().catch((e) => {
       console.warn('sync status:', e);
-      document.getElementById('data-sync-status').textContent = `Не удалось получить свежесть данных: ${e.message}`;
+      document.getElementById('data-sync-status').textContent =
+        `Не удалось получить свежесть данных: ${e.message}` +
+        (lastStatusOkAt ? ` · последняя успешная проверка: ${format(lastStatusOkAt)}` : '');
     });
-  }
-
-  async function recover() {
-    await Promise.all([snapshot(), readStatus()]);
   }
 
   function onWs(data) {
@@ -160,5 +271,5 @@ window.LFDataSync = (() => {
     // Read the durable authoritative status; coalesce bursts of progress.
     readStatus().catch((e) => console.warn('sync event:', e));
   }
-  return { init, onWs, snapshot, readStatus, paint };
+  return { init, onWs, snapshot, readStatus, paint, recover };
 })();

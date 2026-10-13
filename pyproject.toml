@@ -1,8 +1,8 @@
 [project]
 name = "htf-zones"
-version = "0.1.0"
+version = "0.2.0"
 description = "HTF Zones — личный сервис обнаружения ценовых зон (спека v0.1)"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.13"
 dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
@@ -10,6 +10,7 @@ dependencies = [
     "python-telegram-bot>=21.0",
     "mplfinance>=0.12.10b0",
     "matplotlib>=3.8",
+    "websockets>=15",
 ]
 
 [project.optional-dependencies]
@@ -29,3 +30,6 @@ include = ["app*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.setuptools.package-data]
+app = ["schema.sql", "web/static/*", "web/static/**/*"]

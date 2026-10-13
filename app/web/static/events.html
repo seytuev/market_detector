@@ -8,6 +8,7 @@
   <script>(function(){try{var c=localStorage.getItem('lf:theme');var l=window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches;var t=(c==='dark'||c==='light')?c:(c==='system'?(l?'light':'dark'):'light');document.documentElement.dataset.theme=t;var sb=localStorage.getItem('lf:sidebar');if(sb==='collapsed'||sb==='expanded')document.documentElement.dataset.sidebar=sb;}catch(e){document.documentElement.dataset.theme='light';}})();</script>
   <link rel="stylesheet" href="/style.css">
   <link rel="stylesheet" href="/market-context.css">
+  <link rel="stylesheet" href="/redesign.css">
 </head>
 <body class="app-body">
   <a class="skip" href="#main">К содержимому</a>
@@ -54,9 +55,9 @@
     <div class="events-modes" role="group" aria-label="Режим контекста">
       <button type="button" class="btn small" data-mode="now">Сейчас</button>
       <button type="button" class="btn small" data-mode="calendar">Календарь</button>
-      <a class="btn small" href="/?kind=market#journal">Что изменилось</a>
+      <a class="btn small" href="/?kind=market&scope=context#journal">Что изменилось</a>
       <a class="btn small" href="/#help">Как считается оценка</a>
-      <a class="btn small" href="/#settings">Источники</a>
+      <a class="btn small" href="/?section=sources#settings">Источники</a>
     </div>
     <p id="market-status" class="market-status" role="status" aria-live="polite"></p>
     <div id="events-body" aria-busy="true"></div>
@@ -81,6 +82,7 @@
     <a href="/#settings" role="menuitem">Настройки</a>
   </div>
   <script src="/common.js"></script>
+  <script src="/ui.js"></script>
   <script src="/events.js"></script>
 </body>
 </html>

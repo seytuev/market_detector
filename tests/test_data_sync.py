@@ -54,7 +54,7 @@ class Exchange:
 
 
 @pytest.fixture
-def market(monkeypatch, tmp_path):
+async def market(monkeypatch, tmp_path):
     clock = [AT]
     monkeypatch.setattr("app.services.data_sync.now_ms", lambda: clock[0])
     monkeypatch.setattr("app.worker.now_ms", lambda: clock[0])
@@ -86,6 +86,8 @@ def market(monkeypatch, tmp_path):
             exchange.rows[symbol, tf] = rows
             db.insert_candles(rows[:3])
     yield db, worker, exchange, clock, instruments, sender
+    await worker.calc_queue.stop()
+    await worker.market_queue.stop()
     db.close()
 
 
@@ -243,7 +245,11 @@ async def test_manual_and_periodic_do_not_overlap(market):
     job = worker.data_sync.start()
     await asyncio.gather(worker.data_sync._task, worker._poll_instrument(instruments[0]), worker._poll_ltf_instrument(instruments[0]))
     assert read_json(worker.db, JOB_KEY)["job_id"] == job["job_id"]
-    assert exchange.max_active == 1
+    # Этап 5 (§10/AC14): свечные каналы РАЗНЫХ инструментов идут параллельно,
+    # лимит — per-venue семафор rest_concurrency (=2 в тесте); один канал —
+    # один запрос благодаря single-flight, каналы одного инструмента
+    # сериализует его замок
+    assert exchange.max_active <= 2
 
 
 async def test_deadline_keeps_ownership_until_thread_finishes(market):
@@ -258,9 +264,9 @@ async def test_deadline_keeps_ownership_until_thread_finishes(market):
         entered.set()
         release.wait(2)
 
-    async def slow(ins, tf, incoming, before):
+    async def slow(ins, tf, incoming, before, **kwargs):
         await worker._calculate(blocking)
-        return await original(ins, tf, incoming, before)
+        return await original(ins, tf, incoming, before, **kwargs)
 
     worker._process_synced_channel = slow
     job = sync.start()
@@ -329,7 +335,7 @@ async def test_processing_error_and_retry_do_not_skip_persisted_closes(market):
     ins = instruments[0]
     original = worker._process_synced_channel
 
-    async def failed(*args):
+    async def failed(*args, **kwargs):
         raise RuntimeError("calculation_failed")
 
     worker._process_synced_channel = failed
@@ -403,3 +409,46 @@ async def test_shutdown_finishes_job_and_clears_processing_marker(market):
     assert job["results"][1]["error"] == "interrupted_by_shutdown"
     assert not read_json(db, f"data_sync:channel:{instruments[0].id}:D1")["processing"]
     assert db.get_meta(f"replaying:{instruments[0].id}") == "0"
+
+
+async def test_persist_failure_rolls_back_candles_cursor_and_channel_meta(market, monkeypatch):
+    """Этап 7 (§12): секция записи _sync_candles (курсор + insert_candles +
+    снимок канала) — одна единица batch_writes. Сбой финальной meta-записи
+    откатывает и вставку свечей, и курсор обработки: рестарт/повтор не
+    пропускает хвост и не видит сдвинутого курсора (AC18)."""
+    db, worker, _, _, instruments, _ = market
+    ins = instruments[0]
+    tf = "D1"
+    channel_key = f"data_sync:channel:{ins.id}:{tf}"
+    real_save = worker.data_sync._save_channel
+    calls = 0
+
+    def flaky_save(ins_, tf_, result):
+        nonlocal calls
+        if ins_.id == ins.id and tf_ == tf:
+            calls += 1
+            if calls == 2:
+                # вторая запись канала — финальная внутри _persist_incoming,
+                # после фиксации курсора и вставки свечей в той же единице
+                raise RuntimeError("injected meta failure")
+        return real_save(ins_, tf_, result)
+
+    monkeypatch.setattr(worker.data_sync, "_save_channel", flaky_save)
+    before = len(db.get_candles(ins.id, tf))
+    with pytest.raises(RuntimeError, match="injected meta failure"):
+        await worker.data_sync.sync_candles(ins, tf)
+    # всё откачено: свечи не вставлены, курсор не записан, успех-мета нет
+    assert len(db.get_candles(ins.id, tf)) == before
+    assert db.get_meta(f"data_sync:processed:{ins.id}:{tf}") is None
+    saved = read_json(db, channel_key)
+    assert saved["error"] == "injected meta failure"
+    assert saved["processing"] is False
+    # мета успешной вставки (finished_at ставится только после расчёта) не записана
+    assert not saved.get("finished_at")
+    # повтор без сбоя восстанавливает канал: откаченная вставка проходит
+    # заново (идемпотентно), курсор и мета фиксируются вместе
+    status = await worker.data_sync.sync_candles(ins, tf)
+    assert status["status"] == "ok", status
+    assert status["new_bars"] == 4  # 7 закрытых у источника, 3 были в БД
+    assert len(db.get_candles(ins.id, tf)) == 7
+    assert db.get_meta(f"data_sync:processed:{ins.id}:{tf}") is not None

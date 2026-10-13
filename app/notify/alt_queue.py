@@ -157,7 +157,7 @@ class AltDispatcher:
         if ctx.asset is not None and not ctx.asset.enabled:
             for ev in events:
                 self.db.mark_alt_event_delivered(ev.id)
-            await self.outbox.flush()
+            await self.outbox.flush_inline()
             return 0
         allowed = []
         for ev in events:
@@ -170,7 +170,7 @@ class AltDispatcher:
         quiet = all(e.event_type in {"forming_started", "data_stale"} for e in allowed)
         self.outbox.put("alt", f"{allowed[0].setup_id}:{allowed[0].run_id}", Card(""),
                         [e.id for e in allowed], quiet=quiet)
-        await self.outbox.flush()
+        await self.outbox.flush_inline()
         return sum(bool(self.db.get_alt_event(e.id).delivered) for e in allowed)
 
     async def dispatch_pending(self, chat_id: Optional[str] = None) -> int:
@@ -226,5 +226,5 @@ class AltDispatcher:
         self.services.note(text, key="alt:backfill-summary")
         # Enqueue is durable; no historical event replay on the next run.
         self.db.set_meta(BACKFILL_SUMMARY_META, str(now_ms()))
-        await self.outbox.flush()
+        await self.outbox.flush_inline()
         return True

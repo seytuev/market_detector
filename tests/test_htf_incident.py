@@ -350,12 +350,13 @@ def test_a21_diagnostics_and_single_owner(tmp_path, db, instrument_id):
     assert "telegram" not in blob.lower() or "telegram_owner" in blob
     assert "dev-token" not in blob
     assert settings.auth_token not in blob
-    assert body["schema_version"] == 1
+    assert body["schema_version"] == 2
     assert body["profile_fingerprint"]
     assert body["process_role"] == "web"
-    own = claim_owner(db, CALC_OWNER, {"pid": os.getpid(), "role": "calc"})
+    # Владелец — instance_id; pid только диагностика и сам по себе аренду не делит.
+    own = claim_owner(db, CALC_OWNER, {"pid": os.getpid(), "role": "calc", "instance_id": "owner-a"})
     assert own["owned"] is True
-    other = claim_owner(db, CALC_OWNER, {"pid": os.getpid() + 100000, "role": "calc"})
+    other = claim_owner(db, CALC_OWNER, {"pid": os.getpid() + 100000, "role": "calc", "instance_id": "owner-b"})
     assert other["owned"] is False
     diag = build_diagnostics(
         db, settings, role="web", instance_id="t", started_at=1, build_id="test",

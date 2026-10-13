@@ -35,7 +35,7 @@ _END_KNOWN = (
 )
 
 # Пока статус родителя или расчёт не позволяют вывод, уровень BOS/SMS не показываем.
-_HOLD_STRUCTURE = frozenset({"C18", "Q02", "Q03", "Q04", "Q05", "Q06"})
+_HOLD_STRUCTURE = frozenset({"C18", "Q02", "Q03", "Q04", "Q05", "Q06", "Q10", "Q11"})
 
 
 def _px(value: Optional[float]) -> dict[str, Any]:
@@ -302,6 +302,10 @@ def select_headline(facts: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         }
     engine = facts.get("engine") or {}
     reason = (facts.get("data_state") or {}).get("reason")
+    if reason == "quote_processing_failed":
+        return "Q11", {}
+    if reason == "quote_processing_lag":
+        return "Q10", {}
     if engine.get("replaying") or reason == "replay_in_progress":
         return "Q06", {"time": facts.get("consistent_at") or "—"}
     if engine.get("ltf_enabled") is False or engine.get("ltf_analyze") is False:

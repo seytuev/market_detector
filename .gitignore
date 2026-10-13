@@ -5,3 +5,8 @@ data/
 .pytest_cache/
 .env
 node_modules/
+
+tmp/
+app/web/static/vendor/
+build/
+dist/

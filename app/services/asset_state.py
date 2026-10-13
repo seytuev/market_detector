@@ -850,7 +850,7 @@ def _grounds_summary(evidence: list[dict]) -> str:
 
 
 def _source_name(row: dict) -> str:
-    kind = _TYPE_RU.get(row.get("type") or "", None)
+    kind = _TYPE_RU.get(str(row.get("type") or "").lower(), None)
     if not kind:
         return ""
     tf = row.get("timeframe") or ""
@@ -1039,7 +1039,7 @@ def _entry_rows(zones, leg) -> list[dict]:
             "kind": "entry",
             "k": "Вход" if i == 0 else "",
             "v": f"{name}: {span}",
-            "note": half if i == 0 else "",
+            "note": half,
         })
     return rows
 

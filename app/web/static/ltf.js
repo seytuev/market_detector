@@ -230,6 +230,10 @@ async function loadAssets() {
 
 function applyAssets(payload) {
   state.assets = payload.instruments;
+  // §13 (этап 6b): версии доменов списка — точка отсчёта для WS-diff'ов
+  if (payload && payload.versions && window.HTF && HTF.DomainSync) {
+    domainSync.adoptAll(HTF.DomainSync.statusEntries(payload.versions));
+  }
   const sel = $('ltf-instrument');
   const prev = state.instrumentId;
   sel.innerHTML = '';
@@ -464,7 +468,8 @@ async function reloadCurrent({ keepRange }) {
     const candleRows = versioned ? (candleBundle.candles || []) : (Array.isArray(candleBundle) ? candleBundle : []);
     const candleVersion = versioned && candleBundle.state_version != null
       ? candleBundle.state_version : view.state_version;
-    return { view, layers, candles: candleRows, candleVersion, journal, assets, h1 };
+    const candleVersions = versioned && candleBundle.versions ? candleBundle.versions : null;
+    return { view, layers, candles: candleRows, candleVersion, candleVersions, journal, assets, h1 };
   };
   const mismatch = (b) =>
     b.candleVersion !== b.view.state_version ||
@@ -494,6 +499,15 @@ async function reloadCurrent({ keepRange }) {
   state.candles = bundle.candles;
   state.journal = bundle.journal ? bundle.journal.events : [];
   state.appliedSeq = bundle.view.state_version;
+  // §13 (этап 6b): доменные версии применённого снимка
+  if (bundle.view.versions) {
+    domainSync.adopt(`scenario:${id}`, bundle.view.versions.scenario);
+    domainSync.adopt('zones', bundle.view.versions.zones);
+    domainSync.adopt(`quote:${id}`, bundle.view.versions.quote);
+  }
+  if (bundle.candleVersions) {
+    domainSync.adopt(`candles:${id}:H1`, bundle.candleVersions.candles);
+  }
   state.historyRows = null;
   state.excludedRows = null;
   applyAssets(bundle.assets);
@@ -1996,12 +2010,43 @@ function setupLtfWorkspace() {
 // WebSocket (§14): обновления без перезагрузки; после reconnect — полный снимок
 // ---------------------------------------------------------------------------
 
+// Доменные версии (§13/§14, этап 6b): рефетч по факту смены версии домена,
+// а не на каждое сообщение; версии снимков записываются в reloadCurrent.
+const domainSync = new HTF.DomainSync();
+
+function scheduleReloadAll() {
+  clearTimeout(state.reloadTimer);
+  state.reloadTimer = setTimeout(async () => {
+    await loadAssets();
+    if (state.instrumentId) await reloadCurrent({ keepRange: true });
+  }, 500);
+}
+
+function scheduleReloadCurrent() {
+  if (!state.instrumentId) return;
+  clearTimeout(state.reloadTimer);
+  state.reloadTimer = setTimeout(() => reloadCurrent({ keepRange: true }), 500);
+}
+
+domainSync
+  .on('scenario', () => scheduleReloadAll())
+  .on('zones', () => scheduleReloadCurrent())
+  .on('candles', (key) => {
+    const iid = Number(String(key || '').split(':')[1]);
+    if (iid && state.instrumentId && iid !== state.instrumentId) return; // чужой канал
+    scheduleReloadCurrent();
+  })
+  .on('config', () => scheduleReloadAll());
+
 function handleWsMessage(data) {
   if (window.LFDataSync) LFDataSync.onWs(data);
   // F04: каждое WS-сообщение несёт state_seq; сообщение старше уже
   // применённого снимка — позднее эхо, перезагружать экран не нужно
   if (typeof data.state_seq === 'number' && state.appliedSeq &&
       data.state_seq < state.appliedSeq) return;
+  // AC17: в скрытой вкладке только запоминаем версии; возврат — recovery
+  domainSync.notifyWs(data);
+  if (document.hidden) return;
   if (data.type === 'price') {
     const ins = state.current && state.current.instrument;
     if (ins && data.instrument_id === ins.id && data.price) {
@@ -2023,20 +2068,8 @@ function handleWsMessage(data) {
         }
       }
     }
-  } else if (data.type === 'ltf') {
-    if (state.instrumentId && data.instrument_id !== state.instrumentId) return;
-    clearTimeout(state.reloadTimer);
-    state.reloadTimer = setTimeout(async () => {
-      await loadAssets();
-      if (state.instrumentId) await reloadCurrent({ keepRange: true });
-    }, 500);
-  } else if (data.type === 'candle' && data.timeframe === 'H1') {
-    const ins = state.current && state.current.instrument;
-    if (ins && data.instrument_id === ins.id && state.instrumentId) {
-      clearTimeout(state.reloadTimer);
-      state.reloadTimer = setTimeout(() => reloadCurrent({ keepRange: true }), 500);
-    }
   }
+  // ltf/candle/zone: рефетчи — через доменные версии (domainSync выше)
 }
 
 // ---------------------------------------------------------------------------
@@ -2117,10 +2150,22 @@ async function main() {
     if (!isCompactLtf()) $('ltf-inspector').classList.remove('open');
   });
 
-  LFDataSync.init({ selected: () => state.instrumentId, reload: async () => {
-    await loadAssets();
-    if (state.instrumentId) await reloadCurrent({ keepRange: true });
-  } });
+  LFDataSync.init({ selected: () => state.instrumentId,
+    // §14/AC17: сверка доменных версий статуса → точечный рефетч изменённых;
+    // immediate (terminal job / recovery) дожидается и отложенных рефетчей
+    syncStale: async (versions, opts) => {
+      await domainSync.syncStatus(versions, opts);
+      if (opts && opts.immediate) await domainSync.flush();
+    },
+    onRecover: () => {
+      // возврат на вкладку / reconnect: дешёвая перерисовка после recovery
+      updatePriceLine();
+      if (state.instrumentId) renderTopbar();
+    },
+    reload: async () => {
+      await loadAssets();
+      if (state.instrumentId) await reloadCurrent({ keepRange: true });
+    } });
   await loadLabels();
   await loadAssets();
   const initial = await resolveDeepLink();
@@ -2130,11 +2175,12 @@ async function main() {
     $('ltf-chart-empty').textContent = 'Активов с LTF-наблюдениями нет — включите «Анализировать» в настройках LTF или дождитесь касания HTF-зоны.';
     $('ltf-chart-empty').classList.remove('hidden');
   }
-  // после reconnect — полный снимок: пропущенные сообщения не должны
-  // удерживать отменённый сценарий текущим (§14, п.18)
+  // после reconnect — одно объединённое восстановление по версиям доменов
+  // (§14, AC17): пропущенные сообщения не должны удерживать отменённый
+  // сценарий текущим (§14, п.18)
   state.ws = window.HTF.connectWs(handleWsMessage, $('ws-indicator'), async (isReconnect) => {
     if (!isReconnect) return;
-    await LFDataSync.snapshot({ force: true });
+    await LFDataSync.recover();
   });
 }
 

@@ -543,6 +543,17 @@ def test_entry_rows_level_prints_single_price_with_name():
     assert bear[0]["note"] == "в premium"
 
 
+def test_every_h1_entry_has_its_type_and_pd_half():
+    from app.services.asset_state import _entry_rows
+
+    zones = [{"type": kind, "admitted": [81033.66, 81959.53]}
+             for kind in ("FVG", "OB", "BSL", "SSL")]
+    for direction, half in (("bull", "discount"), ("bear", "premium")):
+        rows = _entry_rows(zones, {"direction": direction})
+        assert [row["v"].split(":")[0] for row in rows] == ["FVG", "OB", "BSL", "SSL"]
+        assert all(row["note"] == f"в {half}" for row in rows)
+
+
 def test_short_time_today_vs_other_day():
     from app.services.asset_state import _short_time
     ms = _close(12)

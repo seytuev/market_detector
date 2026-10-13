@@ -19,6 +19,7 @@ from typing import Optional
 import httpx
 
 from ..models import Candle, Instrument, now_ms
+from ..validation import accept_source_candle
 from .base import TIMEFRAME_MS, AdapterError, QuoteTick, retry_after_seconds
 
 # Маппинг внутренних таймфреймов на коды Binance
@@ -36,16 +37,37 @@ class BinanceSpotAdapter:
         self._base = base_url.rstrip("/")
         self._client = client or httpx.AsyncClient(base_url=self._base, timeout=30.0)
         self._own_client = client is None
+        # Этап 5 (§10): последний известный вес X-MBX-USED-WEIGHT-1M от
+        # источника (учёт лимитов; только наблюдение, троттлинг не меняется).
+        # asyncio-атомарно: одно событие-циклическое присваивание.
+        self.last_weight: Optional[int] = None
 
     async def aclose(self) -> None:
         if self._own_client:
             await self._client.aclose()
+
+    def realtime_supported(self) -> bool:
+        """Binance Spot имеет публичные маркет-стримы (этап 3, спека §7)."""
+        return True
+
+    def _capture_weight(self, resp: httpx.Response) -> None:
+        """Запомнить использованный вес минуты (заголовок есть и у 200,
+        и у 429); регистр имени заголовка не фиксирован."""
+        for name in ("x-mbx-used-weight-1m", "X-MBX-USED-WEIGHT-1M"):
+            raw = resp.headers.get(name)
+            if raw:
+                try:
+                    self.last_weight = int(raw)
+                except ValueError:
+                    pass
+                return
 
     async def _get(self, path: str, params: dict) -> httpx.Response:
         try:
             resp = await self._client.get(path, params=params)
         except httpx.HTTPError as e:
             raise AdapterError(f"binance: сеть/таймаут при {path}: {e}") from e
+        self._capture_weight(resp)
         if resp.status_code != 200:
             # Явная ошибка без фолбэка: -1121 = несуществующий спотовый символ
             try:
@@ -56,7 +78,8 @@ class BinanceSpotAdapter:
             if code == -1121:
                 raise AdapterError(
                     f"binance: спотовый инструмент не существует: "
-                    f"{params.get('symbol')} (код -1121)"
+                    f"{params.get('symbol')} (код -1121)",
+                    invalid_symbol=True,
                 )
             raise AdapterError(
                 f"binance: HTTP {resp.status_code} при {path}: код={code} {msg}",
@@ -125,20 +148,20 @@ class BinanceSpotAdapter:
             forming = open_time + interval_ms > now
             if forming and not include_forming:
                 continue  # незакрытая свеча — не отдаём детектору (§11)
-            candles.append(
-                Candle(
-                    instrument_id=0,  # проставит вызывающий
-                    timeframe=timeframe,
-                    open_time=open_time,
-                    close_time=int(k[6]),  # closeTime — последняя ms интервала
-                    open=float(k[1]),
-                    high=float(k[2]),
-                    low=float(k[3]),
-                    close=float(k[4]),
-                    closed=not forming,
-                    source=self.venue,
-                )
+            candle = Candle(
+                instrument_id=0,  # проставит вызывающий
+                timeframe=timeframe,
+                open_time=open_time,
+                close_time=int(k[6]),  # closeTime — последняя ms интервала
+                open=float(k[1]),
+                high=float(k[2]),
+                low=float(k[3]),
+                close=float(k[4]),
+                closed=not forming,
+                source=self.venue,
             )
+            if accept_source_candle(candle):
+                candles.append(candle)
         return candles
 
     async def last_price(self, symbol: str) -> QuoteTick:

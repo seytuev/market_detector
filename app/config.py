@@ -280,6 +280,15 @@ _CSV_ENUMS: dict[str, set[str]] = {
 }
 
 
+def detector_field_schema() -> dict[str, dict[str, list]]:
+    """Схема полей для UI настроек: числовые границы и допустимые
+    перечисления (GET /api/settings). Значения приведены к JSON."""
+    return {
+        "ranges": {k: list(v) for k, v in _NUMERIC_RANGES.items()},
+        "enums": {k: sorted(v) for k, v in _CSV_ENUMS.items()},
+    }
+
+
 def _validate_csv(name: str, value: str, allowed: set[str]) -> Optional[str]:
     allowed_upper = {a.upper() for a in allowed}
     bad = [t for t in (s.strip() for s in value.split(","))
@@ -451,19 +460,56 @@ class Settings:
     telegram_token: str = field(default_factory=lambda: _env("TELEGRAM_TOKEN", ""))
     telegram_chat_id: str = field(default_factory=lambda: _env("TELEGRAM_CHAT_ID", ""))
     auth_token: str = field(default_factory=lambda: _env("HTF_AUTH_TOKEN", "dev-token"))
+    backup_enabled: bool = field(default_factory=lambda: parse_bool(_env("HTF_BACKUP_ENABLED", "1")))
+    backup_interval_hours: int = field(default_factory=lambda: int(_env("HTF_BACKUP_INTERVAL_HOURS", "24")))
     binance_base_url: str = field(
         default_factory=lambda: _env("BINANCE_BASE_URL", "https://data-api.binance.vision")
     )
     hyperliquid_base_url: str = field(
         default_factory=lambda: _env("HYPERLIQUID_BASE_URL", "https://api.hyperliquid.xyz")
     )
-    poll_seconds: int = int(_env("HTF_POLL_SECONDS", "1800"))  # 30 мин — достаточно для D1/W1
+    poll_seconds: int = field(default_factory=lambda: int(_env("HTF_POLL_SECONDS", "1800")))
     # F02/A02: отдельный быстрый цикл котировок — короткий заход цены в зону
     # между HTF-опросами не теряется; 0 — цикл выключен, котировку забирает
     # HTF-цикл (прежнее поведение)
-    quote_poll_seconds: int = int(_env("HTF_QUOTE_POLL_SECONDS", "10"))
+    quote_poll_seconds: int = field(default_factory=lambda: int(_env("HTF_QUOTE_POLL_SECONDS", "10")))
+    # Этап 3 (спека §7): realtime-поток Binance Spot по WebSocket.
+    # По умолчанию выключен — поведение идентично REST-опросу (AC21).
+    realtime_enabled: bool = field(
+        default_factory=lambda: parse_bool(_env("HTF_REALTIME_ENABLED", "0")))
+    binance_ws_url: str = field(default_factory=lambda: _env(
+        "HTF_BINANCE_WS_URL", "wss://stream.binance.com:9443"))
+    # Секунд без сообщений до переподключения: у маркет-стримов Binance
+    # документированного idle-таймаута нет, но kline-стрим шлёт обновления
+    # каждые ~2 с — 120 с молчания = мёртвое соединение (проектный выбор)
+    ws_idle_timeout: int = field(
+        default_factory=lambda: int(_env("HTF_WS_IDLE_TIMEOUT", "120")))
+    # Плановая ротация: Binance разрывает соединение через 24 ч (82800 ≈ 23 ч)
+    ws_lifetime_s: int = field(
+        default_factory=lambda: int(_env("HTF_WS_LIFETIME_S", "82800")))
+    # Backoff переподключения: база/потолок, экспонента ×2, джиттер ±20%
+    ws_reconnect_base_s: int = field(
+        default_factory=lambda: int(_env("HTF_WS_RECONNECT_BASE_S", "1")))
+    ws_reconnect_cap_s: int = field(
+        default_factory=lambda: int(_env("HTF_WS_RECONNECT_CAP_S", "60")))
+    # Этап 4 (спека §9): durable-очередь расчётов закрытых свечей —
+    # приоритеты, коалесцинг, fairness, восстановление заданий (AC18).
+    # По умолчанию ВКЛЮЧЕНА (новый основной путь); 0 — прежний синхронный
+    # расчёт внутри sync_candles (путь отката этапа).
+    calc_queue_enabled: bool = field(
+        default_factory=lambda: parse_bool(_env("HTF_CALC_QUEUE_ENABLED", "1")))
+    # Потребители очереди расчётов. Тяжёлые вызовы движка всё равно
+    # сериализует глобальный calc-замок (AC19); >1 лишь перекрывает
+    # ожидание/доставку — держать 1 до замеров.
+    calculation_concurrency: int = field(
+        default_factory=lambda: int(_env("HTF_CALC_CONCURRENCY", "1")))
+    # Этап 5 (спека §10): параллельные REST-запросы на venue (свечи разных
+    # инструментов). Стартовое значение — прежнее (2); увеличивать после
+    # baseline и тестов, отдельно от расчётов.
+    rest_concurrency: int = field(
+        default_factory=lambda: int(_env("HTF_REST_CONCURRENCY", "2")))
     host: str = field(default_factory=lambda: _env("HTF_HOST", "127.0.0.1"))
-    port: int = int(_env("HTF_PORT", "8000"))
+    port: int = field(default_factory=lambda: int(_env("HTF_PORT", "8000")))
     # Публичный URL сайта для ссылок из Telegram (кнопка «Открыть график»);
     # нужен, когда сервис за прокси или HTF_HOST=0.0.0.0
     public_base_url: str = field(default_factory=lambda: _env("HTF_PUBLIC_BASE_URL", ""))
@@ -514,6 +560,19 @@ class Settings:
     events_price_max_age_seconds: int = field(
         default_factory=lambda: int(_env("EVENTS_PRICE_MAX_AGE_SECONDS", "7200")))
 
+    def __post_init__(self) -> None:
+        for name in ("ws_idle_timeout", "ws_lifetime_s",
+                     "ws_reconnect_base_s", "ws_reconnect_cap_s",
+                     "calculation_concurrency", "rest_concurrency"):
+            value = getattr(self, name)
+            if not isinstance(value, int) or value <= 0:
+                raise ValueError(f"Settings.{name}: нужен положительный int, "
+                                 f"получено {value!r}")
+        if not self.binance_ws_url.startswith("wss://"):
+            raise ValueError(
+                f"Settings.binance_ws_url: нужна схема wss://, "
+                f"получено {self.binance_ws_url!r}")
+
     def effective_base_url(self) -> str:
         """URL для внешних ссылок. Без HTF_PUBLIC_BASE_URL — локальный;
         0.0.0.0 в ссылке бессмысленен, подставляем 127.0.0.1."""
@@ -540,12 +599,10 @@ def load_detector_config() -> DetectorConfig:
             else:
                 setattr(cfg, f.name, type(f.default)(raw))
         except (ValueError, TypeError) as exc:
-            # A05: некорректный ENV не роняет старт, но и не прячется —
-            # предупреждение с полем, значением и причиной
-            logger.warning(
-                "HTF_DET_%s: значение %r отклонено (%s), используется %r",
-                f.name.upper(), raw, exc, getattr(cfg, f.name),
-            )
+            raise ValueError(f"HTF_DET_{f.name.upper()}: {exc}") from exc
+    errors = validate_detector_config(cfg)
+    if errors:
+        raise ValueError(f"Invalid detector ENV: {errors}")
     return cfg
 
 

@@ -61,6 +61,7 @@ def register_alt_routes(app, db: Database, settings, require_auth,
         dd_min: Optional[float] = None,
         dd_max: Optional[float] = None,
         structure: Optional[str] = None,
+        search: str = "",
     ) -> dict[str, Any]:
         if bucket not in BUCKETS:
             raise HTTPException(
@@ -72,7 +73,7 @@ def register_alt_routes(app, db: Database, settings, require_auth,
                 db, settings, bucket=bucket, venue=venue,
                 rank_min=rank_min, rank_max=rank_max,
                 age_min=age_min, age_max=age_max,
-                dd_min=dd_min, dd_max=dd_max, structure=structure,
+                dd_min=dd_min, dd_max=dd_max, structure=structure, search=search,
             )
 
     # ------------------------- деталь / «Почему найдено» (§16) -------------------------

@@ -68,6 +68,20 @@ def _candle(i, o, h, l, c, *, closed=True):
     return make_candle(_t(i), o, h, l, c, timeframe="H1", closed=closed)
 
 
+def test_fvg_ends_on_first_candle_opening_at_confirmation():
+    from app.services.h1_chart import _CandleIndex, _fvg_filled_at
+
+    candles = [_candle(3, 101, 104, 97, 100), _candle(4, 100, 105, 96, 100)]
+    index = _CandleIndex(candles, _t(6))
+    for direction in (Direction.BULL, Direction.BEAR):
+        zone = LtfEntryZone(
+            id=None, instrument_id=1, type="FVG", direction=direction,
+            lower=98, upper=103, formed_at=_t(2), confirmed_at=_t(3),
+        )
+        assert _fvg_filled_at(zone, index) == candles[0].close_time
+        assert _fvg_filled_at(zone, _CandleIndex(candles, _t(3))) is None
+
+
 def _store_pivot(db, instrument_id, pid_price, kind, role, at, confirmed) -> int:
     return db.insert_ltf_pivot(LtfPivot(
         id=None, instrument_id=instrument_id, price=pid_price, kind=kind,

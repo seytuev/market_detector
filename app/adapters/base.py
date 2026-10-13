@@ -60,11 +60,16 @@ class QuoteTick:
 
 class AdapterError(Exception):
     """Явная ошибка адаптера: несуществующий инструмент, недоступность
-    источника, неожиданный формат ответа. Фолбэков на другие рынки нет (§1)."""
+    источника, неожиданный формат ответа. Фолбэков на другие рынки нет (§1).
 
-    def __init__(self, message, *, retry_after=None):
+    invalid_symbol=True — источник однозначно отверг инструмент (Binance
+    -1121): такой ответ не повторяется в цикле (§10) — канал помечается
+    instrument:invalid:{iid} и пропускается до следующего job/рестарта."""
+
+    def __init__(self, message, *, retry_after=None, invalid_symbol=False):
         super().__init__(message)
         self.retry_after = retry_after
+        self.invalid_symbol = invalid_symbol
 
 
 def retry_after_seconds(response):
@@ -114,3 +119,10 @@ class MarketDataAdapter(Protocol):
     async def status(self) -> dict:
         """Состояние подключения к источнику."""
         ...
+
+    def realtime_supported(self) -> bool:
+        """Есть ли у источника realtime-поток (этап 3, спека §7).
+
+        Отсутствие возможности — обычный REST-режим, не ошибка; флаг
+        включения (HTF_REALTIME_ENABLED) отдельно от самой возможности."""
+        return False

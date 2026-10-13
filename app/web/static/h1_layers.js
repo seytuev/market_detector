@@ -373,23 +373,35 @@
     };
 
     const setup = layers.setup;
-    if (setup && setup.lower != null && setup.upper != null && typeof yOf === 'function') {
+    if (setup && (!setup.history || settings.historicalZones)
+        && setup.lower != null && setup.upper != null && typeof yOf === 'function') {
       const originAt = setup.origin_anchor && setup.origin_anchor.at;
       let x1 = originAt != null ? xOf(originAt) : 0;
       if (x1 == null || x1 < 0) x1 = 0;
       const provisional = setup.range_status !== 'confirmed';
       const klass = 'h1-pd-line' + (provisional ? ' provisional' : ' confirmed');
-      const end = setup.endpoint || {};
-      const bull = setup.direction === 'bull';
+      if (paneRight > x1 && setup.eq != null) {
+        [[setup.upper, setup.eq, 'premium'], [setup.eq, setup.lower, 'discount']]
+          .forEach(([hi, lo, half]) => {
+            const box = clipZoneBox(yOf(hi), yOf(lo), height);
+            if (!box) return;
+            const band = add('h1-pd-band ' + half);
+            band.style.left = x1 + 'px';
+            band.style.top = box.top + 'px';
+            band.style.width = (paneRight - x1) + 'px';
+            band.style.height = box.height + 'px';
+            band.title = 'PD Massive · ' + half + ' · ' + fmtPrice(lo) + '–' + fmtPrice(hi);
+          });
+      }
       const rows = [
-        [setup.upper, bull ? (provisional ? 'H потенц.' : 'H подтв.') : 'H'],
-        [setup.eq, '50%'],
-        [setup.lower, bull ? 'L' : (provisional ? 'L потенц.' : 'L подтв.')],
+        [setup.upper, 'PD Massive · Premium', false],
+        [setup.eq, 'EQ · 50%', true],
+        [setup.lower, 'Discount', false],
       ];
-      rows.forEach(([price, text]) => {
+      rows.forEach(([price, text, mid]) => {
         const y = yOf(price);
         if (y == null || y < -8 || y > height + 8 || paneRight <= x1) return;
-        const line = add(klass + (text === '50%' ? ' mid' : ''));
+        const line = add(klass + (mid ? ' mid' : ''));
         line.style.top = y + 'px';
         line.style.left = x1 + 'px';
         line.style.width = Math.max(4, paneRight - x1) + 'px';
@@ -397,12 +409,10 @@
           + (provisional ? ' · пунктир, предварительный PD' : ' · сплошная линия');
         const span = doc.createElement('span');
         span.className = 'h1-pd-label';
-        span.textContent = text;
+        span.textContent = text + ' · ' + fmtPrice(price)
+          + (provisional && !mid && price === setup.upper ? ' · предварительный' : '');
         line.appendChild(span);
       });
-      if (end && end.price != null) {
-        /* подпись экстремума уже на границе PD */
-      }
     }
 
     if (ctx.transitionEl) {
@@ -432,7 +442,7 @@
         if (labelGroups[groupKey]) {
           const group = labelGroups[groupKey];
           group.count += 1;
-          group.name.textContent = group.caption + ' ×' + group.count;
+          group.name.textContent = group.caption;
           group.tag.title = title + ' · Совпадающих зон: ' + group.count;
           return;
         }

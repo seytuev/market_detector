@@ -508,7 +508,8 @@ def _fvg_filled_at(zone: LtfEntryZone, index: _CandleIndex) -> Optional[int]:
     if zone.type != "FVG":
         return None
     after = zone.confirmed_at or zone.formed_at
-    i = index.start(after)
+    # Открытие первой свечи после подтверждения совпадает с confirmed_at.
+    i = index.start(after - 1)
     n = len(index.open_time)
     # Полное заполнение — первая свеча, которая касается дальней границы.
     # Свеча целиком по ту сторону зоны касанием не считается: то же правило,
@@ -894,7 +895,11 @@ def assemble_h1_layers(
         ))
         zones[-1].update(relevance=fact, idea_links=idea_links.get(zone.id, []))
         if fact["reason"] not in ("ok", "data_gap", "unconfirmed"):
-            zones[-1].update(lifecycle="ended", display_until=fact["excluded_at"], recently_taken=False)
+            end = zones[-1]["display_until"]
+            excluded = fact["excluded_at"]
+            if excluded is not None:
+                end = excluded if end is None else min(end, excluded)
+            zones[-1].update(lifecycle="ended", display_until=end, recently_taken=False)
     if candles:
         for extra in _scan_zones(
             candidates, candles, events, cfg, moment, index,
@@ -917,7 +922,11 @@ def assemble_h1_layers(
             extra.update(relevance=fact, idea_links=[], max_test_depth=rebuilt.max_test_depth,
                          first_test_at=rebuilt.first_test_at, validity=rebuilt.validity)
             if fact["reason"] not in ("ok", "data_gap", "unconfirmed"):
-                extra.update(lifecycle="ended", display_until=fact["excluded_at"], recently_taken=False)
+                end = extra["display_until"]
+                excluded = fact["excluded_at"]
+                if excluded is not None:
+                    end = excluded if end is None else min(end, excluded)
+                extra.update(lifecycle="ended", display_until=end, recently_taken=False)
             zones.append(extra)
     zones.sort(key=lambda z: (z["formed_at"], str(z["id"])))
 

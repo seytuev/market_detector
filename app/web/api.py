@@ -14,18 +14,19 @@ import os
 import uuid
 from dataclasses import asdict, fields, replace
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Literal
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..config import (
     DETECTOR_DEPRECATED_FIELDS,
     DETECTOR_FIELD_GROUPS,
     DetectorConfig,
     Settings,
+    detector_field_schema,
     load_settings,
     parse_bool,
     validate_detector_config,
@@ -34,7 +35,7 @@ from ..config import (
 from ..db import Database
 from ..engine import Scanner
 from ..engine.scanner import review_replay_start_ms
-from ..services.journal import JOURNAL_KINDS, collect_journal
+from ..services.journal import JOURNAL_KINDS, collect_journal, journal_page
 from ..services.zone_groups import union_find_groups
 from ..models import (
     TIMEFRAME_MINUTES,
@@ -52,8 +53,9 @@ from ..models import (
     now_ms,
 )
 from .auth import check_ws_token, make_auth_dependency
+from .metrics_api import MetricsMiddleware, metrics_lifespan, register_metrics_routes
 
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.2.0"
 _STATIC_DIR = Path(__file__).with_name("static")
 
 logger = logging.getLogger(__name__)
@@ -395,12 +397,12 @@ def export_label(db: Database, zone: Zone, decision: str, text: str,
 # ---------------------------------------------------------------------------
 
 class InstrumentIn(BaseModel):
-    asset: str
-    venue: str
-    symbol: str
-    market_type: str = "spot"
+    asset: str = Field(min_length=1, max_length=32)
+    venue: Literal["binance", "bybit", "hyperliquid"]
+    symbol: str = Field(min_length=1, max_length=80)
+    market_type: Literal["spot"] = "spot"
     quote_asset: str = "USDT"
-    precision: int = 8
+    precision: int = Field(default=8, ge=0, le=16)
 
 
 class ManualZoneIn(BaseModel):
@@ -412,9 +414,9 @@ class ManualZoneIn(BaseModel):
     level-зон допустимо None)."""
     instrument_id: int
     direction: str = "bull"
-    lower: Optional[float] = None
-    upper: Optional[float] = None
-    level: Optional[float] = None
+    lower: Optional[float] = Field(default=None, gt=0, allow_inf_nan=False)
+    upper: Optional[float] = Field(default=None, gt=0, allow_inf_nan=False)
+    level: Optional[float] = Field(default=None, gt=0, allow_inf_nan=False)
     timeframe: str = "D1"
     name: str = ""
     comment: str = ""
@@ -424,8 +426,8 @@ class ManualZoneIn(BaseModel):
 
 class ZonePatchIn(BaseModel):
     """Правка границ/названия ручной работы (§10)."""
-    lower: Optional[float] = None
-    upper: Optional[float] = None
+    lower: Optional[float] = Field(default=None, gt=0, allow_inf_nan=False)
+    upper: Optional[float] = Field(default=None, gt=0, allow_inf_nan=False)
     name: Optional[str] = None
     comment: Optional[str] = None
 
@@ -450,8 +452,8 @@ class ReviewIn(BaseModel):
     """
     decision: str
     text: str = ""
-    lower: Optional[float] = None
-    upper: Optional[float] = None
+    lower: Optional[float] = Field(default=None, gt=0, allow_inf_nan=False)
+    upper: Optional[float] = Field(default=None, gt=0, allow_inf_nan=False)
     reason_code: Optional[str] = None          # машинный код причины (R13)
     anchor_candle_open_time: Optional[int] = None  # свеча-якорь поправки (§15.2)
     evidence_source: str = "manual_ui"
@@ -472,52 +474,149 @@ class PreferEntryIn(BaseModel):
 # ---------------------------------------------------------------------------
 
 class WsHub:
-    """Простой hub: множество подключений + broadcast() для воркера (§11 п.6).
+    """Bounded per-client delivery. Latest prices coalesce; overload requests resync.
 
-    ``broadcast`` — синхронный метод: его может дёргать фоновый воркер
-    из своего потока, отправка планируется в цикле событий приложения.
-    """
-
-    def __init__(self, state_seq_provider=None) -> None:
-        self.connections: set[WebSocket] = set()
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
-        # D01: провайдер монотонной версии состояния (db.get_state_seq);
-        # каждое сообщение несёт версию изменения
+    Конверт сообщения (этап 6a, §13): state_seq (совместимость), epoch —
+    id этого экземпляра хаба (пересоздание при рестарте сбрасывает
+    per-connection seq у клиента), seq — монотонный счётчик на соединение
+    (пропуск сообщения виден по разрыву), domain_versions — какие домены
+    сдвинулись (не полная карта)."""
+    def __init__(self, state_seq_provider=None, domain_version_provider=None):
+        import threading
+        self.connections = set()
+        self._loop = None
         self._state_seq_provider = state_seq_provider
+        self._domain_version_provider = domain_version_provider
+        self.epoch = uuid.uuid4().hex
+        self._queues = {}
+        self._prices = {}
+        self._seqs = {}
+        self._tasks = {}
+        self._mailbox = {}
+        self._mailbox_lock = threading.Lock()
+        self._scheduled = False
 
-    async def connect(self, ws: WebSocket) -> None:
+    async def connect(self, ws):
         self._loop = asyncio.get_running_loop()
         await ws.accept()
         self.connections.add(ws)
+        self._queues[ws] = asyncio.Queue(maxsize=100)
+        self._prices[ws] = {}
+        self._seqs[ws] = 0
+        self._tasks[ws] = asyncio.create_task(self._send(ws))
 
-    def disconnect(self, ws: WebSocket) -> None:
+    def disconnect(self, ws):
         self.connections.discard(ws)
+        self._queues.pop(ws, None)
+        self._prices.pop(ws, None)
+        self._seqs.pop(ws, None)
+        task = self._tasks.pop(ws, None)
+        if task and task is not asyncio.current_task(): task.cancel()
 
-    async def _broadcast_async(self, message: dict[str, Any]) -> None:
-        data = json.dumps(message, ensure_ascii=False)
-        dead: list[WebSocket] = []
+    async def _send(self, ws):
+        try:
+            while ws in self.connections:
+                message = await self._queues[ws].get()
+                if isinstance(message, tuple):
+                    message = self._prices[ws].pop(message[1], None)
+                    if message is None: continue
+                if hasattr(ws, "app") and not await check_ws_token(ws, ws.app.state.settings):
+                    return
+                # seq/epoch штампуются при фактической отправке: коалесцинг
+                # price в mailbox/очереди не должен расходиться с порядком
+                seq = self._seqs.get(ws, 0) + 1
+                self._seqs[ws] = seq
+                message = {**message, "seq": seq, "epoch": self.epoch}
+                await asyncio.wait_for(ws.send_text(json.dumps(message, ensure_ascii=False)), 2)
+        except (Exception, asyncio.CancelledError):
+            try: await ws.close(code=1013)
+            except Exception: pass
+        finally:
+            self.disconnect(ws)
+
+    def _enqueue(self, message):
         for ws in list(self.connections):
-            try:
-                await ws.send_text(data)
-            except Exception:
-                dead.append(ws)
-        for ws in dead:
-            self.connections.discard(ws)
+            queue = self._queues[ws]
+            if message.get("type") == "price":
+                key = message.get("instrument_id")
+                if key in self._prices[ws]:
+                    self._prices[ws][key] = message
+                    continue
+                if not queue.full():
+                    self._prices[ws][key] = message
+                    queue.put_nowait(("price", key))
+                    continue
+            elif not queue.full():
+                queue.put_nowait(message)
+                continue
+            # Event journal remains durable; reconnect obtains a new snapshot.
+            task = self._tasks.get(ws)
+            if task: task.cancel()
 
-    def broadcast(self, message: dict[str, Any]) -> None:
-        """Трансляция {type: price|event|zone|ltf, state_seq, ...} всем
-        подключённым клиентам."""
-        if self._loop is None or not self.connections:
+    def _flush_mailbox(self):
+        with self._mailbox_lock:
+            messages = list(self._mailbox.values())
+            self._mailbox.clear()
+            self._scheduled = False
+        for message in messages: self._enqueue(message)
+
+    async def _broadcast_async(self, message):
+        self._enqueue(message)
+
+    def _domain_versions(self, message):
+        """Какие домены сдвинуло это сообщение (§13): короткое имя → seq.
+        Не полная карта — клиенту нужно знать, ЧТО перечитать. Версия читается
+        ПОСЛЕ записи домена (порядок bump → broadcast; внутри unit of work
+        broadcast откладывается через on_commit — см. ниже), поэтому refetch
+        клиента никогда не читает состояние до bump."""
+        provider = self._domain_version_provider
+        if provider is None:
+            return None
+        mtype = message.get("type")
+        iid = message.get("instrument_id")
+        try:
+            if mtype == "price" and iid is not None:
+                return {"quote": provider(f"seq:quote:{iid}")}
+            if mtype == "candle" and iid is not None and message.get("timeframe"):
+                return {
+                    "candles": provider(
+                        f"seq:candles:{iid}:{message['timeframe']}"
+                    )
+                }
+            if mtype in ("zone", "event"):
+                return {"zones": provider("seq:zones")}
+            if mtype == "ltf" and iid is not None:
+                return {"scenario": provider(f"seq:scenario:{iid}")}
+            if mtype == "instrument":
+                return {"config": provider("seq:config")}
+        except Exception:
+            # рассылка не должна ронять путь записи из-за версии конверта
+            logger.warning("ws: не удалось прочитать domain_versions", exc_info=True)
+            return None
+        return None
+
+    def broadcast(self, message):
+        if self._loop is None or not self.connections: return
+        db = getattr(self._state_seq_provider,"__self__",None)
+        if db is not None and db._batch_depth:
+            db.on_commit(lambda: self.broadcast(message))
             return
         if self._state_seq_provider is not None:
-            try:
-                message = {
-                    **message,
-                    "state_seq": self._state_seq_provider(),
-                }
-            except Exception:
-                pass  # версия — дополнение, не должна ронять доставку
-        asyncio.run_coroutine_threadsafe(self._broadcast_async(message), self._loop)
+            message = {**message, "state_seq": self._state_seq_provider()}
+        domains = self._domain_versions(message)
+        if domains:
+            message = {**message, "domain_versions": domains}
+        with self._mailbox_lock:
+            key = ("price", message.get("instrument_id")) if message.get("type")=="price" else ("event",len(self._mailbox))
+            if len(self._mailbox)>=1024:
+                self._mailbox.clear()
+                message = {"type":"resync", "state_seq":message.get("state_seq")}
+                key = ("resync",0)
+            self._mailbox[key] = dict(message)
+            if not self._scheduled:
+                self._scheduled = True
+                self._loop.call_soon_threadsafe(self._flush_mailbox)
+
 
 
 # ---------------------------------------------------------------------------
@@ -531,41 +630,30 @@ def _settings_path(settings: Settings) -> Path:
     return parent / "settings.json"
 
 
-def _apply_detector_payload(cfg: DetectorConfig, payload: dict[str, Any]) -> list[str]:
-    """Применяет известные поля DetectorConfig; возвращает список применённых."""
-    known = {f.name: type(f.default) for f in fields(cfg)}
-    applied: list[str] = []
-    for key, value in payload.items():
-        if key not in known:
-            continue
-        try:
-            # bool — подкласс int: строки/числа приводим аккуратно
-            # ("false" из ENV/JSON не должна превращаться в True)
-            if known[key] is bool:
-                setattr(cfg, key, parse_bool(value))
-            else:
-                setattr(cfg, key, known[key](value))
-            applied.append(key)
-        except (ValueError, TypeError) as exc:
-            # A05: битое значение в settings.json не роняет старт, но
-            # видно в журнале (поле, значение, причина)
-            logger.warning(
-                "settings.json: поле %s со значением %r пропущено (%s)",
-                key, value, exc,
-            )
-    return applied
+def _apply_detector_payload(cfg, payload):
+    if not isinstance(payload, dict):
+        raise ValueError("detector: JSON object required")
+    filtered = {k:v for k,v in payload.items() if k not in DETECTOR_DEPRECATED_FIELDS}
+    values, errors = validate_detector_payload(filtered)
+    candidate = replace(cfg, **values)
+    errors.update(validate_detector_config(candidate))
+    if errors: raise ValueError(str(errors))
+    for key, value in values.items(): setattr(cfg, key, value)
+    return sorted(values)
 
 
-def _load_detector_from_file(settings: Settings) -> None:
+def _load_detector_from_file(settings):
     path = _settings_path(settings)
-    if not path.exists():
-        return
+    if not path.exists(): return
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict): raise ValueError("settings: JSON object required")
         _apply_detector_payload(settings.detector, payload.get("detector", payload))
-    except (json.JSONDecodeError, OSError) as exc:
-        # битый файл настроек не должен ронять старт — но и не прячется
-        logger.warning("settings.json не прочитан (%s); используются значения по умолчанию", exc)
+        settings.config_error = None
+    except (ValueError, TypeError, OSError) as exc:
+        settings.config_error = str(exc)
+        logger.error("Invalid saved configuration: %s", exc)
+
 
 
 def _save_detector_to_file(
@@ -575,13 +663,16 @@ def _save_detector_to_file(
     чтобы сбой записи не оставлял обрезанный settings.json."""
     path = _settings_path(settings)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
+    tmp = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
     tmp.write_text(
         json.dumps({"detector": asdict(detector or settings.detector)},
                    ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    os.replace(tmp, path)
+    try:
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
     return path
 
 
@@ -643,26 +734,28 @@ def create_app(
     _load_detector_from_file(settings)
     # A05: recalc-задание в статусе running при старте — процесс умер посреди
     # пересчёта (безопасное завершение после краша/перезапуска)
-    _stale_recalc = _get_recalc_status(db)
-    if _stale_recalc is not None and _stale_recalc.get("status") == "running":
-        _set_recalc_status(
-            db, "failed", started_at=_stale_recalc.get("started_at") or now_ms(),
-            finished_at=now_ms(), error="interrupted_by_restart",
-        )
-    require_auth = make_auth_dependency(settings)
-    hub = WsHub(state_seq_provider=db.get_state_seq)
+    require_auth = make_auth_dependency(settings, db)
+    hub = WsHub(state_seq_provider=db.get_state_seq,
+                domain_version_provider=db.get_domain)
 
-    app = FastAPI(title="LevelFrame", version=APP_VERSION)
+    app = FastAPI(title="LevelFrame", version=APP_VERSION, lifespan=metrics_lifespan)
     app.state.db = db
     app.state.settings = settings
     app.state.instance_id = str(uuid.uuid4())
     app.state.started_at = now_ms()
     app.state.process_role = "web"
     app.state.build_id = os.environ.get("HTF_BUILD_ID") or APP_VERSION
+    from ..services.build_info import source_revision
+    app.state.source_revision = source_revision()
     app.state.ws_hub = hub
+    db.publisher = hub.broadcast
     app.state.event_bus = event_bus
     app.state.ltf_engine = ltf_engine
     app.state.alt_runner = alt_runner
+    from .auth import register_auth_routes
+    register_auth_routes(app, db, settings, require_auth)
+    from ..services.settings_jobs import SettingsJobs
+    app.state.settings_jobs = SettingsJobs(app, db, settings, ltf_engine, _save_detector_to_file)
     if callable(event_bus):
         event_bus(hub.broadcast)
 
@@ -675,6 +768,8 @@ def create_app(
     register_events_routes(app, db, settings, require_auth)
     from .data_sync_api import register_data_sync_routes
     register_data_sync_routes(app, db, require_auth)
+    register_metrics_routes(app, require_auth)
+    app.add_middleware(MetricsMiddleware)
 
     # ------------------------- instruments -------------------------
 
@@ -741,11 +836,20 @@ def create_app(
         instrument_id: Optional[int] = None,
         status: Optional[str] = None,
         type: Optional[str] = None,
-    ) -> list[dict[str, Any]]:
+        with_version: bool = False,
+    ) -> Any:
         statuses = _parse_enum_list(status, ZoneStatus, "status")
         types = _parse_enum_list(type, ZoneType, "type")
-        zones = db.get_zones(instrument_id=instrument_id, statuses=statuses, types=types)
-        return [zone_to_dict(z) for z in zones]
+        if not with_version:
+            zones = db.get_zones(instrument_id=instrument_id, statuses=statuses, types=types)
+            return [zone_to_dict(z) for z in zones]
+        # §13 (этап 6a): opt-in конверт (список — прежний контракт app.js);
+        # данные и версия домена — из одной read-транзакции
+        with db.read_tx():
+            zones = [zone_to_dict(z) for z in db.get_zones(
+                instrument_id=instrument_id, statuses=statuses, types=types)]
+            versions = {"zones": db.get_domain("seq:zones")}
+        return {"zones": zones, "versions": versions}
 
     @app.get("/api/zones/grouped", dependencies=[Depends(require_auth)])
     def grouped_zones(instrument_id: int) -> dict[str, Any]:
@@ -754,12 +858,16 @@ def create_app(
         Только для отображения: исходные зоны, их границы, середины и
         правила уведомлений НЕ пересчитываются и не меняются.
         """
-        zones = [z for z in db.get_zones(instrument_id=instrument_id,
-                                         statuses=[ZoneStatus.ACTIVE])
-                 if z.is_currently_relevant()]  # ТЗ 06.10.2026 §13 (T21)
-        groups = union_find_groups(zones)
+        with db.read_tx():
+            zones = [z for z in db.get_zones(instrument_id=instrument_id,
+                                             statuses=[ZoneStatus.ACTIVE])
+                     if z.is_currently_relevant()]  # ТЗ 06.10.2026 §13 (T21)
+            groups = union_find_groups(zones)
+            zones_version = db.get_domain("seq:zones")
         return {
             "instrument_id": instrument_id,
+            # §13 (этап 6a): версия домена зон того же снимка
+            "versions": {"zones": zones_version},
             "groups": [
                 {
                     "id": min(z.id for z in members),
@@ -1159,24 +1267,77 @@ def create_app(
     def list_events(
         limit: int = Query(default=50, ge=1, le=500),
         instrument_id: Optional[int] = None,
-    ) -> list[dict[str, Any]]:
+        after_id: Optional[int] = Query(default=None,ge=0),
+        with_version: bool = False,
+    ) -> Any:
         """Лента событий. instrument_id ограничивает её одним активом;
-        без параметра остаётся общий журнал."""
-        out = []
-        skip = (EventKind.APPROACH.value,)
-        events = (
-            db.list_events_for_instrument(instrument_id, limit=limit, exclude_kinds=skip)
-            if instrument_id is not None else db.get_events(limit=limit, exclude_kinds=skip)
-        )
-        for e in events:
-            zone = db.get_zone(e.zone_id)
-            ins = db.get_instrument(zone.instrument_id) if zone else None
-            out.append({
-                **event_to_dict(e),
-                "zone": zone_to_dict(zone) if zone else None,
-                "instrument": instrument_to_dict(ins) if ins else None,
-            })
-        return out
+        без параметра остаётся общий журнал.
+
+        with_version=true (§13, этап 6a): конверт {events, versions} —
+        список остаётся прежним контрактом без флага. Версии доменов
+        (zones — карточки зон в строках, history — ревизии/починки истории
+        по инструментам) читаются в одной read-транзакции с данными."""
+        def _collect() -> list[dict[str, Any]]:
+            out = []
+            skip = (EventKind.APPROACH.value,)
+            events = (
+                db.list_events_for_instrument(instrument_id, limit=limit, exclude_kinds=skip)
+                if instrument_id is not None else db.get_events(limit=limit, exclude_kinds=skip)
+            )
+            if after_id is not None:
+                query = "SELECT e.id FROM event e JOIN zone z ON z.id=e.zone_id WHERE e.id>? AND e.kind!='approach'"
+                args=[after_id]
+                if instrument_id is not None:
+                    query += " AND z.instrument_id=?"
+                    args.append(instrument_id)
+                query += " ORDER BY e.id LIMIT ?"
+                events=[db.get_event(row["id"]) for row in db.conn.execute(query,(*args,limit))]
+            for e in events:
+                zone = db.get_zone(e.zone_id)
+                ins = db.get_instrument(zone.instrument_id) if zone else None
+                out.append({
+                    **event_to_dict(e),
+                    "zone": zone_to_dict(zone) if zone else None,
+                    "instrument": instrument_to_dict(ins) if ins else None,
+                })
+            return out
+
+        if not with_version:
+            return _collect()
+        with db.read_tx():
+            events_out = _collect()
+            dv = db.domain_versions()
+            versions = {
+                "zones": dv.get("zones", 0),
+                "history": dv.get("history", {}),
+            }
+        return {"events": events_out, "versions": versions}
+
+    @app.get("/api/journal/page", dependencies=[Depends(require_auth)])
+    def paged_journal(
+        kind: str = Query(default="all"), limit: int = Query(default=50, ge=1, le=200),
+        cursor: str = Query(default="", max_length=512), symbol: str = Query(default="", max_length=80),
+        q: str = Query(default="", max_length=300), scope: str = Query(default=""),
+        event_type: str = Query(default="", max_length=100),
+        from_date: str = Query(default=""), to_date: str = Query(default=""),
+    ) -> dict[str, Any]:
+        from datetime import datetime, timedelta, timezone
+        if kind not in JOURNAL_KINDS or scope not in ("", "htf", "ltf", "alt", "context"):
+            raise HTTPException(status_code=400, detail="Некорректный фильтр журнала")
+        def boundary(raw, end=False):
+            if not raw:
+                return None
+            value = datetime.strptime(raw, "%Y-%m-%d").replace(tzinfo=timezone(timedelta(hours=3)))
+            return int((value + (timedelta(days=1) if end else timedelta())).timestamp() * 1000)
+        try:
+            start, end = boundary(from_date), boundary(to_date, True)
+            if start is not None and end is not None and start >= end:
+                raise ValueError("Начало периода должно быть не позже конца")
+            with db.read_tx():
+                return journal_page(db, kind=kind, limit=limit, cursor=cursor, symbol=symbol,
+                                    query=q, scope=scope, event_type=event_type, from_ms=start, to_ms=end)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Проверьте период и страницу журнала") from exc
 
     @app.get("/api/journal", dependencies=[Depends(require_auth)])
     def journal(
@@ -1200,16 +1361,30 @@ def create_app(
         limit: int = Query(default=300, ge=1, le=5000),
         with_version: bool = False,
     ) -> Any:
-        """Свечи для графика в формате lightweight-charts (time — unix sec)."""
+        """Свечи для графика в формате lightweight-charts (time — unix sec).
+
+        with_version=true: конверт со state_version (D01) и вектором доменных
+        версий (§13, этап 6a) — candles/quote читаются в той же
+        read-транзакции, что и данные: версия атомарно соответствует снимку."""
         with db.read_tx():
             candles = db.get_candles(
-                instrument_id, timeframe, closed_only=False)[-limit:]
+                instrument_id, timeframe, closed_only=False, limit=limit)
             payload = [
                 {"time": c.open_time // 1000, "open": c.open, "high": c.high,
                  "low": c.low, "close": c.close, "closed": c.closed}
                 for c in candles
             ]
-            return {"candles": payload, "state_version": db.get_state_seq()} if with_version else payload
+            if not with_version:
+                return payload
+            return {
+                "candles": payload,
+                "state_version": db.get_state_seq(),
+                "versions": {
+                    "candles": db.get_domain(
+                        f"seq:candles:{instrument_id}:{timeframe}"),
+                    "quote": db.get_domain(f"seq:quote:{instrument_id}"),
+                },
+            }
 
     # ------------------------- настройки (§10) -------------------------
 
@@ -1221,7 +1396,9 @@ def create_app(
         устаревшие поля отдаются (миграционная совместимость), но не
         редактируются."""
         return {
-            "detector": asdict(settings.detector),
+            "detector": json.loads(db.get_meta("settings:active_profile") or json.dumps(asdict(settings.detector))),
+            "config_version": app.state.settings_jobs.version,
+            "config_error": getattr(settings,"config_error",None),
             "uncalibrated": [
                 f.name for f in fields(DetectorConfig) if f.name.startswith("uncalibrated_")
             ],
@@ -1230,6 +1407,8 @@ def create_app(
                 for f in fields(DetectorConfig)
             },
             "deprecated": sorted(DETECTOR_DEPRECATED_FIELDS),
+            # схема для UI: числовые границы и допустимые перечисления
+            "schema": detector_field_schema(),
             # A05: статус последнего задания пересчёта (или null, если не было)
             "recalc": _get_recalc_status(db),
             # Признак без секрета: токен и chat id в ответ не попадают (§11 п.8)
@@ -1238,108 +1417,36 @@ def create_app(
         }
 
     @app.post("/api/settings", dependencies=[Depends(require_auth)])
-    async def save_settings(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
-        """L04: строгая схема и атомарное применение. Любая ошибка (неизвестное
-        или устаревшее поле, тип, диапазон, перечисление, зависимость порогов)
-        — 422 с ошибками по полям; память и файл настроек не меняются.
-
-        A05: порядок применения — валидация → атомарная запись файла → память →
-        пересчёт (tracked-задание, meta settings:recalc). Сбой записи файла —
-        500, память не тронута; сбой пересчёта — откат памяти и файла к прежнему
-        конфигу, задание помечается failed, ответ 500."""
-        values, errors = validate_detector_payload(payload)
-        if not errors:
-            candidate = replace(settings.detector, **values)
-            errors = validate_detector_config(candidate)
-        if errors:
-            raise HTTPException(
-                status_code=422,
-                detail={"error": "invalid_settings", "fields": errors},
-            )
-        # файл — первым: при ошибке записи память ещё не изменена
+    async def save_settings(payload: dict[str, Any] = Body(...)):
+        from ..services.settings_jobs import InvalidSettings, SettingsConflict
         try:
-            path = _save_detector_to_file(settings, candidate)
-        except OSError as exc:
-            raise HTTPException(
-                status_code=500,
-                detail={"error": "settings_save_failed", "reason": str(exc)},
-            )
-        # DetectorConfig разделён по ссылке с движком/воркером — применяем
-        # по полям, чтобы объект оставался тем же
-        old_values = {key: getattr(settings.detector, key) for key in values}
-        for key, value in values.items():
-            setattr(settings.detector, key, value)
-        applied = sorted(values)
-        # смена профиля l/r структурных pivots: новая версия расчёта (L03),
-        # прежние опоры помечаются superseded и сохраняются (движок делит
-        # DetectorConfig с настройками и уже видит новые значения)
-        need_resync = ltf_engine is not None and (
-            settings.detector.ltf_structure_left != old_values.get(
-                "ltf_structure_left", settings.detector.ltf_structure_left)
-            or settings.detector.ltf_structure_right != old_values.get(
-                "ltf_structure_right", settings.detector.ltf_structure_right)
-        )
-        # ТЗ «LTF Current Setup» §10/п.14: смена ltf_entry_types — лёгкий
-        # пересчёт привязок активных сценариев (без replay свечей и без
-        # новых событий/уведомлений; история строк сохраняется). F3: то же
-        # при смене прочих параметров пригодности (entry_reuse_max_depth) —
-        # иначе общий отбор расходился бы с evaluate_final движка
-        need_reclassify = ltf_engine is not None and (
-            settings.detector.ltf_entry_types != old_values.get(
-                "ltf_entry_types", settings.detector.ltf_entry_types)
-            or settings.detector.entry_reuse_max_depth != old_values.get(
-                "entry_reuse_max_depth", settings.detector.entry_reuse_max_depth)
-        )
-        if not (need_resync or need_reclassify):
-            return {"applied": applied, "saved_to": str(path),
-                    "structure_resynced": False,
-                    "entries_reclassified": {},
-                    "detector": asdict(settings.detector)}
-
-        def _run_recalc() -> dict[str, Any]:
-            result: dict[str, Any] = {"structure_resynced": False,
-                                      "entries_reclassified": {}}
-            if need_resync:
-                ltf_engine.resync_structure_params()
-                result["structure_resynced"] = True
-            if need_reclassify:
-                result["entries_reclassified"] = ltf_engine.reclassify_active_entries()
-            return result
-
-        started = now_ms()
-        _set_recalc_status(db, "running", started_at=started)
+            job, task = await app.state.settings_jobs.submit(payload)
+        except InvalidSettings as exc:
+            raise HTTPException(422, detail={"error":"invalid_settings","fields":exc.errors})
+        except SettingsConflict as exc:
+            raise HTTPException(409, detail={"error":str(exc),"config_version":app.state.settings_jobs.version})
         try:
-            result = await asyncio.wait_for(
-                asyncio.to_thread(_run_recalc), timeout=_RECALC_WAIT_SECONDS)
+            return await asyncio.wait_for(asyncio.shield(task), _RECALC_WAIT_SECONDS)
         except asyncio.TimeoutError:
-            # длинный пересчёт: задание живёт дальше в потоке, статус —
-            # running в meta и виден через GET /api/settings
-            return {"applied": applied, "saved_to": str(path),
-                    "structure_resynced": need_resync,
-                    "entries_reclassified": {},
-                    "recalc": {"status": "running"},
-                    "detector": asdict(settings.detector)}
+            return Response(json.dumps({"recalc":job,"status_url":"/api/settings/jobs/"+job["job_id"]}), status_code=202, media_type="application/json")
+        except OSError as exc:
+            # Сбой атомарной записи файла — не пересчёт правил.
+            raise HTTPException(500, detail={"error":"settings_save_failed","reason":str(exc)})
         except Exception as exc:
-            # откат: память — к прежним значениям, файл — к прежнему конфигу
-            for key, value in old_values.items():
-                setattr(settings.detector, key, value)
-            try:
-                _save_detector_to_file(settings)
-            except OSError:
-                logger.warning("откат settings.json не записался", exc_info=True)
-            _set_recalc_status(db, "failed", started_at=started,
-                               finished_at=now_ms(), error=str(exc))
-            raise HTTPException(
-                status_code=500,
-                detail={"error": "settings_recalc_failed", "reason": str(exc)},
-            )
-        _set_recalc_status(db, "ready", started_at=started,
-                           finished_at=now_ms(), result=result)
-        return {"applied": applied, "saved_to": str(path),
-                "structure_resynced": result["structure_resynced"],
-                "entries_reclassified": result["entries_reclassified"],
-                "recalc": {"status": "ready"},
-                "detector": asdict(settings.detector)}
+            raise HTTPException(500, detail={"error":"settings_recalc_failed","reason":str(exc)})
+
+    @app.get("/api/settings/jobs/{job_id}", dependencies=[Depends(require_auth)])
+    def settings_job(job_id: str):
+        status = app.state.settings_jobs.status()
+        if status is None or status.get("job_id") != job_id:
+            raise HTTPException(404, "Job not found")
+        return status
+
+    @app.post("/api/diagnostics/quotes/{row_id}/retry", dependencies=[Depends(require_auth)])
+    def retry_quote(row_id: int):
+        db.retry_quote(row_id)
+        return {"status":"pending","row_id":row_id}
+
 
     @app.get("/api/labels", dependencies=[Depends(require_auth)])
     def labels() -> dict[str, Any]:
@@ -1464,6 +1571,51 @@ def create_app(
             "candle_freshness": freshness,
         }
 
+    # ------------------- readiness (§11, этап 5; открыт, дешёвый) -------------------
+
+    # ------------------- readiness (§11, этап 5; открыт, дешёвый) -------------------
+
+    @app.get("/api/ready")
+    def ready() -> dict[str, Any]:
+        """Фазы готовности web → realtime → history → calc (этап 5, §11, AC01).
+
+        ready=true, когда текут котировки (фаза realtime); история и расчёт
+        продолжаются в фоне. Ответ всегда 200 и дешёвый (in-memory + meta):
+        healthcheck Railway не должен валить деплой при временной недоступности
+        биржи. /api/health остаётся прежней liveness-проверкой со свежестью."""
+        from ..adapters.base import TIMEFRAME_MS
+        from ..services.runtime import backfill_progress
+        worker = getattr(app.state, "worker", None)
+        if worker is None:
+            data_sync = getattr(app.state, "data_sync", None)
+            worker = getattr(data_sync, "worker", None) if data_sync is not None else None
+        readiness = getattr(worker, "readiness", None)
+        if readiness is not None:
+            payload = readiness.snapshot()
+            scan_tfs = worker.scan_tfs
+        else:
+            # воркер ещё не присоединён (или web-only роль): веб поднялся,
+            # но котировки не идут — ready=false
+            payload = {
+                "ready": False,
+                "phase": "web",
+                "phases": {"web": {"at": app.state.started_at, "detail": None},
+                           "realtime": None, "history": None, "calc": None},
+                "since": app.state.started_at,
+            }
+            scan_tfs = tuple(
+                t.strip()
+                for t in settings.detector.scan_timeframes.split(",")
+                if t.strip() in TIMEFRAME_MS
+            ) or ("D1", "W1")
+        payload["backfill"] = backfill_progress(db, scan_tfs)
+        return payload
+
+    @app.get("/api/live")
+    def liveness():
+        db.conn.execute("SELECT 1").fetchone()
+        return {"live": True, "version": APP_VERSION}
+
     @app.get("/api/diagnostics", dependencies=[Depends(require_auth)])
     def diagnostics() -> dict[str, Any]:
         """Роль процесса, отпечаток профиля и курсоры. Секретов нет."""
@@ -1472,13 +1624,26 @@ def create_app(
         calc = _read_claim(db, CALC_OWNER)
         if calc and int(calc.get("pid") or 0) == os.getpid():
             role = "calc"
-        return build_diagnostics(
+        data_sync = getattr(app.state, "data_sync", None)
+        worker = getattr(data_sync, "worker", None)
+        market_queue = getattr(worker, "market_queue", None)
+        calc_queue = getattr(worker, "calc_queue", None)
+        # этап 3 (§7): состояние realtime-подписок, когда поток включён
+        realtime = getattr(worker, "realtime", None)
+        diag = build_diagnostics(
             db, settings,
             role=role,
             instance_id=app.state.instance_id,
             started_at=app.state.started_at,
             build_id=app.state.build_id,
+            market_queue=market_queue,
+            calc_queue=calc_queue,
+            readiness=getattr(worker, "readiness", None),
+            realtime=realtime,
         )
+        if realtime is not None:
+            diag["realtime"] = realtime.status()
+        return diag
 
     # ------------------------- WebSocket -------------------------
 
@@ -1490,7 +1655,12 @@ def create_app(
         try:
             while True:
                 # входящие сообщения не используются — соединение держим живым
-                await websocket.receive_text()
+                try:
+                    await asyncio.wait_for(websocket.receive_text(), 30)
+                except asyncio.TimeoutError:
+                    pass
+                if not await check_ws_token(websocket, settings):
+                    return
         except WebSocketDisconnect:
             pass
         finally:
@@ -1499,6 +1669,24 @@ def create_app(
     # ------------------------- статика -------------------------
 
     app.mount("/", _NoCacheStaticFiles(directory=_STATIC_DIR, html=True), name="static")
+    # Sync mutation handlers form one unit, including review's derived changes.
+    # Async handlers own explicit units around their non-network operations.
+    import functools
+    import inspect
+    for route in app.routes:
+        if not set(getattr(route,"methods",())) & {"POST","PUT","PATCH","DELETE"}:
+            continue
+        endpoint = getattr(route,"endpoint",None)
+        if endpoint is None or inspect.iscoroutinefunction(endpoint):
+            continue
+        def transactional_handler(method):
+            @functools.wraps(method)
+            def run(*args,**kwargs):
+                with db.batch_writes():
+                    return method(*args,**kwargs)
+            return run
+        route.endpoint = transactional_handler(endpoint)
+        route.dependant.call = route.endpoint
     return app
 
 

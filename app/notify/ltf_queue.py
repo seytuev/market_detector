@@ -403,7 +403,7 @@ class LtfDispatcher:
                     (ev.scenario_id, ev.occurred_at))
                 self.db.conn.commit()
             pending.append(ev.id)
-        await self.outbox.flush()
+        await self.outbox.flush_inline()
         return sum(bool(self.db.get_ltf_event(i).delivered) for i in pending)
 
     def _keyboard(self, ev: LtfEvent, ctx: LtfContext):
@@ -446,7 +446,7 @@ class LtfDispatcher:
 
     async def retry_charts(self) -> int:
         queued = await self.outbox.retry_media()
-        await self.outbox.flush()
+        await self.outbox.flush_inline()
         return queued
 
     async def __call__(self, events: list[LtfEvent]) -> None:

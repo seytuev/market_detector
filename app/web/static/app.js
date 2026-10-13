@@ -10,8 +10,7 @@
 
 const state = {
   // токен можно передать в URL (?token=...) — сохранится в localStorage
-  token: new URLSearchParams(location.search).get('token')
-    || localStorage.getItem('htf_token') || '',
+  token: '',
   instruments: [],
   instrumentId: null,
   timeframe: 'D1',
@@ -60,6 +59,7 @@ const state = {
   eventReq: 0,
   candidateReq: 0,
   candleVersion: 0,
+  warmupText: null,   // §11: текст прогрева над пустым графиком (событие lf-warmup)
 };
 
 // Режим «Проверка» (U04): собственный график + очередь + инспектор в одном
@@ -355,6 +355,11 @@ async function loadCandles() {
       && version < state.candleVersion) return;
   state.candles = candles;
   if (version != null) state.candleVersion = version;
+  // §13 (этап 6b): доменные версии снимка — точка отсчёта для diff'ов
+  if (versioned && response.versions) {
+    domainSync.adopt(`candles:${id}:${tf}`, response.versions.candles);
+    domainSync.adopt(`quote:${id}`, response.versions.quote);
+  }
   state.loadedCandleTf = tf;
   state.loadedCandleInstrument = id;
   state.candleSeries.setData(state.candles);
@@ -374,7 +379,23 @@ async function loadCandles() {
   }
   // пересчёт координат зон после полного макета графика
   requestAnimationFrame(drawZones);
+  updateChartWarmup();
 }
+
+// Текст прогрева над пустым графиком (§11, AC01): свечей ещё нет, а сервер
+// прогревается — показываем фазу/прогресс вместо пустой области
+function updateChartWarmup() {
+  const el = $('chart-warmup');
+  if (!el) return;
+  const show = !state.candles.length && !!state.warmupText;
+  el.classList.toggle('hidden', !show);
+  if (show) el.textContent = state.warmupText;
+}
+
+document.addEventListener('lf-warmup', (e) => {
+  state.warmupText = e.detail && !e.detail.done ? e.detail.text : null;
+  updateChartWarmup();
+});
 
 // ---------------------------------------------------------------------------
 // Зоны: загрузка и отрисовка поверх графика
@@ -384,11 +405,18 @@ async function loadZones() {
   if (!state.instrumentId) return;
   const id = state.instrumentId;
   const req = ++state.zoneReq;
-  const [zones, grouped] = await Promise.all([
-    api(`/api/zones?instrument_id=${id}`),
+  // §13 (этап 6b): opt-in конверт {zones, versions}; сгруппированный ответ
+  // несёт ту же версию домена зон
+  const [zonesRes, grouped] = await Promise.all([
+    api(`/api/zones?instrument_id=${id}&with_version=true`),
     api(`/api/zones/grouped?instrument_id=${id}`),
   ]);
   if (id !== state.instrumentId || req !== state.zoneReq) return;
+  const zones = Array.isArray(zonesRes) ? zonesRes : (zonesRes && zonesRes.zones) || [];
+  const zonesVersion = (!Array.isArray(zonesRes) && zonesRes && zonesRes.versions)
+    ? zonesRes.versions.zones
+    : (grouped && grouped.versions ? grouped.versions.zones : null);
+  if (zonesVersion != null) domainSync.adopt('zones', zonesVersion);
   state.zones = zones;
   state.groups = grouped.groups.filter((g) => g.zones.length > 1);
   drawZones();
@@ -871,7 +899,7 @@ function drawH1Breaks(overlay, ts, paneRight, height) {
   window.H1Layers.draw(overlay, {
     layers,
     settings: window.H1Layers.loadSettings(),
-    xOf: (ms) => (ms == null ? null : ts.timeToCoordinate(Math.floor(Number(ms) / 1000))),
+    xOf: (ms) => barCoordinate(ts, ms),
     yOf: (price) => state.candleSeries.priceToCoordinate(price),
     paneRight,
     height: paneHeight,
@@ -1382,7 +1410,7 @@ async function loadZoneDetail(zoneId, focusChart) {
     <p class="inspector-actions">
       <button type="button" class="btn primary" id="btn-focus-zone">На графике</button>
       ${(z.type === 'ob' && HTF_TFS.has(z.timeframe))
-        ? `<a class="btn small" href="/ltf.html?zone_id=${z.id}&token=${encodeURIComponent(state.token)}&instrument=${state.instrumentId}">Открыть LTF →</a>`
+        ? `<a class="btn small" href="/ltf.html?zone_id=${z.id}&instrument=${state.instrumentId}">Открыть LTF →</a>`
         : ''}
     </p>
     <dl>
@@ -1477,15 +1505,21 @@ function showGroupMembers(group) {
 async function loadEvents() {
   const id = state.instrumentId;
   const req = ++state.eventReq;
+  // §13 (этап 6b): opt-in конверт {events, versions} — версии зон/истории
+  // того же снимка
   const assetQ = state.instrumentId
-    ? `/api/events?limit=50&instrument_id=${state.instrumentId}`
-    : '/api/events?limit=50';
-  const [assetEvents, allEvents] = await Promise.all([
+    ? `/api/events?limit=50&instrument_id=${state.instrumentId}&with_version=true`
+    : '/api/events?limit=50&with_version=true';
+  const [assetRes, allRes] = await Promise.all([
     api(assetQ),
-    api('/api/events?limit=50'),
+    api('/api/events?limit=50&with_version=true'),
   ]);
   if (id !== state.instrumentId || req !== state.eventReq) return;
-  renderEvents(assetEvents, allEvents);
+  const unwrap = (r) => (Array.isArray(r) ? r : (r && r.events) || []);
+  const versions = (!Array.isArray(assetRes) && assetRes && assetRes.versions)
+    || (!Array.isArray(allRes) && allRes && allRes.versions) || null;
+  if (versions) domainSync.adoptAll(HTF.DomainSync.statusEntries(versions));
+  renderEvents(unwrap(assetRes), unwrap(allRes));
 }
 
 function renderEvents(assetEvents, allEvents) {
@@ -2206,7 +2240,7 @@ const SETTINGS_META = {
     group: 'Поиск зон',
   },
   scan_timeframes: {
-    title: 'Таймфреймы поиска (через запятую)',
+    title: 'Таймфреймы поиска',
     desc: 'HTF Zones: работают только старшие ТФ — D1,W1 (по умолчанию). H1/H4 убраны из ' +
           'интерфейса и сканирования по решению пользователя. Применяется после перезапуска сервиса.',
     group: 'Поиск зон',
@@ -2265,8 +2299,8 @@ const SETTINGS_META = {
   },
   ltf_notify_kinds: {
     title: 'События структуры H1',
-    desc: 'Какие события H1 уходят в уведомления: слом, готовые зоны, касание, исход снятия, отмена. ' +
-          'Список через запятую.',
+    desc: 'Какие события H1 уходят в уведомления. Касания, подтверждения и отмены ' +
+          'отправляются сразу, остальное — в тихой сводке.',
     group: 'Уведомления',
   },
   uncalibrated_cluster_denominator: {
@@ -2311,6 +2345,143 @@ const SETTINGS_META = {
           'согласована (§9, §14.4).',
     group: 'Не калибровано',
   },
+  entry_reuse_max_depth: {
+    title: 'Предел повторного использования OB (доля)',
+    desc: 'Повторный выбор OB как Entry Zone допустим, пока максимальная глубина ' +
+          'самостоятельных тестов строго меньше порога. Максимум берётся за всю историю ' +
+          'действующего OB: мелкий поздний тест не стирает более глубокий прежний.',
+    group: 'Касания и глубина',
+  },
+  inner_level_pivot_left: {
+    title: 'Внутренний уровень: свечей слева',
+    desc: 'Подтверждение внутренних BSL/SSL — общее правило пивота на таймфрейме уровня.',
+    group: 'Касания и глубина',
+  },
+  inner_level_pivot_right: {
+    title: 'Внутренний уровень: свечей справа',
+    desc: 'Внутренний экстремум подтверждён после закрытия N-й свечи справа.',
+    group: 'Касания и глубина',
+  },
+  ltf_enabled: {
+    title: 'LTF-мониторинг (H1)',
+    desc: 'Наблюдение структуры H1 и Entry Zones. Выключение останавливает LTF-расчёт ' +
+          'и не затрагивает зоны D1/W1.',
+    group: 'LTF-наблюдения (H1)',
+  },
+  ltf_structure_left: {
+    title: 'Структурные pivots слева (3–5)',
+    desc: 'Сколько свечей слева должен превосходить структурный экстремум H1.',
+    group: 'LTF-наблюдения (H1)',
+  },
+  ltf_structure_right: {
+    title: 'Структурные pivots справа (3–5)',
+    desc: 'Сколько свечей справа подтверждают структурный экстремум H1.',
+    group: 'LTF-наблюдения (H1)',
+  },
+  ltf_entry_types: {
+    title: 'Типы Entry Zones',
+    desc: 'Применяется к расчёту пригодности, графику, счётчикам и новым уведомлениям. ' +
+          'Отключение типа не удаляет уже найденные зоны и историю.',
+    group: 'LTF-наблюдения (H1)',
+  },
+  ltf_history_days: {
+    title: 'Глубина H1-истории (дней)',
+    desc: 'Сколько H1-истории загружается до касания HTF-зоны при старте наблюдения.',
+    group: 'LTF-наблюдения (H1)',
+  },
+  ltf_poll_seconds: {
+    title: 'Цикл опроса H1 (сек)',
+    desc: 'Как часто LTF-движок проверяет новые закрытия H1.',
+    group: 'LTF-наблюдения (H1)',
+  },
+  ltf_live_grace_seconds: {
+    title: 'Окно «live» для H1-событий (сек)',
+    desc: 'Событие, обнаруженное в пределах окна после закрытия свечи, доставляется сразу. ' +
+          'Позже — как догоняющий бэклог: доставка подавляется, как у replay.',
+    group: 'LTF-наблюдения (H1)',
+  },
+  ltf_observation_stale_days: {
+    title: 'Автоархивация наблюдений (дней)',
+    desc: 'Наблюдение без активности дольше срока уходит в архив. 0 — выключено.',
+    group: 'LTF-наблюдения (H1)',
+  },
+  ltf_range_anchor_policy: {
+    title: 'Якоря диапазона',
+    desc: 'От чего строить диапазон, пока нет подтверждённой пары продолжения ' +
+          '(LH→LL / HL→HH) после первичного слома.',
+    group: 'LTF-наблюдения (H1)',
+  },
+  ltf_provisional_range_enabled: {
+    title: 'Предварительный диапазон',
+    desc: 'Предлагаемый режим: пунктирный слой временного конца текущего движения до ' +
+          'подтверждения опор. Только отображение — на подтверждённые диапазоны, отбор ' +
+          'и уведомления не влияет.',
+    group: 'LTF-наблюдения (H1)',
+  },
+  htf_context_types: {
+    title: 'Источники HTF-контекста',
+    desc: 'Какие зоны D1/W1 запускают LTF-наблюдение. Для уровней направление ожидания ' +
+          'фиксировано (BSL — снятие вверх, SSL — снятие вниз), контакт — касание уровня.',
+    group: 'HTF-контекст для LTF',
+  },
+  htf_context_wait_hours: {
+    title: 'Ожидание подтверждения H1 (часов)',
+    desc: 'Сколько часов эпизод контекста хранится от последнего отдельного взаимодействия ' +
+          'до подтверждения H1. Повтор того же события срок не продлевает.',
+    group: 'HTF-контекст для LTF',
+  },
+  htf_context_wait_hours_d1: {
+    title: '…отдельно для D1 (часов)',
+    desc: 'Переопределение общего срока для D1. 0 — использовать общий срок.',
+    group: 'HTF-контекст для LTF',
+  },
+  htf_context_wait_hours_w1: {
+    title: '…отдельно для W1 (часов)',
+    desc: 'Переопределение общего срока для W1. 0 — использовать общий срок.',
+    group: 'HTF-контекст для LTF',
+  },
+  htf_context_horizon_days: {
+    title: 'Горизонт торгового контекста (дней)',
+    desc: 'Сколько дней от глобальной опоры ноги сценарий остаётся торговым контекстом. ' +
+          'Продлевается, пока нет квалифицированного обратного слома.',
+    group: 'HTF-контекст для LTF',
+  },
+  htf_context_leg_anchor: {
+    title: 'Якорь отсчёта ноги',
+    desc: 'От какого момента отсчитывается горизонт контекста: последний обновлённый ' +
+          'экстремум ноги или начало ноги (исходная опора).',
+    group: 'HTF-контекст для LTF',
+  },
+  stale_quote_seconds: {
+    title: 'Порог свежести котировок (сек)',
+    desc: 'Котировка старше срока помечается устаревшей. 0 — автоматически: два интервала опроса.',
+    group: 'Свежесть данных',
+  },
+  stale_h1_intervals: {
+    title: 'Свежесть H1 (интервалов)',
+    desc: 'Свечи H1 считаются устаревшими после N интервалов ТФ без обновления.',
+    group: 'Свежесть данных',
+  },
+  stale_d1_intervals: {
+    title: 'Свежесть D1 (интервалов)',
+    desc: 'Свечи D1 считаются устаревшими после N интервалов ТФ без обновления.',
+    group: 'Свежесть данных',
+  },
+  stale_w1_intervals: {
+    title: 'Свежесть W1 (интервалов)',
+    desc: 'Свечи W1 считаются устаревшими после N интервалов ТФ без обновления.',
+    group: 'Свежесть данных',
+  },
+  uncalibrated_breakout_fvg_back_candles: {
+    title: 'FVG пробоя: отступ назад (свечей)',
+    desc: 'FVG привязывается к пробойному движению не раньше, чем за N свечей до пробоя.',
+    group: 'Не калибровано',
+  },
+  uncalibrated_breakout_fvg_delay_candles: {
+    title: 'FVG пробоя: предел задержки (свечей)',
+    desc: 'На сколько свечей позже закрытия пробоя FVG ещё может подтвердиться.',
+    group: 'Не калибровано',
+  },
   rule_version: {
     title: 'Версия правил',
     desc: 'Служебная метка, сохраняется у каждой зоны — позволяет отличить объекты, найденные ' +
@@ -2326,19 +2497,138 @@ const SETTINGS_GROUP_TITLES = {
   experimental: 'Экспериментальные (не калиброваны)',
 };
 
+// Подразделы «Правил анализа»: порядок отображения и ключи каждой группы.
+// htf_context_types и ltf_provisional_range_enabled сервер кладёт в
+// «experimental», но они не uncalibrated — показываем тематически здесь.
+const RULES_SUBSECTIONS = [
+  { title: 'Поиск зон (HTF)', keys: [
+    'lookback_days', 'lookback_days_d1', 'lookback_days_w1', 'scan_timeframes',
+    'pivot_left', 'pivot_right', 'cluster_tolerance_pct'] },
+  { title: 'Касания и глубина', keys: [
+    'approach_pct', 'depth_mid', 'depth_worked', 'entry_reuse_max_depth',
+    'inner_level_pivot_left', 'inner_level_pivot_right'] },
+  { title: 'LTF-наблюдения (H1)', keys: [
+    'ltf_enabled', 'ltf_provisional_range_enabled', 'ltf_structure_left',
+    'ltf_structure_right', 'ltf_entry_types', 'ltf_history_days',
+    'ltf_poll_seconds', 'ltf_live_grace_seconds', 'ltf_observation_stale_days',
+    'ltf_range_anchor_policy'] },
+  { title: 'HTF-контекст для LTF', keys: [
+    'htf_context_types', 'htf_context_wait_hours', 'htf_context_wait_hours_d1',
+    'htf_context_wait_hours_w1', 'htf_context_horizon_days',
+    'htf_context_leg_anchor'] },
+  { title: 'Свежесть данных', keys: [
+    'stale_quote_seconds', 'stale_h1_intervals', 'stale_d1_intervals',
+    'stale_w1_intervals'] },
+  { title: 'Служебное', keys: ['rule_version'] },
+];
+const NOTIFY_ORDER = [
+  'suppress_hours', 'notification_digest_seconds', 'delivery_target_seconds',
+  'notify_only_reviewed', 'ltf_notify_kinds'];
+const EXPERIMENTAL_ORDER = [
+  'uncalibrated_approach_base', 'uncalibrated_cluster_denominator',
+  'uncalibrated_consolidation_max_candles', 'uncalibrated_consolidation_overlap_pct',
+  'uncalibrated_ob_delay_max_candles', 'uncalibrated_breakout_fvg_back_candles',
+  'uncalibrated_breakout_fvg_delay_candles', 'uncalibrated_plateau_equal_peaks'];
+
+// Доли (0..1) — рядом с полем показываем эквивалент в процентах.
+const PERCENT_KEYS = new Set([
+  'approach_pct', 'cluster_tolerance_pct', 'depth_mid', 'depth_worked',
+  'entry_reuse_max_depth', 'uncalibrated_consolidation_overlap_pct']);
+
+// CSV-перечисления: опции чипсов. Значение поля — join(',') выбранных.
+const CSV_CHOICES = {
+  scan_timeframes: [['D1', 'D1'], ['W1', 'W1']],
+  ltf_entry_types: [['FVG', 'FVG'], ['OB', 'OB'], ['BSL', 'BSL'], ['SSL', 'SSL']],
+  htf_context_types: [['OB', 'OB'], ['FVG', 'FVG'], ['BSL', 'BSL'], ['SSL', 'SSL']],
+  ltf_notify_kinds: [
+    ['bos_sms', 'Слом (BOS/SMS)'],
+    ['entries_ready', 'Готовые зоны'],
+    ['touch', 'Касание'],
+    ['sweep_outcome', 'Исход снятия'],
+    ['cancellation', 'Отмена'],
+  ],
+};
+
+// Выбор из перечисления — селект с русскими подписями.
+const SELECT_CHOICES = {
+  ltf_range_anchor_policy: [
+    ['origin_reversal', 'От истока слома (по умолчанию)'],
+    ['continuation_only', 'Только подтверждённое продолжение'],
+  ],
+  htf_context_leg_anchor: [
+    ['leg_extreme', 'Последний экстремум ноги'],
+    ['leg_start', 'Начало ноги (исходная опора)'],
+  ],
+};
+
+// Схема полей из GET /api/settings (ranges/enums) — заполняется в openSettings.
+let settingsSchema = { ranges: {}, enums: {} };
+
+function cleanSettingsDesc(desc) {
+  return (desc || '')
+    .replace(/\s*§[\d.]+/g, '')
+    .replace(/\(\)/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+function csvOptionsFor(key) {
+  const fromServer = (settingsSchema.enums[key] || []).map((v) => {
+    const known = (CSV_CHOICES[key] || []).find(
+      ([x]) => x.toLowerCase() === String(v).toLowerCase());
+    return [known ? known[0] : v, known ? known[1] : v];
+  });
+  return fromServer.length ? fromServer : (CSV_CHOICES[key] || null);
+}
+
+function settingsControlHtml(key, value) {
+  if (typeof value === 'boolean') {
+    return `<label class="switch"><input type="checkbox" data-key="${key}" ` +
+      `${value ? 'checked' : ''}><span class="switch-track" aria-hidden="true"></span></label>`;
+  }
+  const csv = csvOptionsFor(key);
+  if (csv) {
+    const selected = String(value).split(',').map((s) => s.trim().toLowerCase());
+    const chips = csv.map(([v, label]) => {
+      const on = selected.includes(String(v).toLowerCase());
+      return `<label class="chip${on ? ' on' : ''}">` +
+        `<input type="checkbox" data-csv-for="${key}" value="${esc(v)}"${on ? ' checked' : ''}>` +
+        `<span>${esc(label)}</span></label>`;
+    });
+    return `<input type="hidden" data-key="${key}" value="${esc(value)}">` +
+      `<div class="chip-row" data-csv="${key}">${chips.join('')}</div>`;
+  }
+  if (SELECT_CHOICES[key]) {
+    const opts = SELECT_CHOICES[key].map(([v, label]) =>
+      `<option value="${esc(v)}"${String(value) === v ? ' selected' : ''}>${esc(label)}</option>`).join('');
+    return `<select data-key="${key}">${opts}</select>`;
+  }
+  const isNum = typeof value === 'number';
+  const range = settingsSchema.ranges[key];
+  const attrs = [
+    `data-key="${key}"`,
+    isNum ? 'type="number" step="any" inputmode="decimal" spellcheck="false"' : 'type="text"',
+    range ? `min="${range[0]}" max="${range[1]}"` : '',
+  ].filter(Boolean).join(' ');
+  const hints = [];
+  if (isNum && PERCENT_KEYS.has(key)) {
+    hints.push(`<span class="field-hint pct" data-pct-for="${key}"></span>`);
+  }
+  if (range) hints.push(`<span class="field-hint">допустимо ${range[0]}…${range[1]}</span>`);
+  return `<div class="control-row"><input ${attrs} value="${esc(value)}">${hints.join('')}</div>`;
+}
+
 function settingsFieldHtml(key, value, uncal) {
   const meta = SETTINGS_META[key] || { title: key, desc: '' };
   const badge = uncal
     ? '<span class="uncalibrated-hint">не калибровано</span>' : '';
-  const desc = (meta.desc || '').replace(/\s*§[\d.]+/g, '');
-  const head = `<div class="field-title">${meta.title}${badge}</div>` +
+  const desc = cleanSettingsDesc(meta.desc);
+  const head = `<div class="field-title">${esc(meta.title)}${badge}</div>` +
     (desc ? `<div class="field-desc">${desc}</div>` : '');
-  if (typeof value === 'boolean') {
-    return head +
-      `<label class="check-label"><input type="checkbox" data-key="${key}" ` +
-      `${value ? 'checked' : ''}><span>${value ? 'включено' : 'выключено'}</span></label>`;
-  }
-  return head + `<input data-key="${key}" value="${esc(value)}">`;
+  const control = settingsControlHtml(key, value);
+  return typeof value === 'boolean'
+    ? `<div class="settings-field-row"><div class="settings-field-info">${head}</div>${control}</div>`
+    : head + control;
 }
 
 function appendSettingsFields(container, pairs, uncal) {
@@ -2348,6 +2638,43 @@ function appendSettingsFields(container, pairs, uncal) {
     wrap.innerHTML = settingsFieldHtml(key, value, uncal.has(key));
     container.appendChild(wrap);
   }
+}
+
+// «Правила анализа»: подразделы по RULES_SUBSECTIONS + блок не калиброванных.
+function renderRulesPane(container, detector, uncal, deprecated) {
+  for (const sub of RULES_SUBSECTIONS) {
+    const pairs = sub.keys
+      .filter((k) => !deprecated.has(k) && k in detector)
+      .map((k) => [k, detector[k]]);
+    if (!pairs.length) continue;
+    const sec = document.createElement('div');
+    sec.className = 'settings-subsection';
+    sec.innerHTML = `<h3 class="settings-group-title">${esc(sub.title)}</h3>` +
+      '<div class="settings-form"></div>';
+    appendSettingsFields(sec.lastElementChild, pairs, uncal);
+    container.appendChild(sec);
+  }
+  const exp = EXPERIMENTAL_ORDER
+    .filter((k) => !deprecated.has(k) && k in detector)
+    .map((k) => [k, detector[k]]);
+  if (exp.length) {
+    const det = document.createElement('details');
+    det.className = 'settings-exp';
+    det.innerHTML =
+      `<summary class="settings-group" data-group="experimental">${esc(SETTINGS_GROUP_TITLES.experimental)} · ${exp.length}</summary>` +
+      '<div class="field-desc settings-exp-note">Значения не калиброваны и ' +
+      'могут влиять на расчёты: найденные зоны, экстремумы и допуски.</div>' +
+      '<div class="settings-form"></div>';
+    appendSettingsFields(det.lastElementChild, exp, uncal);
+    container.appendChild(det);
+  }
+  // ключи вне подразделов — не теряем (страховка от рассинхрона с бэкендом);
+  // доставку и устаревшие сюда не включаем — они рендерятся в своей панели
+  const known = new Set(RULES_SUBSECTIONS.flatMap((s) => s.keys)
+    .concat(EXPERIMENTAL_ORDER, NOTIFY_ORDER));
+  const rest = Object.entries(detector).filter(([k]) =>
+    !deprecated.has(k) && !known.has(k));
+  if (rest.length) appendSettingsFields(container, rest, uncal);
 }
 
 function recalcNote(recalc) {
@@ -2379,51 +2706,48 @@ function renderAssetActiveButton() {
 function renderSettingsAssets() {
   const box = $('settings-assets');
   if (!box) return;
+  const count = $('settings-assets-count');
+  if (count) {
+    const on = state.instruments.filter((i) => i.enabled).length;
+    count.textContent = state.instruments.length
+      ? `${on} из ${state.instruments.length} под наблюдением` : '';
+  }
   if (!state.instruments.length) {
     box.innerHTML = '<p class="field-desc">Активов нет.</p>';
     return;
   }
   box.innerHTML = state.instruments.map((ins) => {
     const on = !!ins.enabled;
-    return `<div class="asset-switch">` +
-      `<div><div class="asset-sym">${esc(displayPair(ins.symbol))}</div>` +
+    return `<div class="asset-switch${on ? '' : ' is-off'}">` +
+      `<span class="state-dot ${on ? 'dot-positive' : 'dot-muted'}" aria-hidden="true"></span>` +
+      `<div class="asset-info"><div class="asset-sym">${esc(displayPair(ins.symbol))}</div>` +
       `<div class="asset-sub">${esc(ins.venue)} · ${esc(ins.market_type || 'spot')}` +
-      `${on ? '' : ' · выключен'}</div></div>` +
-      `<button type="button" class="btn small${on ? '' : ' primary'}" data-active-id="${ins.id}" data-next="${on ? '0' : '1'}">` +
-      `${on ? 'Снять с наблюдения' : 'Наблюдать'}</button></div>`;
+      `${on ? '' : ' · снят с наблюдения'}</div></div>` +
+      `<label class="switch"><input type="checkbox" data-active-id="${ins.id}" ` +
+      `${on ? 'checked' : ''}><span class="switch-track" aria-hidden="true"></span></label></div>`;
   }).join('');
-  box.querySelectorAll('[data-active-id]').forEach((btn) => {
-    btn.onclick = () => setInstrumentActive(
-      Number(btn.dataset.activeId), btn.dataset.next === '1',
-    );
+  box.querySelectorAll('[data-active-id]').forEach((inp) => {
+    inp.addEventListener('change', () =>
+      setInstrumentActive(Number(inp.dataset.activeId), inp.checked));
   });
 }
 
 async function setInstrumentActive(id, active) {
   const ins = state.instruments.find((i) => i.id === id);
   if (!ins || !!ins.enabled === !!active) return;
-  if (!active) {
-    const name = displayPair(ins.symbol);
-    const ok = window.confirm(
-      `Снять ${name} с наблюдения? История и уже рассчитанные объекты сохранятся. Новые свечи, котировки и расчёт остановятся.`,
-    );
-    if (!ok) return;
-  }
   let res;
   try {
     res = await api(`/api/instruments/${id}/active`, {
       method: 'POST', body: JSON.stringify({ active: !!active }),
     });
   } catch (e) {
-    console.warn('asset active:', e);
+    LFUI.error(e,'Не удалось изменить наблюдение',() => setInstrumentActive(id,active));
+    renderSettingsAssets(); // не получилось — свитч назад
     return;
   }
   ins.enabled = !!(res && res.enabled);
   ins.ltf_analyze = !!(res && res.ltf_analyze);
-  if (!ins.enabled && state.instrumentId === id) {
-    const next = state.instruments.find((i) => i.enabled);
-    state.instrumentId = next ? next.id : null;
-  }
+  // Keep the selected chart and its history when observation is switched off.
   fillInstrumentSelect();
   renderAssetActiveButton();
   renderSettingsAssets();
@@ -2446,31 +2770,20 @@ async function openSettings() {
   if (!notify || !rules) return;
   notify.innerHTML = '';
   rules.innerHTML = '';
+  settingsSchema = data.schema || { ranges: {}, enums: {} };
   const uncal = new Set(data.uncalibrated || []);
   const deprecated = new Set(data.deprecated || []);
-  const groupOf = data.groups || {};
-  const entries = Object.entries(data.detector);
-  settingsOriginal = data.detector || {};
-  const inGroup = (group) => entries.filter(
-    ([k]) => !deprecated.has(k) && (groupOf[k] || 'analysis') === group);
-  appendSettingsFields(notify, inGroup('delivery'), uncal);
-  appendSettingsFields(rules, inGroup('analysis'), uncal);
-  const experimental = inGroup('experimental');
-  if (experimental.length) {
-    const det = document.createElement('details');
-    det.className = 'settings-exp';
-    det.innerHTML =
-      `<summary class="settings-group" data-group="experimental">${SETTINGS_GROUP_TITLES.experimental}</summary>` +
-      '<div class="field-desc settings-exp-note">Значения не калиброваны и ' +
-      'могут влиять на расчёты: найденные зоны, экстремумы и допуски.</div>';
-    appendSettingsFields(det, experimental, uncal);
-    rules.appendChild(det);
-  }
-  const depEntries = entries.filter(([k]) => deprecated.has(k));
+  const detector = data.detector || {};
+  settingsOriginal = detector;
+  settingsConfigVersion = data.config_version ?? 0;
+  const valueOf = (k) => (k in detector ? [k, detector[k]] : null);
+  appendSettingsFields(notify, NOTIFY_ORDER.map(valueOf).filter(Boolean), uncal);
+  renderRulesPane(rules, detector, uncal, deprecated);
+  const depEntries = Object.keys(detector).filter((k) => deprecated.has(k));
   if (depEntries.length) {
     const note = document.createElement('div');
     note.className = 'settings-deprecated';
-    note.innerHTML = depEntries.map(([k]) =>
+    note.innerHTML = depEntries.map((k) =>
       `<div>Поле <code>${esc(k)}</code> устарело и не редактируется.</div>`).join('');
     rules.appendChild(note);
   }
@@ -2483,13 +2796,14 @@ async function openSettings() {
   }
   const ver = $('settings-rule-ver');
   if (ver) {
-    const v = data.detector && data.detector.rule_version;
+    const v = detector.rule_version;
     ver.textContent = v != null && v !== '' ? `Версия ${v}` : '';
   }
   const recalc = $('settings-recalc');
   if (recalc) recalc.textContent = recalcNote(data.recalc);
   syncThemeChoices();
   $('settings-status').textContent = '';
+  updateSettingsDirty();
 }
 
 // POST /api/settings напрямую через fetch: общий api() сворачивает тело 422
@@ -2501,7 +2815,7 @@ async function postSettings(payload) {
       'Content-Type': 'application/json',
       'Authorization': 'Bearer ' + HTF.getToken(),
     },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({...payload, expected_config_version: settingsConfigVersion}),
   });
   let resp = await doFetch();
   if (resp.status === 401) {
@@ -2514,8 +2828,9 @@ async function postSettings(payload) {
 
 // L04: сервер валидирует патч строго — отправляем только изменённые поля
 let settingsOriginal = {};
+let settingsConfigVersion = 0;
 
-async function saveSettings() {
+function collectSettingsDelta() {
   const payload = {};
   document.querySelectorAll('#view-settings [data-key]').forEach((inp) => {
     const key = inp.dataset.key;
@@ -2527,6 +2842,70 @@ async function saveSettings() {
       payload[key] = inp.value !== '' && !isNaN(num) ? num : inp.value;
     }
   });
+  return payload;
+}
+
+function settingsDirty() {
+  return Object.keys(collectSettingsDelta()).length > 0;
+}
+
+function updateSettingsDirty() {
+  updatePctHints();
+  const dirty = settingsDirty();
+  const save = $('settings-save');
+  const reset = $('settings-cancel');
+  if (save) {
+    save.disabled = !dirty;
+    save.title = dirty ? '' : 'Есть изменения для сохранения';
+  }
+  if (reset) reset.disabled = !dirty;
+}
+
+function updatePctHints() {
+  document.querySelectorAll('#view-settings [data-pct-for]').forEach((el) => {
+    const inp = document.querySelector(
+      `#view-settings [data-key="${el.dataset.pctFor}"]`);
+    const v = inp ? Number(String(inp.value).replace(',', '.')) : NaN;
+    el.textContent = Number.isFinite(v) && inp
+      ? `= ${Math.round(v * 10000) / 100} %` : '';
+  });
+}
+
+// Чипсы CSV: скрытый input data-key хранит join(','); порядок — как в списке
+// опций, не в порядке щелчков.
+function syncCsvHidden(key) {
+  const hidden = document.querySelector(
+    `#view-settings input[type="hidden"][data-key="${key}"]`);
+  if (!hidden) return;
+  const checked = new Set(
+    [...document.querySelectorAll(`#view-settings [data-csv-for="${key}"]`)]
+      .filter((c) => c.checked).map((c) => String(c.value).toLowerCase()));
+  hidden.value = (csvOptionsFor(key) || [])
+    .filter(([v]) => checked.has(String(v).toLowerCase()))
+    .map(([v]) => v).join(',');
+  document.querySelectorAll(`#view-settings .chip-row[data-csv="${key}"] .chip`)
+    .forEach((chip) => {
+      const cb = chip.querySelector('input');
+      chip.classList.toggle('on', !!(cb && cb.checked));
+    });
+}
+
+function initSettingsDirty() {
+  const view = document.querySelector('#view-settings');
+  if (!view || view.dataset.dirtyBound) return;
+  view.dataset.dirtyBound = '1';
+  const onChange = (event) => {
+    const target = event.target;
+    const csv = target && target.closest && target.closest('[data-csv-for]');
+    if (csv) syncCsvHidden(csv.dataset.csvFor);
+    updateSettingsDirty();
+  };
+  view.addEventListener('input', onChange);
+  view.addEventListener('change', onChange);
+}
+
+async function saveSettings() {
+  const payload = collectSettingsDelta();
   const status = $('settings-status');
   const form = $('view-settings');
   form.querySelectorAll('.field-error').forEach((e) => e.remove());
@@ -2567,7 +2946,28 @@ async function saveSettings() {
       (typeof detail === 'string' ? detail : 'ошибка сервера');
     return;
   }
-  const res = await resp.json();
+  let res = await resp.json();
+  if (resp.status === 202) {
+    status.textContent = 'Настройки проверены. Идёт пересчёт…';
+    $('settings-save').disabled = true;
+    try {
+      let job = res.recalc;
+      while (['queued', 'running'].includes(job.status)) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        job = await HTF.api(res.status_url);
+        status.textContent = recalcNote(job);
+      }
+      if (job.status !== 'ready') throw new Error(job.error || 'Пересчёт не завершён');
+      const updated = await HTF.api('/api/settings');
+      res = {detector: updated.detector, config_version: updated.config_version, applied: Object.keys(payload)};
+    } catch (err) {
+      status.textContent = 'Настройки не применены: ' + err.message;
+      updateSettingsDirty(); return;
+    }
+  }
+  settingsConfigVersion = res.config_version ?? settingsConfigVersion;
+  settingsOriginal = res.detector || { ...settingsOriginal, ...payload };
+  updateSettingsDirty();
   status.textContent = `Сохранено: ${res.applied.length} параметров.`;
 }
 
@@ -2588,7 +2988,7 @@ const VIEW_ALIASES = {
   analysis: 'desk',
 };
 
-function showView(name) {
+function showView(name, navigation = 'push') {
   name = VIEW_ALIASES[name] || name;
   if (!VIEW_IDS[name]) name = 'now';
   document.querySelectorAll('.view').forEach((el) => el.classList.toggle('active', el.id === VIEW_IDS[name]));
@@ -2609,7 +3009,11 @@ function showView(name) {
   }
   if (name === 'review') enterReviewMode().catch((e) => console.warn('review mode:', e));
   if (name === 'journal' && window.LFJournal) window.LFJournal.show();
-  if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
+  if (location.hash !== '#' + name) history[navigation === 'replace' ? 'replaceState' : 'pushState'](null, '', '#' + name);
+  document.querySelectorAll('.app-tab[data-view]').forEach(el => {
+    if (el.dataset.view === name) el.setAttribute('aria-current','page'); else el.removeAttribute('aria-current');
+  });
+  document.dispatchEvent(new CustomEvent('lf-view',{detail:{name}}));
 }
 
 function setupViews() {
@@ -2620,21 +3024,102 @@ function setupViews() {
       showView(el.dataset.view);
     });
   });
-  window.addEventListener('hashchange', () => showView((location.hash || '#now').slice(1)));
-  showView((location.hash || '#now').slice(1));
+  window.addEventListener('hashchange', () => showView((location.hash || '#now').slice(1), 'replace'));
+  window.addEventListener('popstate', () => {
+    const url = new URL(location.href), id = Number(url.searchParams.get('instrument'));
+    showView((location.hash || '#now').slice(1), 'replace');
+    if (id && id !== state.instrumentId) LFDesk.openInstrument(id,{history:false,mode:url.searchParams.get('mode') === 'h1' ? 'h1' : 'context'});
+  });
+  showView((location.hash || '#now').slice(1), 'replace');
 }
 
 // ---------------------------------------------------------------------------
 // WebSocket: обновления без перезагрузки (§11 п.6)
 // ---------------------------------------------------------------------------
 
+// Доменные версии (§13/§14, этап 6b): рефетчим только домен, чья версия
+// выросла; тик котировки сеть не трогает (AC16). Снимки со with_version=true
+// записывают версии через adopt(), WS-сообщения и статус — через bump/diff.
+const domainSync = new HTF.DomainSync();
+domainSync
+  .on('zones', () => loadZones()
+    .then(() => {
+      if (state.selectedZoneId) {
+        loadZoneDetail(state.selectedZoneId, false).catch((e) => console.warn('zone detail:', e));
+      }
+    })
+    .then(() => Promise.all([loadCandidates(), loadEvents()])))
+  .on('candles', (key) => {
+    const parts = String(key || '').split(':');
+    const iid = Number(parts[1]);
+    const tf = parts[2];
+    if (iid && iid !== state.instrumentId) return null; // неотображаемый канал
+    if (tf && tf !== state.timeframe) return null;
+    const jobs = [loadCandles()];
+    // на структуре H1 закрытие бара перечитывает и слои (прежний reloadAll)
+    if (state.chartMode === 'h1' && window.H1Layers) jobs.push(loadH1Markers());
+    return Promise.all(jobs);
+  })
+  .on('scenario', () => {
+    // карточка сценария — только когда рабочее место на экране; вход во
+    // вкладку и так делает scheduleDeskRefresh()
+    if (isDeskActive()) scheduleDeskRefresh();
+  })
+  .on('config', () => loadInstruments());
+
 // Дополнительные слушатели WS-сообщений: экран «Сейчас» (now.js) и другие
 // модули подписываются, не меняя основной handleWsMessage
 const wsExtraHandlers = [];
 function registerWsHandler(fn) { wsExtraHandlers.push(fn); }
 
+// Закрытый бар (§14): при непрерывности версии домена свечей (ровно +1) и
+// наличии OHLC в сообщении — точечное обновление серии; при разрыве, старом
+// конверте без нагрузки или чужом канале — обычный дебаунс-рефетч домена.
+function handleWsCandle(data) {
+  const iid = data.instrument_id;
+  const tf = data.timeframe;
+  const key = (iid != null && tf) ? `candles:${iid}:${tf}` : null;
+  const version = data.domain_versions && data.domain_versions.candles;
+  const current = iid != null && iid === state.instrumentId && tf === state.timeframe;
+  const known = key ? domainSync.knownVersion(key) : null;
+  const bar = current && data.open_time != null ? {
+    time: Math.floor(Number(data.open_time) / 1000),
+    open: data.open, high: data.high, low: data.low, close: data.close,
+  } : null;
+  if (bar && version != null && known != null && version === known + 1
+      && state.candleSeries && state.candles.length) {
+    const last = state.candles[state.candles.length - 1];
+    // закрывшийся бар замещает формирующий того же периода или встаёт
+    // строго следом; разрыв баров (синк догнал несколько) — рефетч домена
+    const period = TF_SECONDS[tf] || 0;
+    const contiguous = last && (bar.time === last.time
+      || (period > 0 && bar.time === last.time + period));
+    if (contiguous) {
+      domainSync.adopt(key, version);
+      state.candleSeries.update(bar);
+      if (bar.time === last.time) state.candles[state.candles.length - 1] = bar;
+      else state.candles.push(bar);
+      drawZones();
+      if (state.chartMode === 'h1' && window.H1Layers) {
+        loadH1Markers().catch((e) => console.warn('h1 markers:', e));
+      }
+      return;
+    }
+  }
+  if (key) domainSync.bump(key, version);
+}
+
 function handleWsMessage(data) {
   if (window.LFDataSync) LFDataSync.onWs(data);
+  // §14/AC16: версии доменов — триггер точечных рефетчей; в скрытой вкладке
+  // учёт и рефетчи продолжаются (серверные сигналы не останавливаем), а
+  // визуальная работа тиков пропускается — возврат делает один recovery (AC17)
+  if (data.type === 'candle') {
+    handleWsCandle(data);
+  } else {
+    domainSync.notifyWs(data);
+  }
+  if (document.hidden) return;
   if (data.type === 'price') {
     if (data.instrument_id === state.instrumentId && data.price) {
       state.lastPrice = data.price;
@@ -2645,13 +3130,9 @@ function handleWsMessage(data) {
         if (last && last.time === bar.time) state.candles[state.candles.length - 1] = bar;
         else if (!last || bar.time > last.time) state.candles.push(bar);
       }
+      // AC16: тик двигает цену, текущий бар и маркеры «зона—цена» — и всё;
+      // drawZones()/сценарий/снимки пересчитываются по смене версий доменов
       updateLastPrice();
-      drawZones();
-    }
-  } else if (data.type === 'candle') {
-    // новая закрытая свеча на источнике — догружаем график и зоны
-    if (data.instrument_id === state.instrumentId) {
-      loadCandles().then(() => loadZones());
     }
   } else if (data.type === 'event') {
     const foreign = data.instrument_id != null
@@ -2659,14 +3140,6 @@ function handleWsMessage(data) {
     if (data.event && data.event.kind !== 'approach' && !foreign && $('events-list')) {
       $('events-list').prepend(eventLi(data.event));
     }
-    loadZones().then(() => {
-      if (state.selectedZoneId) loadZoneDetail(state.selectedZoneId, false);
-    });
-  } else if (data.type === 'zone') {
-    loadZones().then(() => {
-      if (state.selectedZoneId) loadZoneDetail(state.selectedZoneId, false);
-    });
-    loadCandidates();
   }
   // Дополнительные слушатели (экран «Сейчас» и др.): ошибка слушателя не
   // должна ломать основную обработку сообщения
@@ -2678,7 +3151,8 @@ function handleWsMessage(data) {
 function connectWs() {
   // соединение/переподключение/индикатор — в common.js (window.HTF)
   state.ws = HTF.connectWs(handleWsMessage, $('ws-indicator'), (isReconnect) => {
-    if (isReconnect && window.LFDataSync) return LFDataSync.snapshot({ force: true });
+    // AC17: после reconnect — одно объединённое восстановление по версиям
+    if (isReconnect && window.LFDataSync) return LFDataSync.recover();
   });
 }
 
@@ -2727,23 +3201,47 @@ function syncInstrumentContext() {
 // Тот же механизм выбора, что у селекта в workbar: localStorage htf:instrument
 // + ?instrument= (syncInstrumentContext), затем перезагрузка данных desk.
 window.LFDesk = {
-  openInstrument(id) {
+  async openInstrument(id, options = {}) {
     const numId = Number(id);
     if (numId && state.instruments.some((i) => i.id === numId)) {
+      if (options.history !== false) {
+        const url = new URL(location.href); url.searchParams.set('instrument',String(numId)); url.hash='desk';
+        if (options.mode === 'h1') url.searchParams.set('mode','h1');
+        else if (options.mode === 'context') url.searchParams.delete('mode');
+        if (options.at) url.searchParams.set('at',String(options.at)); else url.searchParams.delete('at');
+        if (options.eventId) url.searchParams.set('event',String(options.eventId)); else url.searchParams.delete('event');
+        if (options.zoneId) url.searchParams.set('zone',String(options.zoneId)); else url.searchParams.delete('zone');
+        history.pushState(null,'',url.pathname+url.search+url.hash);
+      }
       state.instrumentId = numId;
+      if (options.mode) setChartMode(options.mode);
       const sel = $('instrument-select');
       if (sel) sel.value = String(numId);
       syncInstrumentContext();
       showView('desk');
       showInspector(false);
       clearZoneSelection();
-      reloadAll().catch((e) => console.warn('desk reload:', e));
-      loadDeskExtras().catch((e) => console.warn('desk extras:', e));
+      try {
+        await Promise.all([reloadAll(),loadDeskExtras()]);
+        if (state.instrumentId !== numId) return;
+        if (options.zoneId) await loadZoneDetail(Number(options.zoneId),false);
+        if (options.at) focusAnalysisTime(Number(options.at));
+      } catch (err) { LFUI.error(err,'Анализ не загрузился',() => LFDesk.openInstrument(numId,{...options,history:false})); }
     } else {
       showView('desk');
     }
   },
 };
+
+function focusAnalysisTime(at) {
+  const index = state.candles.findIndex((c,i) => c.time * 1000 <= at && (!state.candles[i+1] || state.candles[i+1].time*1000 > at));
+  if (index < 0 || at > (state.candles.at(-1)?.time || 0)*1000 + (TF_SECONDS[state.timeframe] || 3600)*1000) {
+    LFUI.openDrawer('Событие за пределами истории','<p>Свеча события не входит в загруженную историю. Выбран правильный актив; увеличьте период истории.</p>'); return;
+  }
+  state.chart.timeScale().setVisibleLogicalRange({from:Math.max(0,index-20),to:index+12});
+  const el = $('h1-event-card');
+  if (el) { el.classList.remove('hidden'); el.textContent = 'Событие: ' + HTF.fmtTime(at); }
+}
 
 // ---------------------------------------------------------------------------
 // Рабочее место (LevelFrame, этап 4 ребрендинга; макет §6.B плана): строка
@@ -2825,6 +3323,7 @@ function deskDirBadge(d) {
 // Короткая подпись состояния в списке активов (макет §6.B):
 // Сценарий / Конфликт / В зоне / Проверка / Ожидание
 function deskAssetState(r) {
+  if (r.scenario_summary) return {label:r.scenario_summary.label,dot:'dot-muted'};
   if (r.asset && r.asset.governs && r.market_stage) {
     const code = r.asset.asset_state && r.asset.asset_state.code;
     const dot = code === 'data_incomplete' || code === 'state_inconsistent' ? 'dot-warning' : 'dot-muted';
@@ -2979,7 +3478,7 @@ function renderDeskAssets() {
       `<span class="desk-asset-price">${price != null ? esc(fmtPrice(price)) : '—'}</span>` +
       `<span class="desk-asset-state"><span class="state-dot ${st8.dot}"></span>${esc(st8.label)}</span>` +
       `</button>` +
-      `<button type="button" class="btn small desk-asset-off" data-off="${ins.id}">Выкл</button>` +
+      `<button type="button" class="btn small desk-asset-off" data-off="${ins.id}" aria-label="Отключить наблюдение ${esc(ins.symbol)}" title="Отключить наблюдение">−</button>` +
       `</div>`;
   }).join('');
   el.querySelectorAll('.desk-asset').forEach((btn) => {
@@ -3052,28 +3551,29 @@ function renderDeskScenario() {
   const ins = state.instruments.find((i) => i.id === state.instrumentId) || v.instrument || {};
   const row = deskData.assets.find((r) => r.instrument.id === state.instrumentId);
   const tf = deskSelectedTf(v);
-  const watching = !!(ins && ins.ltf_analyze);
+  const watching = !!(ins && ins.enabled);
   const ds = v.data_state || {};
   const pres = v.presentation;
   const live = state.lastPrice;
   const quote = pres && pres.location ? pres.location.quote : null;
   const suppress = live != null && quote != null && Number(live) !== Number(quote);
   if (pres && window.LFCopy) {
-    el.innerHTML = LFCopy.card(pres, {
+    el.innerHTML = LFUI.scenarioHtml(v.scenario_summary) + LFCopy.card(pres, {
+      hideHeadline: !!v.scenario_summary,
       suppressLocation: suppress,
-      visualHtml: window.LFCopy.visual(pres, {
-        price: v.price != null ? v.price : (state.lastPrice != null ? state.lastPrice : null),
-        entries: v.eligible_entries,
-        cancel: v.cancel_condition && v.cancel_condition.level != null ? v.cancel_condition.level : null,
-      }),
+      visualHtml: '',
+      hideDetails: true,
+      simpleTradeTitle: true,
     }) +
-      `<button type="button" id="desk-watch-btn" class="btn ${watching ? 'primary' : ''} desk-watch">${watching ? '✓ Наблюдение включено' : 'Включить наблюдение'}</button>` +
+      `<button type="button" id="desk-watch-btn" class="btn desk-watch ${watching ? 'is-on' : 'is-off'}" aria-pressed="${watching}">${watching ? '✓ Наблюдение включено' : 'Наблюдение выключено'}</button>` +
       `<details class="desk-basis"><summary>Основания и качество данных</summary><dl>` +
       `<dt>Показан контекст</dt><dd>${esc(DESK_BASIS_RU[v.selected_context_basis] || v.selected_context_basis || '—')}</dd>` +
       `<dt>Качество данных</dt><dd>${esc(ds.state === 'ok' ? 'Данные актуальны' : (DESK_DATA_REASON_RU[ds.reason] || ds.reason || ds.state || '—'))}</dd>` +
       `<dt>Версия состояния</dt><dd>${v.state_version != null ? v.state_version : '—'}</dd>` +
       `</dl></details>`;
     $('desk-watch-btn').onclick = toggleDeskWatch;
+    el.insertAdjacentHTML('beforeend','<button type="button" class="btn small" id="desk-data-details">Качество и время данных</button>');
+    $('desk-data-details').onclick = () => LFUI.openDrawer('Данные актива',LFUI.channelsHtml(ds));
     return;
   }
   const cancel = deskCancelText(v);
@@ -3095,7 +3595,7 @@ function renderDeskScenario() {
       <dd class="qa-a">${esc(deskWaitText(v))}</dd>
       ${cancel ? `<dt class="qa-q">Условие отмены</dt><dd class="qa-a">${esc(cancel)}</dd>` : ''}
     </dl>
-    <button type="button" id="desk-watch-btn" class="btn ${watching ? 'primary' : ''} desk-watch">${watching ? '✓ Наблюдение включено' : 'Включить наблюдение'}</button>
+    <button type="button" id="desk-watch-btn" class="btn desk-watch ${watching ? 'is-on' : 'is-off'}" aria-pressed="${watching}">${watching ? '✓ Наблюдение включено' : 'Наблюдение выключено'}</button>
     <details class="desk-basis">
       <summary>Основания и качество данных</summary>
       <dl>
@@ -3115,15 +3615,7 @@ async function toggleDeskWatch() {
   if (!ins) return;
   const btn = $('desk-watch-btn');
   if (btn) btn.disabled = true;
-  try {
-    const res = await api(`/api/instruments/${ins.id}/ltf-analyze`, {
-      method: 'POST', body: JSON.stringify({ analyze: !ins.ltf_analyze }),
-    });
-    ins.ltf_analyze = (res && typeof res.ltf_analyze === 'boolean')
-      ? res.ltf_analyze : !ins.ltf_analyze;
-  } catch (e) {
-    console.warn('ltf-analyze:', e);
-  }
+  await setInstrumentActive(ins.id,!ins.enabled);
   renderDeskScenario();
   scheduleDeskRefresh();
 }
@@ -3222,8 +3714,17 @@ async function loadDeskExtras() {
   if (assetsRes) {
     deskData.assets = assetsRes.instruments || [];
     deskData.assetsVersion = assetsVersion;
+    // §13 (этап 6b): версии доменов списка (zones + scenario/quote по активам)
+    if (assetsRes.versions) {
+      domainSync.adoptAll(HTF.DomainSync.statusEntries(assetsRes.versions));
+    }
   }
   deskData.current = cur;
+  if (cur && cur.versions) {
+    domainSync.adopt(`scenario:${id}`, cur.versions.scenario);
+    domainSync.adopt('zones', cur.versions.zones);
+    domainSync.adopt(`quote:${id}`, cur.versions.quote);
+  }
   if (state.chartMode === 'h1') {
     loadH1Markers().catch((e) => console.warn('h1 markers:', e));
   }
@@ -3243,26 +3744,23 @@ document.addEventListener('lf-reconciled', () => {
   if (state.instrumentId) loadZones().catch((e) => console.warn('zones reconcile:', e));
 });
 
+// Точечное обновление цены в строке списка активов без innerHTML-пересборки
+function updateDeskAssetPrice(iid, price) {
+  if (iid == null || price == null) return;
+  const cell = document.querySelector(`.desk-asset[data-iid="${iid}"] .desk-asset-price`);
+  if (cell) cell.textContent = fmtPrice(price);
+}
+
 function deskOnWs(data) {
   if (!isDeskActive()) return;
-  if (data.instrument_id != null && data.instrument_id !== state.instrumentId
-      && data.type !== 'price') {
-    return;
-  }
   if (data.type === 'price' && data.instrument_id === state.instrumentId) {
+    // AC16: тик обновляет только цену и возраст котировки в шапке; карточка
+    // сценария и снимок /current перечитываются по смене версии scenario
     renderDeskHead();
-    renderDeskScenario();
-    scheduleDeskRefresh();
   } else if (data.type === 'price') {
-    renderDeskAssets();
-  } else if (data.type === 'ltf' || data.type === 'zone' || data.type === 'event'
-      || data.type === 'candle') {
-    scheduleDeskRefresh();
-    if (data.type === 'candle' && state.chartMode === 'h1'
-        && data.instrument_id === state.instrumentId) {
-      reloadAll().catch((e) => console.warn('h1 reload:', e));
-    }
+    updateDeskAssetPrice(data.instrument_id, data.price);
   }
+  // ltf/zone/event/candle: рефетчи идут через доменные версии в handleWsMessage
 }
 
 function fillInstrumentSelect() {
@@ -3462,7 +3960,7 @@ function initSettingsSections() {
   const nav = document.getElementById('settings-sections');
   if (!nav || nav.dataset.bound) return;
   nav.dataset.bound = '1';
-  const known = ['assets', 'notify', 'look', 'rules'];
+  const known = ['assets', 'notify', 'look', 'rules', 'sources'];
   const show = (id, write) => {
     const pane = known.includes(id) ? id : 'assets';
     document.querySelectorAll('[data-settings-pane]').forEach((el) => {
@@ -3473,9 +3971,10 @@ function initSettingsSections() {
       btn.classList.toggle('active', on);
       btn.setAttribute('aria-pressed', on ? 'true' : 'false');
     });
-    const target = document.querySelector(`[data-settings-pane="${pane}"]`);
-    if (write && target) target.scrollIntoView({ block: 'start' });
     if (!write) return;
+    // новая вкладка начинается сверху: контейнер панелей — свой скролл-бокс
+    const wrap = document.querySelector('.settings-panes');
+    if (wrap) wrap.scrollTop = 0;
     const url = new URL(location.href);
     url.searchParams.set('section', pane);
     history.replaceState(null, '', url.pathname + url.search + url.hash);
@@ -3487,20 +3986,58 @@ function initSettingsSections() {
   show(new URLSearchParams(location.search).get('section') || 'assets', false);
 }
 
+function initAnalysisPanels() {
+  const view = $('view-overview'), layout = view.querySelector('.overview-layout');
+  view.dataset.mobilePane = 'chart';
+  const savedAssets = localStorage.getItem('lf:analysis:assets');
+  if (savedAssets === 'closed') view.querySelector('.desk-main').classList.add('assets-hidden');
+  const sideVisible = localStorage.getItem('lf:analysis:side') !== 'closed';
+  layout.classList.toggle('side-hidden',!sideVisible);
+  $('desk-side-toggle').setAttribute('aria-pressed',String(sideVisible));
+  $('desk-side-toggle').onclick = () => {
+    const visible = !layout.classList.toggle('side-hidden');
+    $('desk-side-toggle').setAttribute('aria-pressed',String(visible));
+    localStorage.setItem('lf:analysis:side',visible ? 'open' : 'closed');
+    if (window.innerWidth < 1024) setPane('scenario');
+  };
+  $('desk-expand').onclick = () => {
+    const expanded = view.classList.toggle('lf-chart-expanded');
+    $('desk-expand').setAttribute('aria-pressed',String(expanded));
+    $('desk-expand').textContent = expanded ? 'Вернуть панели' : 'Развернуть';
+  };
+  function setPane(pane) {
+    view.dataset.mobilePane = pane;
+    view.querySelectorAll('[data-analysis-pane]').forEach(button => button.setAttribute('aria-pressed',String(button.dataset.analysisPane === pane)));
+    if (pane === 'scenario') layout.classList.remove('side-hidden');
+    requestAnimationFrame(drawZones);
+  }
+  view.querySelectorAll('[data-analysis-pane]').forEach(button => button.onclick = () => setPane(button.dataset.analysisPane));
+  const bottom = document.createElement('div'); bottom.className = 'lf-analysis-bottom-tabs';
+  bottom.innerHTML = '<button type="button" class="btn small" data-bottom="zones" aria-pressed="true">Зоны сценария</button><button type="button" class="btn small" data-bottom="events" aria-pressed="false">События</button><button type="button" class="btn small" id="analysis-journal">Все события актива</button>';
+  layout.after(bottom); view.dataset.bottom = localStorage.getItem('lf:analysis:bottom') || 'zones';
+  const paintBottom = () => bottom.querySelectorAll('[data-bottom]').forEach(button => button.setAttribute('aria-pressed',String(button.dataset.bottom === view.dataset.bottom)));
+  paintBottom();
+  bottom.querySelectorAll('[data-bottom]').forEach(button => button.onclick = () => { view.dataset.bottom = button.dataset.bottom; localStorage.setItem('lf:analysis:bottom',button.dataset.bottom); paintBottom(); });
+  $('analysis-journal').onclick = () => LFJournal.open({kind:'all',symbol:state.instruments.find(i => i.id === state.instrumentId)?.symbol || '',scope:''});
+}
+
 async function main() {
   await ensureToken();
   setupViews();
   initSettingsSections();
+  initSettingsDirty();
   const assetsToggle = $('desk-assets-toggle');
   if (assetsToggle) {
     assetsToggle.onclick = () => {
       const desk = document.querySelector('.desk-main');
       if (!desk) return;
-      const open = desk.classList.toggle('assets-open');
+      const open = window.innerWidth >= 1440 ? !desk.classList.toggle('assets-hidden') : desk.classList.toggle('assets-open');
       assetsToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      localStorage.setItem('lf:analysis:assets',open ? 'open' : 'closed');
     };
   }
   initChart();
+  initAnalysisPanels();
 
   const hideInspector = () => {
     showInspector(false);
@@ -3620,7 +4157,19 @@ async function main() {
   $('draw-cancel').onclick = exitDrawMode;
   $('btn-settings').onclick = () => showView('settings');
   $('settings-save').onclick = saveSettings;
-  $('settings-cancel').onclick = () => showView('now');
+  $('settings-cancel').onclick = async () => {
+    // «Сбросить»: откат полей к загруженным значениям, без ухода со страницы
+    await openSettings();
+    const status = $('settings-status');
+    if (status) status.textContent = 'Правки отменены.';
+  };
+  if ($('settings-close')) {
+    $('settings-close').onclick = () => {
+      if (settingsDirty() &&
+          !window.confirm('Есть неприменённые правки. Закрыть настройки без сохранения?')) return;
+      showView('now');
+    };
+  }
   $('mz-save').onclick = saveManualZone;
   $('mz-cancel').onclick = () => HTF.closeModal($('manual-modal'));
   $('btn-new-zone').onclick = () => HTF.openModal($('zone-create-choice'));
@@ -3655,12 +4204,25 @@ async function main() {
     if (e.key === '1') { e.preventDefault(); submitReviewDecision('correct'); }
     else if (e.key === '2') { e.preventDefault(); submitReviewDecision('fix_boundaries'); }
     else if (e.key === '3') { e.preventDefault(); submitReviewDecision('wrong_type'); }
-    else if (e.key === 'ArrowRight' || e.key === 'Enter') { e.preventDefault(); nextReviewCandidate(); }
+    else if ((e.key === 'ArrowRight' || e.key === 'Enter') && reviewState.doneMap.has(reviewState.currentId)) { e.preventDefault(); nextReviewCandidate(); }
   });
 
   initAppearance();
   LFDataSync.init({
     selected: () => state.instrumentId,
+    // §14/AC17: сверка доменных версий статуса → точечные рефетчи изменённых;
+    // immediate (terminal job / recovery) дожидается и отложенных рефетчей
+    syncStale: async (versions, opts) => {
+      await domainSync.syncStatus(versions, opts);
+      if (opts && opts.immediate) await domainSync.flush();
+    },
+    onRecover: () => {
+      // возврат на вкладку / reconnect: дешёвая перерисовка после recovery
+      // (данные уже свежие — рефетчи шли по версиям и в скрытой вкладке)
+      updateLastPrice();
+      drawZones();
+      if (isDeskActive()) renderDeskHead();
+    },
     reload: async () => {
       const saved = state.chart && state.candles.length ? HTF.captureChartRange(state.chart, state.candles) : null;
       const keepUserRange = state.chartMode !== 'h1' || !!state.h1UserPanned;
@@ -3684,19 +4246,29 @@ async function main() {
   }
   await loadLabels();
   await reloadAll();
+  const initialAt = Number(new URLSearchParams(location.search).get('at'));
+  if (initialAt) focusAnalysisTime(initialAt);
+  const initialZone = Number(new URLSearchParams(location.search).get('zone'));
+  if (initialZone) await loadZoneDetail(initialZone,false);
   connectWs();
   registerWsHandler(deskOnWs);
   loadDeskExtras().catch((e) => console.warn('desk extras:', e));
-  // возраст котировки и резервный опрос, если WebSocket потерян
+  // Возраст котировки — каждые 15 с; снимок рабочего места — медленным
+  // опросом (свежесть data_state не версионируется), он же резервный канал
+  // при потере WebSocket
   setInterval(() => {
-    if (isDeskActive()) renderDeskQuoteAge();
-    const down = !HTF.isWsConnected();
-    if (!down) return;
-    if (isDeskActive()) loadDeskExtras().catch(() => {});
+    if (!isDeskActive()) return;
+    renderDeskQuoteAge();
+    scheduleDeskRefresh();
   }, 15000);
 }
 
 main().catch((err) => {
   document.body.insertAdjacentHTML('beforeend',
     `<div style="position:fixed;bottom:10px;left:10px;background:#ef5350;color:#fff;padding:8px 14px;border-radius:6px;z-index:200">Ошибка: ${esc(err.message)}</div>`);
+});
+
+$('settings-logout')?.addEventListener('click', async () => {
+  await HTF.api('/api/auth/session', {method:'DELETE'});
+  location.reload();
 });

@@ -114,6 +114,22 @@ async def test_binance_klines_parsing_and_unclosed_cutoff():
     await adapter.aclose()
 
 
+async def test_binance_klines_drop_inconsistent_ohlc():
+    """Противоречивая свеча источника не попадает в набор (спека §7)."""
+    adapter = BinanceSpotAdapter(BINANCE)
+    now = now_ms()
+    hour_open = (now // H1_MS) * H1_MS
+    closed = hour_open - H1_MS
+    good = _binance_kline(closed, 100.0)
+    bad = _binance_kline(closed - H1_MS, 100.0)
+    bad[3] = "150"  # low выше open/close/high
+    with respx.mock:
+        respx.get(f"{BINANCE}/api/v3/klines").respond(200, json=[bad, good])
+        candles = await adapter.klines("BTCUSDT", "H1", closed - H1_MS, hour_open)
+    assert [c.open_time for c in candles] == [closed]
+    await adapter.aclose()
+
+
 async def test_binance_klines_pagination_two_pages():
     """Страница ровно из 1000 свечей → запрос следующей страницы по startTime."""
     adapter = BinanceSpotAdapter(BINANCE)

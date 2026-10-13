@@ -107,7 +107,11 @@ def ltf_app_url(settings, instrument_id: int) -> str | None:
     base = public_base_url(settings)
     if base is None:
         return None
-    return f"{base}/ltf.html?token={settings.auth_token}&instrument={instrument_id}"
+    from urllib.parse import quote
+
+    # Свежий браузер по кнопке Telegram не имеет сессии: токен остаётся в ссылке.
+    token = quote(settings.auth_token or "", safe="")
+    return f"{base}/ltf.html?token={token}&instrument={instrument_id}"
 
 
 def asset_inline(db: Database, settings, instrument_id: int) -> InlineKeyboardMarkup:

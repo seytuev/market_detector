@@ -303,7 +303,7 @@ def test_candle_revision_insert_dedup_and_list(db, instrument_id):
 def test_candle_revision_column_defaults(db, instrument_id):
     db.insert_candles([Candle(
         instrument_id=instrument_id, timeframe="H1", open_time=T,
-        close_time=T + H - 1, open=1, high=2, low=0, close=1, closed=True,
+        close_time=T + H - 1, open=1, high=2, low=0.5, close=1, closed=True,
         source="test",
     )])
     row = db.conn.execute(
@@ -352,6 +352,9 @@ def test_quote_extended_fields_roundtrip(db, instrument_id):
         "price": 100.5, "ts": T, "price_kind": "trade",
         "event_at": T - 500, "received_at": T + 100,
         "age_ms": None, "detection_lag_ms": None,
+        # этап 2 (§8): источник и его последовательность для tie-break
+        # равных по времени сделок; старые записи — None
+        "source": None, "source_seq": None,
     }
     # старый кортежный интерфейс не изменился
     assert db.get_quote(instrument_id) == (100.5, T)

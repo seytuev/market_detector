@@ -187,21 +187,32 @@ window.LFCopy = (() => {
     const visual = typeof opts.visualHtml === 'function' ? opts.visualHtml() : (opts.visualHtml || '');
     const asset = p.asset;
     if (asset && asset.governs && asset.asset_state && asset.asset_state.title) {
-      const title = asset.asset_state.title;
+      let title = asset.asset_state.title;
+      const trade = asset.asset_state.direction;
+      const pd = asset.pd;
+      if (opts.simpleTradeTitle && /^(long|short)_/.test(asset.asset_state.code || '')
+          && pd && pd.lower != null && pd.upper != null && pd.eq != null) {
+        const lo = trade === 'long' ? pd.lower : pd.eq;
+        const hi = trade === 'long' ? pd.eq : pd.upper;
+        const integer = (value) => Math.trunc(Number(value)).toLocaleString('ru-RU');
+        title = `${trade.toUpperCase()} (${integer(lo)}–${integer(hi)})`;
+      }
       const dir = asset.asset_state.direction === 'long' ? 'dir-long'
         : asset.asset_state.direction === 'short' ? 'dir-short' : '';
       let html = '';
       if (p.instrument_line) {
         html += `<div class="now-card-head"><span>${esc(p.instrument_line)}</span></div>`;
       }
-      html += `<h3 class="asset-status ${dir}">${esc(title)}</h3>`;
+      if (!opts.hideHeadline) html += `<h3 class="asset-status ${dir}">${esc(title)}</h3>`;
       html += visual;
       html += rowsHtml(asset);
       // кнопка действия выше «Подробнее»; подвал (котировка) — самым последним
       if (opts.extraHtml) html += opts.extraHtml;
-      html += '<details class="asset-more"><summary>Подробнее</summary>';
-      html += assetDetails(asset);
-      html += '</details>';
+      if (!opts.hideDetails) {
+        html += '<details class="asset-more"><summary>Подробнее</summary>';
+        html += assetDetails(asset);
+        html += '</details>';
+      }
       if (opts.footHtml) html += opts.footHtml;
       return html;
     }
@@ -211,7 +222,7 @@ window.LFCopy = (() => {
     if (p.instrument_line) {
       html += `<div class="now-card-head"><span>${esc(p.instrument_line)}</span></div>`;
     }
-    html += `<h3>${esc(headline)}</h3>`;
+    if (!opts.hideHeadline) html += `<h3>${esc(headline)}</h3>`;
     if (detail && detail !== headline) {
       html += `<p class="now-card-lead">${esc(detail)}</p>`;
     }

@@ -57,6 +57,7 @@ async def test_monotonic_trade_then_info_price():
         assert detail["event_at"] is None
         assert detail["received_at"] == now + 2 * H
     finally:
+        await worker.market_queue.stop()
         db.close()
 
 
@@ -83,6 +84,7 @@ async def test_r47_stale_tick_keeps_forming_bar_and_zones():
         assert forming.high == 102.0 and forming.close == 102.0
         assert db.get_quote(ins.id) == (102.0, now)
     finally:
+        await worker.market_queue.stop()
         db.close()
 
 
@@ -111,6 +113,7 @@ async def test_age_and_detection_lag_stored():
         assert detail["age_ms"] >= 5_000
         assert detail["detection_lag_ms"] >= 1_000
     finally:
+        await worker.market_queue.stop()
         db.close()
 
 

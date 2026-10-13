@@ -107,6 +107,7 @@ async def test_quote_loop_updates_quote_independent_of_htf_cycle():
 
     assert db.get_quote(ins.id) == tuple(adapter.price)
     assert adapter.klines_calls == 0  # HTF-цикл не затрагивался
+    await worker.market_queue.stop()
 
 
 async def test_quote_updates_open_h1_and_skips_expired_bar():
@@ -151,6 +152,8 @@ async def test_quote_updates_open_h1_and_skips_expired_bar():
     assert stale is not None
     assert stale.close == 100
     assert stale.high == 101
+    await worker.market_queue.stop()
+    await worker2.market_queue.stop()
 
 
 async def test_poll_once_skips_quote_when_quote_loop_enabled():
@@ -180,11 +183,13 @@ async def test_poll_instrument_fetches_quote_when_quote_loop_disabled():
     await worker.poll_once()
 
     assert db.get_quote(ins.id) == tuple(adapter.price)
+    await worker.market_queue.stop()
 
 
 async def test_quote_loop_touch_event_not_duplicated():
     """Тик внутрь зоны регистрирует TOUCH один раз; повторные опросы той же
-    цены события не дублируют (дедупликация движка)."""
+    цены события не дублируют (дедупликация движка + дедуп тиков очереди).
+    Этап 2: события создаёт потребитель market_queue — ждём дочитки."""
     db = Database(":memory:")
     adapter = FakeAdapter()
     worker = _make_worker(db, adapter)
@@ -193,12 +198,15 @@ async def test_quote_loop_touch_event_not_duplicated():
     adapter.price = QuoteTick(95.0, now_ms(), now_ms(), "trade")  # цена внутри зоны [90;100] → TOUCH
 
     await worker._quote_poll_once()
+    assert await worker.market_queue.wait_idle(ins.id, 5)
     events = db.get_events(zone_id=zone.id)
     assert len(events) == 1
 
     await worker._quote_poll_once()  # тот же тик повторно
     await worker._quote_poll_once()
+    assert await worker.market_queue.wait_idle(ins.id, 5)
     assert len(db.get_events(zone_id=zone.id)) == 1
+    await worker.market_queue.stop()
 
 
 async def test_quote_loop_error_isolation_and_backoff():
@@ -235,6 +243,7 @@ async def test_quote_loop_error_isolation_and_backoff():
         if db.get_quote(btc.id) is not None:
             break
     assert db.get_quote(btc.id) == tuple(adapter.price)
+    await worker.market_queue.stop()
 
 
 def test_quality_quote_threshold_follows_quote_loop():

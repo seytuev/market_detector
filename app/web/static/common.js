@@ -8,6 +8,7 @@ window.HTF = (() => {
   const TOKEN_KEY = 'htf_token';
   let urlTokenRead = false;
   let tokenDialogPromise = null;
+  let authCheckPromise = null;
   const modalStack = [];
 
   // Тема оформления LevelFrame: 'system' | 'dark' | 'light' (localStorage lf:theme).
@@ -45,18 +46,18 @@ window.HTF = (() => {
   }
   themeApply();
 
-  function getToken() {
-    if (!urlTokenRead) {
-      urlTokenRead = true;
-      const url = new URL(location.href);
-      const fromUrl = url.searchParams.get('token');
-      if (fromUrl) {
-        localStorage.setItem(TOKEN_KEY, fromUrl);
-        url.searchParams.delete('token');
-        history.replaceState(null, '', url.pathname + url.search + url.hash);
-      }
-    }
-    return localStorage.getItem(TOKEN_KEY) || '';
+  let sessionReady = false;
+  let migrationToken = '';
+  function getToken() { return ''; }
+  async function exchangeToken(token) {
+    const response = await fetch('/api/auth/session', {
+      method: 'POST', credentials: 'same-origin',
+      headers: {'Content-Type':'application/json'}, body: JSON.stringify({token}),
+    });
+    if (!response.ok) throw new Error('Токен не подошёл. Проверьте значение.');
+    localStorage.removeItem(TOKEN_KEY);
+    sessionReady = true;
+    return '';
   }
 
   function cssVar(name, fallback) {
@@ -113,8 +114,28 @@ window.HTF = (() => {
     if (rec && rec.prev && typeof rec.prev.focus === 'function') rec.prev.focus();
   }
 
-  async function ensureToken(error = '') {
-    if (getToken()) return getToken();
+  function ensureToken(error = '') {
+    if (!error && sessionReady) return Promise.resolve('');
+    if (authCheckPromise) return authCheckPromise;
+    authCheckPromise = ensureTokenInner(error).finally(() => { authCheckPromise = null; });
+    return authCheckPromise;
+  }
+
+  async function ensureTokenInner(error = '') {
+    if (!error && sessionReady) return '';
+    if (!error) {
+      const check = await fetch('/api/auth/session', {credentials:'same-origin'});
+      if (check.ok) { sessionReady = true; return ''; }
+      const url = new URL(location.href);
+      migrationToken = url.searchParams.get('token') || localStorage.getItem(TOKEN_KEY) || '';
+      url.searchParams.delete('token');
+      history.replaceState(null, '', url.pathname + url.search + url.hash);
+      if (migrationToken) {
+        const old = migrationToken; migrationToken = '';
+        try { return await exchangeToken(old); } catch (_) { localStorage.removeItem(TOKEN_KEY); }
+      }
+    }
+    sessionReady = false;
     if (tokenDialogPromise) return tokenDialogPromise;
     const modal = document.createElement('div');
     modal.className = 'modal';
@@ -124,14 +145,19 @@ window.HTF = (() => {
     const input = modal.querySelector('input');
     input.focus();
     tokenDialogPromise = new Promise((resolve, reject) => {
-      modal.querySelector('form').onsubmit = (event) => {
+      modal.querySelector('form').onsubmit = async (event) => {
         event.preventDefault();
         const token = input.value.trim();
         if (!token) { modal.querySelector('.form-error').textContent = 'Введите токен.'; return; }
-        localStorage.setItem(TOKEN_KEY, token);
-        modal.remove();
-        tokenDialogPromise = null;
-        resolve(token);
+        const button = modal.querySelector('button');
+        button.disabled = true;
+        try {
+          await exchangeToken(token);
+          input.value = '';
+          modal.remove(); tokenDialogPromise = null; resolve('');
+        } catch (err) {
+          modal.querySelector('.form-error').textContent = err.message;
+        } finally { button.disabled = false; }
       };
       modal.onkeydown = (event) => {
         if (event.key === 'Escape') {
@@ -145,8 +171,10 @@ window.HTF = (() => {
   }
 
   async function api(path, options = {}) {
+    await ensureToken();
     const resp = await fetch(path, {
       ...options,
+      credentials: 'same-origin',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer ' + getToken(),
@@ -154,6 +182,7 @@ window.HTF = (() => {
       },
     });
     if (resp.status === 401) {
+      sessionReady = false;
       localStorage.removeItem(TOKEN_KEY);
       await ensureToken('Токен не подошёл. Проверьте значение и попробуйте снова.');
       return api(path, options);
@@ -161,6 +190,7 @@ window.HTF = (() => {
     if (!resp.ok) {
       let detail = resp.statusText;
       try { detail = (await resp.json()).detail || detail; } catch (e) { /* не JSON */ }
+      if (typeof detail === 'object') detail = detail.fields ? Object.entries(detail.fields).map(([k,v]) => `${k}: ${v}`).join('\n') : JSON.stringify(detail);
       throw new Error(detail);
     }
     return resp.status === 204 ? null : resp.json();
@@ -169,24 +199,38 @@ window.HTF = (() => {
   function connectWs(onMessage, indicatorEl, onOpen) {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     let opened = false;
+    let attempts = 0;
     const connect = () => {
       const ws = new WebSocket(
-        `${proto}://${location.host}/ws?token=${encodeURIComponent(getToken())}`);
+        `${proto}://${location.host}/ws`);
       currentSocket = ws;
       ws.onopen = () => {
+        attempts = 0;
         setConnectionState(true);
         // onOpen(isReconnect): после reconnect окно может запросить полный снимок
         if (onOpen) Promise.resolve(onOpen(opened)).catch((e) => console.warn('ws recovery:', e));
         opened = true;
       };
-      ws.onclose = () => {
+      ws.onclose = (event) => {
         setConnectionState(false);
-        setTimeout(connect, 3000);
+        if (event.code === 4403) {
+          const label = document.getElementById('connection-label');
+          if (label) label.textContent = 'Доступ отклонён';
+          return;
+        }
+        if (event.code === 4401) {
+          sessionReady = false;
+          ensureToken('Сессия завершена. Войдите снова.').then(connect).catch(console.warn);
+          return;
+        }
+        const delay = Math.min(30000, 1000 * 2 ** Math.min(attempts++, 5));
+        setTimeout(connect, delay * (0.8 + Math.random() * 0.4));
       };
       ws.onerror = () => ws.close();
       ws.onmessage = (msg) => {
         let data;
         try { data = JSON.parse(msg.data); } catch (e) { return; }
+        if (data.type === 'resync' || data.type === 'instrument') { ws.close(); return; }
         onMessage(data);
       };
       return ws;
@@ -246,12 +290,166 @@ window.HTF = (() => {
     return `https://www.tradingview.com/chart/?symbol=${ins.venue.toUpperCase()}:${ins.symbol}`;
   }
 
+  /* Доменные версии (§13/§14, этап 6b): WS-сообщения и снимки несут версии
+     доменов; страница перечитывает только домен, чья версия выросла.
+     Ключи: 'zones' | 'config' | 'quote:{iid}' | 'candles:{iid}:{tf}' |
+     'scenario:{iid}' | 'history:{iid}'.
+     Правила: версия равная/старше известной — без действия; первая известная
+     версия (known == null) — только запоминается (первичную загрузку делает
+     сама страница); сообщение без версии (старый сервер) — прежнее поведение
+     (рефетч домена). В скрытой вкладке точечные рефетчи продолжаются (§14:
+     серверные сигналы не останавливаем) — скрытие экономит только
+     визуальную работу тиков; возврат делает один объединённый recovery. */
+  class DomainSync {
+    constructor() {
+      this.known = new Map();     // ключ → последняя применённая версия
+      this.handlers = new Map();  // домен → (key) => Promise|void
+      this.timers = new Map();    // ключ → дебаунс-таймер (per-key: соседний
+      // канал того же домена не должен отменять чужой отложенный рефетч)
+      this.running = new Map();   // домен → Promise (single-flight рефетча)
+      this.debounceMs = 350;
+    }
+
+    static wsEntries(msg) {
+      const out = [];
+      const dv = msg && msg.domain_versions;
+      if (!dv) return out;
+      const iid = msg.instrument_id;
+      if (dv.quote != null && iid != null) out.push([`quote:${iid}`, dv.quote]);
+      if (dv.candles != null && iid != null && msg.timeframe) {
+        out.push([`candles:${iid}:${msg.timeframe}`, dv.candles]);
+      }
+      if (dv.zones != null) out.push(['zones', dv.zones]);
+      if (dv.scenario != null && iid != null) out.push([`scenario:${iid}`, dv.scenario]);
+      if (dv.config != null) out.push(['config', dv.config]);
+      return out;
+    }
+
+    // Карта versions из /api/data-sync/status и снимков: скаляры (zones,
+    // config) и вложенные {iid: seq} / {'iid:tf': seq} — в плоские ключи.
+    static statusEntries(versions) {
+      const out = [];
+      if (!versions || typeof versions !== 'object') return out;
+      for (const [domain, value] of Object.entries(versions)) {
+        if (value == null) continue;
+        if (typeof value === 'number') { out.push([domain, value]); continue; }
+        if (typeof value === 'object') {
+          for (const [sub, v] of Object.entries(value)) {
+            if (typeof v === 'number') out.push([`${domain}:${sub}`, v]);
+          }
+        }
+      }
+      return out;
+    }
+
+    // Сообщение старого сервера без domain_versions: домен по типу.
+    static legacyKey(msg) {
+      const iid = msg.instrument_id;
+      switch (msg.type) {
+        case 'candle':
+          return iid != null && msg.timeframe ? `candles:${iid}:${msg.timeframe}` : null;
+        case 'zone': case 'event': return 'zones';
+        case 'ltf': return iid != null ? `scenario:${iid}` : null;
+        case 'instrument': return 'config';
+        default: return null;
+      }
+    }
+
+    on(domain, fn) { this.handlers.set(domain, fn); return this; }
+
+    adopt(key, value) {
+      if (value == null || !Number.isFinite(value)) return;
+      const cur = this.known.get(key);
+      if (cur == null || value > cur) this.known.set(key, value);
+    }
+
+    adoptAll(entries) { for (const [key, v] of entries) this.adopt(key, v); }
+
+    knownVersion(key) { return this.known.get(key); }
+
+    // Реакция на смену версии: отложенный (дебаунс) или немедленный рефетч
+    // домена. Возвращает Promise для immediate-режима, иначе null.
+    bump(key, value, { immediate = false } = {}) {
+      if (value != null) {
+        const cur = this.known.get(key);
+        if (cur != null && value <= cur) return null; // уже применено
+        this.adopt(key, value);
+        if (cur == null) return null; // первое касание — покрывает загрузка страницы
+      }
+      const domain = key.split(':')[0];
+      if (!this.handlers.has(domain)) return null;
+      if (immediate) return this.fetchNow(domain, key);
+      this.schedule(domain, key);
+      return null;
+    }
+
+    notifyWs(msg, opts) {
+      const entries = DomainSync.wsEntries(msg);
+      if (!entries.length) {
+        const key = msg && msg.type ? DomainSync.legacyKey(msg) : null;
+        if (key) this.bump(key, null, opts);
+        return;
+      }
+      for (const [key, value] of entries) this.bump(key, value, opts);
+    }
+
+    // Сверка карты versions из статуса/снимка; immediate — дождаться рефетчей.
+    syncStatus(versions, { immediate = false } = {}) {
+      const jobs = [];
+      for (const [key, value] of DomainSync.statusEntries(versions)) {
+        const r = this.bump(key, value, { immediate });
+        if (r) jobs.push(r);
+      }
+      return Promise.all(jobs);
+    }
+
+    schedule(domain, key) {
+      clearTimeout(this.timers.get(key));
+      this.timers.set(key, setTimeout(() => {
+        this.timers.delete(key);
+        this.fetchNow(domain, key);
+      }, this.debounceMs));
+    }
+
+    // Немедленно выполнить отложенные рефетчи и дождаться идущих — для точек,
+    // где нужно «данные свежие прямо сейчас» (terminal job, recovery).
+    async flush() {
+      for (let guard = 0; guard < 8; guard += 1) {
+        const keys = [...this.timers.keys()];
+        for (const key of keys) {
+          clearTimeout(this.timers.get(key));
+          this.timers.delete(key);
+          this.fetchNow(key.split(':')[0], key);
+        }
+        const running = [...this.running.values()];
+        if (!running.length && !this.timers.size) return;
+        await Promise.all(running);
+      }
+    }
+
+    fetchNow(domain, key) {
+      const fn = this.handlers.get(domain);
+      if (!fn) return null;
+      const prev = this.running.get(domain);
+      if (prev) {
+        // домен ушёл вперёд во время рефетча — повторный проход после него
+        return prev.then(() => this.fetchNow(domain, key));
+      }
+      const p = Promise.resolve().then(() => fn(key))
+        .catch((e) => console.warn(`domain refetch (${domain}):`, e));
+      this.running.set(domain, p);
+      p.finally(() => { if (this.running.get(domain) === p) this.running.delete(domain); });
+      return p;
+    }
+  }
+
   return {
     getToken, ensureToken, api, connectWs, isWsConnected: () => !!currentSocket && currentSocket.readyState === 1,
     fmtPrice, fmtTime, parseMskLocal, esc, tradingviewUrl,
     captureChartRange, restoreChartRange,
     chartTheme, openModal, closeModal, setConnectionState,
     theme: { get: themeGet, set: themeSet, apply: themeApply },
+    DomainSync,
   };
 })();
 

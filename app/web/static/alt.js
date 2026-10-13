@@ -29,10 +29,15 @@ const COLUMNS = [
   { id: 'asset', title: 'Монета / источник', render: (r) => `${esc(r.asset.symbol)} <span class="alt-dim">${esc((r.source || {}).symbol || '')} ${esc((r.source || {}).venue || '')}</span>` },
   { id: 'stage', title: 'Стадия', render: (r) => esc(r.terminal ? r.state_ru : (r.stage_ru || r.state_ru || '—')) },
   { id: 'close', title: 'Закрытие D1', num: true, render: (r) => fmtPrice(r.last_close) },
-  { id: 'distance', title: 'До входа', num: true, render: (r) => r.distance_pct == null ? '—' : fmtPct(r.distance_pct) },
+  { id: 'distance', title: 'До зоны · закрытие D1', num: true, render: (r) => r.distance_pct == null ? 'Не рассчитано' : fmtPct(r.distance_pct) },
   { id: 'age', title: 'Возраст, дн', num: true, render: (r) => r.age_days == null ? '—' : String(r.age_days) },
   { id: 'dd', title: 'Падение от ATH', num: true, render: (r) => fmtPct(r.drawdown_pct) },
   { id: 'last', title: 'Последнее событие', render: (r) => r.last_event ? `${esc(r.last_event.label_ru)} <span class="alt-dim">${fmtDate(r.last_event.event_time_ms)}</span>` : esc(r.reason || '—') },
+  { id: 'data', title: 'Данные', render: (r) => {
+    const source = r.source || {};
+    const word = r.state === 'data_stale' ? 'Устарели' : !r.source ? 'Источник не выбран' : source.history_scope === 'partial' ? 'История частичная' : 'История загружена';
+    return esc(word) + (source.last_closed_ms ? `<span class="alt-dim"> · ${fmtDate(source.last_closed_ms)}</span>` : '');
+  } },
   { id: 'rank', title: 'Ранг капитализации', num: true, render: (r) => r.asset.cmc_rank || '—' },
   { id: 'ath', title: 'ATH', render: (r) => `${fmtPrice(r.ath_price)} <span class="alt-dim">${fmtDate(r.ath_open_time)}</span>` },
   { id: 'pmin', title: 'Минимум после ATH', render: (r) => `${fmtPrice(r.p_min)} <span class="alt-dim">${fmtDate(r.p_min_open_time)}</span>` },
@@ -49,7 +54,7 @@ const COLUMNS = [
   { id: 'deadline', title: 'Срок ретеста', render: (r) => (r.retest_deadline_ms ? fmtTime(r.retest_deadline_ms) : '—') },
   { id: 'reason', title: 'Причина пропуска', render: (r) => esc(r.reason || (r.run_status && r.run_status !== 'processed' ? r.run_status : '—')) },
 ];
-const DEFAULT_COLUMNS = ['asset', 'stage', 'close', 'distance', 'age', 'dd', 'last'];
+const DEFAULT_COLUMNS = ['asset', 'stage', 'close', 'distance', 'last', 'data'];
 
 const state = {
   rows: [], buckets: {}, venues: [], listPhase: 'loading', listError: '',
@@ -66,6 +71,7 @@ const state = {
   },
   tableMode: true, columns: DEFAULT_COLUMNS.slice(),
   pane: 'list',
+  screen: 'list', searchTimer: null,
   timeframe: 'D1',
   candles: [], rawCandles: [], viewCandles: [], candleByTime: new Map(),
   chart: null, candleSeries: null, ro: null,
@@ -192,6 +198,11 @@ function loadPrefs() {
   state.tableMode = prefs.tableMode == null ? true : !!prefs.tableMode;
   state.columns = Array.isArray(prefs.columns) && prefs.columns.length ? prefs.columns.filter((id) => COLUMNS.some((col) => col.id === id)) : DEFAULT_COLUMNS.slice();
   if (prefs.selected && prefs.selected.kind && prefs.selected.id != null) state.savedSelected = prefs.selected;
+  const query = new URLSearchParams(location.search);
+  ['bucket','venue','search','sort','rankMin','rankMax','ageMin','ageMax','ddMin','ddMax','structure','stage'].forEach(key => { if (query.has(key)) state[key] = query.get(key); });
+  state.screen = query.get('view') === 'analysis' || query.has('setup') || query.has('candidate') ? 'analysis' : 'list';
+  if (query.get('tf') === 'W1' || query.get('tf') === 'D1') state.timeframe = query.get('tf');
+  state.tableMode = state.screen === 'list';
 }
 function savePrefs() {
   const payload = {
@@ -205,6 +216,7 @@ function savePrefs() {
     selected: state.selected ? { kind: state.selected.kind, id: state.selected.id } : null,
   };
   try { localStorage.setItem(PREF_KEY, JSON.stringify(payload)); } catch (e) { /* приватный режим */ }
+  writeUrl();
 }
 
 function queryString() {
@@ -218,6 +230,7 @@ function queryString() {
   if (state.ddMin !== '') params.set('dd_min', state.ddMin);
   if (state.ddMax !== '') params.set('dd_max', state.ddMax);
   if (state.structure) params.set('structure', state.structure);
+  if (state.search) params.set('search',state.search);
   return params.toString();
 }
 
@@ -328,6 +341,7 @@ function renderList() {
     list.innerHTML = '';
     empty.classList.remove('hidden');
     empty.textContent = emptyListText();
+    renderTable();
     return;
   }
   empty.classList.add('hidden');
@@ -364,7 +378,7 @@ function renderFresh() {
   if (run && run.running) status = 'Идёт обработка';
   else if (last) {
     const names = { ok: 'Обновлены', no_universe: 'Нет вселенной', error: 'Ошибка обработки' };
-    status = (names[last.status] || last.status) + (last.trigger === 'manual' ? ', ручной запуск' : '');
+    status = (last.status === 'ok' && last.errors ? 'Обновлены частично' : (names[last.status] || 'Состояние уточняется')) + (last.trigger === 'manual' ? ', ручной запуск' : '');
   }
   if (state.refreshing) status += ' · список обновляется, снимок на экране сохранён';
   $('alt-run-state').textContent = status;
@@ -421,10 +435,10 @@ function remainText(detail) {
 function entryText(entry) {
   const when = fmtTime(entry.event_time_ms);
   if (entry.kind === 'A') {
-    return `Вход A · закрытие подтверждающей D1 ${fmtPrice(entry.price)} · зафиксирован ${when}. Это историческая цена закрытия, не текущая заявка.`;
+    return `Историческое условие A · закрытие D1 ${fmtPrice(entry.price)} · ${when}.`;
   }
   const zone = entry.zone || {};
-  return `Вход B · зона ретеста ${fmtPrice(zone.lower)}–${fmtPrice(zone.upper)} · зафиксирован ${when}. Историческая фиксация первого принятого ретеста.`;
+  return `Историческое условие B · зона ретеста ${fmtPrice(zone.lower)}–${fmtPrice(zone.upper)} · ${when}.`;
 }
 
 function renderCard() {
@@ -736,9 +750,15 @@ function writeUrl() {
   url.searchParams.delete('asset');
   const row = currentRow();
   const asset = (state.detail && state.detail.asset) || (row && row.asset) || (state.nodata && state.nodata.asset);
-  if (state.selected && state.selected.kind === 'setup') url.searchParams.set('setup', String(state.selected.id));
-  if (state.selected && state.selected.kind === 'candidate') url.searchParams.set('candidate', String(state.selected.id));
-  if (asset && asset.cmc_id != null) url.searchParams.set('asset', String(asset.cmc_id));
+  url.searchParams.set('view',state.screen);
+  ['bucket','venue','search','sort','rankMin','rankMax','ageMin','ageMax','ddMin','ddMax','structure','stage'].forEach(key => { if (state[key] !== '') url.searchParams.set(key,state[key]); else url.searchParams.delete(key); });
+  if (state.screen === 'analysis') {
+    url.searchParams.set('tf',state.timeframe);
+    if (state.selected && state.selected.kind === 'setup') url.searchParams.set('setup', String(state.selected.id));
+    if (state.selected && state.selected.kind === 'candidate') url.searchParams.set('candidate', String(state.selected.id));
+    if (asset && asset.cmc_id != null) url.searchParams.set('asset', String(asset.cmc_id));
+  }
+  else { url.searchParams.delete('tf'); url.searchParams.delete('event'); url.searchParams.delete('at'); }
   history.replaceState(null, '', url.pathname + url.search);
 }
 
@@ -781,6 +801,7 @@ async function loadStatus() {
 
 async function selectRow(kind, id, options) {
   const opts = options || {};
+  if (!opts.fromWs && opts.navigate !== false) openAnalysisScreen();
   if (!opts.preserve && state.selected) saveViewport();
   const req = ++state.reqSeq;
   state.selected = { kind, id };
@@ -872,6 +893,7 @@ function showNodata(row) {
 }
 
 async function openExact(kind, id) {
+  openAnalysisScreen(false);
   state.selected = { kind, id };
   state.cardPhase = 'loading';
   state.detail = null;
@@ -1584,11 +1606,40 @@ function applyPane() {
   if (state.chart) scheduleDraw();
 }
 function applyTableMode() {
+  $('alt-page').dataset.screen = state.screen;
   $('alt-table-mode').classList.toggle('hidden', !state.tableMode);
   $('alt-work').classList.toggle('hidden', state.tableMode);
   $('alt-journal').classList.toggle('hidden', state.tableMode);
   $('alt-table-toggle').setAttribute('aria-pressed', state.tableMode ? 'true' : 'false');
   $('alt-table-toggle').textContent = state.tableMode ? 'К графику' : 'Таблица';
+  const searchHead = document.querySelector('.alt-list-head');
+  if (searchHead) {
+    if (state.screen === 'list') $('alt-table-mode').prepend(searchHead);
+    else $('alt-list-pane').prepend(searchHead);
+  }
+  const title = document.querySelector('.alt-fresh h1');
+  title.textContent = state.screen === 'analysis' ? 'Анализ · Сетап D1/W1' : 'Скринер';
+  document.querySelectorAll('.sidebar .app-tab').forEach(link => {
+    const isAnalysis = link.getAttribute('href') === '/#desk';
+    const isScreener = link.textContent.trim().startsWith('Скринер');
+    if (isAnalysis || isScreener) { const active = state.screen === 'analysis' ? isAnalysis : isScreener;
+      link.classList.toggle('current',active); if (active) link.setAttribute('aria-current','page'); else link.removeAttribute('aria-current'); }
+  });
+}
+
+function openAnalysisScreen(push = true) {
+  if (state.screen === 'list' && push) {
+    state.listScroll = $('alt-table-mode').querySelector('.alt-table-scroll').scrollTop;
+    history.pushState(null,'',location.href);
+  }
+  state.screen = 'analysis'; state.tableMode = false; state.pane = 'chart';
+  applyTableMode(); applyPane();
+}
+function returnToScreener() {
+  state.screen = 'list'; state.tableMode = true; state.pane = 'list';
+  applyTableMode(); applyPane(); writeUrl(); renderTable();
+  requestAnimationFrame(() => { $('alt-table-mode').querySelector('.alt-table-scroll').scrollTop = state.listScroll || 0;
+    $('alt-tbody').querySelector('[aria-selected="true"]')?.focus({preventScroll:true}); });
 }
 function renderTable() {
   const columns = state.columns.map((id) => COLUMNS.find((col) => col.id === id)).filter(Boolean);
@@ -1599,9 +1650,10 @@ function renderTable() {
     const kind = row.setup_id != null ? 'setup' : (row.candidate_id != null ? 'candidate' : 'nodata');
     const id = kind === 'setup' ? row.setup_id : (kind === 'candidate' ? row.candidate_id : '');
     const cmc = row.asset && row.asset.cmc_id != null ? row.asset.cmc_id : '';
-    return `<tr aria-selected="${selected ? 'true' : 'false'}" data-kind="${kind}" data-id="${id}" data-cmc="${cmc}">` +
+    return `<tr tabindex="0" aria-selected="${selected ? 'true' : 'false'}" data-kind="${kind}" data-id="${id}" data-cmc="${cmc}">` +
       columns.map((col) => `<td${col.num ? ' class="num"' : ''}>${col.render(row)}</td>`).join('') + '</tr>';
   }).join('');
+  if (!rows.length) $('alt-tbody').innerHTML = `<tr><td colspan="${columns.length}" class="alt-empty">${state.listPhase === 'loading' ? 'Загружаем активы…' : state.listPhase === 'error' ? 'Список не загрузился. Повторите загрузку.' : esc(emptyListText())}</td></tr>`;
 }
 function renderColumns() {
   $('alt-columns').innerHTML = state.columns.concat(COLUMNS.map((col) => col.id).filter((id) => !state.columns.includes(id)))
@@ -1646,6 +1698,7 @@ function syncControls() {
 }
 
 function openPanel(id, opener) {
+  ['alt-filter-panel','alt-layers','alt-columns'].forEach(other => { if (other !== id && !$(other).classList.contains('hidden')) closePanel(other); });
   $(id).classList.remove('hidden');
   opener.setAttribute('aria-expanded', 'true');
   state.panelOpener = opener;
@@ -1762,6 +1815,7 @@ function bind() {
     savePrefs();
     renderChips();
     renderList();
+    clearTimeout(state.searchTimer); state.searchTimer = setTimeout(loadTable,250);
   };
   $('alt-sort').onchange = () => {
     state.sort = $('alt-sort').value;
@@ -1807,11 +1861,7 @@ function bind() {
   });
   $('alt-reveal').onclick = () => showInList();
   $('alt-back').onclick = () => {
-    state.pane = 'list';
-    applyPane();
-    const current = $('alt-list').querySelector('[aria-selected="true"]');
-    if (current) current.focus();
-    else $('alt-list').focus();
+    returnToScreener();
   };
   document.querySelectorAll('.alt-modes button').forEach((button) => {
     button.onclick = () => {
@@ -1925,14 +1975,16 @@ function bind() {
   $('journal-from').onchange = () => renderJournal();
   $('journal-to').onchange = () => renderJournal();
   $('alt-table-toggle').onclick = () => {
-    state.tableMode = !state.tableMode;
+    if (state.screen === 'analysis') returnToScreener();
+    else if (state.selected) openAnalysisScreen();
     savePrefs();
     applyTableMode();
     if (state.tableMode) renderTable();
     else if (state.chart) scheduleDraw();
   };
   $('alt-table-back').onclick = () => {
-    state.tableMode = false;
+    if (!state.selected) return;
+    openAnalysisScreen();
     savePrefs();
     applyTableMode();
   };
@@ -1974,13 +2026,14 @@ function bind() {
       if (rowEl.dataset.kind === 'candidate') return String(item.candidate_id) === rowEl.dataset.id;
       return item.kind === 'nodata' && String(item.asset.cmc_id) === rowEl.dataset.cmc;
     });
-    state.tableMode = false;
+    openAnalysisScreen();
     savePrefs();
     applyTableMode();
     if (!row) return;
     if (row.kind === 'nodata') showNodata(row);
     else selectRow(rowEl.dataset.kind, Number(rowEl.dataset.id));
   };
+  $('alt-tbody').onkeydown = event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.target.closest('tr[data-kind]')?.click(); } };
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
     const tag = document.activeElement && document.activeElement.tagName;
@@ -1997,6 +2050,18 @@ function bind() {
   });
   window.addEventListener('lf-theme', paintChartTheme);
   window.addEventListener('pagehide', destroyChart);
+  window.addEventListener('popstate', async () => {
+    const query = new URLSearchParams(location.search);
+    ['bucket','venue','search','sort','rankMin','rankMax','ageMin','ageMax','ddMin','ddMax','structure','stage'].forEach(key => {
+      if (query.has(key)) state[key] = query.get(key);
+      else if (key !== 'bucket' && key !== 'sort') state[key] = '';
+    });
+    fillFilterInputs();
+    if (query.get('view') !== 'analysis') { returnToScreener(); await loadTable(); return; }
+    if (query.get('setup')) await selectRow('setup',Number(query.get('setup')),{navigate:false});
+    else if (query.get('candidate')) await selectRow('candidate',Number(query.get('candidate')),{navigate:false});
+    openAnalysisScreen(false);
+  });
 }
 
 async function init() {
@@ -2016,13 +2081,15 @@ async function init() {
   if (params.get('setup')) await openExact('setup', Number(params.get('setup')));
   else if (params.get('candidate')) await openExact('candidate', Number(params.get('candidate')));
   else if (params.get('asset')) await selectByAsset(Number(params.get('asset')));
-  else if (state.savedSelected && (state.savedSelected.kind === 'setup' || state.savedSelected.kind === 'candidate')) {
+  else if (state.screen === 'analysis' && state.savedSelected && (state.savedSelected.kind === 'setup' || state.savedSelected.kind === 'candidate')) {
     await selectRow(state.savedSelected.kind, Number(state.savedSelected.id), { optional: true });
   }
-  if (!state.selected && !state.nodata && state.cardPhase !== 'missing') {
+  if (state.screen === 'analysis' && !state.selected && !state.nodata && state.cardPhase !== 'missing') {
     const first = viewRows().find((row) => row.setup_id != null || row.candidate_id != null);
     if (first) await selectRow(first.setup_id != null ? 'setup' : 'candidate', first.setup_id != null ? first.setup_id : first.candidate_id);
   }
+  const eventAt = Number(params.get('at'));
+  if (eventAt && state.detail) jumpTo(eventAt);
   HTF.connectWs((msg) => {
     if (msg && msg.type === 'alt') {
       clearTimeout(state.reloadTimer);

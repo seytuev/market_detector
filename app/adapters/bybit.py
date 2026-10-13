@@ -21,6 +21,7 @@ from typing import Optional
 import httpx
 
 from ..models import Candle, Instrument, now_ms
+from ..validation import accept_source_candle
 from .base import TIMEFRAME_MS, AdapterError, QuoteTick, retry_after_seconds
 
 # Маппинг внутренних таймфреймов на коды Bybit V5
@@ -51,6 +52,10 @@ class BybitSpotAdapter:
     async def aclose(self) -> None:
         if self._own_client:
             await self._client.aclose()
+
+    def realtime_supported(self) -> bool:
+        """Realtime-потока для Bybit пока нет — обычный REST-режим."""
+        return False
 
     async def _get(self, path: str, params: dict) -> dict:
         """GET с проверкой HTTP-статуса и retCode; возвращает result."""
@@ -161,20 +166,20 @@ class BybitSpotAdapter:
             forming = open_time + interval_ms > now
             if forming and not include_forming:
                 continue  # незакрытая свеча — не отдаём детектору (§11)
-            candles.append(
-                Candle(
-                    instrument_id=0,  # проставит вызывающий
-                    timeframe=timeframe,
-                    open_time=open_time,
-                    close_time=open_time + interval_ms - 1,
-                    open=float(k[1]),
-                    high=float(k[2]),
-                    low=float(k[3]),
-                    close=float(k[4]),
-                    closed=not forming,
-                    source=self.venue,
-                )
+            candle = Candle(
+                instrument_id=0,  # проставит вызывающий
+                timeframe=timeframe,
+                open_time=open_time,
+                close_time=open_time + interval_ms - 1,
+                open=float(k[1]),
+                high=float(k[2]),
+                low=float(k[3]),
+                close=float(k[4]),
+                closed=not forming,
+                source=self.venue,
             )
+            if accept_source_candle(candle):
+                candles.append(candle)
         return candles
 
     async def last_price(self, symbol: str) -> QuoteTick:

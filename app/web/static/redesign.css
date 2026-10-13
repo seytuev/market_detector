@@ -1,0 +1,146 @@
+/* LevelFrame redesign — common surfaces and adaptive analysis. */
+:root { --lf-reading: 14px; }
+body { font-size: var(--lf-reading); }
+.sidebar .app-tab { min-height: 40px; font-size: 14px; }
+.sidebar { width: 208px; }
+.shell { margin-left: 208px; }
+.btn, select, input { min-height: 32px; }
+:focus-visible { outline: 2px solid var(--lf-brand); outline-offset: 3px; }
+.state-sub, .asset-sub, .price-age, .work-meta, .muted, .field-desc, .alt-dim, .events-service { font-size: 12px; }
+.asset-table td { font-size: 14px; }
+.metric-filter .stat-note { font-size: 12px; }
+.lf-caption { font-size: 12px; color: var(--lf-text2); }
+.lf-scenario-summary { border-bottom: 1px solid var(--lf-border); padding: 0 0 16px; margin-bottom: 16px; }
+.lf-scenario-summary h3 { font-size: 18px; margin: 6px 0; }
+.lf-scenario-summary p { margin: 4px 0; }
+.lf-facts { display: grid; grid-template-columns: minmax(100px, 1fr) 2fr; gap: 12px; }
+.lf-facts dt { color: var(--lf-text2); }
+.lf-facts dd { margin: 0; overflow-wrap: anywhere; }
+.lf-facts small { display: block; color: var(--lf-text2); margin-top: 4px; }
+.lf-drawer-backdrop { position: fixed; inset: 0; background: #10203050; z-index: 1000; display: flex; justify-content: flex-end; }
+.lf-drawer { width: min(480px, 100vw); background: var(--lf-surface); color: var(--lf-text); display: flex; flex-direction: column; box-shadow: -8px 0 32px #0002; }
+.lf-drawer header { display: flex; align-items: center; gap: 16px; padding: 20px; border-bottom: 1px solid var(--lf-border); }
+.lf-drawer header h2 { margin: 0; flex: 1; font-size: 20px; }
+.lf-drawer-body { overflow: auto; padding: 20px; }
+.lf-drawer-body p { overflow-wrap: anywhere; }
+#lf-error { position: fixed; bottom: 32px; left: max(16px, calc(50vw - 300px)); max-width: min(600px, calc(100vw - 32px)); display: flex; flex-wrap: wrap; gap: 8px; align-items: center; z-index: 1100; padding: 16px; background: var(--lf-surface); color: var(--lf-text); border: 1px solid var(--lf-warning, #af6f24); border-radius: 8px; box-shadow: 0 8px 28px #0002; }
+.lf-export { position: relative; }
+.lf-export > div { position: absolute; bottom: 40px; right: 0; display: flex; gap: 8px; padding: 12px; background: var(--lf-surface); border: 1px solid var(--lf-border); z-index: 50; border-radius: 8px; }
+.lf-analysis-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.lf-analysis-tabs { display: none; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--lf-border); }
+.lf-analysis-tabs button { flex: 1; }
+.overview-layout { grid-template-columns: minmax(0, 1fr) 336px; }
+.desk-main { grid-template-columns: 240px minmax(0, 1fr); }
+.desk-side { overflow-y: auto !important; }
+.desk-panel, .desk-panel-body { overflow: visible; }
+.desk-panel { flex: none; }
+.desk-side .desk-panel { flex: none; min-height: auto; }
+.desk-panel-body > .desk-scenario { flex: none; overflow: visible; }
+.desk-panel-body > .zone-rail { flex: none; overflow: visible; }
+.desk-panel-body { max-height: none; }
+.desk-scenario .asset-visual { display: none; }
+.desk-asset-off { width: 32px; }
+#desk-assets-toggle { display: inline-flex; }
+.desk-main.assets-hidden { grid-template-columns: minmax(0, 1fr); }
+.desk-main.assets-hidden .desk-assets { display: none; }
+.overview-layout.side-hidden { grid-template-columns: minmax(0, 1fr); }
+.overview-layout.side-hidden .desk-side { display: none; }
+.desk-entries { resize: vertical; min-height: 56px; }
+.lf-chart-expanded .overview-layout { grid-template-columns: minmax(0,1fr); }
+.lf-chart-expanded .desk-main { grid-template-columns: minmax(0,1fr); }
+.lf-chart-expanded .desk-side, .lf-chart-expanded .desk-assets, .lf-chart-expanded .desk-entries, .lf-chart-expanded .events-strip { display: none !important; }
+.lf-analysis-bottom-tabs { padding: 8px 12px; }
+.lf-reference-body { padding: 16px; }
+.lf-reference-body .events-card { background: var(--lf-surface); border-color: var(--lf-border); }
+.lf-analysis-bottom-tabs { display: flex; gap: 8px; align-items: center; }
+.lf-analysis-bottom-tabs button[aria-pressed="true"] { background: var(--lf-brand); color: white; }
+#view-overview[data-bottom="events"] .desk-entries,
+#view-overview[data-bottom="zones"] .event-strip { display: none; }
+.journal-tools { flex-wrap: wrap; }
+.journal-row { min-height: 64px; }
+.journal-time small { white-space: normal; }
+.journal-title { font-size: 14px; }
+.journal-scope-bar { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+.journal-group .journal-row { border: 0; }
+.now-market { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; padding: 12px 16px; border: 1px solid var(--lf-border); border-radius: 8px; background: var(--lf-surface); flex-wrap: wrap; }
+.now-market p { margin: 0; }
+.now-market .side-open { margin-left: auto; }
+.alt-fresh .h1-events-context { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 12px; border: 0; padding: 0; }
+.alt-fresh .h1-events-context p { margin: 0; }
+.alt-market-note { display: none; }
+.alt-page[data-screen="list"] .alt-work { display: none !important; }
+.alt-page[data-screen="list"] #alt-table-mode { display: block !important; }
+.alt-page[data-screen="analysis"] #alt-table-mode,
+.alt-page[data-screen="analysis"] > .alt-tabs,
+.alt-page[data-screen="analysis"] > .alt-chips,
+.alt-page[data-screen="analysis"] #alt-filter-panel { display: none !important; }
+.alt-page[data-screen="analysis"] .alt-work { display: grid !important; flex: 1; min-height: 0; }
+.alt-page[data-screen="analysis"] .alt-fresh-main > p,
+.alt-page[data-screen="analysis"] .alt-fresh-main > .h1-events-context { display: none; }
+.alt-page[data-screen="analysis"] .alt-back { display: inline-flex; }
+.alt-page[data-screen="analysis"] .alt-chart-col { min-width: 0; }
+.alt-page[data-screen="analysis"] .alt-card { width: auto; }
+#alt-table-mode .alt-list-head { display: flex; gap: 16px; padding: 16px 0; flex-wrap: wrap; }
+#alt-table-mode .alt-list-head { flex-direction: row; }
+#alt-table-mode .alt-collapse { display: none; }
+#alt-table-mode .alt-list-head label { min-width: 180px; flex: 1; }
+#alt-tbody tr { cursor: pointer; }
+#alt-tbody tr:focus-visible { outline-offset: -3px; }
+.market-technical { margin-top: 12px; }
+.market-facts > details > summary { padding: 12px 0; cursor: pointer; }
+.lf-calendar-head { display: flex; align-items: center; gap: 16px; margin-bottom: 16px; }
+.lf-calendar-head h2 { flex: 1; margin: 0; text-align: center; text-transform: capitalize; }
+.lf-calendar-grid { display: grid; grid-template-columns: repeat(7, minmax(0,1fr)); gap: 6px; }
+.lf-calendar-grid .btn { flex-direction: column; min-height: 64px; padding: 8px; }
+.lf-calendar-grid .btn[aria-pressed="true"] { background: var(--lf-brand); color: white; }
+.lf-calendar-grid small { font-size: 11px; }
+.lf-calendar-grid > span { text-align: center; font-size: 12px; padding: 4px; }
+.lf-calendar-agenda { margin-top: 24px; border-top: 1px solid var(--lf-border); padding-top: 16px; }
+@media (min-width: 1024px) and (max-width: 1439px) {
+  .desk-main { grid-template-columns: minmax(0,1fr); }
+  .desk-assets { display: none; }
+  .desk-main.assets-open .desk-assets { display: block; max-height: 190px; }
+  .overview-layout { grid-template-columns: minmax(0,1fr) 320px; }
+}
+@media (max-width: 1023px) {
+  .lf-analysis-tabs { display: flex; }
+  .overview-layout { grid-template-columns: minmax(0,1fr); }
+  #view-overview[data-mobile-pane="chart"] .desk-side,
+  #view-overview[data-mobile-pane="chart"] .desk-entries,
+  #view-overview[data-mobile-pane="chart"] .event-strip,
+  #view-overview[data-mobile-pane="scenario"] .desk-main,
+  #view-overview[data-mobile-pane="scenario"] .event-strip,
+  #view-overview[data-mobile-pane="events"] .overview-layout { display: none !important; }
+  #view-overview[data-mobile-pane="scenario"] .desk-side { display: block !important; }
+  #view-overview[data-mobile-pane="events"] .event-strip { display: block !important; height: auto; }
+  #view-overview[data-mobile-pane="events"] .strip-events { display: flex !important; flex-direction: column; overflow: visible; }
+  .sidebar { width: 64px; }
+  .sidebar .app-tab { font-size: 12px; }
+  .shell { margin-left: 64px; }
+  .alt-page[data-screen="analysis"] .alt-work { display: block !important; }
+}
+@media (min-width: 768px) {
+  html[data-sidebar="collapsed"] .sidebar { width: 64px; }
+  html[data-sidebar="collapsed"] .shell { margin-left: 64px; }
+}
+@media (max-width: 767px) {
+  .shell { margin-left: 0; }
+  .app-footer { display: none; }
+  .data-sync-bar { flex-wrap: nowrap; gap: 8px; }
+  .data-sync-bar > button { flex: none; }
+  #data-sync-status { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .data-sync-bar details { flex: none; max-width: 108px; }
+  .data-sync-bar summary { font-size: 12px; display: flex; align-items: center; }
+  .btn, select, input, summary { min-height: 44px; }
+  .lf-drawer { width: 100vw; }
+  #lf-error { bottom: 76px; }
+  .metric-filter .stat-label { font-size: 12px; }
+  .lf-analysis-tabs { gap: 4px; }
+  .lf-analysis-tabs button { padding: 6px; }
+  .lf-calendar-grid { gap: 3px; }
+  .lf-calendar-grid .btn { min-height: 52px; padding: 4px; }
+  .lf-calendar-grid small { font-size: 10px; }
+  .lf-analysis-bottom-tabs { flex-wrap: wrap; }
+  .journal-tools label { flex: 1 1 140px; min-width: 0; }
+  .journal-tools input, .journal-tools select { max-width: 100%; }
+}

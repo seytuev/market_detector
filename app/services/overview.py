@@ -7,6 +7,7 @@ Telegram-бот напрямую, без HTTP.
 """
 from __future__ import annotations
 
+import json
 from typing import Any, Optional
 
 from ..db import Database
@@ -164,6 +165,21 @@ ATTENTION_REASON_RU = {
     "data_problem": "Проблема данных",
     "none": "—",
 }
+
+
+def _scenario_summary(sc, selected) -> dict[str, Any]:
+    """Display the structural scenario independently from delivery quality.
+
+    Existence of the active scenario is the engine's confirmation fact;
+    eligibility of an entry zone is a different condition.
+    """
+    if sc is not None:
+        return {"id": sc.id, "confirmed": True, "state": sc.state,
+                "label": "Сценарий подтверждён", "direction": sc.direction.value,
+                "confirmed_at": sc.created_at}
+    return {"id": None, "confirmed": False, "state": "awaiting" if selected else "none",
+            "label": "Ожидает подтверждения" if selected else "Активного сценария нет",
+            "direction": None, "confirmed_at": None}
 
 
 def _select_context_with_basis(
@@ -1240,6 +1256,7 @@ def instruments_overview(db: Database, settings) -> list[dict[str, Any]]:
             },
             "stage": stage,
             "market_stage": market_stage,
+            "scenario_summary": _scenario_summary(sc, selected),
             "presentation": presentation,
             "asset": asset,
             "direction": direction,
@@ -1400,6 +1417,7 @@ def instrument_current(
         "data_state": ds,
         "stage": stage,
         "market_stage": market_stage,
+        "scenario_summary": _scenario_summary(sc, selected),
         "presentation": presentation,
         "asset": asset,
         "direction": direction,
@@ -1935,3 +1953,24 @@ def service_status(db: Database, settings) -> dict[str, Any]:
         "delivery_pending": delivery_pending,
         "data_gaps": gaps,
     }
+
+
+def _published_profile(method):
+    import functools
+    @functools.wraps(method)
+    def snapshot(db, settings, *args, **kwargs):
+        import copy
+        from ..config import DetectorConfig
+        with db.read_tx():
+            view_settings = copy.copy(settings)
+            raw = db.get_meta("settings:active_profile")
+            view_settings.detector = DetectorConfig(**json.loads(raw)) if raw else copy.copy(settings.detector)
+            result = method(db, view_settings, *args, **kwargs)
+            if isinstance(result, dict):
+                result["config_version"] = int(db.get_meta("settings:config_version") or 0)
+            return result
+    return snapshot
+
+instrument_current = _published_profile(instrument_current)
+instrument_structure = _published_profile(instrument_structure)
+instruments_overview = _published_profile(instruments_overview)

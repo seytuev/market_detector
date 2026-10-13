@@ -35,10 +35,11 @@
   // проблемой данных
   const FILTERS = {
     all: () => true,
-    attention: (r) => ['review', 'price_in_zone', 'data_problem'].includes(r.attention),
-    watch: (r) => ['awaiting', 'eligible', 'price_in_zone'].includes(r.attention),
-    zone: (r) => r.attention === 'price_in_zone',
-    eligible: (r) => r.attention === 'eligible',
+    attention: (r) => !!r.review_state?.needed || r.attention === 'price_in_zone' ||
+      !!(r.data_state?.state && r.data_state.state !== 'ok' && r.data_state.reason !== 'current_candle_pending'),
+    watch: () => true,
+    zone: (r) => r.attention === 'price_in_zone' || r.stage === 'Цена в HTF-зоне' || r.stage === 'Цена в Entry Zone',
+    eligible: (r) => !!r.scenario_summary?.confirmed,
   };
 
   const st = {
@@ -46,6 +47,7 @@
     candidates: 0,       // HTF-кандидаты на проверку
     currents: new Map(), // instrument_id -> снимок /current
     prices: new Map(),   // instrument_id -> {price, at} из WS (новее снимка)
+    versions: new Map(), // доменные версии снимка (§13) — рефетч по их росту
     filter: 'all',
     selectedId: null,
     reqSeq: 0,           // поздний ответ старого запроса экран не перезаписывает
@@ -116,35 +118,30 @@
 
   function scenarioHtml(r) {
     const titled = r.asset && r.asset.asset_state && r.asset.asset_state.title;
-    const main = titled || r.market_stage || r.stage || 'Сценарий не определён';
+    const main = r.scenario_summary?.label || titled || r.market_stage || r.stage || 'Сценарий не определён';
     const review = (r.review_state && r.review_state.needed)
       ? `<div class="state-sub"><a href="#review" data-view="review">Нужна проверка · ${r.review_state.count}</a></div>`
       : '';
-    return esc(main) + review;
+    const direction = {bull:'Рост',bear:'Снижение'}[r.scenario_summary?.direction];
+    return esc(main) + (direction ? `<div class="state-sub">${direction}</div>` : '') + review;
   }
 
   function zoneRelationHtml(r) {
     if (r.attention === 'price_in_zone') return 'Цена в зоне';
     const ds = r.data_state || {};
-    const pending = ds.reason === 'current_candle_pending';
-    if ((!ds.state || ds.state === 'ok' || pending) && r.attention_reason && r.attention !== 'data_problem') {
-      return esc(r.attention_reason);
-    }
-    if (r.price == null) {
-      const why = DATA_STATE_REASON_RU[ds.reason] || 'нет котировки';
-      return `Не рассчитано<div class="state-sub">${esc(why)}</div>`;
-    }
-    return esc(r.attention_reason || '—');
+    if (r.presentation?.location?.text) return esc(LFUI.readable(r.presentation.location.text));
+    const why = ds.reason ? LFUI.dataLabel(ds) : 'Нет данных о зоне';
+    return `Не рассчитано<div class="state-sub">${esc(why)}</div>`;
   }
 
   function dataHtml(r) {
     const ds = r.data_state || {};
-    if (!ds.state || ds.state === 'ok') {
+    if (!ds.state) return 'Ещё не проверены';
+    if (ds.state === 'ok') {
       return '<span class="state-dot dot-positive"></span>Актуальны';
     }
     if (ds.reason === 'current_candle_pending') {
-      return '<span class="state-dot dot-muted"></span>Текущая свеча формируется' +
-        `<div class="state-sub">${esc(DATA_STATE_REASON_RU[ds.reason])}</div>`;
+      return '<span class="state-dot dot-muted"></span>' + esc(LFUI.dataLabel(ds));
     }
     const word = ds.state === 'stale' ? 'Устарели' : 'Неполные';
     const why = DATA_STATE_REASON_RU[ds.reason] || ds.reason || '';
@@ -389,6 +386,13 @@
       ]);
       if (seq !== st.reqSeq) return;
       st.rows = (ov && ov.instruments) || [];
+      // §13 (этап 6b): доменные версии снимка — точка отсчёта для WS-diff'ов
+      if (ov && ov.versions && HTF.DomainSync) {
+        for (const [key, v] of HTF.DomainSync.statusEntries(ov.versions)) {
+          const cur = st.versions.get(key);
+          if (cur == null || v > cur) st.versions.set(key, v);
+        }
+      }
       st.candidates = ((cands || []).filter((z) => HTF_TFS.has(z.timeframe))).length;
       // Цена строки уже в обзоре. Полный снимок H1 нужен только карточке
       // выбранного актива, а не каждому инструменту списка.
@@ -409,16 +413,34 @@
     }, 800);
   }
 
+  // §14 (этап 6b): рефетч только при росте доменной версии; сообщение без
+  // версий (старый сервер) — прежнее поведение (дебаунс-рефетч)
+  function versionAdvanced(data) {
+    const entries = HTF.DomainSync ? HTF.DomainSync.wsEntries(data) : [];
+    if (!entries.length) return true;
+    let changed = false;
+    for (const [key, value] of entries) {
+      if (value == null) continue;
+      const cur = st.versions.get(key);
+      // ключа ещё нет в снимке (например, candles вне versions листинга) —
+      // консервативно считаем изменением
+      if (cur == null || value > cur) { st.versions.set(key, value); changed = true; }
+    }
+    return changed;
+  }
+
   function onWs(data) {
     if (!isActive()) return;
+    if (document.hidden) return; // AC17: возврат на вкладку — общий recovery
     if (data.type === 'price' && data.instrument_id != null && data.price) {
       st.prices.set(data.instrument_id, { price: data.price, at: data.time || Date.now() });
       refreshAges();
       renderCard();
-      scheduleRefresh();
+      // scheduleRefresh() с тика убран (AC16): снимки перечитываются по смене
+      // доменных версий, котировка меняет только цену и возраст
     } else if (data.type === 'event' || data.type === 'zone' || data.type === 'ltf'
         || data.type === 'candle') {
-      scheduleRefresh();
+      if (versionAdvanced(data)) scheduleRefresh();
     }
   }
 
@@ -473,16 +495,19 @@
     const box = $('now-recent');
     if (!box) return;
     try {
-      const items = await api('/api/journal?kind=all&limit=5');
+      const data = await api('/api/journal/page?kind=all&limit=30');
+      const items = LFUI.groupEvents(data.items).slice(0,5);
       if (seq !== st.reqSeq) return;
       if (!items || !items.length) {
         box.innerHTML = '<li class="now-empty">Записей журнала пока нет.</li>';
         return;
       }
-      box.innerHTML = items.slice(0, 5).map((item) => {
+      st.recentItems = items.map(group => group.items[0]);
+      box.innerHTML = items.slice(0, 5).map((group,index) => {
+        const item = group.items[0];
         const who = item.symbol ? `${esc(item.symbol)} · ` : '';
-        return `<li><button type="button" class="now-recent-open" data-view="journal">` +
-          `<span class="now-recent-time">${esc(ageText(item.at))}</span> ${who}${esc(item.title || 'Запись')}</button></li>`;
+        return `<li><button type="button" class="now-recent-open" data-recent="${index}">` +
+          `<span class="now-recent-time" title="${esc(HTF.fmtTime(item.at))}">${esc(ageText(item.at))}</span> ${who}${esc(LFUI.readable(item.title || 'Запись'))}${group.items.length > 1 ? ` · ${group.items.length} повторения` : ''}</button></li>`;
       }).join('');
     } catch (e) {
       if (seq !== st.reqSeq) return;
@@ -499,7 +524,7 @@
     }
     if (e.target.id === 'now-recent-retry') loadRecent(st.reqSeq);
     const recent = e.target.closest('.now-recent-open');
-    if (recent && typeof showView === 'function') showView('journal');
+    if (recent && window.LFJournal) LFJournal.details(st.recentItems[Number(recent.dataset.recent)]);
   });
 
   async function loadCurrent(id, seq) {

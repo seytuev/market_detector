@@ -31,9 +31,10 @@ def test_env_bool_true(monkeypatch):
     assert load_detector_config().notify_only_reviewed is True
 
 
-def test_env_bool_invalid_ignored(monkeypatch):
+def test_env_bool_invalid_rejected(monkeypatch):
     monkeypatch.setenv("HTF_DET_NOTIFY_ONLY_REVIEWED", "junk")
-    assert load_detector_config().notify_only_reviewed is False
+    with pytest.raises(ValueError, match="HTF_DET_NOTIFY_ONLY_REVIEWED"):
+        load_detector_config()
 
 
 def test_apply_payload_bool_string():

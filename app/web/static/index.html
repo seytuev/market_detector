@@ -9,7 +9,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
   <link rel="stylesheet" href="/style.css">
-  <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+  <link rel="stylesheet" href="/redesign.css">
+  <script src="/vendor/lightweight-charts.js"></script>
 </head>
 <body class="app-body">
   <a class="skip" href="#main">К содержимому</a>
@@ -45,6 +46,7 @@
       <span class="conn-status">
         <span id="ws-indicator" class="ws-dot offline" title="Нет соединения"></span>
         <span id="connection-label" class="connection-label">Нет соединения</span>
+        <span id="warmup-indicator" class="connection-label hidden" role="status"></span>
       </span>
     </div>
   </aside>
@@ -63,6 +65,7 @@
         <h1 class="now-title">Наблюдение</h1>
         <p class="now-sub" id="now-subline">ваш список наблюдения</p>
       </header>
+      <section id="now-market" class="now-market" aria-label="Рыночный фон"><span>Рыночный фон</span><a href="/events.html">Открыть рынок</a></section>
       <div class="now-stats" role="group" aria-label="Фильтры наблюдения">
         <button type="button" class="metric-filter" data-metric="attention">
           <span class="stat-label">Требуют внимания</span>
@@ -130,6 +133,7 @@
       </div>
     </div>
     <div class="workbar">
+      <div class="lf-analysis-actions"><a class="btn small" href="/alt.html">Сетапы D1/W1</a><button type="button" id="desk-side-toggle" class="btn small" aria-pressed="true">Сценарий</button><button type="button" id="desk-expand" class="btn small" aria-pressed="false">Развернуть</button></div>
       <select id="instrument-select" title="Инструмент"></select>
       <button type="button" id="asset-active-btn" class="btn small" aria-pressed="true">Наблюдать</button>
       <span id="instrument-meta" class="work-meta">—</span>
@@ -190,6 +194,7 @@
       <button id="btn-new-zone" class="btn primary">+ Зона</button>
     </div>
 
+    <div class="lf-analysis-tabs" role="group" aria-label="Панели анализа"><button type="button" class="btn" data-analysis-pane="chart" aria-pressed="true">График</button><button type="button" class="btn" data-analysis-pane="scenario" aria-pressed="false">Сценарий</button><button type="button" class="btn" data-analysis-pane="events" aria-pressed="false">События</button></div>
     <div class="overview-layout">
       <div class="desk-main">
         <aside class="desk-assets" id="desk-assets" aria-label="Активы">
@@ -203,11 +208,12 @@
               <button type="button" class="mode-tab" id="lnk-ltf" data-chart-mode="h1">Структура H1</button>
             </div>
             <span id="candle-tf-label" class="work-meta">Свечи D1</span>
-            <button type="button" id="desk-assets-toggle" class="btn small" aria-expanded="false" aria-controls="desk-assets">Активы</button>
+            <button type="button" id="desk-assets-toggle" class="btn small" aria-expanded="true" aria-controls="desk-assets">Активы</button>
           </div>
           <div id="chart-container">
             <div id="chart"></div>
             <div id="zone-overlay"></div>
+            <div id="chart-warmup" class="chart-warmup hidden" role="status"></div>
             <div id="h1-transition" class="h1-transition hidden"></div>
             <div id="h1-event-card" class="h1-event-card hidden"></div>
             <div id="h1-layer-status" class="h1-layer-status hidden"></div>
@@ -336,11 +342,14 @@
         <label>Актив <select id="journal-instrument"><option value="">Все</option></select></label>
         <label>С даты <input id="journal-from" type="date"></label>
         <label>По дату <input id="journal-to" type="date"></label>
-        <label>Текст <input id="journal-query" type="search" placeholder="По загруженным записям"></label>
+        <label>Тип события <select id="journal-type-filter"><option value="">Все типы</option></select></label>
+        <label>Область <select id="journal-scope-filter"><option value="">Все источники</option><option value="htf">Зоны D1/W1</option><option value="ltf">Структура H1</option><option value="alt">Скринер</option><option value="context">Рыночный фон</option></select></label>
+        <label>Поиск <input id="journal-query" type="search" placeholder="По всей истории"></label>
       </div>
       <p class="field-desc" id="journal-scope">Поиск в загруженных событиях. Вся история базы этим полем не охватывается.</p>
       <button type="button" id="journal-new" class="btn hidden">Новые записи</button>
       <div id="journal-list" class="journal-list" aria-live="polite"></div>
+      <button type="button" id="journal-more" class="btn hidden">Загрузить ещё</button>
     </div>
   </section>
 
@@ -378,7 +387,9 @@
       <section class="now-assets help-block">
         <div class="now-assets-head"><h2>Архив методик</h2></div>
         <p class="field-desc">Сетапы биткоина A, B, V и G — архив. Они не задают текущую оценку рынка и не являются вероятностью движения цены. Если наблюдений мало, на экране рынка это пишется отдельно: недостаточно наблюдений для статистической оценки.</p>
+        <details id="help-archive"><summary>Посмотреть прежнюю методику BTC</summary><div id="market-archive-body"></div></details>
       </section>
+      <section class="now-assets help-block"><div class="now-assets-head"><h2>Как считается оценка рынка</h2></div><div id="market-methodology-body" class="lf-reference-body" aria-live="polite"></div></section>
     </div>
   </section>
 
@@ -396,11 +407,14 @@
         <button type="button" data-settings-pane-btn="notify" aria-pressed="false">Уведомления</button>
         <button type="button" data-settings-pane-btn="look" aria-pressed="false">Оформление</button>
         <button type="button" data-settings-pane-btn="rules" aria-pressed="false">Правила анализа</button>
+        <button type="button" data-settings-pane-btn="sources" aria-pressed="false">Данные и источники</button>
       </nav>
       <div class="settings-panes">
+      <section class="lf-panel" data-settings-pane="sources"><div class="lf-panel-head"><h2>Данные и источники</h2></div><p class="field-desc">Полнота источника и актуальность расчёта показываются отдельно.</p><button type="button" id="market-sources-refresh" class="btn">Обновить состояние</button><div id="market-sources-body" aria-live="polite"></div></section>
       <section class="lf-panel settings-assets-panel is-active" data-settings-pane="assets" aria-labelledby="set-assets-title">
         <div class="lf-panel-head">
           <h2 id="set-assets-title">Активы</h2>
+          <span id="settings-assets-count" class="settings-tg"></span>
         </div>
         <p class="field-desc">Одна кнопка останавливает свечи, котировки и расчёт по активу. История остаётся в базе, включение возвращает процедуры.</p>
         <div id="settings-assets" class="settings-assets"></div>
@@ -420,9 +434,9 @@
       <section class="lf-panel" data-settings-pane="look" aria-labelledby="set-look-title">
         <h2 id="set-look-title">Оформление</h2>
         <div class="theme-choices" role="radiogroup" aria-label="Тема оформления">
-          <button type="button" class="theme-choice" data-theme-choice="system" aria-pressed="false"><span class="theme-dot" aria-hidden="true"></span>Как в системе</button>
-          <button type="button" class="theme-choice" data-theme-choice="dark" aria-pressed="false"><span class="theme-dot" aria-hidden="true"></span>Тёмная тема</button>
-          <button type="button" class="theme-choice" data-theme-choice="light" aria-pressed="false"><span class="theme-dot" aria-hidden="true"></span>Светлая тема</button>
+          <button type="button" class="theme-choice" data-theme-choice="system" aria-pressed="false"><span class="theme-swatch swatch-system" aria-hidden="true"></span><span class="theme-name">Как в системе</span></button>
+          <button type="button" class="theme-choice" data-theme-choice="dark" aria-pressed="false"><span class="theme-swatch swatch-dark" aria-hidden="true"></span><span class="theme-name">Тёмная</span></button>
+          <button type="button" class="theme-choice" data-theme-choice="light" aria-pressed="false"><span class="theme-swatch swatch-light" aria-hidden="true"></span><span class="theme-name">Светлая</span></button>
         </div>
         <p class="field-desc">Тема хранится в этом браузере и не запускает пересчёт. Без сохранённого выбора открывается светлая тема.</p>
       </section>
@@ -437,8 +451,10 @@
       </div>
       <div class="settings-sticky">
         <span id="settings-status" class="settings-status"></span>
-        <button type="button" id="settings-cancel" class="btn">Отменить</button>
-        <button type="button" id="settings-save" class="btn primary">Сохранить</button>
+        <button type="button" id="settings-cancel" class="btn" disabled>Сбросить</button>
+        <button type="button" id="settings-close" class="btn">Закрыть</button>
+        <button type="button" id="settings-save" class="btn primary" disabled>Сохранить</button>
+        <button type="button" id="settings-logout" class="btn">Выйти</button>
       </div>
     </div>
   </section>
@@ -507,6 +523,7 @@
   <button id="btn-settings" class="hidden" type="button"></button>
 
   <script src="/common.js"></script>
+  <script src="/ui.js"></script>
   <script src="/data_sync.js"></script>
   <script src="/messages.js"></script>
   <script src="/h1_layers.js"></script>

@@ -123,7 +123,8 @@ def _tf_channel(db: Database, settings, instrument_id: int,
 def _continuity_channel(db: Database, instrument_id: int) -> dict[str, Any]:
     """Разрывы истории: промежуток между close_time соседних закрытых H1
     больше одного интервала. Меньше двух свечей — проверять нечего."""
-    candles = db.get_candles(instrument_id, "H1")[-_CONTINUITY_SCAN:]
+    # Ограничение окна в SQL (DESC LIMIT по PK), а не срез полного чтения (§12)
+    candles = db.get_candles(instrument_id, "H1", limit=_CONTINUITY_SCAN)
     gaps = sum(
         1 for a, b in zip(candles, candles[1:])
         if b.close_time - a.close_time > H1_MS
@@ -204,4 +205,7 @@ def data_quality(db: Database, settings, instrument_id: int,
         return {"state": "stale", "reason": "processing_lag", **out}
     if channels["continuity"]["status"] == "stale":
         return {"state": "stale", "reason": "history_gap", **out}
+    oldest = db.conn.execute("SELECT status,received_at,last_error FROM quote_spool WHERE instrument_id=? AND status NOT IN ('processed','cancelled') ORDER BY id LIMIT 1",(instrument_id,)).fetchone()
+    if oldest and (oldest["status"] in {"retry","quarantine"} or now_ms-oldest["received_at"] > 2000):
+        return {"state":"stale","reason":"quote_processing_failed" if oldest["status"] in {"retry","quarantine"} else "quote_processing_lag", **out}
     return {"state": "ok", "reason": None, **out}

@@ -12,7 +12,10 @@ def register_data_sync_routes(app, db, require_auth):
     async def status():
         sync = coordinator()
         if sync is None:
-            return {"available": False, "job": read_json(db, JOB_KEY), "channels": []}
+            return {"available": False, "job": read_json(db, JOB_KEY),
+                    "channels": [],
+                    # §13 (этап 6a): версии доступны и без координатора
+                    "versions": db.domain_versions(), "readiness": None}
         return sync.status()
 
     @app.post("/api/data-sync", status_code=202, dependencies=[Depends(require_auth)])

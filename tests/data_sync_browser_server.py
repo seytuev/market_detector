@@ -4,6 +4,8 @@ from dataclasses import replace
 from pathlib import Path
 import tempfile
 
+from fastapi import Body
+
 from app.adapters.base import QuoteTick, TIMEFRAME_MS
 from app.config import DetectorConfig, Settings
 from app.db import Database
@@ -64,5 +66,49 @@ async def change(iid: int, price: float = 110):
     return {"close": price, "open_time": candle.open_time}
 
 
-# The production application mounts static files at / as its final route.
-app.router.routes.insert(0, app.router.routes.pop())
+@app.post("/__test/broadcast")
+async def test_broadcast(message: dict = Body(...)):
+    """Сырой WS-бroadcast через хаб (штампы epoch/seq/domain_versions — настоящие)."""
+    app.state.ws_hub.broadcast(dict(message))
+    return {"ok": True}
+
+
+@app.post("/__test/add-zone/{iid}")
+async def add_zone(iid: int, lower: float = 90.0, upper: float = 95.0):
+    """Вставка зоны: реальный bump домена zones без WS-рассылки (проверка
+    восстановления по diff'у версий статуса)."""
+    from app.models import Direction, Zone, ZoneStatus, ZoneType
+    zid = db.insert_zone(Zone(
+        id=None, instrument_id=iid, type=ZoneType.OB, direction=Direction.BEAR,
+        timeframe="D1", lower=lower, upper=upper, formed_at=now_ms() - 10_000,
+        confirmed_at=now_ms() - 9_000, status=ZoneStatus.ACTIVE))
+    return {"zone_id": zid, "zones_version": db.get_domain("seq:zones")}
+
+
+@app.post("/__test/close-candle/{iid}")
+async def close_candle(iid: int, tf: str = "H1", close: float = 107, extra_revisions: int = 0):
+    """Закрытие последнего бара без пересчёта движка: один bump домена свечей
+    (+ extra_revisions дополнительных bump'ов для проверки разрыва версии)
+    и WS-рассылка candle с OHLC-нагрузкой, как у worker._ws_closed_kline."""
+    candle = db.last_candle(iid, tf, closed_only=False)
+    for _ in range(extra_revisions):
+        db.insert_candles([replace(candle, high=candle.high + 0.01)])
+    db.insert_candles([replace(
+        candle, close=close, closed=True,
+        high=max(candle.high, close), low=min(candle.low, close))])
+    app.state.ws_hub.broadcast({
+        "type": "candle", "instrument_id": iid, "timeframe": tf,
+        "open_time": candle.open_time, "open": candle.open,
+        "high": max(candle.high, close), "low": min(candle.low, close),
+        "close": close,
+    })
+    return {"open_time": candle.open_time,
+            "candles_version": db.get_domain(f"seq:candles:{iid}:{tf}")}
+
+
+# The production application mounts static files at "/" after all API routes;
+# the __test endpoints above were registered later and would fall under the
+# static mount (405) — move the mount back to the end.
+static_mount = next(r for r in app.router.routes if getattr(r, "name", "") == "static")
+app.router.routes.remove(static_mount)
+app.router.routes.append(static_mount)

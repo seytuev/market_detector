@@ -70,6 +70,7 @@ def _market_items(db: Database, limit: int) -> list[dict[str, Any]]:
         ins = instruments.get(obs.instrument_id) if obs else None
         symbol = ins.symbol if ins else None
         ref: dict[str, Any] = {"observation_id": e.observation_id}
+        ref["event_id"] = e.id
         if e.scenario_id is not None:
             ref["scenario_id"] = e.scenario_id
         items.append({
@@ -180,3 +181,139 @@ def collect_journal(db: Database, kind: str = "all", limit: int = 100) -> list[d
         items.extend(_delivery_items(db, limit))
     items.sort(key=lambda it: it["at"], reverse=True)
     return items[:limit]
+
+
+def journal_page(db: Database, *, kind: str = "all", limit: int = 100,
+                 cursor: str = "", symbol: str = "", query: str = "",
+                 scope: str = "", event_type: str = "",
+                 from_ms: Optional[int] = None, to_ms: Optional[int] = None) -> dict:
+    """Search the complete durable journal before pagination.
+
+    A source-qualified (time, source, id) keyset preserves distinct events at
+    the same time and avoids offset drift when new events are inserted.
+    The legacy list endpoint remains compatible with existing clients.
+    """
+    import base64
+    from ..texts_ru import ALT_EVENT_KIND_RU
+
+    params: list[Any] = []
+
+    def labels(column, mapping):
+        cases = []
+        for key, value in mapping.items():
+            params.extend([getattr(key, "value", key), value])
+            cases.append("WHEN ? THEN ?")
+        return f"CASE {column} {' '.join(cases)} ELSE 'Событие' END"
+
+    # All branches have exactly the same named columns. SQL filters operate
+    # on the human-readable text, not on a capped Python snapshot.
+    branches = [f"""
+        SELECT e.id, e.occurred_at AS at, 'htf' AS source, 'market' AS category,
+          e.kind, {labels('e.kind', KIND_RU)} AS label,
+          'Цена ' || e.price AS text, i.symbol, z.instrument_id,
+          json_object('event_id',e.id,'zone_id',e.zone_id) AS ref_json, '' AS status
+        FROM event e LEFT JOIN zone z ON z.id=e.zone_id
+        LEFT JOIN instrument i ON i.id=z.instrument_id WHERE e.kind!='approach'
+    """, f"""
+        SELECT e.id, e.occurred_at, 'ltf', 'market', e.kind,
+          {labels('e.kind', LTF_EVENT_KIND_RU)}, '', i.symbol, o.instrument_id,
+          json_object('event_id',e.id,'observation_id',e.observation_id,
+            'scenario_id',e.scenario_id), ''
+        FROM ltf_event e LEFT JOIN ltf_observation o ON o.id=e.observation_id
+        LEFT JOIN instrument i ON i.id=o.instrument_id
+    """, f"""
+        SELECT r.id,r.created_at,'htf','decisions',r.decision,
+          'Решение: ' || {labels('r.decision', DECISION_RU)},r.text,i.symbol,z.instrument_id,
+          json_object('review_id',r.id,'zone_id',r.zone_id),''
+        FROM review r LEFT JOIN zone z ON z.id=r.zone_id
+        LEFT JOIN instrument i ON i.id=z.instrument_id
+    """, f"""
+        SELECT r.id,r.created_at,'ltf','decisions',r.decision,
+          'Решение: ' || {labels('r.decision', DECISION_RU)},r.text,i.symbol,z.instrument_id,
+          json_object('review_id',r.id,'entry_zone_id',r.entry_zone_id,
+            'scenario_id',r.scenario_id,'observation_id',s.observation_id),''
+        FROM ltf_review r LEFT JOIN ltf_entry_zone z ON z.id=r.entry_zone_id
+        LEFT JOIN ltf_scenario s ON s.id=r.scenario_id
+        LEFT JOIN instrument i ON i.id=z.instrument_id
+    """, """
+        SELECT d.id,COALESCE(d.delivered_at,0),'htf','delivery',d.status,
+          'Уведомление',d.destination,NULL,NULL,
+          json_object('delivery_id',d.id),d.status FROM delivery d
+    """]
+    tables = {r[0] for r in db.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if 'alt_event' in tables:
+        branches.append(f"""
+            SELECT e.id,e.event_time_ms,'alt','market',e.event_type,
+              {labels('e.event_type', ALT_EVENT_KIND_RU)},'',a.symbol,NULL,
+              json_object('event_id',e.id,'setup_id',e.setup_id),''
+            FROM alt_event e LEFT JOIN alt_setup s ON s.id=e.setup_id
+            LEFT JOIN alt_asset a ON a.id=s.asset_id
+        """)
+    if 'events_publication' in tables:
+        branches.append("""
+            SELECT p.id,p.created_at,'context','market',p.kind,'Рыночный фон',
+              COALESCE(json_extract(p.payload_json,'$.text'),''),NULL,NULL,
+              json_object('event_id',p.id,'assessment_id',p.assessment_id,
+                'bundle_id',p.bundle_id),'' FROM events_publication p
+        """)
+    if 'events_delivery' in tables:
+        branches.append("""
+            SELECT d.id,COALESCE(d.delivered_at,d.created_at),'context','delivery',
+              d.status,'Уведомление о рынке',d.channel,NULL,NULL,
+              json_object('delivery_id',d.id,'bundle_id',d.bundle_id),d.status
+            FROM events_delivery d
+        """)
+    cte = 'WITH entries AS (' + ' UNION ALL '.join(branches) + ') '
+    where = ['1=1']
+    filters: list[Any] = []
+    for col, value in [('category', kind if kind != 'all' else ''),
+                       ('symbol', symbol), ('source', scope), ('kind', event_type)]:
+        if value:
+            where.append(f'{col}=?')
+            filters.append(value)
+    if from_ms is not None:
+        where.append('at>=?')
+        filters.append(from_ms)
+    if to_ms is not None:
+        where.append('at<?')
+        filters.append(to_ms)
+    # SQLite's built-in lower is ASCII-only: use a deterministic Unicode
+    # function on this connection for Russian text search.
+    db.conn.create_function('lf_casefold', 1, lambda v: str(v or '').casefold(), deterministic=True)
+    if query:
+        where.append("instr(lf_casefold(COALESCE(symbol,'') || ' ' || label || ' ' || text),?)>0")
+        filters.append(query.casefold())
+    predicate = ' AND '.join(where)
+    total = db.conn.execute(cte + 'SELECT count(*) FROM entries WHERE ' + predicate,
+                            params + filters).fetchone()[0]
+    symbols = [r[0] for r in db.conn.execute(cte +
+        'SELECT DISTINCT symbol FROM entries WHERE symbol IS NOT NULL ORDER BY symbol', params)]
+    types = [dict(r) for r in db.conn.execute(cte +
+        'SELECT kind,MIN(label) AS label FROM entries GROUP BY kind ORDER BY label', params)]
+    if cursor:
+        try:
+            values = json.loads(base64.urlsafe_b64decode(cursor.encode('ascii')))
+            if (not isinstance(values, list) or len(values) != 4
+                    or not isinstance(values[0], int) or not isinstance(values[1], str)
+                    or not isinstance(values[2], str) or not isinstance(values[3], int)):
+                raise ValueError
+        except (ValueError, TypeError, UnicodeError) as exc:
+            raise ValueError('Некорректная страница журнала') from exc
+        where.append('(at,source,category,id)<(?,?,?,?)')
+        filters.extend(values)
+    rows = db.conn.execute(cte + 'SELECT * FROM entries WHERE ' + ' AND '.join(where) +
+        ' ORDER BY at DESC,source DESC,category DESC,id DESC LIMIT ?', params + filters + [limit + 1]).fetchall()
+    next_cursor = None
+    if len(rows) > limit:
+        last = rows[limit - 1]
+        next_cursor = base64.urlsafe_b64encode(json.dumps(
+            [last['at'], last['source'], last['category'], last['id']]).encode()).decode()
+    items = []
+    for row in rows[:limit]:
+        item = dict(row)
+        item['ref'] = json.loads(item.pop('ref_json'))
+        item['title'] = _title(item['symbol'], item.pop('label'))
+        item['uid'] = f"{item['source']}:{item['category']}:{item['id']}"
+        items.append(item)
+    return {'items': items, 'total': total, 'symbols': symbols, 'types': types,
+            'next_cursor': next_cursor, 'scope': 'full_history'}

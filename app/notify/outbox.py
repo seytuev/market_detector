@@ -40,6 +40,7 @@ class Outbox:
         self.lock = asyncio.Lock()
         self.register("chart", lambda r, m: None, lambda i, s: None)
         self._media_check = 0
+        self.inline_delivery = True
 
     @property
     def destination(self):
@@ -67,7 +68,7 @@ class Outbox:
         stamp = now_ms()
         due = stamp + int(getattr(self.cfg, "notification_digest_seconds", 900)) * 1000 if quiet else stamp
         encoded = json.dumps(asdict(card), ensure_ascii=False)
-        with self.db.conn._lock:
+        with self.db.batch_writes():
             self.db.conn.execute(
                 "INSERT OR IGNORE INTO notification_packet "
                 "(destination,channel,semantic_key,card,quiet,created_at,due_at) VALUES(?,?,?,?,?,?,?)",
@@ -135,6 +136,10 @@ class Outbox:
             (status, now_ms() + int(delay * 1000), f"{type(exc).__name__}: {exc}", row["id"]))
         self.db.conn.commit()
         log.warning("Notification %s: %s", row["id"], status)
+
+    async def flush_inline(self):
+        if self.inline_delivery:
+            await self.flush()
 
     async def flush(self):
         async with self.lock:
@@ -274,7 +279,7 @@ class Outbox:
     async def _digest(self, rows):
         # Freeze membership before sending. Retry uses this very same packet.
         key = fingerprint(sorted(r["id"] for r in rows))
-        with self.db.conn._lock:
+        with self.db.batch_writes():
             # Packet creation and child assignment commit together: another
             # process must never see an empty, sendable digest between them.
             stamp = now_ms()
@@ -358,14 +363,18 @@ class Outbox:
             queued += 1
         return queued
 
-    async def run(self):
-        while True:
+    async def run(self, stop=None):
+        stop = stop or asyncio.Event()
+        while not stop.is_set():
             try:
                 await self.flush()
                 await self.retry_media()
             except Exception:
                 log.exception("Notification outbox flush failed")
-            await asyncio.sleep(5)
+            try:
+                await asyncio.wait_for(stop.wait(), 5)
+            except asyncio.TimeoutError:
+                pass
 
 
 def get_outbox(db, sender, cfg):

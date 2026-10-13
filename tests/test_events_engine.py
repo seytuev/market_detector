@@ -343,7 +343,7 @@ def test_runner_is_idempotent_and_api_hides_the_key(tmp_path):
     ))
     db.insert_candles([
         Candle(ins, "D1", T0 + i * DAY_MS, T0 + (i + 1) * DAY_MS - 1,
-               100, 101, 99, 100 - i, True, "test")
+               100, 110, 90, 100 - i, True, "test")
         for i in range(5)
     ])
     settings = Settings()

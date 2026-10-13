@@ -449,12 +449,14 @@ class EventDispatcher:
                         self.db.conn.execute("UPDATE notification_member SET reason='superseded' WHERE id=?", (old["id"],))
                         self._finish_packet(old["event_id"], "suppressed")
                     self.db.conn.commit()
-        await self.outbox.flush()
+        if not getattr(self,"defer_flush",False):
+            await self.outbox.flush_inline()
         return self._deliveries_by_ids(ids)
 
     async def notify_service(self, text: str) -> None:
         self.services.note(text)
-        await self.outbox.flush()
+        if not getattr(self,"defer_flush",False):
+            await self.outbox.flush_inline()
 
     async def retry_pending(self) -> list[Delivery]:
         # Adopt legacy unsent rows once; never touch successful history.
@@ -488,7 +490,8 @@ class EventDispatcher:
                     continue
                 from .outbox import Card
                 self.outbox.put("htf", f"legacy:{event_id}", Card(""), [event_id], quiet=True)
-        await self.outbox.flush()
+        if not getattr(self,"defer_flush",False):
+            await self.outbox.flush_inline()
         return self.db.pending_deliveries()
 
     def _deliveries_by_ids(self, ids: list[int]) -> list[Delivery]:

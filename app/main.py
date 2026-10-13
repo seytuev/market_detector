@@ -63,8 +63,10 @@ async def run_bot_polling(settings, db) -> None:
         TELEGRAM_OWNER,
         claim_owner,
         record_telegram_conflict,
+        lease_heartbeat,
+        release_owner,
     )
-    claim = claim_owner(db, TELEGRAM_OWNER, {
+    claim = await asyncio.to_thread(claim_owner, db, TELEGRAM_OWNER, {
         "pid": os.getpid(), "role": "telegram",
     })
     if not claim["owned"]:
@@ -94,7 +96,20 @@ async def run_bot_polling(settings, db) -> None:
         await application.start()
         await application.updater.start_polling()
         log.info("Telegram-бот запущен (polling)")
-        await asyncio.Event().wait()  # живём до остановки процесса
+        stop = getattr(db, "runtime_stop", asyncio.Event())
+        heartbeat = asyncio.create_task(lease_heartbeat(db, TELEGRAM_OWNER, claim["owner"], stop))
+        waiter = asyncio.create_task(stop.wait())
+        try:
+            done, _ = await asyncio.wait([heartbeat, waiter], return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                task.result()
+        finally:
+            heartbeat.cancel()
+            waiter.cancel()
+            await asyncio.gather(heartbeat, waiter, return_exceptions=True)
+            await application.updater.stop()
+            await application.stop()
+            await asyncio.to_thread(release_owner, db, TELEGRAM_OWNER, claim["owner"])
 
 
 def check_deploy_token(settings) -> None:
@@ -123,7 +138,7 @@ async def async_main() -> None:
     # получит тот же итоговый конфиг, что виден в веб-настройках
     settings.detector = load_detector_config()
     settings.alt_config = load_alt_config()
-    db = Database(settings.db_path)
+    db = await asyncio.to_thread(Database, settings.db_path)
     if settings.db_path != ":memory:":
         try:
             db_bytes = Path(settings.db_path).stat().st_size
@@ -164,6 +179,8 @@ async def async_main() -> None:
         chat_id=settings.telegram_chat_id or None,
     )
 
+    dispatcher.defer_flush = True
+    dispatcher.outbox.inline_delivery = False
     ltf_engine = LtfEngine(db, settings.detector)   # LTF Confirmations (этапы B–E)
     app = create_app(db, settings, ltf_engine=ltf_engine)
     # доставка LTF-уведомлений тем же транспортом, что у HTF (§11)
@@ -187,21 +204,54 @@ async def async_main() -> None:
         alt_dispatcher=alt_dispatcher,
     )
     app.state.data_sync = worker.data_sync
+    app.state.worker = worker
+    worker.instance_id = app.state.instance_id
+    db.runtime_instance_id = app.state.instance_id
+    db.runtime_stop = worker._stop
 
     server = uvicorn.Server(
         uvicorn.Config(app=app, host=settings.host, port=settings.port,
                        log_level="info")
     )
+    from .services.maintenance import run as run_maintenance
+    tasks = [asyncio.create_task(server.serve(), name="http"),
+             asyncio.create_task(worker.run(), name="worker"),
+             asyncio.create_task(dispatcher.outbox.run(worker._stop), name="outbox"),
+             asyncio.create_task(run_maintenance(db,settings,worker._stop), name="maintenance")]
+    if settings.telegram_token:
+        tasks.append(asyncio.create_task(run_bot_polling(settings, db), name="telegram"))
     try:
-        await asyncio.gather(
-            server.serve(),
-            worker.run(),
-            dispatcher.outbox.run(),
-            run_bot_polling(settings, db),
-        )
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            task.result()
     finally:
+        app.state.stopping = True
         worker.stop()
+        server.should_exit = True
+        if worker.realtime is not None:
+            await worker.realtime.stop()
+        for task in list(worker._ws_background):
+            task.cancel()
+        await asyncio.gather(*list(worker._ws_background), return_exceptions=True)
+        for task in tasks:
+            if task.get_name() == "worker" and not task.done():
+                task.cancel()
+        await app.state.settings_jobs.shutdown()
+        await worker.market_queue.stop()
+        await worker.calc_queue.stop()
         await worker.data_sync.shutdown()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        lease_task = getattr(worker,"_lease_task",None)
+        if lease_task is not None:
+            await asyncio.gather(lease_task,return_exceptions=True)
+        from .services.runtime import CALC_OWNER, release_owner
+        claim = getattr(worker, "_calc_claim", None)
+        if claim:
+            await asyncio.to_thread(release_owner, db, CALC_OWNER, claim)
+        for adapter in [*adapters.values(), cmc_adapter]:
+            client = getattr(adapter, "client", None) or getattr(adapter, "_client", None)
+            if client is not None and hasattr(client, "aclose"):
+                await client.aclose()
         db.close()
 
 

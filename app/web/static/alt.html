@@ -9,7 +9,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
   <link rel="stylesheet" href="/style.css">
-  <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+  <link rel="stylesheet" href="/redesign.css">
+  <script src="/vendor/lightweight-charts.js"></script>
 </head>
 <body class="app-body">
   <a class="skip" href="#main">К содержимому</a>
@@ -71,7 +72,7 @@
 
     <div class="alt-tabs" role="tablist" aria-label="Группы сетапов">
       <button type="button" class="alt-tab" data-bucket="eligible" title="Активные сетапы без стадии «требует проверки». Не означает, что вход доступен.">Все активные</button>
-      <button type="button" class="alt-tab" data-bucket="new_entries">Новые входы</button>
+      <button type="button" class="alt-tab" data-bucket="new_entries">Новые условия входа</button>
       <button type="button" class="alt-tab" data-bucket="awaiting_retest">Ожидание ретеста</button>
       <button type="button" class="alt-tab" data-bucket="review">Требуют проверки</button>
       <button type="button" class="alt-tab" data-bucket="history">История</button>
@@ -155,11 +156,12 @@
 
       <section class="alt-chart-col" aria-label="График">
         <div class="alt-asset-head">
-          <button type="button" id="alt-back" class="btn small alt-back">К списку</button>
+          <button type="button" id="alt-back" class="btn small alt-back">← К скринеру</button>
           <h2 id="alt-chart-title">Выберите монету</h2>
           <p id="alt-chart-sub" class="alt-dim"></p>
         </div>
         <div class="alt-toolbar" id="alt-toolbar">
+          <a class="btn small" href="/?mode=h1#desk">Структура H1</a>
           <div class="alt-modes" role="group" aria-label="Режим событий">
             <button type="button" id="alt-mode-setup" data-mode="setup" aria-pressed="true">Сетап</button>
             <button type="button" id="alt-mode-history" data-mode="history" aria-pressed="false">История</button>
@@ -202,8 +204,7 @@
         </div>
         <div class="alt-chart-actions">
           <button type="button" id="alt-auto" class="btn small" title="Показать все загруженные свечи и подобрать ценовую шкалу по ним">Авто</button>
-          <button type="button" id="alt-png" class="btn small" title="Скачать текущий вид графика в PNG">PNG</button>
-          <button type="button" id="alt-png2" class="btn small" title="Скачать текущий вид графика в PNG, двойное разрешение">PNG 2×</button>
+          <details class="lf-export"><summary class="btn small">Экспорт</summary><div><button type="button" id="alt-png" class="btn small" title="Скачать текущий вид графика в PNG">PNG</button><button type="button" id="alt-png2" class="btn small" title="Скачать текущий вид графика в PNG, двойное разрешение">PNG 2×</button></div></details>
         </div>
         <p id="alt-chart-empty" class="alt-empty">Выберите монету слева — график и карточка обновятся.</p>
         <section class="alt-journal" id="alt-journal">
@@ -225,7 +226,7 @@
 
       <aside class="alt-card" id="alt-card" aria-label="Карточка сетапа">
         <div class="alt-card-head">
-          <h2>Состояние сетапа</h2>
+          <h2>Сценарий D1/W1</h2>
           <button type="button" id="alt-collapse-card" class="btn small alt-collapse">Свернуть</button>
           <button type="button" id="alt-card-close" class="btn small">Закрыть</button>
         </div>
@@ -293,6 +294,7 @@
   </div>
 
   <script src="/common.js"></script>
+  <script src="/ui.js"></script>
   <script src="/alt_chart.js"></script>
   <script src="/events.js"></script>
   <script src="/alt.js"></script>

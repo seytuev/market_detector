@@ -962,6 +962,7 @@ def alt_setups_table(
     dd_min: Optional[float] = None,
     dd_max: Optional[float] = None,
     structure: Optional[str] = None,
+    search: str = "",
 ) -> dict[str, Any]:
     """Таблица §16 с ранжированием §17.
 
@@ -1077,6 +1078,9 @@ def alt_setups_table(
     # --- вторичные фильтры (§16) ---
     def visible(row: dict[str, Any]) -> bool:
         src = row["source"] or {}
+        if search and search.casefold() not in " ".join(str(value or "") for value in (
+            row["asset"].get("symbol"), row["asset"].get("name"), src.get("symbol"))).casefold():
+            return False
         if venue and src.get("venue") != venue:
             return False
         rank = row["asset"]["cmc_rank"] or 0
@@ -1106,6 +1110,13 @@ def alt_setups_table(
         return True
 
     rows = [r for r in rows if visible(r)]
+    # Counters describe the same secondary filters as the visible rows.
+    counts = {b: 0 for b in BUCKETS if b != "all"}
+    for row in all_rows:
+        if visible(row):
+            name = bucket_of(row)
+            counts[name] = counts.get(name, 0) + 1
+    counts["eligible"] = sum(1 for r in active_rows if r["stage"] != STAGE_REVIEW and visible(r))
     # §17: активные ранжируются; история — по завершению (свежие первыми)
     if bucket == "history":
         rows.sort(key=lambda r: (r["terminated_ms"] or 0, r["asset"]["id"]),

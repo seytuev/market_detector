@@ -33,8 +33,8 @@
     validated: 'проверено', unvalidated: 'правило ещё не проверено',
   };
   const SOURCE_RU = {
-    price: 'Цены', liquidations: 'Принудительное закрытие сделок', oi: 'Объём открытых контрактов',
-    funding: 'Плата за удержание позиции', calendar: 'Календарь', basket: 'Набор монет',
+    price: 'Цены', liquidations: 'Ликвидации — принудительное закрытие позиций', oi: 'Открытый интерес',
+    funding: 'Ставка финансирования', calendar: 'Календарь', basket: 'Набор монет',
     basket_history: 'История цен набора монет',
   };
   const BUNDLE_KIND_RU = { changes: 'Изменения', downtime_digest: 'Сводка после простоя' };
@@ -43,7 +43,7 @@
     delivered: 'доставлено', sent: 'отправлено', pending: 'ожидает',
     unavailable: 'недоступна', failed: 'ошибка', shadow: 'теневая запись',
   };
-  const UPCOMING_KIND_RU = { day_boundary: 'Начало нового дня', fact_expiry: 'Событие перестанет влиять на оценку' };
+  const UPCOMING_KIND_RU = { msk_day_boundary:'Плановый пересчёт · новый день МСК', day_boundary: 'Начало нового дня', fact_expiry: 'Окончание учёта фактора' };
   const RULE_NAME = {
     LIQ_PRESSURE: 'Давление из-за закрытия сделок', LIQ_RECOVERY: 'Восстановление после массового закрытия сделок',
     LIQ_FACT: 'Массовое закрытие сделок', TIME_WEEKDAY: 'Влияние дня недели',
@@ -153,16 +153,18 @@
   function factsListHtml(facts) {
     const list = facts || [];
     if (!list.length) return '<p class="market-empty">За последние 10 дней нет событий, которые сейчас влияют на оценку.</p>';
-    const more = list.length > 4 ? `<details class="market-more" data-persist="more-facts"><summary>Ещё событий: ${list.length - 4}</summary><ul>${list.slice(4).map(factLine).join('')}</ul></details>` : '';
-    return `<ul>${list.slice(0, 4).map(factLine).join('')}</ul>${more}`;
+    const more = list.length > 3 ? `<details class="market-more" data-persist="more-facts"><summary>Все факторы · ещё ${list.length - 3}</summary><ul>${list.slice(3).map(factLine).join('')}</ul></details>` : '';
+    return `<ul>${list.slice(0, 3).map(factLine).join('')}</ul>${more}`;
   }
 
   // Частота и калиброванная вероятность подписаны раздельно; калиброванная
   // показывается только при kind == 'calibrated_probability' (AC13).
   function statsHtml(stats) {
-    if (!stats || !stats.available) return '<p class="market-empty">Пока мало наблюдений для надёжной статистики.</p>';
+    if (!stats || !stats.available) {
+      return `<p class="market-empty">${esc((stats && stats.text) || 'Статистика недостаточна')}</p>`;
+    }
     const label = stats.kind === 'calibrated_probability'
-      ? 'вероятность с поправкой по прошлым результатам' : 'как часто это происходило в прошлом';
+      ? 'калиброванная вероятность' : 'историческая частота';
     const n = stats.n != null ? ` · наблюдений: ${fmtNum(stats.n)}` : '';
     const unc = stats.uncertainty
       ? ` · интервал ${fmtNum(stats.uncertainty.low)}–${fmtNum(stats.uncertainty.high)}` : '';
@@ -172,7 +174,8 @@
 
   function factorAgreementHtml(agreement) {
     if (!agreement) return '';
-    return `<div class="market-votes"><span>За рост <strong>${esc(fmtNum(agreement.long))}</strong></span><span>За снижение <strong>${esc(fmtNum(agreement.short))}</strong></span></div><p class="events-service">Количество учтённых условий, а не вероятность движения цены.</p>`;
+    const label = agreement.label || 'Согласованность факторов';
+    return `<div class="market-votes"><span class="events-service">${esc(label)}</span><span>За рост <strong>${esc(fmtNum(agreement.long))}</strong></span><span>За снижение <strong>${esc(fmtNum(agreement.short))}</strong></span></div><p class="events-service">Количество учтённых условий, а не вероятность движения цены.</p>`;
   }
 
   function unknownDepsHtml(deps) {
@@ -240,8 +243,7 @@
     const age = data.market_age_seconds != null ? ` · обновлено ${fmtAge(data.market_age_seconds)}` : '';
     const stale = data.market_stale
       ? '<p class="events-warn">Оценка устарела. Показан последний сохранённый результат.</p>' : '';
-    const legacy = data.legacy_methodology
-      ? `<section class="events-card"><h2>${esc(data.legacy_methodology)}</h2>${renderNowLegacy(data)}</section>` : '';
+    const legacy = '';
 
     const facts = market.active_facts || [];
     const ratio = coverage && coverage.ok != null && Number.isFinite(Number(coverage.ok)) && Number(coverage.total) > 0 && Number.isFinite(Number(coverage.total))
@@ -329,29 +331,32 @@
   }
 
   // ---- полный раздел: «Календарь» ------------------------------------------
+  let calendarMonth = '', calendarDay = '', calendarData = null;
+  const mskDate = ms => new Date(Number(ms)+10800000).toISOString().slice(0,10);
   function renderCalendarMarket(market) {
     if (!market) return '';
-    const tc = market.time_context || {};
-    const dayMove = (sign) => sign == null ? 'нет данных' : Number(sign) > 0 ? 'рост' : Number(sign) < 0 ? 'снижение' : 'без изменения';
-    const days = (tc.completed_days || []).map((day) =>
-      `<li>${esc(fmtMsk(day.day_start_ms))} · ${esc(day.weekday_name || day.weekday || '')} · ${dayMove(day.sign)}${day.median_return != null ? `<details class="market-technical"><summary>Числовой результат дня</summary><p>Изменение цены в середине набора монет: ${esc(fmtNum(day.median_return))} (медиана)</p></details>` : ''}</li>`
-    ).join('');
-    const seq = tc.week_seq;
-    const seqText = seq
-      ? `Понедельник: ${dayMove(seq.mon_sign)}. Вторник: ${dayMove(seq.tue_sign)}. Условие роста в начале недели ${seq.condition_met ? 'выполнено' : 'не выполнено'}.`
-      : 'Рост в начале недели пока не проверялся.';
-    const upcoming = (market.upcoming || []).map((item) =>
-      `<li>${esc(UPCOMING_KIND_RU[item.kind] || item.kind || '—')}: ${esc(item.label || '')} — ${esc(fmtMsk(item.at_ms))}</li>`
-    ).join('');
-    const hour = tc.hour_msk != null ? ` · час МСК: ${tc.hour_msk}` : '';
-    return `<article class="events-card">
-      <h2>День и время по Москве</h2>
-      <p>День недели: ${esc(tc.weekday_name || '—')}${esc(hour)}</p>
-      ${days ? `<h3>Завершённые дни</h3><ul>${days}</ul>` : ''}
-      <p>${esc(seqText)}</p>
-      ${upcoming ? `<h3>Ближайшие изменения оценки</h3><ul>${upcoming}</ul>` : ''}
-      <p class="events-service">Календарь показывает сроки проверки условий. Массовое закрытие сделок заранее не известно.</p>
-    </article>`;
+    calendarData = market;
+    if (!calendarDay) calendarDay = mskDate(Date.now());
+    if (!calendarMonth) calendarMonth = calendarDay.slice(0,7);
+    const tc = market.time_context || {}, days = tc.completed_days || [];
+    const upcoming = market.upcoming || [];
+    const dayMove = sign => sign == null ? 'Нет данных' : Number(sign)>0 ? 'Рост' : Number(sign)<0 ? 'Снижение' : 'Без изменения';
+    const [year,month] = calendarMonth.split('-').map(Number);
+    const count = new Date(Date.UTC(year,month,0)).getUTCDate();
+    const offset = (new Date(Date.UTC(year,month-1,1)).getUTCDay()+6)%7;
+    const monthLabel = new Date(Date.UTC(year,month-1,1)).toLocaleDateString('ru-RU',{month:'long',year:'numeric',timeZone:'UTC'});
+    const cells = Array.from({length:count},(_,i) => {
+      const date = `${calendarMonth}-${String(i+1).padStart(2,'0')}`;
+      const completed = days.find(day => day.day_start_ms && mskDate(day.day_start_ms) === date);
+      const n = upcoming.filter(item => (item.at || item.at_ms) && mskDate(item.at || item.at_ms) === date).length;
+      const move = completed ? dayMove(completed.sign) : '';
+      const glyph = completed ? completed.sign > 0 ? '↑' : completed.sign < 0 ? '↓' : '↔' : '';
+      return `<button type="button" class="btn" data-calendar-day="${date}" aria-pressed="${date===calendarDay}" aria-label="${date}${move ? ' · '+move : n ? ' · Событий: '+n : ''}">${i+1}${completed ? `<small title="${move}">${glyph}</small>` : n ? `<small title="Запланированные события">• ${n}</small>` : ''}</button>`;
+    }).join('');
+    const agenda = upcoming.filter(item => (item.at || item.at_ms) && mskDate(item.at || item.at_ms) === calendarDay);
+    const completed = days.find(day => day.day_start_ms && mskDate(day.day_start_ms) === calendarDay);
+    const list = agenda.map(item => `<li><strong>${esc(UPCOMING_KIND_RU[item.kind] || 'Пересмотр оценки')}</strong><p>${esc(fmtMsk(item.at || item.at_ms))}</p>${item.fact_key ? '<small>Область: рыночный фактор</small>' : ''}</li>`).join('');
+    return `<article class="events-card"><div class="lf-calendar-head"><button type="button" class="btn" data-calendar-shift="-1" aria-label="Предыдущий месяц">←</button><h2>${esc(monthLabel)}</h2><button type="button" class="btn" data-calendar-shift="1" aria-label="Следующий месяц">→</button></div><div class="lf-calendar-grid">${['Пн','Вт','Ср','Чт','Пт','Сб','Вс'].map(day=>`<span>${day}</span>`).join('')}${'<span></span>'.repeat(offset)}${cells}</div><section class="lf-calendar-agenda"><h3>${esc(new Date(calendarDay+'T12:00:00+03:00').toLocaleDateString('ru-RU',{day:'numeric',month:'long',year:'numeric',timeZone:'Europe/Moscow'}))}</h3>${completed ? `<p>Завершённый день: ${dayMove(completed.sign)}</p>${completed.median_return != null ? `<p>Медианное изменение цены: ${esc(fmtNum(Number(completed.median_return)*100))}%</p>` : ''}` : ''}${list ? `<ul>${list}</ul>` : '<p>Нет запланированных изменений оценки на выбранный день.</p>'}</section><p class="events-service">Все даты и границы дня указаны по МСК. Будущие ликвидации заранее неизвестны.</p></article>`;
   }
 
   // ---- полный раздел: «Правила и статистика» --------------------------------
@@ -548,7 +553,7 @@
       <div class="events-side-state">${state}` +
       (note.side && note.text ? `<span class="side-state-note">${esc(note.text)}</span>` : '') +
       `</div>
-      <a class="btn small side-open" href="/events.html">Открыть раздел</a>`;
+      <a class="btn small side-open" href="/events.html">Открыть контекст рынка</a>`;
   }
 
   function renderFeedLegacy(data) {
@@ -597,12 +602,11 @@
   async function loadSide() {
     const box = document.getElementById('h1-events-context');
     if (!box || !window.HTF || document.getElementById('events-root')) return;
-    if (!HTF.getToken()) {
-      box.innerHTML = '<p>Рыночный фон появится после входа.</p>';
-      return;
-    }
     try {
+      await HTF.ensureToken();
       renderSideMarket(await HTF.api('/api/events/overview'));
+      const overview = document.getElementById('now-market');
+      if (overview) overview.innerHTML = box.innerHTML;
     } catch (err) {
       box.innerHTML = '<p>Рыночный фон сейчас недоступен. <a href="/events.html">Открыть рынок</a></p>';
     }
@@ -618,13 +622,13 @@
     const endpoint = { now: 'overview', feed: 'journal', calendar: 'calendar', rules: 'rules', sources: 'health' }[mode] || 'overview';
     let data = null;
     try {
-      if (!HTF.getToken()) await HTF.ensureToken('Нужен токен владельца.');
+      await HTF.ensureToken();
       if (version !== requestVersion) return;
       data = await requestData(endpoint);
       if (version !== requestVersion) return;
       let html;
       if (mode === 'feed') html = renderFeedBundles(data) || renderFeedLegacy(data);
-      else if (mode === 'calendar') html = renderCalendarMarket(data.market) + renderCalendarLegacy(data)
+      else if (mode === 'calendar') html = (data.market ? renderCalendarMarket(data.market) : renderCalendarLegacy(data))
         || `<p>${esc(data.empty_reason || 'Нет данных календаря.')}</p>`;
       else if (mode === 'sources') html = renderSources(data);
       else if (mode === 'rules') {
@@ -633,7 +637,7 @@
           + (registry.length ? registry.map(ruleRegistryCard).join('') : (data.rules || []).map((rule) =>
             `<article class="events-card"><h2>${esc(rule.text)}</h2><p>ID ${esc(rule.id)} · ${esc(CLASS_RU[rule.class] || rule.class || '—')}</p></article>`).join(''))
           + `<section class="events-card"><h2>Статистика</h2>${statsHtml(data.statistics)}</section>`;
-      } else html = data.market ? renderNowMarket(data) : renderNowLegacy(data);
+      } else html = data.market ? renderNowMarket(data) : '<section class="events-card"><h2>Оценка рынка недоступна</h2><p>Недостаточно данных для общей оценки. Прежняя методика BTC доступна в справке.</p><a href="/#help">Открыть справку</a></section>';
       // Сохраняем раскрытые детали при обновлении; одинаковый результат не перерисовываем.
       if (body.dataset.mode !== mode || body._marketHtml !== html) {
         const opened = body.dataset.mode === mode
@@ -643,7 +647,7 @@
         body._marketHtml = html;
       }
       body.dataset.mode = mode;
-      if (status) status.textContent = 'Данные обновлены · время указано по МСК';
+      if (status) status.textContent = data.market_stale ? 'Показана сохранённая оценка · устарела · время МСК' : 'Состояние загружено · время указано по МСК';
     } catch (err) {
       if (version !== requestVersion) return;
       if (body.dataset.mode !== mode) {
@@ -677,6 +681,46 @@
   }
 
   document.getElementById('market-refresh')?.addEventListener('click', refresh);
+  document.getElementById('events-body')?.addEventListener('click', event => {
+    const day = event.target.closest('[data-calendar-day]'), shift = event.target.closest('[data-calendar-shift]');
+    if (!day && !shift) return;
+    if (day) calendarDay = day.dataset.calendarDay;
+    if (shift) { const [year,month] = calendarMonth.split('-').map(Number);
+      calendarMonth = new Date(Date.UTC(year,month-1+Number(shift.dataset.calendarShift),1)).toISOString().slice(0,7); }
+    const body = document.getElementById('events-body'); body.innerHTML = renderCalendarMarket(calendarData); body._marketHtml = body.innerHTML;
+  });
+  window.addEventListener('popstate', () => {
+    if (!document.getElementById('events-root')) return;
+    currentMode = new URLSearchParams(location.search).get('tab') === 'calendar' ? 'calendar' : 'now';
+    document.querySelectorAll('[data-mode]').forEach(btn => { btn.classList.toggle('active',btn.dataset.mode === currentMode); btn.setAttribute('aria-pressed',String(btn.dataset.mode === currentMode)); });
+    show(currentMode);
+  });
+  const referenceRequests = new Map();
+  async function loadReference(id, endpoint, renderer) {
+    const el = document.getElementById(id);
+    if (!el || referenceRequests.has(id)) return;
+    const request = (async () => {
+      el.setAttribute('aria-busy','true');
+      try { await HTF.ensureToken(); el.innerHTML = renderer(await requestData(endpoint)); }
+      catch (err) { el.innerHTML = '<p>Не удалось прочитать данные. <button type="button" class="btn">Повторить</button></p>'; el.querySelector('button').onclick = () => loadReference(id,endpoint,renderer); }
+      finally { el.setAttribute('aria-busy','false'); referenceRequests.delete(id); }
+    })();
+    referenceRequests.set(id,request); return request;
+  }
+  function loadMethodology() {
+    return loadReference('market-methodology-body','rules', data => (data.registry || []).map(ruleRegistryCard).join('') || '<p>Описание правил пока недоступно.</p>');
+  }
+  function loadHealth() { return loadReference('market-sources-body','health',renderSources); }
+  document.addEventListener('lf-view', event => {
+    if (event.detail.name === 'help') loadMethodology();
+    if (event.detail.name === 'settings') loadHealth();
+  });
+  document.getElementById('market-sources-refresh')?.addEventListener('click',loadHealth);
+  document.getElementById('help-archive')?.addEventListener('toggle', event => {
+    if (event.target.open) loadReference('market-archive-body','overview', data => `<p class="events-warn">Архивная методика BTC. Не входит в текущую общую оценку рынка.</p>${renderNowLegacy(data)}`);
+  });
+  if (document.getElementById('view-help')?.classList.contains('active')) loadMethodology();
+  if (document.getElementById('view-settings')?.classList.contains('active')) loadHealth();
 
   // ---- инициализация ----------------------------------------------------------
   document.querySelectorAll('[data-mode]').forEach((button) => {
@@ -688,6 +732,7 @@
         item.setAttribute('aria-pressed', on ? 'true' : 'false');
       });
       currentMode = button.getAttribute('data-mode') || 'now';
+      const url = new URL(location.href); url.searchParams.set('tab',currentMode); history.pushState(null,'',url.pathname+url.search);
       show(currentMode).catch((err) => {
         const body = document.getElementById('events-body');
         if (body) body.textContent = err.message || 'Не удалось загрузить события';
@@ -696,7 +741,8 @@
   });
 
   if (document.getElementById('events-root')) {
-    const initial = document.querySelector('[data-mode="now"]');
+    currentMode = new URLSearchParams(location.search).get('tab') === 'calendar' ? 'calendar' : 'now';
+    const initial = document.querySelector(`[data-mode="${currentMode}"]`);
     if (initial) {
       initial.classList.add('active');
       initial.setAttribute('aria-pressed', 'true');
@@ -704,7 +750,7 @@
     // Глубокая ссылка на сохранённую оценку: /events.html?assessment=<id>
     const requested = new URLSearchParams(location.search).get('assessment');
     if (requested) loadSavedAssessment(requested).catch(() => {});
-    show('now').catch((err) => {
+    show(currentMode).catch((err) => {
       const body = document.getElementById('events-body');
       if (body) body.textContent = err.message || 'Не удалось загрузить события';
     });

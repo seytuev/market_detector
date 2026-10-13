@@ -15,6 +15,11 @@ ELIGIBLE_STATES = ("forming", "mature", "active", "completed")
 
 
 def persist_result(db: Any, asset_id: int, source_id: int, result: dict[str, Any]) -> int:
+    with db.batch_writes():
+        return _persist_result(db,asset_id,source_id,result)
+
+
+def _persist_result(db: Any, asset_id: int, source_id: int, result: dict[str, Any]) -> int:
     """Заменяет структуры этой версии для источника. Возвращает число структур."""
     version = result.get("rules_version") or RULES_VERSION
     computed = int(result.get("computed_at_ms") or 0)

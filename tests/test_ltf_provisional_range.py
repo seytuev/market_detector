@@ -3,6 +3,9 @@
 опоры тремя правыми свечами; чистый read-only слой (приёмка п.21)."""
 from __future__ import annotations
 
+import json
+from dataclasses import asdict
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -207,6 +210,8 @@ def test_current_provisional_read_only_when_enabled(db, client, api_settings,
     подтверждённые версии диапазона, события и зоны (счётчик не меняется)."""
     sc = _seed_scenario(db, instrument_id)
     api_settings.detector.ltf_provisional_range_enabled = True
+    # Снимок читает опубликованный профиль, а не позднюю правку объекта в памяти.
+    db.set_meta("settings:active_profile", json.dumps(asdict(api_settings.detector)))
     r = client.get(f"/api/ltf/instruments/{instrument_id}/current",
                    headers=AUTH)
     assert r.status_code == 200

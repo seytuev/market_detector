@@ -1114,3 +1114,46 @@ CREATE TABLE IF NOT EXISTS ltf_plateau (
     UNIQUE (instrument_id, side, level, start_open)
 );
 CREATE INDEX IF NOT EXISTS ix_ltf_plateau_instr ON ltf_plateau (instrument_id, side);
+
+-- ============================================================================
+-- Этап 2 (спека §8): durable spool тиков котировок. Переполнение
+-- per-instrument очереди market_queue не теряет тик — строка переживает
+-- рестарт и дочитывается потребителем в порядке id.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS quote_spool (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    instrument_id INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    event_at INTEGER,
+    received_at INTEGER NOT NULL,
+    price REAL NOT NULL,
+    price_kind TEXT NOT NULL,
+    source_seq TEXT,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_quote_spool_iid ON quote_spool(instrument_id, id);
+
+-- ============================================================================
+-- Этап 4 (спека §9): durable-очередь расчётов. Одна строка на ключ
+-- (instrument_id, timeframe, task_kind): pending → running → done (DELETE)
+-- или failed (строка с error остаётся для диагностики). AC18: падение после
+-- вставки свечи, но до расчёта, оставляет восстанавливаемое задание —
+-- CalcQueue.start() поднимает pending/running/failed обратно в обработку.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS calc_task (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    instrument_id INTEGER NOT NULL,
+    timeframe TEXT NOT NULL,
+    task_kind TEXT NOT NULL,
+    priority INTEGER NOT NULL,
+    target_cursor INTEGER,
+    earliest_revised_open INTEGER,
+    input_version INTEGER,
+    status TEXT NOT NULL DEFAULT 'pending',
+    error TEXT,
+    run_count INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(instrument_id, timeframe, task_kind)
+);
+CREATE INDEX IF NOT EXISTS ix_calc_task_status ON calc_task (status);
