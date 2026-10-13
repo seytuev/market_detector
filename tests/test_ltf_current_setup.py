@@ -139,6 +139,20 @@ def _make_live(db, instrument_id, price: float) -> None:
     db.set_meta(f"ltf:h1:last_close:{instrument_id}", str(c.close_time))
 
 
+def test_scenario_confirmation_is_independent_of_data_quality(client, db, seeded, instrument_id):
+    # No quote or H1 history: data quality is degraded, but the engine's
+    # existing confirmed scenario must not disappear from presentation.
+    current = client.get(f"/api/ltf/instruments/{instrument_id}/current", headers=AUTH).json()
+    summary = current['scenario_summary']
+    assert summary['confirmed'] is True
+    assert summary['id'] == seeded['sc1'].id
+    assert summary['direction'] == 'bear'
+    assert current['data_state']['state'] != 'ok'
+    rows = client.get('/api/ltf/instruments', headers=AUTH).json()['instruments']
+    row = next(r for r in rows if r['instrument']['id'] == instrument_id)
+    assert row['scenario_summary'] == summary
+
+
 # ------------------------------ список активов (§4.2) ------------------------------
 
 def test_instruments_one_row_per_instrument(client, db, seeded, instrument_id):

@@ -125,6 +125,20 @@ def _setup(db: Database, asset: AltAsset, source: AltInstrumentSource,
     return setup
 
 
+def test_search_and_counters_use_same_filtered_population(db, client):
+    asset = _asset(db, 99001, 'MATCH', 20)
+    source = _source(db, asset.id)
+    _candles(db, source.id)
+    _setup(db, asset, source, AltState.ACTIVE_CONFIRMED.value)
+    other = _asset(db, 99002, 'OTHER', 80)
+    other_source = _source(db, other.id)
+    _candles(db, other_source.id)
+    _setup(db, other, other_source, AltState.ACTIVE_CONFIRMED.value)
+    result = client.get('/api/alt/setups', params={'search':'match','rank_max':30}, headers=AUTH).json()
+    assert len(result['rows']) == result['buckets']['eligible'] == 1
+    assert result['rows'][0]['asset']['symbol'] == 'MATCH'
+
+
 @pytest.fixture()
 def seeded(db, client):
     """Сетапы во всех стадиях §17 + terminal + forming-кандидат + прогон."""
