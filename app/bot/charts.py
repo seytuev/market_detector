@@ -383,7 +383,22 @@ def render_ltf_chart(
     # ---- слой диапазона. Для события — границы из записи, не поздний пересчёт.
     payload_range = payload.get("range") if isinstance(payload.get("range"), dict) else None
     drew_range = False
+    range_from_setup = False
     if (
+        "range" in layer_set and h1_layers and setup
+        and setup.get("lower") is not None and setup.get("upper") is not None
+    ):
+        # Историческая проекция той же ноги, что на веб-графике. Старый
+        # диапазон сценария в payload может принадлежать другому движению.
+        _draw_pd(
+            float(setup["lower"]), float(setup["upper"]), float(setup["eq"]),
+            provisional=setup.get("range_status") != "confirmed",
+            origin_at=(setup.get("origin_anchor") or {}).get("at"),
+            from_event=False,
+        )
+        drew_range = True
+        range_from_setup = True
+    elif (
         "range" in layer_set and event is not None and payload_range
         and payload_range.get("lower") is not None
         and payload_range.get("upper") is not None
@@ -437,7 +452,7 @@ def render_ltf_chart(
 
     if "range" in layer_set and setup and drew_range:
         # Не привязываем опоры другой ноги к диапазону из payload.
-        matching = not payload_range or (
+        matching = range_from_setup or not payload_range or (
             payload_range.get("lower") == setup.get("lower")
             and payload_range.get("upper") == setup.get("upper")
         )

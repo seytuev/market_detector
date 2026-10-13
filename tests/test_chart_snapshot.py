@@ -140,7 +140,8 @@ def test_touch_shows_pd_points_and_other_zones(
     ev = LtfEvent(
         id=11, observation_id=obs.id, scenario_id=sc.id, kind="touch",
         payload={"entry_zone_id": 1, "type": "FVG", "lower": 99.0,
-                 "upper": 101.0, "candle_open_time": candles[-1].open_time},
+                 "upper": 101.0, "candle_open_time": candles[-1].open_time,
+                 "range": {"lower": 500.0, "upper": 600.0, "mid": 550.0}},
         occurred_at=when, detected_at=when, dedupe_key="touch-full-context",
     )
     _path, fig = _render(
