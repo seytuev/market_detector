@@ -14,7 +14,7 @@ from matplotlib import pyplot as plt
 from app.config import DetectorConfig, Settings
 from app.models import Direction
 from app.models_ltf import LtfEvent, LtfStructureEvent
-from app.notify.chart_snapshot import chart_signature, right_pad
+from app.notify.chart_snapshot import chart_signature, layers_for_kind, right_pad
 from app.notify.formatting import fmt_price_ru, fmt_time_msk
 from tests.conftest import make_candle
 from tests.test_ltf_notify import T0, _setup
@@ -91,6 +91,79 @@ def test_right_pad_stays_under_ten_percent():
     assert right_pad(14) <= 2
     assert right_pad(14) / 14 <= 0.10
     assert right_pad(60) / 60 <= 0.10
+
+
+@pytest.mark.parametrize("direction", ["bull", "bear"])
+def test_touch_shows_pd_points_and_other_zones(
+        db, instrument_id, tmp_path, monkeypatch, direction):
+    candles = _series(instrument_id, 20, base=100.0)
+    db.insert_candles(candles)
+    _zone, obs, sc = _setup(db, instrument_id)
+    when = _event_at(candles)
+    bull = direction == "bull"
+    setup = {
+        "direction": direction, "lower": 92.0, "upper": 108.0, "eq": 100.0,
+        "range_status": "provisional",
+        "origin_anchor": {"at": candles[2].open_time, "price": 92.0 if bull else 108.0,
+                          "provenance": "confirmed_pivot"},
+        "endpoint": {"at": candles[15].open_time, "price": 108.0 if bull else 92.0,
+                     "status": "provisional"},
+    }
+    seen = {}
+
+    def layers(db_, settings_, iid, **kwargs):
+        seen.update(kwargs)
+        return {
+            "setup": setup, "structural_events": [], "expected_structure": {},
+            "pivot_markers": [
+                {"role": "HL" if bull else "LH", "kind": "low" if bull else "high",
+                 "price": 96.0 if bull else 104.0, "pivot_at": candles[8].open_time},
+                {"role": "HH", "kind": "high", "price": 107.0, "pivot_at": when + H1},
+            ],
+            "detected_zones": [
+                {"id": 1, "type": "FVG", "lower": 99.0, "upper": 101.0,
+                 "direction": direction, "formed_at": candles[5].open_time},
+                {"id": 2, "type": "OB", "lower": 93.0, "upper": 95.0,
+                 "direction": direction, "formed_at": candles[4].open_time},
+                {"id": 3, "type": "SSL", "lower": 92.0, "upper": 92.0,
+                 "lifecycle": "ended"},
+            ],
+        }
+
+    monkeypatch.setattr("app.services.h1_chart.assemble_h1_layers", layers)
+    from types import SimpleNamespace
+    original_get_zone = db.get_ltf_entry_zone
+    monkeypatch.setattr(db, "get_ltf_entry_zone", lambda zid: (
+        SimpleNamespace(direction=Direction(direction), formed_at=candles[5].open_time)
+        if zid == 1 else original_get_zone(zid)
+    ))
+    ev = LtfEvent(
+        id=11, observation_id=obs.id, scenario_id=sc.id, kind="touch",
+        payload={"entry_zone_id": 1, "type": "FVG", "lower": 99.0,
+                 "upper": 101.0, "candle_open_time": candles[-1].open_time},
+        occurred_at=when, detected_at=when, dedupe_key="touch-full-context",
+    )
+    _path, fig = _render(
+        db, obs, tmp_path / "context.png", _settings(tmp_path), candles,
+        event=ev, layers=layers_for_kind(ev.kind, ev.payload),
+    )
+    note = _texts(fig)
+    assert "PD Massive" in note and "PD 50%" in note
+    assert "Premium" in note and "Discount" in note
+    assert ("L · опора" if bull else "H · опора") in note
+    assert ("H потенц." if bull else "L потенц.") in note
+    assert ("HL" if bull else "LH") in note
+    assert "HH" not in note and "SSL ликвидность" not in note
+    assert "Orderblock" in note
+    assert seen["as_of"] == when and seen["setup_event"] is True
+    patches = fig.axes[0].patches
+    assert sum(p.get_alpha() == 0.07 for p in patches) == 2
+    assert sum(p.get_y() == 99.0 and p.get_height() == 2.0 for p in patches) == 1
+    touched = next(p for p in patches if p.get_y() == 99.0 and p.get_height() == 2.0)
+    from matplotlib.colors import to_rgba
+    assert touched.get_facecolor() == to_rgba("#34d399" if bull else "#f87171", 0.25)
+    assert touched.get_x() == 4.5, "Зона начинается от формирования, а не касания"
+    _inside(fig)
 
 
 def test_short_series_fills_the_width(db, instrument_id, tmp_path, monkeypatch):

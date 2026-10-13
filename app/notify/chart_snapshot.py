@@ -37,7 +37,7 @@ def layers_for_kind(kind: str, payload: Optional[dict] = None) -> tuple[str, ...
     if kind in ("bos", "sms", "cancellation"):
         return ("bos", "range") if has_range else ("bos",)
     if kind in ("touch", "sweep_confirmed", "sweep_failed"):
-        return ("entries",)
+        return ("htf", "bos", "range", "entries")
     if kind in ("entries_ready", "range_ready"):
         return ("range", "entries")
     return ("htf", "bos", "range", "entries")
@@ -79,6 +79,7 @@ def chart_signature(ev) -> str:
         })
     rng = payload.get("range") if isinstance(payload.get("range"), dict) else {}
     body = _canonical({
+        "render_version": 2,
         "kind": ev.kind,
         "observation_id": ev.observation_id,
         "scenario_id": ev.scenario_id,

@@ -163,6 +163,27 @@ def contain_labels(fig, artists: list) -> list[str]:
                 tb.x0 < bbox.x0 - 1 or tb.x1 > bbox.x1 + 1
                 or tb.y0 < bbox.y0 - 1 or tb.y1 > bbox.y1 + 1
             )
+        if primary and tb.x1 > bbox.x1 + 1:
+            # Совпавшие PD/HTF/Entry уровни могут дать длинную основную
+            # подпись. Переносим по измеренной ширине правой колонки.
+            available = max(1, bbox.x1 - tb.x0 - 8)
+            words = t.get_text().split()
+            lines = []
+            line = ""
+            for word in words:
+                candidate = f"{line} {word}".strip()
+                width, _, _ = renderer.get_text_width_height_descent(
+                    candidate, t.get_fontproperties(), ismath=False,
+                )
+                if line and width > available:
+                    lines.append(line)
+                    line = word
+                else:
+                    line = candidate
+            lines.append(line)
+            t.set_text("\n".join(lines))
+            fig.canvas.draw()
+            tb = t.get_window_extent(renderer)
         overlap = any(_boxes_overlap(tb, prev) for prev in kept)
         if (outside or overlap) and not primary:
             t.set_visible(False)

@@ -178,6 +178,15 @@ def render_ltf_chart(
             db, settings, observation_id, **layer_kwargs,
         )
     payload = (getattr(event, "payload", None) or {}) if event is not None else {}
+    h1_layers = None
+    if settings is not None and tf == "H1":
+        from ..services.h1_chart import assemble_h1_layers
+        h1_layers = assemble_h1_layers(
+            db, settings, obs.instrument_id, as_of=int(moment),
+            window_from=candles[0].open_time, window_to=int(moment),
+            context_id=observation_id, setup_event=end_ms is not None,
+        )
+        setup = h1_layers.get("setup") or setup
 
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -278,7 +287,7 @@ def render_ltf_chart(
     # ---- слой BOS/SMS: подтверждённый сплошной, ожидаемый пунктиром ----
     if "bos" in layer_set and info:
         breaks = [
-            ev for ev in info["structure_events"]
+            ev for ev in (h1_layers or {}).get("structural_events", info["structure_events"])
             if str(ev.get("kind") or "").lower() in ("bos", "sms")
             and ev.get("break_level") is not None
         ]
@@ -306,7 +315,7 @@ def render_ltf_chart(
                     fontsize=6.5, color=_COLOR_BOS, va="bottom", zorder=5,
                 )
             _remember(level)
-        expected = info.get("expected") or {}
+        expected = (h1_layers or {}).get("expected_structure", info.get("expected")) or {}
         for key in ("bos", "sms"):
             exp = expected.get(key)
             if not exp or exp.get("level") is None:
@@ -337,6 +346,17 @@ def render_ltf_chart(
             return
         style = "--" if provisional else "-"
         x0 = x_since(origin_at) if origin_at else -0.5
+        for bottom, top, color in (
+            (mid, upper, "#f87171"), (lower, mid, "#34d399"),
+        ):
+            ax.add_patch(Rectangle(
+                (x0, bottom), xr - x0, top - bottom,
+                facecolor=color, alpha=0.07, edgecolor="none", zorder=0.5,
+            ))
+        for price, name in (((upper + mid) / 2, "PD Massive · Premium"),
+                            ((lower + mid) / 2, "Discount")):
+            ax.text(xr - 0.2, price, name, ha="right", va="center",
+                    fontsize=8, color=_COLOR_RANGE, alpha=0.75, zorder=3)
         for price in (lower, upper):
             ax.hlines(price, x0, xr, color=_COLOR_RANGE, linewidth=1.0,
                       linestyles=style, zorder=3)
@@ -349,12 +369,12 @@ def render_ltf_chart(
             high_tag = "H потенц." if bull and provisional else ("H подтв." if bull else "H")
             low_tag = "L потенц." if (not bull) and provisional else ("L подтв." if not bull else "L")
         labels.append((upper, high_tag, _COLOR_RANGE, False))
-        labels.append((mid, "PD 50%", _COLOR_RANGE, False))
+        labels.append((mid, "PD 50% · EQ", _COLOR_RANGE, False))
         labels.append((lower, low_tag, _COLOR_RANGE, False))
         _remember(lower)
         _remember(upper)
-        legend_name = "PD снимка" if from_event else (
-            "PD H1 " + ("потенц." if provisional else "подтв.")
+        legend_name = "PD Massive снимка" if from_event else (
+            "PD Massive " + ("потенц." if provisional else "подтв.")
         )
         legend.append((legend_name, _COLOR_RANGE))
         if provisional:
@@ -394,7 +414,62 @@ def render_ltf_chart(
     if not drew_range and "range" in layer_set and event is not None:
         offscale.append("PD в записи события нет")
 
-    def _draw_zone(e, *, primary: bool = False):
+    # Роли точек — из той же исторической проекции, что на веб-графике.
+    # Концы PD отмечаем даже когда структурная роль ещё не назначена.
+    marked_points = set()
+
+    def _draw_point(at, price, name, *, high: bool, confirmed: bool):
+        if at is None or price is None:
+            return
+        if not candles[0].open_time <= int(at) <= candles[-1].open_time:
+            return
+        if not _on_scale(price):
+            return
+        x = x_since(int(at)) + 0.5
+        ax.plot(x, price, marker="v" if high else "^", ms=6,
+                markerfacecolor=_COLOR_RANGE if confirmed else "none",
+                markeredgecolor=_COLOR_RANGE, zorder=6)
+        ax.annotate(name, (x, price), xytext=(0, 9 if high else -12),
+                    textcoords="offset points", ha="center", va="center",
+                    fontsize=8, color=_COLOR_RANGE, zorder=7,
+                    bbox=dict(fc="#111827", ec="none", alpha=0.8, pad=1))
+        marked_points.add((int(at), float(price)))
+
+    if "range" in layer_set and setup and drew_range:
+        # Не привязываем опоры другой ноги к диапазону из payload.
+        matching = not payload_range or (
+            payload_range.get("lower") == setup.get("lower")
+            and payload_range.get("upper") == setup.get("upper")
+        )
+        if matching:
+            bull = setup.get("direction") == "bull"
+            origin = setup.get("origin_anchor") or {}
+            endpoint = setup.get("endpoint") or {}
+            origin_role = next((
+                p.get("role") for p in (h1_layers or {}).get("pivot_markers", [])
+                if p.get("pivot_at") == origin.get("at")
+                and p.get("price") == origin.get("price")
+                and p.get("role") in ("HH", "HL", "LH", "LL")
+            ), None)
+            origin_name = "L · опора" if bull else "H · опора"
+            if origin_role:
+                origin_name += f" · {origin_role}"
+            _draw_point(origin.get("at"), origin.get("price"),
+                        origin_name, high=not bull,
+                        confirmed=origin.get("provenance") == "confirmed_pivot")
+            confirmed = endpoint.get("status") == "confirmed"
+            _draw_point(endpoint.get("at"), endpoint.get("price"),
+                        ("H" if bull else "L") + (" подтв." if confirmed else " потенц."),
+                        high=bull, confirmed=confirmed)
+    if "bos" in layer_set and h1_layers:
+        for point in h1_layers.get("pivot_markers") or []:
+            key = (point.get("pivot_at"), point.get("price"))
+            if key in marked_points or point.get("role") not in ("HH", "HL", "LH", "LL"):
+                continue
+            _draw_point(point.get("pivot_at"), point.get("price"), point["role"],
+                        high=point.get("kind") == "high", confirmed=True)
+
+    def _draw_zone(e, *, primary: bool = False, context: bool = False):
         lower, upper = e.get("lower"), e.get("upper")
         if lower is None or upper is None:
             return
@@ -413,10 +488,17 @@ def render_ltf_chart(
             legend_name = "Зона"
         direction = e.get("direction")
         direction = getattr(direction, "value", direction)
+        stored_zone = None
+        if e.get("entry_zone_id") is not None:
+            stored_zone = db.get_ltf_entry_zone(e["entry_zone_id"])
+            if direction not in ("bull", "bear") and stored_zone is not None:
+                direction = getattr(stored_zone.direction, "value", stored_zone.direction)
         if direction not in ("bull", "bear") and event is not None:
             direction = payload.get("direction")
         color = _COLOR_LONG if direction == "bull" else _COLOR_SHORT
         if not zone_on_scale(lower, upper, c_lo, c_hi):
+            if context:
+                return
             if lower == upper:
                 offscale.append(f"{title} {fmt_price_ru(lower)}")
             else:
@@ -424,15 +506,24 @@ def render_ltf_chart(
                     f"{title} {fmt_price_ru(lower)}–{fmt_price_ru(upper)}"
                 )
             return
-        x_at = e.get("formed_at") or e.get("candle_open_time")
+        x_at = e.get("display_from") or e.get("formed_at") or e.get("candle_open_time")
+        if not e.get("formed_at") and not e.get("display_from") and stored_zone is not None:
+            if stored_zone.formed_at <= moment:
+                x_at = stored_zone.formed_at
         if x_at is None and event is not None:
             x_at = event.occurred_at
         x0 = x_since(int(x_at)) if x_at else -0.5
         height = max(upper - lower, 1e-9)
+        x_end = min(xr, x_since(e["display_until"])) if e.get("display_until") else xr
         ax.add_patch(Rectangle(
-            (x0, lower), max(n - 0.5 - x0, 0.2), height,
+            (x0, lower), max(x_end - x0, 0.2), height,
             facecolor=color, alpha=0.25, edgecolor=color, linewidth=0.8, zorder=2,
         ))
+        if lower == upper:
+            ax.hlines(lower, x0, x_end, color=color, linewidth=1.2, zorder=4)
+        else:
+            ax.hlines((lower + upper) / 2, x0, x_end, color=color,
+                      linewidth=0.7, linestyles="--", alpha=0.6, zorder=3)
         if lower == upper:
             text = f"{title} {fmt_price_ru(lower)}"
             anchor = lower
@@ -456,9 +547,25 @@ def render_ltf_chart(
             _draw_zone(zone_row, primary=event.kind in (
                 "touch", "sweep_confirmed", "sweep_failed",
             ))
-    elif "entries" in layer_set and info:
-        for zone_row in info["entries"]:
-            _draw_zone(zone_row)
+    if "entries" in layer_set:
+        # Полный слой зон инструмента, как на H1, плюс приоритетная зона события.
+        zones = (h1_layers or {}).get("detected_zones", (info or {}).get("entries", []))
+        payload_ids = {z.get("entry_zone_id") for z in payload_zones if z.get("entry_zone_id") is not None}
+        payload_bounds = {(z.get("type"), z.get("lower"), z.get("upper")) for z in payload_zones}
+        drawn_zones = set()
+        for zone_row in zones:
+            if zone_row.get("candidate") or zone_row.get("lifecycle") in ("candidate", "ended"):
+                continue
+            if zone_row.get("id") in payload_ids or (
+                zone_row.get("type"), zone_row.get("lower"), zone_row.get("upper")
+            ) in payload_bounds:
+                continue
+            key = (zone_row.get("type"), zone_row.get("direction"),
+                   zone_row.get("lower"), zone_row.get("upper"), zone_row.get("formed_at"))
+            if key in drawn_zones:
+                continue
+            drawn_zones.add(key)
+            _draw_zone(zone_row, context=True)
 
     if event is not None:
         idx = 0
