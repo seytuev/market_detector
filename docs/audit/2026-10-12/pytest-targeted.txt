@@ -1,0 +1,46 @@
+pytest imported
+
+=================================== ERRORS ====================================
+____________________ ERROR collecting tests/test_config.py ____________________
+ImportError while importing test module 'C:\Users\seytu\projects\htfdec\tests\test_config.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+..\..\AppData\Local\Programs\Python\Python312\Lib\importlib\__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_config.py:8: in <module>
+    from app.web.api import _apply_detector_payload
+app\web\api.py:19: in <module>
+    from fastapi import Body, Depends, FastAPI, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
+.venv\Lib\site-packages\fastapi\__init__.py:7: in <module>
+    from .applications import FastAPI as FastAPI
+.venv\Lib\site-packages\fastapi\applications.py:7: in <module>
+    from fastapi import routing
+.venv\Lib\site-packages\fastapi\routing.py:45: in <module>
+    from fastapi import params
+.venv\Lib\site-packages\fastapi\params.py:7: in <module>
+    from fastapi.exceptions import FastAPIDeprecationWarning
+.venv\Lib\site-packages\fastapi\exceptions.py:5: in <module>
+    from pydantic import BaseModel, create_model
+.venv\Lib\site-packages\pydantic\__init__.py:5: in <module>
+    from ._migration import getattr_migration
+.venv\Lib\site-packages\pydantic\_migration.py:4: in <module>
+    from pydantic.warnings import PydanticDeprecatedSince20
+.venv\Lib\site-packages\pydantic\warnings.py:5: in <module>
+    from .version import version_short
+.venv\Lib\site-packages\pydantic\version.py:7: in <module>
+    from pydantic_core import __version__ as __pydantic_core_version__
+.venv\Lib\site-packages\pydantic_core\__init__.py:8: in <module>
+    from ._pydantic_core import (
+E   ModuleNotFoundError: No module named 'pydantic_core._pydantic_core'
+============================== warnings summary ===============================
+.venv\Lib\site-packages\_pytest\config\__init__.py:1464
+  C:\Users\seytu\projects\htfdec\.venv\Lib\site-packages\_pytest\config\__init__.py:1464: PytestConfigWarning: Unknown config option: asyncio_mode
+  
+    self._warn_or_fail_if_strict(f"Unknown config option: {key}\n")
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+ERROR tests/test_config.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 warning, 1 error in 1.93s

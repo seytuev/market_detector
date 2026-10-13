@@ -94,6 +94,15 @@ window.LFUI = (() => {
     }
     return groups;
   }
+  function analysisTabs(target,onChange) {
+    if (!target) return;
+    target.innerHTML = [['list','Список'],['chart','График'],['scenario','Сценарий'],['events','События']].map(([id,label]) =>
+      `<button type="button" class="btn" data-analysis-pane="${id}" aria-pressed="${id==='chart'}">${label}</button>`).join('');
+    target.onclick = event => { const button = event.target.closest('[data-analysis-pane]'); if (!button) return;
+      target.querySelectorAll('button').forEach(el => el.setAttribute('aria-pressed',String(el === button)));
+      onChange(button.dataset.analysisPane);
+    };
+  }
   document.addEventListener('keydown', event => {
     if (!drawer) return;
     if (event.key === 'Escape') { event.preventDefault(); closeDrawer(); return; }
@@ -117,5 +126,5 @@ window.LFUI = (() => {
   window.addEventListener('error', event => { if (event.error) error(event.error, 'Не удалось отобразить часть экрана'); });
   window.addEventListener('unhandledrejection', event => error(event.reason, 'Действие не завершено'));
   return {readable, error, openDrawer, closeDrawer, channelsHtml, dataLabel, scenarioHtml,
-    eventId, uniqueEvents, groupEvents};
+    eventId, uniqueEvents, groupEvents, analysisTabs};
 })();

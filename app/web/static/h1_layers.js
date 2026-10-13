@@ -320,18 +320,17 @@
     const adm = admission || {};
     const fmt = format || {};
     const reason = adm.reason || 'Пригодность для сценария не оценивалась';
-    return [
-      '<p><b>' + (zone.type || '') + ' H1</b> · ' + (zone.direction || '') + '</p>',
-      '<p>Подтверждение ' + shown(zone.confirmed_at, fmt.time, 'ещё нет') + '</p>',
-      '<p>Состояние ' + (zone.lifecycle || '—') + (zone.level_state ? ' · ' + zone.level_state : '') + '</p>',
-      '<p>Максимальная глубина теста: ' + Math.round((zone.max_test_depth || 0) * 100) + '%</p>',
-      zone.relevance ? '<p>Актуальность: ' + relevanceText(zone.relevance) + '</p>' : '',
-      zone.relevance && zone.relevance.excluded_at != null ? '<p>Исключена: ' + shown(zone.relevance.excluded_at, fmt.time, '—') + '</p>' : '',
-      (zone.idea_links || []).map((i) => '<p>' + ideaLabel(i) + '<br>' + reasonText(i.entry_reason) + '</p>').join(''),
-      zone.relevance ? ((zone.idea_links || []).length ? '' : '<p>Связь с HTF-идеей не подтверждена</p>')
-        : '<p>Пригодность: ' + (adm.eligibility || 'not_evaluated') + '</p><p>' + reason + '</p>',
-      zone.display_window_label ? '<p>' + zone.display_window_label + '</p>' : '',
-    ].join('');
+    const bounds = zone.lower === zone.upper
+      ? shown(zone.lower, fmt.price, '—')
+      : shown(zone.lower, fmt.price, '—') + '–' + shown(zone.upper, fmt.price, '—');
+    const type = (zone.type || 'Зона') + ' H1';
+    const state = (zone.lifecycle || '—') + (zone.level_state ? ' · ' + zone.level_state : '');
+    const relevance = zone.relevance ? relevanceText(zone.relevance) : (adm.eligibility || reason);
+    return '<p><b>' + type + '</b> · ' + (zone.direction === 'bull' ? '↑ покупки' : '↓ продажи') + '</p>'
+      + '<dl class="h1-zone-facts"><dt>Границы</dt><dd>' + bounds + '</dd>'
+      + '<dt>Состояние</dt><dd>' + state + '</dd>'
+      + '<dt>Тест</dt><dd>' + Math.round((zone.max_test_depth || 0) * 100) + '%</dd>'
+      + '<dt>Актуальность</dt><dd>' + relevance + '</dd></dl>';
   }
 
   function pdCaption(setup, fmtPrice) {

@@ -1,0 +1,15 @@
+WARNING: Retrying (Retry(total=4, connect=None, read=None, redirect=None, status=None)) after connection broken by 'ProxyError('Cannot connect to proxy.', NewConnectionError('<pip._vendor.urllib3.connection.HTTPSConnection object at 0x00000202C8B721E0>: Failed to establish a new connection: [WinError 10013] ������� ������� ������� � ������ �������, ����������� ������� �������'))': /simple/fastapi/
+WARNING: Retrying (Retry(total=3, connect=None, read=None, redirect=None, status=None)) after connection broken by 'ProxyError('Cannot connect to proxy.', NewConnectionError('<pip._vendor.urllib3.connection.HTTPSConnection object at 0x00000202C8B72690>: Failed to establish a new connection: [WinError 10013] ������� ������� ������� � ������ �������, ����������� ������� �������'))': /simple/fastapi/
+WARNING: Retrying (Retry(total=2, connect=None, read=None, redirect=None, status=None)) after connection broken by 'ProxyError('Cannot connect to proxy.', NewConnectionError('<pip._vendor.urllib3.connection.HTTPSConnection object at 0x00000202C8C49730>: Failed to establish a new connection: [WinError 10013] ������� ������� ������� � ������ �������, ����������� ������� �������'))': /simple/fastapi/
+WARNING: Retrying (Retry(total=1, connect=None, read=None, redirect=None, status=None)) after connection broken by 'ProxyError('Cannot connect to proxy.', NewConnectionError('<pip._vendor.urllib3.connection.HTTPSConnection object at 0x00000202C8C9FBC0>: Failed to establish a new connection: [WinError 10013] ������� ������� ������� � ������ �������, ����������� ������� �������'))': /simple/fastapi/
+WARNING: Retrying (Retry(total=0, connect=None, read=None, redirect=None, status=None)) after connection broken by 'ProxyError('Cannot connect to proxy.', NewConnectionError('<pip._vendor.urllib3.connection.HTTPSConnection object at 0x00000202C8C9FD10>: Failed to establish a new connection: [WinError 10013] ������� ������� ������� � ������ �������, ����������� ������� �������'))': /simple/fastapi/
+ERROR: Could not find a version that satisfies the requirement fastapi>=0.110 (from versions: none)
+ERROR: No matching distribution found for fastapi>=0.110
+WARNING: Failed to remove contents in a temporary directory 'C:\Users\seytu\AppData\Local\Packages\sandbox.{7c8effd9-b4a0-474c-97fb-50bc9d802ee9}\AC\Temp\pip-build-tracker-8d3gj3xa'.
+You can safely remove it manually.
+WARNING: Failed to remove contents in a temporary directory 'C:\Users\seytu\AppData\Local\Packages\sandbox.{7c8effd9-b4a0-474c-97fb-50bc9d802ee9}\AC\Temp\pip-target-o4dc4rpv'.
+You can safely remove it manually.
+WARNING: Failed to remove contents in a temporary directory 'C:\Users\seytu\AppData\Local\Packages\sandbox.{7c8effd9-b4a0-474c-97fb-50bc9d802ee9}\AC\Temp\pip-ephem-wheel-cache-fokffdm4'.
+You can safely remove it manually.
+WARNING: Failed to remove contents in a temporary directory 'C:\Users\seytu\AppData\Local\Packages\sandbox.{7c8effd9-b4a0-474c-97fb-50bc9d802ee9}\AC\Temp\pip-install-f0ukenmn'.
+You can safely remove it manually.

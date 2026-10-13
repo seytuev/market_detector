@@ -290,6 +290,10 @@ function initChart() {
     if (state.pointerDown) queueZoneRedraw();
   });
   const chartWrap = $('chart-container');
+  chartWrap.addEventListener('click', (event) => {
+    if (event.target.closest('#h1-event-card, .h1-zone, .h1-zone-tag, .h1-liquidity')) return;
+    closeH1Card();
+  });
   chartWrap.addEventListener('pointerdown', () => { state.pointerDown = true; });
   chartWrap.addEventListener('wheel', () => {
     state.h1WheelZoom = true;
@@ -769,16 +773,18 @@ function showH1Card(html) {
   card.classList.remove('hidden');
   card.innerHTML = html + '<button type="button" class="btn small">Закрыть</button>';
   const button = card.querySelector('button');
-  if (button) button.onclick = () => {
-    card.classList.add('hidden');
-    card.innerHTML = '';
-    state.h1SelectedEventId = null;
-    state.h1SelectedZoneId = null;
-    if (state.candleSeries && state.h1Layers && window.H1Layers) {
-      state.candleSeries.setMarkers(window.H1Layers.seriesMarkers(
-        state.h1Layers, null, structurePointColor));
-    }
-  };
+  if (button) button.onclick = closeH1Card;
+}
+
+function closeH1Card() {
+  const card = $('h1-event-card');
+  if (!card || card.classList.contains('hidden')) return;
+  card.classList.add('hidden'); card.innerHTML = '';
+  state.h1SelectedEventId = null; state.h1SelectedZoneId = null;
+  if (state.candleSeries && state.h1Layers && window.H1Layers) {
+    state.candleSeries.setMarkers(state.h1Layers ? window.H1Layers.seriesMarkers(
+      state.h1Layers, null, structurePointColor) : []);
+  }
 }
 
 function h1PaneHeight(fullHeight) {
@@ -3634,10 +3640,10 @@ function renderDeskEntries() {
     el.classList.remove('hidden');
     el.innerHTML = `<div class="desk-entries-head"><h2>Зоны H1 / ${entries.length}</h2>` +
       '<span class="muted">Тот же отбор, что на графике · обе стороны</span></div>' +
-      entries.map((z) => `<div class="desk-entry"><span>${esc(z.type)} H1 · ${z.direction === 'bull' ? '↑' : '↓'}</span>` +
+      entries.map((z) => `<button type="button" class="desk-entry" data-analysis-zone="${z.id}"><span>${esc(z.type)} H1 · ${z.direction === 'bull' ? '↑' : '↓'}</span>` +
         `<span>${fmtPrice(z.lower)} — ${fmtPrice(z.upper)}</span><span>` +
         (z.idea_links || []).map((i) => esc(H.ideaLabel(i)) + '<br>' + esc(H.reasonText(i.entry_reason))).join('<br>') +
-        `</span><span>Тест ${Math.round((z.max_test_depth || 0) * 100)}% · ${esc(H.relevanceText(z.relevance))}</span></div>`).join('') +
+        `</span><span>Тест ${Math.round((z.max_test_depth || 0) * 100)}% · ${esc(H.relevanceText(z.relevance))}</span></button>`).join('') +
       (entries.length ? '' : '<div class="ltf-empty">Нет зон для выбранного отбора.</div>');
     return;
   }
@@ -3655,13 +3661,13 @@ function renderDeskEntries() {
   }
   const entries = (v.eligible_entries || []).slice().sort(byProximity);
   const rows = entries.map((e) => `
-    <div class="desk-entry">
+    <button type="button" class="desk-entry" data-analysis-zone="${e.entry_zone_id}">
       <span class="desk-entry-name">${esc(e.type)} · H1<span class="desk-entry-sub"> / текущий сценарий</span></span>
       <span class="desk-entry-range">${fmtPrice(e.lower)} — ${fmtPrice(e.upper)} USDT</span>
       <span class="desk-entry-status${e.eligible_now ? ' ok' : ''}">${e.eligible_now
         ? '<span class="state-dot dot-positive"></span>Подходит по правилам'
         : '<span class="state-dot dot-muted"></span>' + esc(DESK_REASON_RU[e.reason] || e.reason || '—')}</span>
-    </div>`).join('');
+    </button>`).join('');
   el.innerHTML = `<div class="desk-entries-head"><h2>Зоны сценария / ${entries.length}</h2>` +
     '<span class="muted">Тот же актив и контекст</span></div>' +
     (rows || '<div class="ltf-empty">Сценарий активен; подходящих зон сейчас нет.</div>');
@@ -4011,12 +4017,24 @@ function initAnalysisPanels() {
     if (pane === 'scenario') layout.classList.remove('side-hidden');
     requestAnimationFrame(drawZones);
   }
-  view.querySelectorAll('[data-analysis-pane]').forEach(button => button.onclick = () => setPane(button.dataset.analysisPane));
+  LFUI.analysisTabs(view.querySelector('.lf-analysis-tabs'),setPane);
   const bottom = document.createElement('div'); bottom.className = 'lf-analysis-bottom-tabs';
   bottom.innerHTML = '<button type="button" class="btn small" data-bottom="zones" aria-pressed="true">Зоны сценария</button><button type="button" class="btn small" data-bottom="events" aria-pressed="false">События</button><button type="button" class="btn small" id="analysis-journal">Все события актива</button>';
   layout.after(bottom); view.dataset.bottom = localStorage.getItem('lf:analysis:bottom') || 'zones';
   const paintBottom = () => bottom.querySelectorAll('[data-bottom]').forEach(button => button.setAttribute('aria-pressed',String(button.dataset.bottom === view.dataset.bottom)));
   paintBottom();
+  $('desk-entries').addEventListener('click',async event => {
+    const button = event.target.closest('[data-analysis-zone]'); if (!button) return;
+    const id = Number(button.dataset.analysisZone);
+    const initial = deskData.current?.eligible_entries?.find(e => e.entry_zone_id === id);
+    if (state.chartMode !== 'h1') { setChartMode('h1'); await reloadAll(); }
+    const zone = (state.h1Layers?.detected_zones || []).find(z => z.id === id) || (initial ? {...initial,id} : null);
+    if (!zone) { LFUI.openDrawer('Зона недоступна','<p>Зона больше не входит в текущую загруженную разметку. Обновите анализ.</p>'); return; }
+    focusH1Zone(zone);
+    LFUI.openDrawer('Зона H1',`<h3>${esc(zone.type)} H1 · ${zone.direction === 'bull' ? 'Рост' : 'Снижение'}</h3><dl class="lf-facts"><dt>Границы</dt><dd>${fmtPrice(zone.lower)}–${fmtPrice(zone.upper)}</dd><dt>Подтверждение</dt><dd>${esc(fmtTime(zone.confirmed_at))}</dd><dt>Глубина теста</dt><dd>${Math.round((zone.max_test_depth || 0)*100)}%</dd></dl>` +
+      (zone.idea_links || []).map(link => `<p>${esc(H1Layers.ideaLabel(link))}<br>${esc(H1Layers.reasonText(link.entry_reason))}</p>`).join(''));
+    requestAnimationFrame(drawZones);
+  });
   bottom.querySelectorAll('[data-bottom]').forEach(button => button.onclick = () => { view.dataset.bottom = button.dataset.bottom; localStorage.setItem('lf:analysis:bottom',button.dataset.bottom); paintBottom(); });
   $('analysis-journal').onclick = () => LFJournal.open({kind:'all',symbol:state.instruments.find(i => i.id === state.instrumentId)?.symbol || '',scope:''});
 }

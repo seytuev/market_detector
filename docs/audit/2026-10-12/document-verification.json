@@ -1,0 +1,13 @@
+{
+  "source_files_changed_since_manifest": [],
+  "broken_links": [],
+  "findings": 24,
+  "unique_findings": 24,
+  "work_packages": 13,
+  "acceptance_criteria": 54,
+  "unique_acceptance_criteria": 54,
+  "document_lines": {
+    "docs\\audit\\LevelFrame_Comprehensive_Audit_RU_2026_10_12.md": 282,
+    "docs\\LevelFrame_Stabilization_TZ_RU_2026_10_12.md": 298
+  }
+}

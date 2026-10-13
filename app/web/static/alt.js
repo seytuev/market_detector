@@ -676,7 +676,7 @@ function renderJournal() {
   host.innerHTML = shown.map((event) => `<button type="button" class="alt-event" data-key="${esc(event.key)}" aria-current="${event.key === state.selectedEventKey ? 'true' : 'false'}">
     <span>${fmtTime(event.available_at_ms)}</span>
     <span>${esc(event.details.label_ru || event.label)}${event.importance === 'key' ? ' · ключевое' : ''}${event.details.historical ? ' · историческое восстановление' : ''}</span>
-    <span>К свече</span>
+    <span>Показать свечу</span>
   </button>`).join('');
   host.querySelectorAll('.alt-event').forEach((button) => {
     button.onclick = () => {
@@ -1633,6 +1633,7 @@ function openAnalysisScreen(push = true) {
     history.pushState(null,'',location.href);
   }
   state.screen = 'analysis'; state.tableMode = false; state.pane = 'chart';
+  $('alt-page').dataset.mobilePane = 'chart';
   applyTableMode(); applyPane();
 }
 function returnToScreener() {
@@ -1738,6 +1739,12 @@ async function refreshFromWs() {
 }
 
 function bind() {
+  LFUI.analysisTabs($('alt-analysis-tabs'),pane => {
+    $('alt-page').dataset.mobilePane = pane;
+    if (pane === 'scenario') $('alt-card').classList.add('open');
+    state.pane = pane === 'list' ? 'list' : 'chart';
+    applyPane();
+  });
   document.querySelectorAll('.alt-tab').forEach((button) => {
     button.onclick = () => {
       state.bucket = button.dataset.bucket;

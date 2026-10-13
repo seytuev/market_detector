@@ -1,0 +1,96 @@
+{
+  "python": "3.12.8 (tags/v3.12.8:2dc476b, Dec  3 2024, 19:30:04) [MSC v.1942 64 bit (AMD64)]",
+  "scope": "temporary databases; AST probes are not HTTP integration tests",
+  "transaction_isolation": {
+    "foreign_write": {
+      "replay_after_rollback": null,
+      "parallel_request_after_rollback": null
+    },
+    "foreign_commit": {
+      "replay_after_rollback": "uncommitted",
+      "parallel_request_after_rollback": "acknowledged"
+    }
+  },
+  "queue_failure": {
+    "spool_before": {
+      "1": 1
+    },
+    "spool_after_failed_calculation": {},
+    "reports_idle": true,
+    "degraded_after_failure": null
+  },
+  "delivery_batch": [
+    {
+      "processed_at_delivery": 8,
+      "events": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ]
+    }
+  ],
+  "recalc_timeout": {
+    "reply": {
+      "status": "running"
+    },
+    "thread_finished": true,
+    "scheduler": "test double; actual route body and worker thread",
+    "persisted_status_after_thread_finished": {
+      "status": "running",
+      "started_at": 1791837078399,
+      "finished_at": null,
+      "error": null,
+      "result": null
+    }
+  },
+  "env_late_load": {
+    "env_after_import": {
+      "HTF_PORT": "8765",
+      "HTF_POLL_SECONDS": "123",
+      "HTF_QUOTE_POLL_SECONDS": "7",
+      "HTF_HOST": "example.invalid"
+    },
+    "settings": {
+      "port": 8000,
+      "poll_seconds": 1800,
+      "quote_poll_seconds": 10,
+      "host": "example.invalid"
+    }
+  },
+  "config_file": {
+    "invalid_numeric_loaded": -999,
+    "valid_json_wrong_shape_exception": "AttributeError"
+  },
+  "invalid_candle": {
+    "invalid_ohlc_persisted": true,
+    "high": 90.0,
+    "low": 110.0
+  },
+  "owner_race": {
+    "both_claims_owned": true,
+    "claims": [
+      {
+        "owned": true,
+        "owner": {
+          "pid": 102,
+          "role": "calc",
+          "claimed_at": 1791837078539
+        }
+      },
+      {
+        "owned": true,
+        "owner": {
+          "pid": 101,
+          "role": "calc",
+          "claimed_at": 1791837078539
+        }
+      }
+    ],
+    "scope": "real claim_owner body; read barrier simulates concurrent requests"
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "python": "3.12.8 (tags/v3.12.8:2dc476b, Dec  3 2024, 19:30:04) [MSC v.1942 64 bit (AMD64)]",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "mode": "synthetic, warm OS cache; SQLite cache released between samples",
+  "cases": [
+    {
+      "rows": 100000,
+      "fixture_load_seconds": 0.2354393000714481,
+      "samples": 30,
+      "p50_ms": 1.0412499541416764,
+      "p95_ms": 1.1922999983653426,
+      "max_ms": 1.2311999453231692,
+      "query_plan": [
+        "(5, 0, 0, 'SEARCH candle USING INDEX sqlite_autoindex_candle_1 (instrument_id=? AND timeframe=?)')"
+      ],
+      "dataset_sha256": "337bc6564510935799e7f13035f1f9f05d69153431c5c452c3a6e734836571be"
+    },
+    {
+      "rows": 1000000,
+      "fixture_load_seconds": 2.3248118999181315,
+      "samples": 30,
+      "p50_ms": 0.9768999880179763,
+      "p95_ms": 1.1823000386357307,
+      "max_ms": 1.1877999641001225,
+      "query_plan": [
+        "(5, 0, 0, 'SEARCH candle USING INDEX sqlite_autoindex_candle_1 (instrument_id=? AND timeframe=?)')"
+      ],
+      "dataset_sha256": "87673a7789d4c4df7cfc144a5292957a17bf411081af00bc09ac3579fe832fd1"
+    }
+  ]
+}

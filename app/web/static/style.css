@@ -836,6 +836,9 @@ select, input, textarea {
 .h1-offscreen { right: 72px; bottom: 8px; z-index: 12; }
 .h1-event-card { right: 8px; top: 8px; z-index: 13; width: min(280px, calc(100% - 16px)); pointer-events: auto; padding: 8px; }
 .h1-event-card p { margin: 0 0 4px; }
+.h1-event-card .h1-zone-facts { display: grid; grid-template-columns: auto 1fr; gap: 3px 8px; margin: 6px 0 0; }
+.h1-event-card .h1-zone-facts dt { color: var(--text-dim); }
+.h1-event-card .h1-zone-facts dd { margin: 0; font-variant-numeric: tabular-nums; }
 .h1-event-card .btn { margin-top: 6px; }
 .ltf-expected {
   position: absolute; z-index: 5;

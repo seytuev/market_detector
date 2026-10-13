@@ -1248,6 +1248,10 @@ function initChart() {
   window.addEventListener('resize', drawLtfLayers);
   new ResizeObserver(() => drawLtfLayers()).observe($('chart-container'));
   state.chart.subscribeCrosshairMove(() => drawLtfLayers());
+  $('chart-container').addEventListener('click', (event) => {
+    if (event.target.closest('#h1-event-card, .h1-zone, .h1-zone-tag, .h1-liquidity')) return;
+    closeH1Card();
+  });
 }
 
 // пустота справа после последней свечи (баров H1); временной setVisibleRange
@@ -1389,13 +1393,15 @@ function showH1Card(html) {
   card.classList.remove('hidden');
   card.innerHTML = html + '<button type="button" class="btn small">Закрыть</button>';
   const button = card.querySelector('button');
-  if (button) button.onclick = () => {
-    card.classList.add('hidden');
-    card.innerHTML = '';
-    state.h1SelectedEventId = null;
-    state.h1SelectedZoneId = null;
-    paintH1Markers();
-  };
+  if (button) button.onclick = closeH1Card;
+}
+
+function closeH1Card() {
+  const card = $('h1-event-card');
+  if (!card || card.classList.contains('hidden')) return;
+  card.classList.add('hidden'); card.innerHTML = '';
+  state.h1SelectedEventId = null; state.h1SelectedZoneId = null;
+  paintH1Markers();
 }
 
 async function loadH1Structure() {

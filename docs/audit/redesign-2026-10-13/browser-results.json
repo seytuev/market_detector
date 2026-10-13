@@ -1,0 +1,377 @@
+{
+  "errors": [],
+  "measurements": [
+    {
+      "name": "watch",
+      "width": 1440,
+      "overflow": false,
+      "height": 900,
+      "chart": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0,
+        "left": 0
+      }
+    },
+    {
+      "name": "analysis",
+      "width": 1440,
+      "overflow": false,
+      "height": 900,
+      "chart": {
+        "x": 476,
+        "y": 243,
+        "width": 600,
+        "height": 447,
+        "top": 243,
+        "right": 1076,
+        "bottom": 690,
+        "left": 476
+      }
+    },
+    {
+      "name": "review",
+      "width": 1440,
+      "overflow": false,
+      "height": 900,
+      "chart": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0,
+        "left": 0
+      }
+    },
+    {
+      "name": "journal",
+      "width": 1440,
+      "overflow": false,
+      "height": 900,
+      "chart": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0,
+        "left": 0
+      }
+    },
+    {
+      "name": "screener",
+      "width": 1440,
+      "overflow": false,
+      "height": 900,
+      "chart": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0,
+        "left": 0
+      }
+    },
+    {
+      "name": "market",
+      "width": 1440,
+      "overflow": false,
+      "height": 900
+    },
+    {
+      "name": "calendar",
+      "width": 1440,
+      "overflow": false,
+      "height": 900
+    },
+    {
+      "name": "help",
+      "width": 1440,
+      "overflow": false,
+      "height": 900,
+      "chart": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0,
+        "left": 0
+      }
+    },
+    {
+      "name": "sources",
+      "width": 1440,
+      "overflow": false,
+      "height": 900,
+      "chart": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0,
+        "left": 0
+      }
+    },
+    {
+      "name": "watch",
+      "width": 1366,
+      "overflow": false,
+      "height": 768,
+      "chart": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0,
+        "left": 0
+      }
+    },
+    {
+      "name": "analysis",
+      "width": 1366,
+      "overflow": false,
+      "height": 768,
+      "chart": {
+        "x": 224,
+        "y": 243,
+        "width": 794,
+        "height": 315,
+        "top": 243,
+        "right": 1018,
+        "bottom": 558,
+        "left": 224
+      }
+    },
+    {
+      "name": "review",
+      "width": 1366,
+      "overflow": false,
+      "height": 768,
+      "chart": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0,
+        "left": 0
+      }
+    },
+    {
+      "name": "journal",
+      "width": 1366,
+      "overflow": false,
+      "height": 768,
+      "chart": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0,
+        "left": 0
+      }
+    },
+    {
+      "name": "screener",
+      "width": 1366,
+      "overflow": false,
+      "height": 768,
+      "chart": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0,
+        "left": 0
+      }
+    },
+    {
+      "name": "market",
+      "width": 1366,
+      "overflow": false,
+      "height": 768
+    },
+    {
+      "name": "calendar",
+      "width": 1366,
+      "overflow": false,
+      "height": 768
+    },
+    {
+      "name": "help",
+      "width": 1366,
+      "overflow": false,
+      "height": 768,
+      "chart": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0,
+        "left": 0
+      }
+    },
+    {
+      "name": "sources",
+      "width": 1366,
+      "overflow": false,
+      "height": 768,
+      "chart": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0,
+        "left": 0
+      }
+    },
+    {
+      "name": "watch",
+      "width": 390,
+      "overflow": false,
+      "height": 844,
+      "chart": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0,
+        "left": 0
+      }
+    },
+    {
+      "name": "analysis",
+      "width": 390,
+      "overflow": false,
+      "height": 844,
+      "chart": {
+        "x": 12,
+        "y": 582,
+        "width": 366,
+        "height": 340,
+        "top": 582,
+        "right": 378,
+        "bottom": 922,
+        "left": 12
+      }
+    },
+    {
+      "name": "review",
+      "width": 390,
+      "overflow": false,
+      "height": 844,
+      "chart": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0,
+        "left": 0
+      }
+    },
+    {
+      "name": "journal",
+      "width": 390,
+      "overflow": false,
+      "height": 844,
+      "chart": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0,
+        "left": 0
+      }
+    },
+    {
+      "name": "screener",
+      "width": 390,
+      "overflow": false,
+      "height": 844,
+      "chart": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0,
+        "left": 0
+      }
+    },
+    {
+      "name": "market",
+      "width": 390,
+      "overflow": false,
+      "height": 844
+    },
+    {
+      "name": "calendar",
+      "width": 390,
+      "overflow": false,
+      "height": 844
+    },
+    {
+      "name": "help",
+      "width": 390,
+      "overflow": false,
+      "height": 844,
+      "chart": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0,
+        "left": 0
+      }
+    },
+    {
+      "name": "sources",
+      "width": 390,
+      "overflow": false,
+      "height": 844,
+      "chart": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0,
+        "left": 0
+      }
+    }
+  ]
+}
