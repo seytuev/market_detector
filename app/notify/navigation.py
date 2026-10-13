@@ -80,6 +80,7 @@ def register_notification_handlers(app, db, settings):
         parts = query.data.split(":")
         try:
             action, packet_id = parts[1], int(parts[2])
+            index_or_page = int(parts[3]) if len(parts) > 3 else 0
         except (ValueError, IndexError):
             return
         row = db.conn.execute("SELECT * FROM notification_packet WHERE id=?", (packet_id,)).fetchone()
@@ -90,7 +91,7 @@ def register_notification_handlers(app, db, settings):
         targets = card.get("targets", [])
         text, keyboard = "", []
         if action == "d":
-            page = max(0, int(parts[3])) if len(parts) > 3 else 0
+            page = max(0, index_or_page)
             full = card.get("details") or card["text"]
             pages = [full[i:i + 1800] for i in range(0, len(full), 1800)] or [full]
             page = min(page, len(pages) - 1)
@@ -103,7 +104,7 @@ def register_notification_handlers(app, db, settings):
             if nav:
                 keyboard.append(nav)
         elif action in ("g", "a"):
-            page = max(0, int(parts[3])) if len(parts) > 3 else 0
+            page = min(max(0, index_or_page), max(0, (len(targets) - 1) // 8))
             text = "Выберите объект для графика:" if action == "g" else "Выберите объект для действий:"
             for index in range(page * 8, min(len(targets), (page + 1) * 8)):
                 target = targets[index]
@@ -124,7 +125,7 @@ def register_notification_handlers(app, db, settings):
             if not targets:
                 text = "Для этого сообщения нет отдельных объектов. Подробности доступны по кнопке."
         elif action == "t":
-            index = int(parts[3])
+            index = index_or_page
             if index < 0 or index >= len(targets):
                 return
             target = targets[index]

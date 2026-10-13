@@ -32,12 +32,12 @@ MENU_OPEN_APP = "Открыть рабочее место"
 
 # «Открыть рабочее место» — текстом, а не WebAppInfo: WebApp требует HTTPS,
 # а сервис часто поднят на http://host:port; ссылку шлём сообщением
-MENU_LABELS = frozenset({
-    MENU_NOW, MENU_PICK, MENU_HTF, MENU_LTF, MENU_ALERTS, MENU_OPEN_APP,
-})
-
 MENU_HIST = "История"
 MENU_STATUS = "Состояние сервиса"
+MENU_LABELS = frozenset({
+    MENU_NOW, MENU_PICK, MENU_HTF, MENU_LTF, MENU_ALERTS, MENU_OPEN_APP,
+    MENU_HIST, MENU_STATUS,
+})
 
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
@@ -115,7 +115,7 @@ def ltf_app_url(settings, instrument_id: int) -> str | None:
 
 
 def asset_inline(db: Database, settings, instrument_id: int) -> InlineKeyboardMarkup:
-    """Кнопки карточки актива. График и уведомления — заглушки шагов 4/6."""
+    """График, HTF-зоны, контексты и уведомления актива."""
     iid = instrument_id
     rows = [
         [
@@ -162,10 +162,12 @@ def zone_inline(zone) -> InlineKeyboardMarkup:
     zid, iid = zone.id, zone.instrument_id
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("График", callback_data=f"nav:chartz:{zid}")],
-        [InlineKeyboardButton("LTF от этой зоны", callback_data=f"nav:ltf:{iid}")],
+        [InlineKeyboardButton("LTF от этой зоны", callback_data=f"nav:ltfz:{zid}")],
         [InlineKeyboardButton("История тестов", callback_data=f"nav:zt:{zid}")],
         [InlineKeyboardButton("Уведомления зоны", callback_data=f"nav:alz:{zid}")],
         [InlineKeyboardButton("Заглушить", callback_data=f"nav:zm:{zid}")],
+        [InlineKeyboardButton("Включить уведомления зоны", callback_data=f"nav:zum:{zid}")],
+        [InlineKeyboardButton("← К HTF-зонам", callback_data=f"nav:htf:{iid}:all")],
     ])
 
 
@@ -176,7 +178,7 @@ def zone_tests_inline(zone) -> InlineKeyboardMarkup:
 
 
 def ltf_inline(db: Database, instrument_id: int) -> InlineKeyboardMarkup:
-    """Кнопки карточки LTF-сценария. График/история — заглушки шагов 4/7."""
+    """График, входы, объяснение, контексты и история LTF-сценария."""
     iid = instrument_id
     return InlineKeyboardMarkup([
         [
@@ -243,7 +245,8 @@ def chart_period_inline(instrument_id: int, tf: str) -> InlineKeyboardMarkup:
 
 
 def chart_layers_inline(
-    instrument_id: int, tf: str, days: int, mask: int
+    instrument_id: int, tf: str, days: int, mask: int,
+    observation_id: int | None = None,
 ) -> InlineKeyboardMarkup:
     """Мультивыбор слоёв: переключатель nav:charttg:…:<mask>:<bit>,
     «Показать» — nav:chartgo:<iid>:<tf>:<days>:<mask>."""
@@ -266,12 +269,29 @@ def chart_layers_inline(
     )])
     back = f"nav:chart:{iid}:{tf}" if tf == "H1" else f"nav:chart:{iid}"
     rows.append([InlineKeyboardButton("← Назад", callback_data=back)])
+    if observation_id is not None:
+        # Назад открывает тот же график, а не текущий выбранный сценарий.
+        rows[-1][0] = InlineKeyboardButton(
+            "← К графику", callback_data=f"nav:chartgo:{iid}:{tf}:{days}:{mask}"
+        )
+        rows = _chart_context(rows, observation_id)
     return InlineKeyboardMarkup(rows)
+
+
+def _chart_context(rows, observation_id):
+    """Сохраняем observation во всех действиях над конкретным снимком."""
+    if observation_id is None:
+        return rows
+    return [[InlineKeyboardButton(
+        b.text, callback_data=f"{b.callback_data}:{observation_id}"
+    ) if b.callback_data and b.callback_data.startswith((
+        "nav:chartgo:", "nav:chartlay:", "nav:charttg:",
+    )) else b for b in row] for row in rows]
 
 
 def chart_result_inline(
     instrument_id: int, tf: str, days: int, mask: int,
-    settings=None, instrument=None,
+    settings=None, instrument=None, observation_id: int | None = None,
 ) -> InlineKeyboardMarkup:
     """Кнопки на сообщении с графиком (ТЗ 07.10.2026 §8): «Обновить» и
     периоды — сразу новый рендер той же маской; слои — отдельным сообщением;
@@ -294,7 +314,7 @@ def chart_result_inline(
     rows.append([
         InlineKeyboardButton(
             f"{'• ' + t + ' •' if t == tf else t}",
-            callback_data=f"nav:chartgo:{iid}:{t}:{days if t == 'H1' else 0}:{mask}",
+            callback_data=f"nav:chartgo:{iid}:{t}:{(days or 3) if t == 'H1' else 0}:{mask}",
         )
         for t in ("H1", "D1", "W1")
     ])
@@ -326,7 +346,7 @@ def chart_result_inline(
     if link_row:
         rows.append(link_row)
     rows.append([InlineKeyboardButton("← Назад", callback_data=f"nav:asset:{iid}")])
-    return InlineKeyboardMarkup(rows)
+    return InlineKeyboardMarkup(_chart_context(rows, observation_id))
 
 
 def ltf_signal_inline(
@@ -399,7 +419,9 @@ def watchlist_inline(db: Database, chat_id: str) -> InlineKeyboardMarkup:
         if ins is None:
             continue
         iid = ins.id
-        toggle = "🔔 выкл" if w["alerts_enabled"] else "🔕 вкл"
+        toggle = f"{ins.symbol} · {ins.venue} · {ins.market_type} · " + (
+            "🔕 Выключить" if w["alerts_enabled"] else "🔔 Включить"
+        )
         rows.append([
             InlineKeyboardButton(toggle, callback_data=f"nav:wal:{iid}"),
             InlineKeyboardButton("🗑 Удалить", callback_data=f"nav:wrm:{iid}"),

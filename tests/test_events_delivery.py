@@ -95,6 +95,42 @@ def _events_packets(db) -> list:
     ).fetchall()
 
 
+@pytest.mark.parametrize("long_usd,short_usd,window_ms,send", [
+    (3103163, 2691757, 14_400_000, False),
+    (1555369, 2438185, 14_400_000, False),
+    (25_000_000, 24_999_999, 14_400_000, False),
+    (25_000_000, 25_000_000, 14_400_000, False),
+    (25_000_000, 25_000_001, 14_400_000, True),
+    (51_000_000, 0, 3_600_000, False),
+    (None, 51_000_000, 14_400_000, False),
+    ("NaN", 51_000_000, 14_400_000, False),
+    (-1, 51_000_000, 14_400_000, False),
+])
+async def test_plain_liquidation_notification_threshold(long_usd, short_usd, window_ms, send):
+    db, settings = _db(), _settings()
+    sender = LogSender()
+    publish.wire(db, sender, settings)
+    curr = _asmt()
+    store.insert_assessment(db, curr)
+    fact, _ = memory.begin_fact(
+        db, rule_id="LIQ_FACT", rule_version=ENGINE_RULE_VERSION,
+        scope="crypto_market", episode_id="volume", direction=None,
+        occurred_at=T0, detected_at=T0, available_at=T0,
+        payload={"summary": "объём ликвидаций", "sum_long_usd": long_usd,
+                 "sum_short_usd": short_usd, "window_ms": window_ms},
+    )
+    pubs = publish.process_cycle(
+        db, settings, prev=None, curr=curr,
+        transitions=store.fact_transitions_since(db, 0), now_ms=T0,
+    )
+    assert bool(pubs) is send
+    assert store.get_fact(db, fact["fact_key"]) is not None
+    publish.flush_due(db, settings, T0 + 60_000)
+    await publish._OUTBOX.flush()
+    assert len(sender.cards) == int(send)
+    assert len(_events_packets(db)) == int(send)
+
+
 async def test_ac22_pending_is_not_delivery_until_real_send():
     db, settings = _db(), _settings()
     sender = LogSender()  # изолированный тестовый канал (AC22)

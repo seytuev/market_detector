@@ -73,6 +73,16 @@ const puppeteer = require('../tools/node_modules/puppeteer-core');
     assert.equal(result.on, 'rgb(40, 119, 84)');
     assert.equal(result.off, 'rgb(173, 63, 73)');
     assert.equal(result.historicalPdCount, 0);
+    const labels = await page.$$('.h1-pd-label');
+    assert.equal(labels.length, 3);
+    for (const label of labels) {
+      await label.hover();
+      await page.waitForFunction(() => [...document.querySelectorAll('.h1-pd-label')]
+        .every(el => getComputedStyle(el).opacity === '1'));
+      await page.mouse.move(0, 0);
+      await page.waitForFunction(() => [...document.querySelectorAll('.h1-pd-label')]
+        .every(el => getComputedStyle(el).opacity === '0.25'));
+    }
     await page.screenshot({ path: 'tmp/desk-zone-display-check.png' });
     console.log('Desk zone display: passed');
   } finally {

@@ -284,7 +284,9 @@ class LtfDispatcher:
                     from urllib.parse import urlparse
                     base = self.settings.effective_base_url()
                     if urlparse(base).hostname not in {None, "localhost", "127.0.0.1", "0.0.0.0", "::1"}:
-                        target["url"] = f"{base}/?zone={c.zone.id}"
+                        from urllib.parse import urlencode
+                        params = urlencode({"zone": c.zone.id, "token": self.settings.auth_token})
+                        target["url"] = f"{base}/?{params}"
                 if target not in targets:
                     targets.append(target)
         import json

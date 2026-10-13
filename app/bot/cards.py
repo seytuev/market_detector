@@ -266,14 +266,8 @@ def _zone_line(db: Database, z: Zone, price: Optional[float]) -> str:
     return "; ".join(parts) + "."
 
 
-def render_htf(
-    db: Database, settings, instrument_id: int, filt: str = "all"
-) -> str:
-    """Активные HTF-зоны инструмента. Порядок: цена внутри → ближайшие
-    сверху → ближайшие снизу. Фильтры: d1 | w1 | all | inside | near."""
-    ins = db.get_instrument(instrument_id)
-    if ins is None:
-        return "Инструмент не найден."
+def htf_zones(db: Database, instrument_id: int, filt: str = "all") -> list[Zone]:
+    """Одинаковые фильтры и порядок для текста и кнопок HTF-зон."""
     zones = db.get_zones(
         instrument_id=instrument_id, statuses=_ACTIVE_ZONE_STATUSES
     )
@@ -297,6 +291,19 @@ def render_htf(
         )[:5]
     else:
         ordered = inside + above + below
+    return ordered
+
+
+def render_htf(
+    db: Database, settings, instrument_id: int, filt: str = "all"
+) -> str:
+    """Активные HTF-зоны инструмента с выбранным фильтром."""
+    ins = db.get_instrument(instrument_id)
+    if ins is None:
+        return "Инструмент не найден."
+    ordered = htf_zones(db, instrument_id, filt)
+    quote = db.get_quote(instrument_id)
+    price = quote[0] if quote else None
     head = f"HTF-зоны: {ins.symbol} · {ins.venue} · {ins.market_type}"
     if price is not None:
         head += f"\nЦена: {_fmt_price(price)}"

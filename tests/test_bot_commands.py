@@ -247,12 +247,11 @@ async def test_menu_open_app_sends_url(db):
     app = build_application(_settings(), db)
     update, replies = _msg_update("Открыть рабочее место")
     await _text_handler(app)(update, SimpleNamespace(user_data={}))
-    assert replies == [(f"Анализ: {_settings().effective_base_url()}", None)]
+    assert replies == [("Публичный адрес рабочего места не настроен.", None)]
 
 
-async def test_pending_note_wins_over_menu_button(db, seeded):
-    """Текст кнопки меню при pending-заметке сохраняется как заметка,
-    а не как команда меню (единый on_text)."""
+async def test_menu_button_cancels_pending_note(db, seeded):
+    """Кнопка меню отменяет ввод заметки и открывает выбранный раздел."""
     zone_id = db.insert_zone(Zone(
         id=None, instrument_id=seeded["btc"], type=ZoneType.FVG,
         direction=Direction.BULL, timeframe="H4", lower=1.0, upper=2.0,
@@ -263,5 +262,6 @@ async def test_pending_note_wins_over_menu_button(db, seeded):
     update, replies = _msg_update("Сейчас")
     await _text_handler(app)(update, context)
     reviews = db.get_reviews(zone_id)
-    assert len(reviews) == 1 and reviews[0].text == "Сейчас"
-    assert replies == [("Заметка сохранена.", None)]
+    assert reviews == []
+    assert "pending_note_zone" not in context.user_data
+    assert replies and replies[0][1] is not None

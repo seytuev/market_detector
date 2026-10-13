@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import hashlib
+from decimal import Decimal, InvalidOperation
 
 from ..models import now_ms as _now_ms
 from . import store
@@ -30,6 +31,28 @@ _STALE_AGE_MS = 10 * 60 * 1000
 # Качества источников: ухудшение и восстановление публикуются по одному разу (§9).
 _BAD_QUALITY = {"stale", "unavailable", "auth_error", "capability_error"}
 _GOOD_QUALITY = {"ok", "partial"}
+
+# Owner notification preference: plain volume facts only above $50m / 4h.
+_LIQ_FACT_MIN_USD = Decimal("50000000")
+_LIQ_FACT_WINDOW_MS = 4 * 3_600_000
+
+
+def _fact_publishable(fact: dict) -> bool:
+    if fact.get("rule_id") != "LIQ_FACT":
+        return True
+    payload = fact.get("payload") or {}
+    if payload.get("window_ms") != _LIQ_FACT_WINDOW_MS:
+        return False
+    try:
+        long_usd = Decimal(str(payload["sum_long_usd"]))
+        short_usd = Decimal(str(payload["sum_short_usd"]))
+        return (
+            long_usd.is_finite() and short_usd.is_finite()
+            and long_usd >= 0 and short_usd >= 0
+            and long_usd + short_usd > _LIQ_FACT_MIN_USD
+        )
+    except (KeyError, InvalidOperation, TypeError, ValueError):
+        return False
 
 _TRANSITION_KIND = {
     "appeared": "fact_appeared",
@@ -249,6 +272,8 @@ def process_cycle(db, settings, *, prev: dict | None, curr: dict,
         if kind is None:
             continue
         fact = store.get_fact(db, tr["fact_key"]) or {}
+        if not _fact_publishable(fact):
+            continue
         changes.append({
             "rule_id": fact.get("rule_id") or "UNKNOWN",
             "kind": kind,

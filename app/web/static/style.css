@@ -716,7 +716,8 @@ select, input, textarea {
   opacity: .25;
   transition: opacity .15s ease;
 }
-.h1-pd-label:hover { opacity: 1; }
+#zone-overlay:has(.h1-pd-label:hover) .h1-pd-label,
+#ltf-overlay:has(.h1-pd-label:hover) .h1-pd-label { opacity: 1; }
 .ltf-range-mid { border-top-style: dotted; }
 .ltf-entry {
   border: 1px solid;

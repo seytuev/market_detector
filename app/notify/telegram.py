@@ -276,6 +276,7 @@ class TelegramSender:
         chat_id: str,
         db: Database,
         site_base_url: str = "http://127.0.0.1:8000",
+        auth_token: str = "",
     ):
         from telegram import Bot
 
@@ -283,6 +284,7 @@ class TelegramSender:
         self.chat_id = chat_id
         self.db = db
         self.site_base_url = site_base_url
+        self.auth_token = auth_token
 
     async def send_card(self, card, packet_id, *, quiet=False):
         from .compact import notification_html
@@ -339,7 +341,8 @@ class TelegramSender:
 
         host = urlparse(self.site_base_url).hostname or ""
         if host not in {"127.0.0.1", "localhost", "0.0.0.0", "::1"}:
-            chart_url = f"{self.site_base_url}/?zone={zone_id}"
+            from urllib.parse import urlencode
+            chart_url = f"{self.site_base_url}/?{urlencode({'zone': zone_id, 'token': self.auth_token})}"
             buttons.append(
                 [InlineKeyboardButton("Открыть рабочее место", url=chart_url)]
             )
@@ -552,11 +555,16 @@ def build_application(settings: Settings, db: Database):
         elif action == "snooze":
             until = now_ms() + SNOOZE_HOURS * 3_600_000
             ensure_mute(db, zone_id, cycle_id, kind, until)
+            db.set_mute_scope(str(settings.telegram_chat_id), "zone", str(zone_id), until)
             await query.answer(f"Отложено на {SNOOZE_HOURS} ч.")
         elif action == "mute":
             ensure_mute(db, zone_id, cycle_id, kind, MUTE_FOREVER_MS)
+            db.set_mute_scope(str(settings.telegram_chat_id), "zone", str(zone_id), MUTE_FOREVER_MS)
             await query.answer("Уведомления по зоне отключены.")
         elif action == "note":
+            if db.get_zone(zone_id) is None:
+                await query.answer("Зона не найдена.")
+                return
             context.user_data["pending_note_zone"] = zone_id
             await query.answer("Отправьте текст заметки одним сообщением.")
         else:
@@ -565,11 +573,19 @@ def build_application(settings: Settings, db: Database):
     async def on_text(update, context) -> None:
         if not _is_owner(update):
             return
+        from ..bot.keyboards import MENU_LABELS
+        if (update.message.text or "").strip() in MENU_LABELS:
+            context.user_data.pop("pending_note_zone", None)
+            await handle_menu_text(update, context)
+            return
         zone_id = context.user_data.pop("pending_note_zone", None)
         if zone_id is None:
             # нет pending-заметки — текст может быть кнопкой reply-меню
             if handle_menu_text is not None:
                 await handle_menu_text(update, context)
+            return
+        if db.get_zone(zone_id) is None:
+            await update.message.reply_text("Зона не найдена. Заметка не сохранена.")
             return
         db.add_review(
             Review(

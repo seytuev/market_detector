@@ -19,12 +19,12 @@ MessageHandler'ов остаётся один, и конфликта «заме�
   nav:why:<iid>              — «почему этот сценарий»
   nav:ctx:<iid>              — список контекстов
   nav:ctxsel:<iid>:<obs_id>  — выбрать контекст (как POST select-context)
-  nav:chart:<iid>[:<tf>[:<days>]] — диалог графика (ТФ → период → слои)
+  nav:chart:<iid>[:<tf>[:<days>]] — выбор ТФ или открытие графика
   nav:charttg:<iid>:<tf>:<days>:<mask>:<bit> — переключить слой (mask^bit)
   nav:chartgo:<iid>:<tf>:<days>:<mask> — рендер и отправка фото
   nav:chartlay:<iid>:<tf>:<days>:<mask> — слои отдельным сообщением (из фото)
   nav:chartz:<zone_id>       — график по зоне (observation или снимок зоны)
-  nav:alerts|hist            — заглушки следующих шагов
+  nav:alerts|hist            — уведомления / история
   mask слоёв: 1=htf, 2=bos, 4=range, 8=entries (app/bot/charts.py LAYER_BITS)
 """
 from __future__ import annotations
@@ -41,8 +41,8 @@ from ..services.overview import _ACTIVE_STATES, instrument_current
 from ..texts_ru import BOT_HELP, BOT_START
 from .access import make_owner_guard
 from .cards import (
-    _ACTIVE_ZONE_STATUSES,
     _clip,
+    htf_zones,
     render_asset,
     render_chart_caption,
     render_contexts,
@@ -88,6 +88,7 @@ from .keyboards import (
     ltf_inline,
     main_menu_keyboard,
     now_inline,
+    public_base_url,
     watchlist_add_inline,
     watchlist_inline,
     watchlist_remove_confirm_inline,
@@ -117,14 +118,7 @@ def _resolve_instruments(db: Database, query: str) -> list:
 
 
 def _htf_zones(db: Database, instrument_id: int, filt: str) -> list:
-    zones = db.get_zones(
-        instrument_id=instrument_id, statuses=_ACTIVE_ZONE_STATUSES
-    )
-    # ТЗ 06.10.2026 §13 (T21): единый canonical state актуальности
-    zones = [z for z in zones if z.is_currently_relevant()]
-    if filt in ("d1", "w1"):
-        zones = [z for z in zones if z.timeframe == filt.upper()]
-    return sorted(zones, key=lambda z: (z.timeframe, z.lower))
+    return htf_zones(db, instrument_id, filt)
 
 
 def _chat_id(update) -> str:
@@ -138,9 +132,11 @@ def _parse_duration_ms(token: str) -> int | None:
     token = (token or "").strip().lower()
     try:
         if token.endswith("h"):
-            return int(token[:-1]) * 3_600_000
+            hours = int(token[:-1])
+            return hours * 3_600_000 if hours > 0 else None
         if token.endswith("d"):
-            return int(token[:-1]) * 86_400_000
+            days = int(token[:-1])
+            return days * 86_400_000 if days > 0 else None
     except ValueError:
         return None
     return None
@@ -271,6 +267,11 @@ def register_bot_handlers(app, settings, db: Database):
             await message.reply_text("Инструмент не найден.")
             return
         obs_id = observation_id or cur["selected_context_id"]
+        if observation_id is not None:
+            obs = db.get_ltf_observation(observation_id)
+            if obs is None or obs.instrument_id != instrument_id:
+                await message.reply_text("Контекст недоступен.")
+                return
         if obs_id is None:
             await message.reply_text(
                 "Нет активного контекста — недостаточно данных для графика."
@@ -289,6 +290,26 @@ def register_bot_handlers(app, settings, db: Database):
             await message.reply_text("Недостаточно данных для графика.")
             return
         caption = render_chart_caption(cur, now, tf, days)
+        if obs_id != cur["selected_context_id"]:
+            # Подпись должна описывать нарисованный контекст, а не выбранный
+            # сейчас в рабочем месте сценарий другого наблюдения.
+            from ..notify.formatting import fmt_price_ru
+            obs = db.get_ltf_observation(obs_id)
+            zone = db.get_zone(obs.zone_id)
+            period = f", {days} дн." if tf == "H1" else ""
+            lines = [f"{ins['symbol']} · {tf}{period}"]
+            if cur["price"] is not None:
+                lines.append(f"Цена: {fmt_price_ru(cur['price'])}")
+            if zone is not None:
+                lines.append(f"Контекст: {zone.type.value.upper()} {zone.timeframe} · "
+                             f"{fmt_price_ru(zone.lower)}–{fmt_price_ru(zone.upper)}")
+            sc = db.get_active_ltf_scenario(obs_id) if obs.state in _ACTIVE_STATES else None
+            if sc is not None:
+                lines.append(f"{sc.trigger} подтверждён: уровень {fmt_price_ru(sc.break_level)}")
+            elif obs.state in _ACTIVE_STATES:
+                lines.append("BOS/SMS ещё не подтверждён (ожидаемый — пунктиром)")
+            lines.append(f"Текущая ситуация: {_fmt_time(now)}")
+            caption = "\n".join(lines)
         if observation_id is not None:
             # контекст конкретного сообщения (§8): отменённый сценарий не
             # воскрешается — показываем факт отмены (§11.2)
@@ -305,7 +326,8 @@ def register_bot_handlers(app, settings, db: Database):
         from ..notify.navigation import reusable_photo
         await reusable_photo(db, app.bot, settings.telegram_chat_id,
             f"ltf:{instrument_id}:{obs_id}", path, caption,
-            chart_result_inline(instrument_id, tf, days, mask, settings=settings, instrument=ins),
+            chart_result_inline(instrument_id, tf, days, mask, settings=settings, instrument=ins,
+                                observation_id=obs_id),
             message.reply_photo)
 
     async def _send_zone_snapshot(message, zone) -> None:
@@ -545,8 +567,25 @@ def register_bot_handlers(app, settings, db: Database):
         parts = data.split(":")
 
         async def edit(text: str, markup=None) -> None:
-            # edit — одно сообщение: длинный текст режем до первой порции
-            await query.edit_message_text(_clip(text), reply_markup=markup)
+            from telegram.error import BadRequest
+            # Фото уведомления сохраняем; навигацию открываем текстовым ответом.
+            message = getattr(query, "message", None)
+            if getattr(message, "photo", None):
+                await _reply(message, text, markup)
+                return
+            try:
+                await query.edit_message_text(_clip(text), reply_markup=markup)
+            except BadRequest as exc:
+                reason = str(exc).lower()
+                if "message is not modified" in reason:
+                    return
+                if any(term in reason for term in (
+                    "there is no text in the message", "message to edit not found",
+                    "message can't be edited",
+                )) and message is not None:
+                    await _reply(message, text, markup)
+                    return
+                raise
 
         try:
             if data == "nav:now:refresh":
@@ -778,7 +817,28 @@ def register_bot_handlers(app, settings, db: Database):
                     return
                 # общая с htf:-кнопками логика mute (app/notify/telegram.py)
                 ensure_mute(db, z.id, z.cycle_id, "touch", MUTE_FOREVER_MS)
+                db.set_mute_scope(_chat_id(update), "zone", str(z.id), MUTE_FOREVER_MS)
                 await query.answer("Уведомления по зоне отключены.")
+            elif kind == "zum":
+                zid = int(parts[2])
+                z = db.get_zone(zid)
+                if z is None:
+                    await query.answer("Зона не найдена.")
+                    return
+                db.set_mute(z.id, z.cycle_id, None)
+                db.clear_mute_scope(_chat_id(update), "zone", str(z.id))
+                await query.answer("Пауза уведомлений зоны снята.")
+            elif kind == "ltfz":
+                zid = int(parts[2])
+                z = db.get_zone(zid)
+                obs = db.get_ltf_observation_by_zone(z.id, z.cycle_id) if z else None
+                if obs is None or obs.state not in _ACTIVE_STATES:
+                    await query.answer("У этой зоны нет активного LTF-контекста.")
+                    return
+                db.set_meta(f"ltf:selected_context:{z.instrument_id}", str(obs.id))
+                await edit(render_ltf(db, settings, z.instrument_id),
+                           ltf_inline(db, z.instrument_id))
+                await query.answer()
             elif kind == "ltf":
                 iid = int(parts[2])
                 await edit(render_ltf(db, settings, iid), ltf_inline(db, iid))
@@ -825,6 +885,7 @@ def register_bot_handlers(app, settings, db: Database):
                 await query.answer()
             elif kind == "chart":
                 iid = int(parts[2])
+                await query.answer()
                 if len(parts) == 3:
                     await edit("Таймфрейм:", chart_tf_inline(iid))
                 else:
@@ -832,11 +893,8 @@ def register_bot_handlers(app, settings, db: Database):
                     # сразу рендер с периодом/слоями по умолчанию; период и
                     # слои меняются кнопками ПОСЛЕ выдачи графика
                     tf = parts[3]
-                    days, _ = (
-                        _auto_days(None, now_ms()) if tf == "H1" else (0, False)
-                    )
+                    days = int(parts[4]) if len(parts) > 4 else (3 if tf == "H1" else 0)
                     await _send_chart(query.message, iid, tf, days, DEFAULT_MASK)
-                await query.answer()
             elif kind == "charto":
                 # «График» из конкретного LTF-сообщения: контекст ЭТОГО
                 # события (observation), а не «первый активный сценарий» (§8)
@@ -845,19 +903,22 @@ def register_bot_handlers(app, settings, db: Database):
                 if obs is None or obs.instrument_id != iid:
                     await query.answer("Контекст недоступен.")
                     return
+                await query.answer()
                 days, _ = _auto_days(obs_id, now_ms())
                 await _send_chart(
                     query.message, iid, "H1", days, DEFAULT_MASK,
                     observation_id=obs_id,
                 )
-                await query.answer()
             elif kind == "chartlay":
                 # из фото-сообщения текст не редактируется — слои новым сообщением
                 iid, tf, days, mask = (
                     int(parts[2]), parts[3], int(parts[4]), int(parts[5])
                 )
                 await query.message.reply_text(
-                    "Слои:", reply_markup=chart_layers_inline(iid, tf, days, mask)
+                    "Слои:", reply_markup=chart_layers_inline(
+                        iid, tf, days, mask,
+                        observation_id=int(parts[6]) if len(parts) > 6 else None,
+                    )
                 )
                 await query.answer()
             elif kind == "charttg":
@@ -866,21 +927,28 @@ def register_bot_handlers(app, settings, db: Database):
                     int(parts[5]), int(parts[6]),
                 )
                 await edit(
-                    "Слои:", chart_layers_inline(iid, tf, days, mask ^ bit)
+                    "Слои:", chart_layers_inline(
+                        iid, tf, days, mask ^ bit,
+                        observation_id=int(parts[7]) if len(parts) > 7 else None,
+                    )
                 )
                 await query.answer()
             elif kind == "chartgo":
                 iid, tf, days, mask = (
                     int(parts[2]), parts[3], int(parts[4]), int(parts[5])
                 )
-                await _send_chart(query.message, iid, tf, days, mask)
                 await query.answer()
+                await _send_chart(
+                    query.message, iid, tf, days, mask,
+                    observation_id=int(parts[6]) if len(parts) > 6 else None,
+                )
             elif kind == "chartz":
                 zid = int(parts[2])
                 z = db.get_zone(zid)
                 if z is None:
                     await query.answer("Зона не найдена.")
                     return
+                await query.answer()
                 # график H1 по observation этой зоны; без наблюдения —
                 # снимок самой зоны (render_zone_chart)
                 obs = db.get_ltf_observation_by_zone(z.id, z.cycle_id)
@@ -891,7 +959,6 @@ def register_bot_handlers(app, settings, db: Database):
                     )
                 else:
                     await _send_zone_snapshot(query.message, z)
-                await query.answer()
             elif kind == "hist":
                 # фильтры истории: актив → период → тип события (ТЗ п.11)
                 iid = int(parts[2])
@@ -951,9 +1018,15 @@ def register_bot_handlers(app, settings, db: Database):
                 reply_markup=instruments_inline(db, "nav:ltf"),
             )
         elif text == MENU_OPEN_APP:
-            await update.message.reply_text(
-                f"Анализ: {settings.effective_base_url()}"
-            )
+            from urllib.parse import quote
+            base = public_base_url(settings)
+            if base is None:
+                await update.message.reply_text(
+                    "Публичный адрес рабочего места не настроен."
+                )
+            else:
+                token = quote(settings.auth_token or "", safe="")
+                await update.message.reply_text(f"Анализ: {base}/?token={token}")
         elif text == MENU_ALERTS:
             await update.message.reply_text(
                 "Группы уведомлений (глобально):",

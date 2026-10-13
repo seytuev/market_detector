@@ -368,7 +368,9 @@ class EventDispatcher:
                           zone_id=z.id, instrument_id=ins.id, cycle_id=v.event.cycle_id,
                           kind=v.event.kind.value, chart=f"nav:chartz:{z.id}", tv=tradingview_url(ins))
             if urlparse(base).hostname not in {None, "localhost", "127.0.0.1", "0.0.0.0", "::1"}:
-                target["url"] = f"{base}/?zone={z.id}"
+                from urllib.parse import urlencode
+                params = urlencode({"zone": z.id, "token": getattr(self.sender, "auth_token", "")})
+                target["url"] = f"{base}/?{params}"
             targets.append(target)
         groups = self._group_members(views)
         details = "\n\n".join(_render_event_details(v, groups.get(v.event.zone_id), approach_pct=self.cfg.approach_pct) for v in views)
