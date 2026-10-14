@@ -45,6 +45,7 @@ const state = {
   // выбор свечи-якоря на графике для модалки исправления границ (U04)
   anchorPickMode: false,
   h1Layers: null,
+  dailyStructure: null,
   h1Req: 0,
   h1LoadError: false,
   h1SelectedEventId: null,
@@ -359,6 +360,7 @@ async function loadCandles() {
   if (version != null && state.loadedCandleInstrument === id && state.loadedCandleTf === tf
       && version < state.candleVersion) return;
   state.candles = candles;
+  state.dailyStructure = versioned ? response.daily_structure || null : null;
   if (version != null) state.candleVersion = version;
   // §13 (этап 6b): доменные версии снимка — точка отсчёта для diff'ов
   if (versioned && response.versions) {
@@ -460,6 +462,7 @@ function drawZones() {
   const ts = state.chart.timeScale();
   // Слой H1 готовится независимо от отбора и отрисовки HTF-контекста.
   drawH1Breaks(overlay, ts, paneRight, height);
+  drawDailyStructure(overlay, ts, paneRight, height);
   // по умолчанию на графике только зоны выбранного ТФ; «Все ТФ» показывает
   // оба, а чекбоксы слоёв позволяют скрыть конкретный ТФ в этом режиме
   const tfOn = (tf) => {
@@ -893,6 +896,68 @@ async function closeSelectedHtfIdea(ideaId) {
   await api(`/api/ltf/ideas/${ideaId}/close`, { method: 'POST' });
   await loadH1Markers();
   await loadDeskExtras();
+}
+
+function drawDailyStructure(overlay, ts, paneRight, height) {
+  const daily = state.dailyStructure;
+  if (!daily || !$('layer-structure-d1')?.checked) return;
+  const bars = state.candles;
+  const xAt = (ms) => {
+    const time = Math.floor(ms / 1000);
+    if (!bars.length || time < bars[0].time) return null;
+    let lo = 0, hi = bars.length - 1;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (bars[mid].time <= time) lo = mid; else hi = mid - 1;
+    }
+    // W1 maps each D1 anchor onto its containing weekly candle.
+    return ts.timeToCoordinate(bars[lo].time);
+  };
+  const label = (x, y, text, color, title) => {
+    const el = document.createElement('span');
+    el.className = 'd1-structure-label';
+    el.textContent = text; el.title = title;
+    Object.assign(el.style, {position:'absolute', left:Math.max(0, Math.min(x, paneRight - 110)) + 'px',
+      top:y + 'px', color, fontSize:'11px', background:'var(--bg, #131722)',
+      padding:'1px 3px', pointerEvents:'auto', zIndex:'4'});
+    overlay.appendChild(el);
+  };
+  (daily.pivots || []).filter(p => ['HH','HL','LH','LL'].includes(p.role)).slice(-20).forEach(p => {
+    const x = xAt(p.pivot_at), y = state.candleSeries.priceToCoordinate(p.price);
+    if (x == null || x < 0 || x > paneRight || y == null || y < 12 || y > height - 40) return;
+    label(x, y + (p.kind === 'high' ? -17 : 4), 'D1 ' + p.role, '#b69cff',
+      `D1 ${p.role} · ${fmtPrice(p.price)} · подтверждение ${fmtTime(p.confirmed_at)}`);
+  });
+  const line = (anchor, end, level, text, color, title, dashed = false) => {
+    const x2 = end == null ? paneRight : xAt(end);
+    const y = state.candleSeries.priceToCoordinate(level);
+    if (x2 == null || x2 < 0 || y == null || y < 0 || y > height - 35) return;
+    const x1 = xAt(anchor);
+    const left = Math.max(0, x1 == null ? 0 : x1), right = Math.min(paneRight, x2);
+    if (right < left) return;
+    const el = document.createElement('div');
+    el.className = 'd1-structure-line';
+    Object.assign(el.style, {position:'absolute', left:left+'px', top:y+'px',
+      width:(right-left)+'px', borderTop:`2px ${dashed ? 'dashed' : 'solid'} ${color}`, pointerEvents:'none'});
+    overlay.appendChild(el);
+    label(Math.max(left, right - 105), y - 17, text, color, title);
+  };
+  (daily.events || []).slice(-50).forEach(e => line(e.anchor_at, e.open_time, e.level,
+    'D1 ' + e.kind + (e.direction === 'bull' ? ' ↑' : ' ↓'), '#b69cff',
+    `D1 ${e.kind} · ${fmtPrice(e.level)} · закрытие ${fmtTime(e.occurred_at)}`));
+  if (daily.data_quality === 'ok') Object.entries(daily.expected || {}).forEach(([dir, conditions]) => {
+    Object.values(conditions).filter(c => c.status === 'ready' && c.level != null).forEach(c => {
+      line(c.pivot?.pivot_at || bars[0].time * 1000, null, c.level,
+        'D1 ждём ' + c.kind + (dir === 'bull' ? ' ↑' : ' ↓'), '#8d7bb5',
+        `Условие ${c.kind} D1: закрытие дня строго ${dir === 'bull' ? 'выше' : 'ниже'} ${fmtPrice(c.level)}`, true);
+    });
+  });
+  const current = typeof deskData === 'undefined' ? null : deskData.current;
+  const sync = current?.instrument?.id != null && current.instrument.id === state.instrumentId
+    ? current.asset?.trade_setup?.daily_alignment : null;
+  const target = sync?.target;
+  if (target) line(bars[0].time * 1000, null, target.price,
+    'Цель · ' + target.type + ' D1', '#c88a35', target.text, true);
 }
 
 function drawH1Breaks(overlay, ts, paneRight, height) {
@@ -3092,6 +3157,10 @@ function registerWsHandler(fn) { wsExtraHandlers.push(fn); }
 function handleWsCandle(data) {
   const iid = data.instrument_id;
   const tf = data.timeframe;
+  if (iid === state.instrumentId && tf === 'D1') {
+    loadCandles().then(() => Promise.all([loadH1Markers(), loadDeskExtras()]))
+      .catch((e) => console.warn('D1 structure:', e));
+  }
   const key = (iid != null && tf) ? `candles:${iid}:${tf}` : null;
   const version = data.domain_versions && data.domain_versions.candles;
   const current = iid != null && iid === state.instrumentId && tf === state.timeframe;
@@ -3576,7 +3645,7 @@ function renderDeskScenario() {
       hideHeadline: !!v.scenario_summary,
       suppressLocation: suppress,
       visualHtml: '',
-      hideDetails: true,
+      hideDetails: false,
       simpleTradeTitle: true,
       deskLayout: true,
     }) +
@@ -4140,7 +4209,7 @@ async function main() {
   refreshLayers = updateLayers;
   $('tf-all').onchange = updateLayers;
   $('show-candidates').onchange = updateLayers;
-  ['layer-tf-d1', 'layer-tf-w1', 'layer-history', 'layer-mids', 'layer-labels'].forEach((id) => {
+  ['layer-tf-d1', 'layer-tf-w1', 'layer-structure-d1', 'layer-history', 'layer-mids', 'layer-labels'].forEach((id) => {
     if ($(id)) $(id).onchange = updateLayers;
   });
   updateLayers();

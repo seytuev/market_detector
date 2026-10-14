@@ -1376,8 +1376,10 @@ def create_app(
             ]
             if not with_version:
                 return payload
+            from ..services.d1_structure import project_daily
             return {
                 "candles": payload,
+                "daily_structure": project_daily(db, instrument_id, now_ms()),
                 "state_version": db.get_state_seq(),
                 "versions": {
                     "candles": db.get_domain(

@@ -11,6 +11,8 @@ from typing import Any, Optional
 
 from ..notify.formatting import fmt_price_ru, fmt_time_msk
 from .h1_setup import local_leg_at, revision_at
+from .d1_structure import project_daily
+from .structure_sync import synchronize_scenario
 
 RULE_VERSION = "asset-context-3"
 H1_MS = 3_600_000
@@ -95,6 +97,30 @@ def project_asset(
         state, transition if proven else None, evidence, display_zones, pd,
         invalidation, quality_text, leg, quality_bad, forming_note, moment,
     )
+    daily = project_daily(db, instrument_id, moment)
+    alignment = synchronize_scenario(
+        db, instrument_id, daily, state["trade_direction"], moment,
+        reference=price if price is not None else (transition or {}).get("close_price"),
+        h1_confirmed=proven, has_htf_source=bool(evidence),
+    )
+    daily_line = daily["text"] + ". " + alignment["status"]
+    if alignment["target_text"]:
+        daily_line += ". Цель: " + alignment["target_text"]
+    if len(compact) < 5:
+        compact.append(daily_line)
+    else:
+        compact[-1] += "\n" + daily_line
+    lead_rows = [r for r in compact_rows if r["kind"] in ("grounds", "bos")]
+    tail_rows = [r for r in compact_rows if r["kind"] not in ("grounds", "bos")]
+    compact_rows = [
+        {"kind": "daily_structure", "k": "Структура D1", "v": daily["text"],
+         "dir": "long" if daily["direction"] == "bull" else "short" if daily["direction"] else None},
+    ] + sorted(lead_rows, key=lambda r: r["kind"] == "bos") + [
+        {"kind": "daily_alignment", "k": "Сценарий HTF", "v": alignment["status"]},
+    ]
+    if alignment["target_text"]:
+        compact_rows.append({"kind": "target", "k": "Цель", "v": alignment["target_text"]})
+    compact_rows.extend(tail_rows)
     snapshot_id = "asset:{iid}:{as_of}:{move}:{key}:{code}".format(
         iid=instrument_id,
         as_of=moment,
@@ -118,7 +144,9 @@ def project_asset(
             "last_transition": transition if proven else None,
             "proven": proven,
         },
+        "daily_structure": daily,
         "trade_setup": {
+            "daily_alignment": alignment,
             "state": state["setup_state"],
             "direction": state["trade_direction"],
             "context_episode_ids": sides["episode_ids"],
@@ -147,6 +175,18 @@ def project_asset(
         "compact": compact,
         "compact_rows": compact_rows,
         "details": {
+            "structure_sync": [
+                daily["text"] + " · снимок " + fmt_time_msk(moment),
+                *[f"BOS D1 {'вверх' if e['direction'] == 'bull' else 'вниз'}: "
+                  f"{fmt_price_ru(e['level'])} · {fmt_time_msk(e['occurred_at'])}"
+                  for e in [next((e for e in reversed(daily["events"]) if e["kind"] == "BOS"), None)]
+                  if e is not None],
+                *([alignment["target_text"]] if alignment["target_text"] else []),
+                "D1 задаёт приоритет. Направление меняет BOS; SMS предупреждает о возможной смене.",
+                "Новый контртрендовый сценарий требует подтверждения H1 из HTF-зоны.",
+                "Обратный BOS D1 меняет приоритет действующего сценария, сохраняя его зоны входа.",
+                "Цель контртренда — ближняя граница актуальной противоположной OB/FVG/Breaker/PRB D1.",
+            ],
             "grounds": _ground_lines(evidence),
             "zones": [
                 "{typ} {lo}–{hi}".format(
