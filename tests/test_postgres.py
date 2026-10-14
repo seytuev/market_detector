@@ -4,6 +4,7 @@ import json
 import os
 import sqlite3
 import threading
+import time
 import uuid
 from urllib.parse import urlencode
 from pathlib import Path
@@ -14,7 +15,7 @@ import pytest
 
 from app.db import Database
 from app.models import Instrument
-from app.postgres import translate
+from app.postgres import Connection, translate
 from app.services.postgres_migration import IMPORT_KEY, import_sqlite
 from app.services.runtime import claim_owner
 from app.services.maintenance import backup
@@ -126,3 +127,60 @@ def test_failed_import_rolls_back_every_table(pg, tmp_path):
     assert pg.get_meta("must_rollback") is None
     assert pg.get_meta(IMPORT_KEY) is None
     assert not Path(str(source_path)+".postgres-migrated").exists()
+
+
+def test_pool_bounds_connections_and_keeps_buffered_results(pg):
+    connection = Connection(pg.path, max_size=4)
+    barrier = threading.Barrier(48)
+
+    def query(index):
+        barrier.wait(timeout=10)
+        cursor = connection.execute("SELECT ? AS value, pg_sleep(0.005)", (index,))
+        # Other threads can reuse this connection before we read its result.
+        time.sleep(0.02)
+        return cursor.fetchone()["value"]
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(48) as pool:
+            assert list(pool.map(query, range(48))) == list(range(48))
+        # Replacing request threads must not retain their old connections.
+        for index in range(120):
+            with concurrent.futures.ThreadPoolExecutor(1) as pool:
+                assert pool.submit(lambda: connection.execute("SELECT 1").fetchone()[0]).result() == 1
+        assert connection._pool.get_stats()["pool_size"] <= 4
+        assert not connection._sessions
+    finally:
+        connection.close()
+
+
+def test_pool_pins_nested_transactions_and_releases_on_rollback(pg):
+    with pg.batch_writes():
+        pid = pg.conn.execute("SELECT pg_backend_pid()").fetchone()[0]
+        pg.set_meta("pool:outer", "kept")
+        with pytest.raises(ValueError):
+            with pg.batch_writes():
+                assert pg.conn.execute("SELECT pg_backend_pid()").fetchone()[0] == pid
+                pg.set_meta("pool:inner", "discarded")
+                raise ValueError("rollback nested write")
+        assert pg.conn.execute("SELECT pg_backend_pid()").fetchone()[0] == pid
+    assert not pg.conn._sessions
+    assert pg.get_meta("pool:outer") == "kept"
+    assert pg.get_meta("pool:inner") is None
+    with pg.read_tx():
+        pid = pg.conn.execute("SELECT pg_backend_pid()").fetchone()[0]
+        with pg.read_tx():
+            assert pg.conn.execute("SELECT pg_backend_pid()").fetchone()[0] == pid
+    assert not pg.conn._sessions
+
+
+def test_pool_recovers_after_failed_transaction_and_closed_connection(pg):
+    with pytest.raises(psycopg.errors.UndefinedTable):
+        with pg.conn.session() as session:
+            session.execute("BEGIN")
+            session.execute("SELECT * FROM missing_pool_regression_table")
+    assert not pg.conn._sessions
+    assert pg.conn.execute("SELECT 1").fetchone()[0] == 1
+    with pg.conn.session() as session:
+        session.raw.close()
+    assert pg.conn.execute("SELECT 2").fetchone()[0] == 2
+    assert not pg.conn._sessions

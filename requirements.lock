@@ -1,6 +1,7 @@
 # Reproducible constraints from the development environment. Python 3.11/3.12.
 psycopg==3.3.6
 psycopg-binary==3.3.6
+psycopg_pool==3.3.3
 annotated-doc==0.0.5
 annotated-types==0.8.0
 anyio==4.15.1

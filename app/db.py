@@ -180,60 +180,61 @@ class Database:
         Nested units use savepoints. Never hold this context across await.
         Readers on other threads use their own committed WAL snapshots.
         """
-        raw = self.conn._conn
-        outer = self._batch_depth == 0
-        # read_tx already holds BEGIN. A write joins that transaction and
-        # commits it; a second BEGIN is rejected by SQLite.
-        joined = outer and raw.in_transaction
-        if outer:
-            self._local.after_commit = []
-            if joined:
-                self._local.read_handoff = True
-        callback_count = len(getattr(self._local, "after_commit", []))
-        committed = False
-        name = f"unit_{self._batch_depth}"
-        if not joined:
-            raw.execute(("BEGIN IMMEDIATE" if immediate else "BEGIN DEFERRED") if outer else f"SAVEPOINT {name}")
-        dirty_before = self._state_seq_dirty
-        domain_dirty_before = set(self._domain_seq_dirty)
-        self._batch_depth += 1
-        self.conn.unit_depth += 1
-        try:
-            yield
-            if outer and self._state_seq_dirty:
-                self._write_state_seq()
-            if outer and self._domain_seq_dirty:
-                for _key in self._domain_seq_dirty:
-                    self._write_domain_seq(_key)
-            raw.execute("COMMIT" if outer else f"RELEASE SAVEPOINT {name}")
-            committed = True
-        except BaseException:
+        with self.conn.session() if self.is_postgres else contextlib.nullcontext():
+            raw = self.conn._conn
+            outer = self._batch_depth == 0
+            # read_tx already holds BEGIN. A write joins that transaction and
+            # commits it; a second BEGIN is rejected by SQLite.
+            joined = outer and raw.in_transaction
             if outer:
-                raw.rollback()
-            else:
-                raw.execute(f"ROLLBACK TO SAVEPOINT {name}")
-                raw.execute(f"RELEASE SAVEPOINT {name}")
-            self._state_seq_dirty = dirty_before
-            self._domain_seq_dirty.clear()
-            self._domain_seq_dirty.update(domain_dirty_before)
-            del self._local.after_commit[callback_count:]
-            self._drop_read_caches()
-            raise
-        finally:
-            self._batch_depth -= 1
-            self.conn.unit_depth -= 1
-            if outer:
-                self._state_seq_dirty = False
-                self._domain_seq_dirty.clear()
-                self._seen_epoch = self.get_state_seq()
-                callbacks = self._local.after_commit if committed else []
                 self._local.after_commit = []
-                for callback in callbacks:
-                    try:
-                        callback()
-                    except Exception:
-                        import logging
-                        logging.getLogger(__name__).exception("Post-commit publication failed")
+                if joined:
+                    self._local.read_handoff = True
+            callback_count = len(getattr(self._local, "after_commit", []))
+            committed = False
+            name = f"unit_{self._batch_depth}"
+            if not joined:
+                raw.execute(("BEGIN IMMEDIATE" if immediate else "BEGIN DEFERRED") if outer else f"SAVEPOINT {name}")
+            dirty_before = self._state_seq_dirty
+            domain_dirty_before = set(self._domain_seq_dirty)
+            self._batch_depth += 1
+            self.conn.unit_depth += 1
+            try:
+                yield
+                if outer and self._state_seq_dirty:
+                    self._write_state_seq()
+                if outer and self._domain_seq_dirty:
+                    for _key in self._domain_seq_dirty:
+                        self._write_domain_seq(_key)
+                raw.execute("COMMIT" if outer else f"RELEASE SAVEPOINT {name}")
+                committed = True
+            except BaseException:
+                if outer:
+                    raw.rollback()
+                else:
+                    raw.execute(f"ROLLBACK TO SAVEPOINT {name}")
+                    raw.execute(f"RELEASE SAVEPOINT {name}")
+                self._state_seq_dirty = dirty_before
+                self._domain_seq_dirty.clear()
+                self._domain_seq_dirty.update(domain_dirty_before)
+                del self._local.after_commit[callback_count:]
+                self._drop_read_caches()
+                raise
+            finally:
+                self._batch_depth -= 1
+                self.conn.unit_depth -= 1
+                if outer:
+                    self._state_seq_dirty = False
+                    self._domain_seq_dirty.clear()
+                    self._seen_epoch = self.get_state_seq()
+                    callbacks = self._local.after_commit if committed else []
+                    self._local.after_commit = []
+                    for callback in callbacks:
+                        try:
+                            callback()
+                        except Exception:
+                            import logging
+                            logging.getLogger(__name__).exception("Post-commit publication failed")
 
     def on_commit(self, callback):
         if self._batch_depth:
@@ -1466,23 +1467,24 @@ class Database:
     @contextlib.contextmanager
     def read_tx(self):
         """A committed snapshot on the calling thread's connection."""
-        if self._batch_depth or self._read_depth:
-            yield
-            return
-        raw = self.conn._conn
-        raw.execute("BEGIN DEFERRED")
-        self._read_depth += 1
-        self._local.read_handoff = False
-        self._drop_read_caches()
-        try:
-            yield
-        finally:
-            self._read_depth -= 1
-            handed = bool(getattr(self._local, "read_handoff", False))
+        with self.conn.session() if self.is_postgres else contextlib.nullcontext():
+            if self._batch_depth or self._read_depth:
+                yield
+                return
+            raw = self.conn._conn
+            raw.execute("BEGIN DEFERRED")
+            self._read_depth += 1
             self._local.read_handoff = False
-            if self._read_depth == 0 and not handed and raw.in_transaction:
-                raw.rollback()
             self._drop_read_caches()
+            try:
+                yield
+            finally:
+                self._read_depth -= 1
+                handed = bool(getattr(self._local, "read_handoff", False))
+                self._local.read_handoff = False
+                if self._read_depth == 0 and not handed and raw.in_transaction:
+                    raw.rollback()
+                self._drop_read_caches()
 
     # ---------- кэш горячих LTF-чтений (replay: per-candle N+1) ----------
 

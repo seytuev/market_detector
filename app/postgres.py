@@ -6,6 +6,7 @@ repositories. Schema migrations use native, versioned PostgreSQL DDL.
 from __future__ import annotations
 
 import re
+from contextlib import contextmanager
 from functools import lru_cache
 import threading
 import time
@@ -13,6 +14,7 @@ from pathlib import Path
 
 import psycopg
 from psycopg.pq import TransactionStatus
+from psycopg_pool import ConnectionPool
 
 SCHEMA_VERSION = 1
 
@@ -118,13 +120,62 @@ class Session:
 
 
 class Connection:
-    def __init__(self, url):
+    def __init__(self, url, *, max_size=16):
         self._url = url
         self._local = threading.local()
-        self._sessions = []
+        self._sessions = set()
         self._registry_lock = threading.Lock()
         self._closed = False
         self._id_tables = set()
+        self._pool = ConnectionPool(
+            url, min_size=1, max_size=max_size, open=True, timeout=15,
+            max_idle=60,
+            kwargs={"autocommit": True, "row_factory": row_factory,
+                    "connect_timeout": 15, "application_name": "levelframe"},
+            configure=self._configure,
+            check=self._check,
+        )
+
+    @staticmethod
+    def _configure(raw):
+        raw.execute("SET lock_timeout='15s'")
+        raw.execute("SET idle_in_transaction_session_timeout='120s'")
+        raw._htf_checked_at = time.monotonic()
+
+    @staticmethod
+    def _check(raw):
+        # Hot repository reads must not add a round trip on every checkout.
+        if raw.closed or time.monotonic() - raw._htf_checked_at >= 30:
+            ConnectionPool.check_connection(raw)
+            raw._htf_checked_at = time.monotonic()
+
+    @contextmanager
+    def session(self):
+        """Lease one connection for a query or a complete nested unit of work.
+
+        A thread owns a connection only while it is using it. Transactions,
+        advisory locks and COPY must keep this scope for their entire lifetime.
+        """
+        session = self._conn
+        external_transaction = (not getattr(self._local, "scope_depth", 0)
+                                and session.in_transaction)
+        self._local.scope_depth = getattr(self._local, "scope_depth", 0) + 1
+        try:
+            yield session
+        finally:
+            self._local.scope_depth -= 1
+            if (not self._local.scope_depth and not self.unit_depth
+                    and not external_transaction):
+                del self._local.session
+                with self._registry_lock:
+                    self._sessions.discard(session)
+                try:
+                    if not session.raw.closed and session.in_transaction:
+                        session.rollback()
+                except psycopg.Error:
+                    session.raw.close()
+                finally:
+                    self._pool.putconn(session.raw)
 
     @property
     def _lock(self):
@@ -137,13 +188,13 @@ class Connection:
         if self._closed:
             raise RuntimeError("Database is closed")
         if not hasattr(self._local, "session"):
-            raw = psycopg.connect(self._url, autocommit=True, row_factory=row_factory,
-                                  connect_timeout=15, application_name="levelframe")
-            raw.execute("SET lock_timeout='15s'")
-            raw.execute("SET idle_in_transaction_session_timeout='120s'")
+            raw = self._pool.getconn()
             session = Session(raw, self)
             with self._registry_lock:
-                self._sessions.append(session)
+                if self._closed:
+                    self._pool.putconn(raw)
+                    raise RuntimeError("Database is closed")
+                self._sessions.add(session)
             self._local.session = session
         return self._local.session
 
@@ -164,9 +215,12 @@ class Connection:
         if returning:
             query += " RETURNING id"
         try:
-            cursor = self._conn.raw.execute(query, bind(parameters), prepare=True)
-            row = cursor.fetchone() if returning else None
-            return Cursor(cursor, row[0] if row else None)
+            with self.session() as session:
+                cursor = session.raw.execute(query, bind(parameters), prepare=True)
+                row = cursor.fetchone() if returning else None
+                # Psycopg's client cursor buffers the result; fetching it does
+                # not need to retain the pooled connection after execution.
+                return Cursor(cursor, row[0] if row else None)
         except psycopg.Error as exc:
             if exc.sqlstate in {"40001","40P01","55P03"}:
                 get_registry().counter("sql_busy_errors",labels={"op":"execute"})
@@ -176,36 +230,41 @@ class Connection:
                 {"op":"execute", "kind":"read" if query.upper().startswith(("SELECT", "WITH")) else "write"})
 
     def executemany(self, sql, parameters):
-        cursor = self._conn.raw.cursor()
-        cursor.executemany(translate(sql), (bind(row) for row in parameters))
-        return Cursor(cursor)
+        with self.session() as session:
+            cursor = session.raw.cursor()
+            cursor.executemany(translate(sql), (bind(row) for row in parameters))
+            return Cursor(cursor)
 
     def executescript(self, script):
         if self.unit_depth:
             raise RuntimeError("executescript is not allowed inside a unit of work")
-        self._conn.raw.execute(script, prepare=False)
+        with self.session() as session:
+            session.raw.execute(script, prepare=False)
 
     def commit(self):
         if not self.unit_depth:
-            self._conn.commit()
+            with self.session() as session:
+                session.commit()
 
     def rollback(self):
         if self.unit_depth:
             raise RuntimeError("Only the unit of work may roll back its transaction")
-        self._conn.rollback()
+        with self.session() as session:
+            session.rollback()
 
     def migrate(self):
-        raw = self._conn.raw
-        with raw.transaction():
-            raw.execute("SELECT pg_advisory_xact_lock(741852964)")
-            raw.execute("CREATE TABLE IF NOT EXISTS postgres_schema_version(version BIGINT PRIMARY KEY)")
-            row = raw.execute("SELECT max(version) FROM postgres_schema_version").fetchone()
-            if row[0] and row[0] > SCHEMA_VERSION:
-                raise RuntimeError("PostgreSQL schema is newer than this application")
-            if not row[0]:
-                raw.execute(Path(__file__).with_name("schema_postgres.sql").read_text(encoding="utf-8"), prepare=False)
-                raw.execute("INSERT INTO postgres_schema_version VALUES (%s)", (SCHEMA_VERSION,))
-        self._id_tables = {r[0] for r in raw.execute("SELECT table_name FROM information_schema.columns WHERE table_schema=current_schema() AND column_name='id' AND is_identity='YES'")}
+        with self.session():
+            raw = self._conn.raw
+            with raw.transaction():
+                raw.execute("SELECT pg_advisory_xact_lock(741852964)")
+                raw.execute("CREATE TABLE IF NOT EXISTS postgres_schema_version(version BIGINT PRIMARY KEY)")
+                row = raw.execute("SELECT max(version) FROM postgres_schema_version").fetchone()
+                if row[0] and row[0] > SCHEMA_VERSION:
+                    raise RuntimeError("PostgreSQL schema is newer than this application")
+                if not row[0]:
+                    raw.execute(Path(__file__).with_name("schema_postgres.sql").read_text(encoding="utf-8"), prepare=False)
+                    raw.execute("INSERT INTO postgres_schema_version VALUES (%s)", (SCHEMA_VERSION,))
+            self._id_tables = {r[0] for r in raw.execute("SELECT table_name FROM information_schema.columns WHERE table_schema=current_schema() AND column_name='id' AND is_identity='YES'")}
 
     def close(self):
         with self._registry_lock:
@@ -213,3 +272,4 @@ class Connection:
             for session in self._sessions:
                 session.raw.close()
             self._sessions.clear()
+        self._pool.close()
