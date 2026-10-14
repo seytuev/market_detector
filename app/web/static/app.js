@@ -900,7 +900,19 @@ async function closeSelectedHtfIdea(ideaId) {
 
 function drawDailyStructure(overlay, ts, paneRight, height) {
   const daily = state.dailyStructure;
-  if (!daily || !$('layer-structure-d1')?.checked) return;
+  if (!$('layer-structure-d1')?.checked) return;
+  const status = document.createElement('span');
+  status.className = 'd1-structure-status';
+  status.textContent = daily ? daily.text : 'Структура D1 не загружена · обновите данные';
+  status.title = status.textContent;
+  Object.assign(status.style, {position:'absolute', left:'8px', top:'8px',
+    maxWidth:Math.max(100, paneRight - 24)+'px', padding:'4px 6px',
+    color:daily?.data_quality === 'ok' ? 'var(--text, #263247)' : 'var(--warning, #9d6600)',
+    background:'var(--bg, #fff)', border:'1px solid var(--border, #c6cfdd)',
+    borderRadius:'4px', fontSize:'11px', overflow:'hidden', textOverflow:'ellipsis',
+    whiteSpace:'nowrap', pointerEvents:'auto', zIndex:'20'});
+  overlay.appendChild(status);
+  if (!daily) return;
   const bars = state.candles;
   const xAt = (ms) => {
     const time = Math.floor(ms / 1000);
@@ -919,13 +931,17 @@ function drawDailyStructure(overlay, ts, paneRight, height) {
     el.textContent = text; el.title = title;
     Object.assign(el.style, {position:'absolute', left:Math.max(0, Math.min(x, paneRight - 110)) + 'px',
       top:y + 'px', color, fontSize:'11px', background:'var(--bg, #131722)',
-      padding:'1px 3px', pointerEvents:'auto', zIndex:'4'});
+      padding:'1px 3px', fontWeight:'600', pointerEvents:'auto', zIndex:'15'});
     overlay.appendChild(el);
   };
-  (daily.pivots || []).filter(p => ['HH','HL','LH','LL'].includes(p.role)).slice(-20).forEach(p => {
+  const visiblePoint = p => {
+    const x = xAt(p.pivot_at);
+    return x != null && x >= 0 && x <= paneRight;
+  };
+  (daily.pivots || []).filter(p => ['HH','HL','LH','LL'].includes(p.role) && visiblePoint(p)).slice(-20).forEach(p => {
     const x = xAt(p.pivot_at), y = state.candleSeries.priceToCoordinate(p.price);
     if (x == null || x < 0 || x > paneRight || y == null || y < 12 || y > height - 40) return;
-    label(x, y + (p.kind === 'high' ? -17 : 4), 'D1 ' + p.role, '#b69cff',
+    label(x, y + (p.kind === 'high' ? -17 : 4), 'D1 ' + p.role, '#8056c7',
       `D1 ${p.role} · ${fmtPrice(p.price)} · подтверждение ${fmtTime(p.confirmed_at)}`);
   });
   const line = (anchor, end, level, text, color, title, dashed = false) => {
@@ -938,12 +954,15 @@ function drawDailyStructure(overlay, ts, paneRight, height) {
     const el = document.createElement('div');
     el.className = 'd1-structure-line';
     Object.assign(el.style, {position:'absolute', left:left+'px', top:y+'px',
-      width:(right-left)+'px', borderTop:`2px ${dashed ? 'dashed' : 'solid'} ${color}`, pointerEvents:'none'});
+      width:(right-left)+'px', borderTop:`2px ${dashed ? 'dashed' : 'solid'} ${color}`, pointerEvents:'none', zIndex:'14'});
     overlay.appendChild(el);
     label(Math.max(left, right - 105), y - 17, text, color, title);
   };
-  (daily.events || []).slice(-50).forEach(e => line(e.anchor_at, e.open_time, e.level,
-    'D1 ' + e.kind + (e.direction === 'bull' ? ' ↑' : ' ↓'), '#b69cff',
+  (daily.events || []).filter(e => {
+    const end = xAt(e.open_time), start = xAt(e.anchor_at);
+    return end != null && end >= 0 && (start == null || start <= paneRight);
+  }).slice(-50).forEach(e => line(e.anchor_at, e.open_time, e.level,
+    'D1 ' + e.kind + (e.direction === 'bull' ? ' ↑' : ' ↓'), '#8056c7',
     `D1 ${e.kind} · ${fmtPrice(e.level)} · закрытие ${fmtTime(e.occurred_at)}`));
   if (daily.data_quality === 'ok') Object.entries(daily.expected || {}).forEach(([dir, conditions]) => {
     Object.values(conditions).filter(c => c.status === 'ready' && c.level != null).forEach(c => {

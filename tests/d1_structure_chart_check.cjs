@@ -65,7 +65,29 @@ const draw = source.slice(source.indexOf('function drawDailyStructure('), source
       state.candleSeries.setData(state.candles); state.chart.timeScale().fitContent();
     });
     assert.match(await render(), /D1 BOS/);
+    // History view must filter before limiting the last 20 points / 50 events.
+    await page.evaluate(() => {
+      const day = 86400;
+      state.candles = fixture.bars.concat(Array.from({length:80}, (_, i) => ({
+        ...fixture.bars.at(-1), time:fixture.bars.at(-1).time+(i+1)*day
+      })));
+      state.dailyStructure = {...fixture.daily,
+        pivots:fixture.daily.pivots.concat(Array.from({length:40}, (_, i) => ({
+          ...fixture.daily.pivots[0], pivot_at:(fixture.bars.at(-1).time+(i+1)*day)*1000, role:'HH'
+        }))),
+        events:fixture.daily.events.concat(Array.from({length:60}, (_, i) => ({
+          ...fixture.daily.events[0], anchor_at:(fixture.bars.at(-1).time+(i+1)*day)*1000,
+          open_time:(fixture.bars.at(-1).time+(i+2)*day)*1000
+        })))
+      };
+      state.candleSeries.setData(state.candles);
+      state.chart.timeScale().setVisibleRange({from:fixture.bars[0].time, to:fixture.bars.at(-1).time});
+    });
+    text = await render();
+    assert.match(text, /D1 HH/); assert.match(text, /D1 BOS/);
+    await page.evaluate(() => state.dailyStructure = null);
+    assert.match(await render(), /Структура D1 не загружена/);
     assert.deepEqual(errors, []);
-    console.log('D1 chart: daily and hourly candles, weekly mapping, layer toggle passed');
+    console.log('D1 chart: daily/hourly/weekly, history viewport, layer toggle and missing-data status passed');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exitCode = 1; });
