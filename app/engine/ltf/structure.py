@@ -264,7 +264,7 @@ class StructureBatch:
         if self._existing_fp != count:
             rows = db.list_ltf_pivots(instrument_id)
             self.existing = {(p.kind, p.pivot_at): p for p in rows}
-            self._existing_fp = len(rows)
+            self._existing_fp = count
         return self.existing
 
     # ---- курсоры сканирования сломов ----

@@ -45,6 +45,16 @@ def test_parameter_literals():
     assert translate("SELECT '?' AS x, ? AS y, 'user' AS z") == "SELECT '?' AS x, %s AS y, 'user' AS z"
 
 
+def test_pivot_selection_retains_history_but_hydrates_only_current(pg):
+    from app.models_ltf import LtfPivot
+    iid = pg.upsert_instrument(Instrument(None, 'BTC', 'binance', 'spot', 'BTCUSDT', 'USDT'))
+    ids = [pg.insert_ltf_pivot(LtfPivot(id=None, instrument_id=iid, kind='high', price=100+i,
+                                      pivot_at=1000, candle_open_time=1000,
+                                      confirmed_at=2000)) for i in range(20)]
+    assert [p.id for p in pg.list_ltf_pivots(iid)] == [ids[-1]]
+    assert len(pg.list_ltf_pivots(iid, include_superseded=True)) == 20
+
+
 def test_identity_conflict_and_nested_rollback(pg):
     iid = pg.upsert_instrument(Instrument(id=None, asset="BTC", venue="binance", market_type="spot", symbol="BTCUSDT", quote_asset="USDT"))
     assert iid>0

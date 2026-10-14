@@ -87,3 +87,16 @@ def test_activation_history_matches_scalar_without_per_zone_reads(kind, directio
     with activation_history(db):
         assert activation_cut(db, zone, cuts[0], cfg) == changed
         assert len(reads) == 1
+
+
+def test_current_pivots_select_latest_row_before_loading_histories(db, instrument_id):
+    from app.models_ltf import LtfPivot
+    base = LtfPivot(id=None, instrument_id=instrument_id, kind='high', price=100,
+                    pivot_at=1000, candle_open_time=1000, confirmed_at=2000)
+    # Preserve all historical IDs, including stores with unmarked duplicates.
+    ids = [db.insert_ltf_pivot(replace(base, price=100+i)) for i in range(50)]
+    current = db.list_ltf_pivots(instrument_id)
+    assert len(current) == 1
+    assert current[0].id == ids[-1]
+    assert current[0].price == 149
+    assert len(db.list_ltf_pivots(instrument_id, include_superseded=True)) == 50

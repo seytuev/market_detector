@@ -50,6 +50,14 @@ def test_replay_reuses_pivot_rows_until_storage_count_changes(db, instrument_id,
     ))
     assert ("low", 1) in batch.existing_for(db, instrument_id)
     assert len(reads) == 2
+    db.supersede_ltf_pivots(instrument_id, 99)
+    db.insert_ltf_pivot(LtfPivot(
+        id=None, instrument_id=instrument_id, kind="high", price=12,
+        pivot_at=2, candle_open_time=2, confirmed_at=3,
+    ))
+    for _ in range(100):
+        assert set(batch.existing_for(db, instrument_id)) == {('high', 2)}
+    assert len(reads) == 3, 'archived rows must not force a reload on every bar'
 
 _CFG = DetectorConfig()
 

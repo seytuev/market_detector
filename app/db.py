@@ -2876,6 +2876,12 @@ class Database:
                 args.append(since_ms)
             if not include_superseded:
                 q += " AND (superseded_by IS NULL)"
+                # Legacy stores can contain several unreplaced rows for one
+                # extremum. The engine already resolves them to the latest ID;
+                # select that canonical row before hydrating/chart role logs.
+                q = ("SELECT * FROM (SELECT p.*, ROW_NUMBER() OVER ("
+                     "PARTITION BY kind,pivot_at ORDER BY id DESC) AS _canonical "
+                     "FROM (" + q + ") p) ranked WHERE _canonical=1")
             q += " ORDER BY pivot_at, id"
             return [self._to_ltf_pivot(r) for r in self.conn.execute(q, args).fetchall()]
         return self._ltf_cached(
