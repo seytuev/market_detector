@@ -78,7 +78,29 @@ class MetricsRegistry:
         self._lock = threading.Lock()
         self._series: dict[str, dict[str, Any]] = {}
         self._queries: dict[str, list[float]] = {}
+        self._profiles: dict[str, dict] = {}
         self._started = time.monotonic()
+
+    @contextmanager
+    def profile(self, name: str, **details):
+        """One bounded diagnostic sample; call arguments/locals are not recorded."""
+        import cProfile
+        import pstats
+        from pathlib import Path
+        profiler = cProfile.Profile()
+        profiler.enable()
+        try:
+            yield
+        finally:
+            profiler.disable()
+            functions = [dict(file=Path(file).name, line=line, function=fn,
+                              calls=values[1], self_ms=round(values[2]*1000,3),
+                              total_ms=round(values[3]*1000,3))
+                         for (file,line,fn),values in sorted(
+                             pstats.Stats(profiler).stats.items(), key=lambda item: -item[1][3])[:25]]
+            with self._lock:
+                if name in self._profiles or len(self._profiles) < 4:
+                    self._profiles[name] = dict(details=details, functions=functions)
 
     def query(self, sql: str, seconds: float) -> None:
         """Bounded SQL shapes for diagnosing N+1 reads; never bind values."""
@@ -195,6 +217,7 @@ class MetricsRegistry:
         with self._lock:
             uptime = time.monotonic() - self._started
             queries = [(shape, list(stats)) for shape, stats in self._queries.items()]
+            profiles = dict(self._profiles)
             copied = {
                 name: (meta["kind"], meta["label_keys"],
                        {key: holder for key, holder in meta["series"].items()})
@@ -238,6 +261,7 @@ class MetricsRegistry:
                                  total_ms=round(stats[1] * 1000, 3),
                                  max_ms=round(stats[2] * 1000, 3))
                             for shape, stats in sorted(queries, key=lambda item: -item[1][1])[:20]],
+            "calculation_profiles": profiles,
         }
 
 

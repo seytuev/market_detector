@@ -24,6 +24,7 @@ import logging
 from dataclasses import dataclass, field, replace
 from typing import Any, Optional
 from functools import wraps
+from contextlib import nullcontext
 
 from ...config import DetectorConfig
 from ...db import Database
@@ -500,6 +501,7 @@ class LtfEngine:
             if starts:
                 checkpoint = max((c.close_time for c in closed if c.close_time < min(starts)), default=0)
         self._batch = StructureBatch() if self.scan_cursors else None
+        sampled = False
         try:
             if checkpoint and self._batch is not None:
                 # Restore pure machines from immutable inputs, without replaying
@@ -520,7 +522,11 @@ class LtfEngine:
                 # Refresh external publications between bars, then publish one
                 # atomic bar. Cached reads inside it need no separate epoch SQL.
                 self.db._note_external_epoch()
-                with self.db.batch_writes():
+                from ...services.metrics import get_registry
+                sample = get_registry().profile('ltf_replay_bar', instrument_id=obs.instrument_id,
+                                                 close_time=c.close_time) if resume and not sampled else nullcontext()
+                sampled = True
+                with sample, self.db.batch_writes():
                     self._process_candle(
                         obs.instrument_id, closed, idx,
                         detected_at=c.close_time, processing_mode="replay",

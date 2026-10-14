@@ -148,3 +148,18 @@ def test_query_diagnostics_are_bounded_and_hide_values():
         registry.query(f'SELECT field_{i} FROM t', .01)
     assert len(registry._queries) <= 129
     assert 'private-token' not in str(registry.snapshot())
+
+
+def test_calculation_profile_preserves_failure_and_only_records_function_locations():
+    from app.services.metrics import MetricsRegistry
+    registry = MetricsRegistry()
+    with pytest.raises(ValueError, match='sample failure'):
+        with registry.profile('sample', instrument_id=1):
+            sum(range(10))
+            raise ValueError('sample failure')
+    sample = registry.snapshot()['calculation_profiles']['sample']
+    assert sample['details'] == {'instrument_id': 1}
+    assert sample['functions']
+    assert all(set(row) == {'file','line','function','calls','self_ms','total_ms'}
+               for row in sample['functions'])
+    assert 'sample failure' not in str(sample)
