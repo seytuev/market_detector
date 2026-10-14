@@ -1536,15 +1536,16 @@ def transition_card_text(events, ctx, projection: Optional[dict]) -> str:
     for e in events:
         direction = (e.payload or {}).get("break_direction") or direction
     up = direction == "bull"
+    kind = confirmed[0].kind.upper() if confirmed else "BOS"
     if confirmed and cancels:
         head = (
-            "BOS H1 вверх подтверждён. Медвежий сценарий отменён; бычий сценарий подтверждён."
+            f"{kind} H1 вверх подтверждён. Медвежий сценарий отменён; бычий сценарий подтверждён."
             if up else
-            "BOS H1 вниз подтверждён. Бычий сценарий отменён; медвежий сценарий подтверждён."
+            f"{kind} H1 вниз подтверждён. Бычий сценарий отменён; медвежий сценарий подтверждён."
         )
     elif confirmed:
-        head = "BOS H1 вверх подтверждён. Бычий сценарий подтверждён." if up else (
-            "BOS H1 вниз подтверждён. Медвежий сценарий подтверждён."
+        head = f"{kind} H1 вверх подтверждён. Бычий сценарий подтверждён." if up else (
+            f"{kind} H1 вниз подтверждён. Медвежий сценарий подтверждён."
         )
     elif cancels:
         head = "Сценарий отменён одним закрытием H1."

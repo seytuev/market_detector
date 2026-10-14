@@ -108,13 +108,12 @@ function structurePointColor(role) {
 // Момент снятия — время котировки, не открытие свечи. Шкала графика знает
 // только открытия, поэтому конец линии ставится внутрь той свечи, куда
 // попало снятие, и не тянется до правого края.
-function barCoordinate(ts, ms) {
-  if (ms == null || !state.candles.length) return null;
+function barCoordinate(ts, ms, bars = state.candles, timeframe = state.timeframe) {
+  if (ms == null || !bars.length) return null;
   const sec = Math.floor(Number(ms) / 1000);
   if (!Number.isFinite(sec)) return null;
   const exact = ts.timeToCoordinate(sec);
   if (exact !== null) return exact;
-  const bars = state.candles;
   let lo = 0;
   let hi = bars.length - 1;
   let best = -1;
@@ -136,7 +135,7 @@ function barCoordinate(ts, ms) {
   const prev = bars[best - 1];
   const period = prev
     ? (bars[best].time - prev.time)
-    : (TF_SECONDS[state.timeframe] || 86400);
+    : (TF_SECONDS[timeframe] || 86400);
   const prevX = prev ? ts.timeToCoordinate(prev.time) : null;
   const barPx = prevX !== null ? (x0 - prevX) : 8;
   const frac = period > 0 ? Math.min(1, Math.max(0, (sec - bars[best].time) / period)) : 1;
@@ -556,6 +555,8 @@ function drawZones() {
   const mergedGroups = new Map(); // `${group.id}:${tf}` -> [zones from pool]
   if (!state.selectedZoneId) {
     for (const z of pool) {
+      // У каждого SSL/BSL свой экстремум и момент снятия.
+      if (z.is_level) continue;
       const g = groupByZone.get(z.id);
       if (!g) continue;
       const key = `${g.id}:${z.timeframe}`;
@@ -620,8 +621,9 @@ function drawZones() {
     if (mergedIds.has(z.id)) continue; // входит в объединённую полосу ниже
     // §15.1.7: рисунок начинается от display_from (для FVG — средняя свеча
     // исходной тройки); formed_at — запасной вариант
-    const fromMs = z.display_from || z.formed_at;
-    let x1 = ts.timeToCoordinate(Math.floor(fromMs / 1000));
+    const fromMs = (z.is_level && z.extreme_at) || z.display_from || z.formed_at;
+    let x1 = z.is_level ? barCoordinate(ts, fromMs)
+      : ts.timeToCoordinate(Math.floor(fromMs / 1000));
     // ТЗ §7: ручная зона начинается строго от якоря пользователя. Якорь левее
     // видимой области даёт отрицательную координату — рисуем от неё (overlay
     // обрезается контейнером), а не продлеваем зону влево клампингом в x1=0
@@ -639,7 +641,7 @@ function drawZones() {
     if (completed) {
       const xc = barCoordinate(ts, z.display_until);
       if (xc !== null) x2 = Math.min(paneRight, xc);
-      else if (keptLevel) continue; // снятие левее загруженных свечей — линию вправо не тянем
+      else if (z.is_level) continue; // снятие вне данных — линию вправо не тянем
     }
     if (x2 <= x1) continue; // завершилась левее видимой области
     const cls = `zone-rect z-${z.type} dir-${z.direction === 'bear' ? 'bear' : 'bull'}` +
@@ -660,7 +662,7 @@ function drawZones() {
       div.dataset.zoneId = z.id;
       appendPartialFill(div, z, completed);
       div.style.left = x1 + 'px';
-      div.style.width = Math.max(8, x2 - x1) + 'px';
+      div.style.width = (z.is_level ? x2 - x1 : Math.max(8, x2 - x1)) + 'px';
       div.onclick = () => openZoneDetail(z.id);
 
       if (!z.is_level && z.mid >= lo && z.mid <= hi) {
@@ -2057,14 +2059,17 @@ function drawReviewZone() {
   if (bottom < 0 || top > height) return;
   top = Math.max(0, top);
   bottom = Math.min(height, bottom);
-  const fromMs = z.display_from || z.formed_at;
-  let x1 = ts.timeToCoordinate(Math.floor(fromMs / 1000));
+  const fromMs = (z.is_level && z.extreme_at) || z.display_from || z.formed_at;
+  let x1 = z.is_level
+    ? barCoordinate(ts, fromMs, reviewState.candles, z.timeframe)
+    : ts.timeToCoordinate(Math.floor(fromMs / 1000));
   if (x1 === null || x1 < 0) x1 = 0;
   if (x1 > paneRight) return;
   let x2 = paneRight;
   if (z.display_until) {
-    const xc = ts.timeToCoordinate(Math.floor(z.display_until / 1000));
+    const xc = barCoordinate(ts, z.display_until, reviewState.candles, z.timeframe);
     if (xc !== null) x2 = Math.min(paneRight, xc);
+    else if (z.is_level) return;
   }
   if (x2 <= x1) return;
   const div = document.createElement('div');
@@ -2074,7 +2079,7 @@ function drawReviewZone() {
   div.style.top = top + 'px';
   div.style.height = Math.max(2, bottom - top) + 'px';
   div.style.left = x1 + 'px';
-  div.style.width = Math.max(8, x2 - x1) + 'px';
+  div.style.width = (z.is_level ? x2 - x1 : Math.max(8, x2 - x1)) + 'px';
   if (!z.is_level) {
     const midY = reviewState.candleSeries.priceToCoordinate(z.mid);
     if (midY !== null && midY >= 0 && midY <= height) {

@@ -331,6 +331,7 @@ def test_expected_levels(client, db, seeded):
     obs1, obs2 = seeded["obs1"], seeded["obs2"]
     iid = obs1.instrument_id
     # bear: опорный HL перед последним HH; SMS — внутренний минимум выше HL
+    _pivot(db, iid, 85.0, "high", "none", T0 + 800)
     hl = _pivot(db, iid, 90.0, "low", "HL", T0 + 1000)
     _pivot(db, iid, 100.0, "high", "HH", T0 + 1200)
     il = _pivot(db, iid, 95.0, "low", "internal_low", T0 + 1400)
@@ -350,9 +351,8 @@ def test_expected_levels(client, db, seeded):
     ih = _pivot(db, iid, 93.0, "high", "internal_high", T0 + 2400)
     exp2 = client.get(f"/api/ltf/observations/{obs2.id}", headers=AUTH).json()["expected"]
     assert exp2["bos"]["direction"] == "bull"
-    assert exp2["bos"]["level"] == 108.0
-    assert exp2["sms"]["level"] == 93.0
-    assert exp2["sms"]["internal_pivot"]["id"] == ih
+    assert exp2["bos"]["level"] == 100.0
+    assert exp2["sms"] is None  # future pivots alone cannot reverse a known frame
 
 
 def test_expected_levels_empty_without_anchor(client, seeded):
@@ -366,6 +366,7 @@ def test_expected_levels_hidden_after_break(client, db, seeded):
     скрывается; тень без закрепления уровни сохраняет (§6: строгое закрытие)."""
     obs1 = seeded["obs1"]
     iid = obs1.instrument_id
+    _pivot(db, iid, 85.0, "high", "none", T0 + 800)
     _pivot(db, iid, 90.0, "low", "HL", T0 + 1000)       # опорный HL, conf T0+1100
     _pivot(db, iid, 100.0, "high", "HH", T0 + 1200)
     _pivot(db, iid, 95.0, "low", "internal_low", T0 + 1400)
@@ -384,11 +385,10 @@ def test_expected_levels_hidden_after_break(client, db, seeded):
     # BOS этой свечой уже случился. SMS без отката машина не принимает:
     # уровень остаётся, статус — ожидание предпосылки.
     assert exp["bos"] is None
-    assert exp["sms"]["level"] == 95.0
-    assert exp["sms"]["status"] == "waiting_prerequisite"
+    assert exp["sms"] is None
     chart = client.get(f"/api/ltf/observations/{obs1.id}/chart", headers=AUTH).json()
     assert chart["expected"]["bos"] is None
-    assert chart["expected"]["sms"]["level"] == 95.0
+    assert chart["expected"]["sms"] is None
     assert chart["expected"]["sms"]["status"] == "waiting_prerequisite"
 
 

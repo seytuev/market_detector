@@ -447,13 +447,13 @@
             band.style.top = box.top + 'px';
             band.style.width = (paneRight - x1) + 'px';
             band.style.height = box.height + 'px';
-            band.title = 'PD Massive · ' + half + ' · ' + fmtPrice(lo) + '–' + fmtPrice(hi);
+            band.title = 'Локальный PD · ' + half + ' · ' + fmtPrice(lo) + '–' + fmtPrice(hi);
           });
       }
       const rows = [
-        [setup.upper, 'PD Massive · Premium', false],
-        [setup.eq, 'EQ · 50%', true],
-        [setup.lower, 'Discount', false],
+        [setup.upper, 'Локальный PD · Premium', false],
+        [setup.eq, 'Локальный EQ · 50%', true],
+        [setup.lower, 'Локальный PD · Discount', false],
       ];
       rows.forEach(([price, text, mid]) => {
         const y = yOf(price);
@@ -470,6 +470,28 @@
           + (provisional && !mid && price === setup.upper ? ' · предварительный' : '');
         line.appendChild(span);
       });
+    }
+
+    const main = layers.main_structure;
+    if (main && main.lower != null && main.upper != null && typeof yOf === 'function') {
+      let left = xOf(main.origin_at);
+      if (left == null || left < 0) left = 0;
+      const bull = main.direction === 'bull';
+      [[main.upper, bull ? 'HH' : 'LH'], [main.eq, '50%'], [main.lower, bull ? 'HL' : 'LL']]
+        .forEach(([price, role]) => {
+          const y = yOf(price);
+          if (y == null || y < -8 || y > height + 8 || paneRight <= left) return;
+          const line = add('h1-pd-line main ' + (role === '50%' ? 'mid' : 'confirmed'));
+          line.style.top = y + 'px';
+          line.style.left = left + 'px';
+          line.style.width = Math.max(4, paneRight - left) + 'px';
+          const label = 'Основной PD · ' + role + ' · ' + fmtPrice(price);
+          line.title = label;
+          const span = doc.createElement('span');
+          span.className = 'h1-pd-label';
+          span.textContent = label;
+          line.appendChild(span);
+        });
     }
 
     if (ctx.transitionEl) {

@@ -68,8 +68,9 @@ def test_format_level_keeps_meaning():
     assert fmt_price_ru(110) == "110,00"
 
 
-def test_sms_without_pullback_is_not_ready():
+def test_sms_without_pullback_is_ready():
     pivots = [
+        _pivot(85, "high", "none", T0 + 800, 0),
         _pivot(90, "low", "HL", T0 + 1000, 1),
         _pivot(100, "high", "HH", T0 + 1200, 2),
         _pivot(95, "low", "internal_low", T0 + 1400, 3),
@@ -77,25 +78,26 @@ def test_sms_without_pullback_is_not_ready():
     idle = expected_structure_conditions(pivots, [], Direction.BEAR, T0 + 50_000)
     assert idle["bos"]["status"] == "ready"
     assert idle["bos"]["level"] == 90
-    assert idle["sms"]["status"] == "waiting_prerequisite"
+    assert idle["sms"]["status"] == "ready"
     assert idle["sms"]["level"] == 95
-    assert idle["sms"]["opens_scenario"] is False
-    assert idle["either"] is False
+    assert idle["sms"]["opens_scenario"] is True
+    assert idle["either"] is True
     text = condition_texts(idle)[1]["text"]
-    assert "откат" in text
+    assert "закрытие H1" in text
     assert "95" in text
     broken = expected_structure_conditions(
         pivots,
         [make_candle(T0 + 2000, 92, 93, 86, 88, timeframe="H1")],
-        Direction.BEAR, T0 + 50_000,
+        Direction.BEAR, T0 + 2000 + H1 - 1,
     )
     assert broken["bos"]["status"] == "occurred"
-    assert broken["sms"]["status"] == "waiting_prerequisite"
-    assert broken["sms"]["level"] == 95
+    assert broken["sms"]["status"] == "unavailable"
+    assert broken["sms"]["level"] is None
 
 
 def test_bull_conditions_mirror_bear():
     pivots = [
+        _pivot(95, "low", "none", T0 + 1800, 0),
         _pivot(108, "high", "LH", T0 + 2000, 4),
         _pivot(88, "low", "LL", T0 + 2200, 5),
         _pivot(93, "high", "internal_high", T0 + 2400, 6),
@@ -105,7 +107,7 @@ def test_bull_conditions_mirror_bear():
     assert cond["bos"]["level"] == 108
     assert cond["bos"]["side"] == "above"
     assert cond["sms"]["level"] == 93
-    assert cond["sms"]["status"] == "waiting_prerequisite"
+    assert cond["sms"]["status"] == "ready"
     missing = expected_structure_conditions(
         [_pivot(88, "low", "LL", T0 + 2200, 5)], [], Direction.BULL, T0 + 50_000,
     )

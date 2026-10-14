@@ -16,7 +16,7 @@ from .models import Direction
 # ltf-0.3: коррекционный пересчёт (Этап 8, §15) — причинная цепочка, эпохи,
 # origin_reversal-диапазоны, терминальные исходы уровней (level_broken),
 # перекрытие FVG (fvg_filled); старые расчёты сохранены в *_bak_ltfv2
-RULE_VERSION_LTF = "ltf-0.3"
+RULE_VERSION_LTF = "ltf-0.4-structure"
 
 
 @dataclass

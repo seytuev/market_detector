@@ -1,22 +1,9 @@
-"""§6: BOS/SMS — чистый детектор структурных сломов над историей H1.
+"""Causal BOS/SMS projections and scenario cancellation.
 
-Фиксация слома — закрытие H1 СТРОГО за уровнем: тень, незакрытая свеча и
-Close == level сломом не являются (приёмка п.2). Один уровень/этап в
-сценарии — одно событие: level_key стабилен, дедуп по нему (и UNIQUE в БД).
-
-Стороны:
-- медвежий контекст (§6.1, §6.3): исходно HH/HL; H_peak — последний HH,
-  L_ref — предшествующий опорный HL. Close < L_ref → первичный BOS; далее
-  L_first ниже L_ref, откат H_pullback < H_peak, Close < L_first → вторичный.
-  SMS: внутренний L_internal выше L_ref, затем H_pullback < H_peak;
-  Close < L_internal при ещё не пробитом L_ref → самостоятельный SMS.
-- бычий (§6.2, §6.4): зеркально от последнего LL и опорного LH.
-
-§6.5: одна свеча, пересекающая внутренний и внешний уровни, даёт оба факта —
-основное событие BOS + сопутствующий SMS (accompanying=True). Противоположный
-подтверждённый слом (BOS или SMS) возвращается как CancellationSignal с явным
-видом паттерна (reverse_bos | reverse_sms); события на той же свече, что и
-отмена, сохраняются (§13), дальше сценарий не публикует.
+The main HL/HH or LH/LL frame owns BOS. Every shift and continuation
+inside its bounds remains SMS. Only a strict close can confirm a break;
+SMS needs no confirmed lower high/higher low. Shared H1/D1/W1 rules:
+see docs/BOS_SMS_rules_2026_10_14.md and market_structure.py.
 """
 from __future__ import annotations
 
@@ -82,343 +69,51 @@ class StructureScanResult:
 
 
 class _SideScan:
-    """Машина одной стороны (BEAR ищет сломы вниз, BULL — вверх).
+    """Directional view of the common close-driven nested structure machine."""
+    def __init__(self, direction, now_ms, trace=None):
+        from .market_structure import StructureMachine
+        self.direction, self.now_ms, self.trace = direction, now_ms, trace
+        self.machine = StructureMachine()
 
-    Pivots поглощаются по мере подтверждения (confirmed_at <= закрытие
-    текущей свечи): неподтверждённая опора в уровнях не участвует.
-    """
+    def absorb(self, pivot):
+        self.machine.absorb(pivot)
 
-    def __init__(self, direction: Direction, now_ms: int,
-                 trace: Optional[ScanTrace] = None):
-        self.direction = direction
-        self.now_ms = now_ms
-        self.trace = trace             # None — трассировка выключена (по умолчанию)
-        # опорная пара: для BEAR — (h_peak=HH, l_ref=HL); для BULL — (l_bottom=LL, h_ref=LH)
-        self.anchor: Optional[PivotCandidate] = None   # h_peak | l_bottom
-        self.ref: Optional[PivotCandidate] = None      # l_ref | h_ref
-        # SMS: внутренний экстремум + откат
-        self.internal: Optional[PivotCandidate] = None  # internal_low | internal_high
-        self.pullback: Optional[PivotCandidate] = None  # H_pullback | L_pullback
-        # вторичный BOS: первый экстремум за ref + откат после него
-        self.first: Optional[PivotCandidate] = None    # L_first | H_first
-        self.pullback2: Optional[PivotCandidate] = None
-        self.primary_at: Optional[int] = None          # open_time свечи первичного слома
-        self.ref_broken = False
-        self.secondary_done = False
-        self.broken_keys: set[str] = set()             # §6: уровень/этап — один раз
-        self._last_high: Optional[PivotCandidate] = None
-        self._last_low: Optional[PivotCandidate] = None
+    def on_candle(self, candle):
+        result = [e for e in self.machine.on_candle(candle, self.now_ms) if e.direction == self.direction]
+        if self.trace is not None:
+            for kind, check in (("BOS", "primary_bos"), ("SMS", "sms")):
+                event = next((e for e in result if e.kind == kind), None)
+                condition = self.machine.condition(self.direction, kind)
+                refs = event.ref_pivot_ids if event else []
+                if event and event.stage == "secondary" and kind == "BOS":
+                    check = "secondary_bos"
+                self.trace.entries.append(TraceEntry(
+                    candle_open_time=candle.open_time, candle_close_time=candle.close_time,
+                    direction=self.direction.value, check=check,
+                    decision="accept" if event else "reject",
+                    reason=None if event else ("close_not_beyond_level" if condition.get("level") is not None
+                                               else "internal_not_set" if kind == "SMS" else "anchor_not_set"),
+                    level_kind=kind, level_stage=event.stage if event else condition.get("stage"),
+                    level_price=event.break_level if event else condition.get("level"),
+                    ref_pivot_ids=refs,
+                    anchor_pivot_id=refs[0] if refs else None,
+                    anchor_price=event.evidence.get("anchor_price") if event else None,
+                    ref_pivot_id=event.evidence.get("broken_pivot_id") if event else None,
+                    ref_price=event.break_level if event else None,
+                    internal_pivot_id=event.evidence.get("broken_pivot_id") if event and kind == "SMS" else None,
+                    internal_price=event.break_level if event and kind == "SMS" else None))
+        return result
 
-    # ---- поглощение pivots ----
+    def _trace_entry(self, candle, check, decision, **kwargs):
+        if self.trace is not None:
+            self.trace.entries.append(TraceEntry(
+                candle_open_time=candle.open_time, candle_close_time=candle.close_time,
+                direction=self.direction.value, check=check, decision=decision, **kwargs))
 
-    def absorb(self, p: PivotCandidate) -> None:
-        if self.direction == Direction.BEAR:
-            self._absorb_bear(p)
-        else:
-            self._absorb_bull(p)
-        if p.kind == "high":
-            self._last_high = p
-        else:
-            self._last_low = p
-
-    def _absorb_bear(self, p: PivotCandidate) -> None:
-        if p.kind == "high" and p.role == "HH":
-            # новый пик: опорный HL — low с ролью HL непосредственно перед ним;
-            # уровни нового пика переоткрываются (новый level_key)
-            self.anchor = p
-            self.ref = (
-                self._last_low
-                if self._last_low is not None and self._last_low.role == "HL"
-                else None
-            )
-            self.internal = None
-            self.pullback = None
-            self.first = None
-            self.pullback2 = None
-            self.primary_at = None
-            self.ref_broken = False
-            # защёлка этапа — на ногу (якорь), не на всю историю скана;
-            # дубли уровня режут broken_keys и UNIQUE в БД
-            self.secondary_done = False
-        elif p.kind == "low" and p.role == "internal_low":
-            if (
-                self.anchor is not None and self.ref is not None
-                and p.pivot_at > self.anchor.pivot_at
-                and p.price > self.ref.price          # §6.3: L_internal выше L_ref
-                and self.internal is None
-            ):
-                self.internal = p
-        elif p.kind == "high" and self.internal is not None and self.pullback is None:
-            if p.pivot_at > self.internal.pivot_at and p.price < self.anchor.price:
-                self.pullback = p                     # H_pullback < H_peak (§6.3)
-        # вторичный BOS (§6.1): L_first ниже L_ref, затем откат ниже H_peak
-        if (
-            self.primary_at is not None and p.kind == "low"
-            and self.ref is not None and self.first is None
-            and p.pivot_at >= self.primary_at and p.price < self.ref.price
-        ):
-            self.first = p
-        if (
-            self.first is not None and p.kind == "high" and self.pullback2 is None
-            and p.pivot_at > self.first.pivot_at and p.price < self.anchor.price
-        ):
-            self.pullback2 = p                        # H_pullback не обязан быть ниже L_ref
-
-    def _absorb_bull(self, p: PivotCandidate) -> None:
-        if p.kind == "low" and p.role == "LL":
-            self.anchor = p
-            self.ref = (
-                self._last_high
-                if self._last_high is not None and self._last_high.role == "LH"
-                else None
-            )
-            self.internal = None
-            self.pullback = None
-            self.first = None
-            self.pullback2 = None
-            self.primary_at = None
-            self.ref_broken = False
-            self.secondary_done = False      # защёлка этапа — на ногу, не на скан
-        elif p.kind == "high" and p.role == "internal_high":
-            if (
-                self.anchor is not None and self.ref is not None
-                and p.pivot_at > self.anchor.pivot_at
-                and p.price < self.ref.price          # §6.4: H_internal ниже H_ref
-                and self.internal is None
-            ):
-                self.internal = p
-        elif p.kind == "low" and self.internal is not None and self.pullback is None:
-            if p.pivot_at > self.internal.pivot_at and p.price > self.anchor.price:
-                self.pullback = p                     # L_pullback > L_bottom (§6.4)
-        # вторичный BOS (§6.2): H_first выше H_ref, затем откат выше L_bottom
-        if (
-            self.primary_at is not None and p.kind == "high"
-            and self.ref is not None and self.first is None
-            and p.pivot_at >= self.primary_at and p.price > self.ref.price
-        ):
-            self.first = p
-        if (
-            self.first is not None and p.kind == "low" and self.pullback2 is None
-            and p.pivot_at > self.first.pivot_at and p.price > self.anchor.price
-        ):
-            self.pullback2 = p
-
-    # ---- свечи ----
-
-    def _draft(
-        self, kind: str, stage: str, level_pivot: PivotCandidate,
-        candle: Candle, refs: list[PivotCandidate], accompanying: bool,
-    ) -> StructureEventDraft:
-        return StructureEventDraft(
-            kind=kind, stage=stage, direction=self.direction,
-            break_level=level_pivot.price,
-            break_candle_open_time=candle.open_time,
-            occurred_at=candle.close_time,
-            detected_at=self.now_ms,
-            level_key=_level_key(kind, stage, level_pivot),
-            ref_pivot_ids=[_ref(r) for r in refs],
-            accompanying=accompanying,
-            evidence={
-                "anchor_price": self.anchor.price if self.anchor else None,
-                "ref_price": self.ref.price if self.ref else None,
-                "close": candle.close,
-                # §5/§12: пробитый уровень с происхождением — pivot машины,
-                # его роль и подтверждение на момент события
-                "broken_pivot_id": _ref(level_pivot),
-                "role_at_event": level_pivot.role,
-                "level_price": level_pivot.price,
-                "pivot_confirmed_at": level_pivot.confirmed_at,
-                "candle_close_time": candle.close_time,
-                "close_price": candle.close,
-            },
-        )
-
-    # ---- трассировка (диагностика; при trace=None — нулевая стоимость) ----
-
-    def _trace_entry(
-        self, c: Candle, check: str, decision: str,
-        reason: Optional[str] = None,
-        level_pivot: Optional[PivotCandidate] = None,
-        kind: Optional[str] = None, stage: Optional[str] = None,
-        refs: tuple[PivotCandidate, ...] = (),
-        snap: Optional[dict[str, Any]] = None,
-    ) -> None:
-        if self.trace is None:
-            return
-        s = snap if snap is not None else self._state_snapshot()
-        self.trace.entries.append(TraceEntry(
-            candle_open_time=c.open_time, candle_close_time=c.close_time,
-            direction=self.direction.value, check=check, decision=decision,
-            reason=reason, level_kind=kind, level_stage=stage,
-            level_price=level_pivot.price if level_pivot is not None else None,
-            ref_pivot_ids=[_ref(r) for r in refs], **s,
-        ))
-
-    def _state_snapshot(self) -> dict[str, Any]:
-        """Состояние машины (цены + ссылки pivots) для снапшота в трассе."""
-        def put(d: dict[str, Any], name: str, p: Optional[PivotCandidate]) -> None:
-            d[f"{name}_price"] = p.price if p is not None else None
-            d[f"{name}_pivot_id"] = _ref(p) if p is not None else None
-        out: dict[str, Any] = {}
-        put(out, "anchor", self.anchor)
-        put(out, "ref", self.ref)
-        put(out, "internal", self.internal)
-        put(out, "pullback", self.pullback)
-        put(out, "first", self.first)
-        put(out, "pullback2", self.pullback2)
-        out["ref_broken"] = self.ref_broken
-        out["primary_at"] = self.primary_at
-        return out
-
-    def armed_level(self) -> Optional[tuple[str, str, PivotCandidate]]:
-        """Следующий уровень, который on_candle принял бы при закрытии за ним.
-
-        Тот же порядок, что у расчёта слома: первичный BOS, затем SMS,
-        затем вторичный BOS. Уже пробитый уровень не вооружён.
-        """
-        if self.anchor is not None and self.ref is not None and not self.ref_broken:
-            key = _level_key("BOS", "primary", self.ref)
-            if key not in self.broken_keys:
-                return ("BOS", "primary", self.ref)
-        if (
-            self.internal is not None and self.pullback is not None
-            and not self.ref_broken
-        ):
-            key = _level_key("SMS", "primary", self.internal)
-            if key not in self.broken_keys:
-                return ("SMS", "primary", self.internal)
-        if (
-            self.primary_at is not None and not self.secondary_done
-            and self.first is not None and self.pullback2 is not None
-        ):
-            key = _level_key("BOS", "secondary", self.first)
-            if key not in self.broken_keys:
-                return ("BOS", "secondary", self.first)
-        return None
-
-    def on_candle(self, c: Candle) -> list[StructureEventDraft]:
-        out: list[StructureEventDraft] = []
-        brk = bear_break if self.direction == Direction.BEAR else bull_break
-        ref_broken_before = self.ref_broken
-        snap = self._state_snapshot() if self.trace is not None else None
-
-        primary: Optional[StructureEventDraft] = None
-        # первичный BOS: закрытие строго за опорным уровнем
-        if self.anchor is None:
-            primary_reason = "anchor_not_set"
-        elif self.ref is None:
-            primary_reason = "ref_not_set"
-        elif self.ref_broken:
-            primary_reason = "ref_already_broken"
-        elif not brk(self.ref.price, c):
-            primary_reason = "close_not_beyond_level"
-        else:
-            primary_reason = None
-        if primary_reason is None:
-            key = _level_key("BOS", "primary", self.ref)
-            if key not in self.broken_keys:
-                primary = self._draft("BOS", "primary", self.ref, c,
-                                      [self.anchor, self.ref], accompanying=False)
-                out.append(primary)
-                self.broken_keys.add(key)
-                self._trace_entry(c, "primary_bos", "accept",
-                                  level_pivot=self.ref, kind="BOS",
-                                  stage="primary",
-                                  refs=(self.anchor, self.ref), snap=snap)
-            else:
-                self._trace_entry(c, "primary_bos", "reject",
-                                  reason="duplicate_level_key",
-                                  level_pivot=self.ref, kind="BOS",
-                                  stage="primary", snap=snap)
-            self.ref_broken = True
-            self.primary_at = c.open_time
-        else:
-            self._trace_entry(c, "primary_bos", "reject",
-                              reason=primary_reason,
-                              level_pivot=self.ref if primary_reason not in (
-                                  "anchor_not_set", "ref_not_set") else None,
-                              kind="BOS", stage="primary", snap=snap)
-
-        # SMS: самостоятельный при не пробитом ранее опорном уровне (§6.3/§6.4);
-        # на одной свече с BOS — сопутствующий факт (§6.5)
-        if self.internal is None:
-            sms_reason = "internal_not_set"
-        elif self.pullback is None:
-            sms_reason = "pullback_missing"
-        elif ref_broken_before:
-            sms_reason = "ref_already_broken"
-        elif not brk(self.internal.price, c):
-            sms_reason = "close_not_beyond_level"
-        else:
-            sms_reason = None
-        if sms_reason is None:
-            key = _level_key("SMS", "primary", self.internal)
-            if key not in self.broken_keys:
-                out.append(self._draft(
-                    "SMS", "primary", self.internal, c,
-                    [self.anchor, self.internal, self.pullback],
-                    accompanying=primary is not None,
-                ))
-                self.broken_keys.add(key)
-                self._trace_entry(c, "sms", "accept",
-                                  level_pivot=self.internal, kind="SMS",
-                                  stage="primary",
-                                  refs=(self.anchor, self.internal,
-                                        self.pullback), snap=snap)
-            else:
-                self._trace_entry(c, "sms", "reject",
-                                  reason="duplicate_level_key",
-                                  level_pivot=self.internal, kind="SMS",
-                                  stage="primary", snap=snap)
-        else:
-            self._trace_entry(c, "sms", "reject", reason=sms_reason,
-                              level_pivot=self.internal if sms_reason in (
-                                  "ref_already_broken", "close_not_beyond_level"
-                              ) else None,
-                              kind="SMS", stage="primary", snap=snap)
-
-        # вторичный BOS: только после сформированного отката — непрерывный
-        # импульс через уровень без отката вторым этапом не является (§6.1)
-        if self.primary_at is None:
-            secondary_reason = "primary_not_fired"
-        elif self.secondary_done:
-            secondary_reason = "secondary_done"
-        elif self.first is None:
-            secondary_reason = "first_not_set"
-        elif self.pullback2 is None:
-            secondary_reason = "pullback_missing"
-        elif not brk(self.first.price, c):
-            secondary_reason = "close_not_beyond_level"
-        else:
-            secondary_reason = None
-        if secondary_reason is None:
-            key = _level_key("BOS", "secondary", self.first)
-            if key not in self.broken_keys:
-                out.append(self._draft("BOS", "secondary", self.first, c,
-                                       [self.anchor, self.first, self.pullback2],
-                                       accompanying=False))
-                self.broken_keys.add(key)
-                self._trace_entry(c, "secondary_bos", "accept",
-                                  level_pivot=self.first, kind="BOS",
-                                  stage="secondary",
-                                  refs=(self.anchor, self.first,
-                                        self.pullback2), snap=snap)
-            else:
-                self._trace_entry(c, "secondary_bos", "reject",
-                                  reason="duplicate_level_key",
-                                  level_pivot=self.first, kind="BOS",
-                                  stage="secondary", snap=snap)
-            self.secondary_done = True
-        else:
-            self._trace_entry(c, "secondary_bos", "reject",
-                              reason=secondary_reason,
-                              level_pivot=self.first if secondary_reason == (
-                                  "close_not_beyond_level") else None,
-                              kind="BOS", stage="secondary", snap=snap)
-
-        if self.ref is not None and brk(self.ref.price, c):
-            self.ref_broken = True
-        return out
+    def armed_level(self):
+        levels = self.machine.armed(self.direction)
+        levels.sort(key=lambda item: (item[0] != "SMS", item[2].confirmed_at))
+        return levels[0] if levels else None
 
 
 class BreakCursor:
@@ -494,10 +189,11 @@ class BreakCursor:
                     continue
                 self._absorb(avail, c.close_time)
                 self.last_open_time = c.open_time
+                emitted = self.target.on_candle(c)
+                rev = self.reverse.on_candle(c)
                 if c.open_time < self.since_ms:
                     continue
-                self.events_all.extend(self.target.on_candle(c))
-                rev = self.reverse.on_candle(c)
+                self.events_all.extend(emitted)
                 if rev and self.cancel_not_before_ms is not None:
                     rev = [e for e in rev
                            if e.occurred_at >= self.cancel_not_before_ms]
@@ -598,9 +294,9 @@ def detect_breaks(
     машины — уровень, пробитый ДО рождения сценария, не может стать его
     отменой и позже. None (по умолчанию) — прежнее поведение.
     """
-    closed = sorted((c for c in candles if c.closed), key=lambda c: c.open_time)
+    closed = sorted((c for c in candles if c.closed and c.close_time <= now_ms), key=lambda c: c.open_time)
     ps = sorted(
-        (p for p in pivots if p.state == "confirmed"),
+        (p for p in pivots if p.state == "confirmed" and p.confirmed_at <= now_ms),
         key=lambda p: (p.confirmed_at, p.pivot_at),
     )
     if trace is None:
@@ -643,6 +339,10 @@ def detect_breaks(
             if trace is not None:
                 for side in (bear, bull):
                     side._trace_entry(c, "scan", "context_only")
+            target.trace = reverse.trace = None
+            target.on_candle(c)
+            reverse.on_candle(c)
+            target.trace = reverse.trace = trace
             continue
         n0 = len(trace.entries) if trace is not None else 0
         events.extend(target.on_candle(c))
@@ -709,9 +409,9 @@ def expected_reverse_condition(
     )
     cur.bear.now_ms = now_ms
     cur.bull.now_ms = now_ms
-    closed = sorted((c for c in candles if c.closed), key=lambda c: c.open_time)
+    closed = sorted((c for c in candles if c.closed and c.close_time <= now_ms), key=lambda c: c.open_time)
     ps = sorted(
-        (p for p in pivots if p.state == "confirmed"),
+        (p for p in pivots if p.state == "confirmed" and p.confirmed_at <= now_ms),
         key=lambda p: (p.confirmed_at, p.pivot_at),
     )
     result = cur.scan(ps, closed, [c.open_time for c in closed], now_ms)
@@ -766,73 +466,11 @@ def _side_word(direction: Direction) -> str:
 
 
 def _bos_condition(side: _SideScan) -> dict[str, Any]:
-    """Первичный BOS в том состоянии, в котором on_candle его примет."""
-    bear = side.direction == Direction.BEAR
-    base = {
-        "kind": "BOS", "stage": "primary", "timeframe": "H1",
-        "requires_close": True, "strict": True,
-        "side": _side_word(side.direction),
-        "source": "structure_machine",
-    }
-    if side.anchor is None:
-        missing = (
-            "нет подтверждённого максимума"
-            if bear else "нет подтверждённого минимума"
-        )
-        return {**base, "status": "unavailable", "level": None, "missing": missing,
-                "opens_scenario": False}
-    if side.ref is None:
-        missing = (
-            "после максимума нет подтверждённой опоры"
-            if bear else "после минимума нет подтверждённой опоры"
-        )
-        return {**base, "status": "waiting_prerequisite", "level": None,
-                "missing": missing, "anchor": _pivot_view(side.anchor),
-                "opens_scenario": False}
-    key = _level_key("BOS", "primary", side.ref)
-    occurred = bool(side.ref_broken or key in side.broken_keys)
-    return {
-        **base,
-        "status": "occurred" if occurred else "ready",
-        "level": side.ref.price,
-        "pivot": _pivot_view(side.ref),
-        "anchor": _pivot_view(side.anchor),
-        "opens_scenario": not occurred,
-    }
+    return side.machine.condition(side.direction, "BOS")
 
 
 def _sms_condition(side: _SideScan) -> dict[str, Any]:
-    """SMS: уровень внутреннего экстремума не заменяет отсутствующий откат."""
-    bear = side.direction == Direction.BEAR
-    base = {
-        "kind": "SMS", "stage": "primary", "timeframe": "H1",
-        "requires_close": True, "strict": True,
-        "side": _side_word(side.direction),
-        "source": "structure_machine",
-    }
-    if side.internal is None:
-        missing = "нет подтверждённого внутреннего экстремума"
-        return {**base, "status": "unavailable", "level": None, "missing": missing,
-                "opens_scenario": False}
-    key = _level_key("SMS", "primary", side.internal)
-    if key in side.broken_keys:
-        status, missing = "occurred", None
-    elif side.pullback is None:
-        status = "waiting_prerequisite"
-        missing = "сначала нужен подтверждённый откат"
-    elif side.ref_broken:
-        status, missing = "superseded", "опорный уровень уже пробит"
-    else:
-        status, missing = "ready", None
-    return {
-        **base,
-        "status": status,
-        "level": side.internal.price,
-        "pivot": _pivot_view(side.internal),
-        "pullback": _pivot_view(side.pullback) if side.pullback else None,
-        "missing": missing,
-        "opens_scenario": status == "ready",
-    }
+    return side.machine.condition(side.direction, "SMS")
 
 
 def expected_structure_conditions(
@@ -849,7 +487,7 @@ def expected_structure_conditions(
     вооружают следующее условие и не создают исторический слом.
     """
     cur = BreakCursor(direction, since_ms, stop_on_cancellation=False)
-    closed = sorted((c for c in candles if c.closed), key=lambda c: c.open_time)
+    closed = sorted((c for c in candles if c.closed and c.close_time <= now_ms), key=lambda c: c.open_time)
     ps = sorted(
         (p for p in pivots if p.state == "confirmed" and p.confirmed_at <= now_ms),
         key=lambda p: (p.confirmed_at, p.pivot_at),

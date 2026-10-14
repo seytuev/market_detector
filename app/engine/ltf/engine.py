@@ -67,7 +67,7 @@ from .ranges import (
     range_recalc,
     zone_half,
 )
-from .roles import assign_roles
+from .market_structure import replay_structure
 from .structure import StructureBatch, sync_structure
 
 # §4/§15: инвалидация родителя — конверсия в Breaker или архив по пробою;
@@ -246,6 +246,19 @@ class LtfEngine:
         """Обрабатывает все ещё не обработанные закрытые H1-свечи инструмента
         (инкрементально, через meta-курсор — перезапуск ничего не дублирует)."""
         now = now_ms if now_ms is not None else _real_now_ms()
+        from ...services.structure_upgrade import prepare_upgrade
+        from .market_structure import RULE_VERSION as STRUCTURE_RULE_VERSION
+        if prepare_upgrade(self.db, self.cfg, instrument_id, now):
+            self._h1_cursors.pop(instrument_id, None)
+            observations = [o for o in self.db.list_ltf_observations(instrument_id=instrument_id)
+                            if o.state in ("waiting_structure", "active")]
+            result = self.replay_observation(observations[0].id) if observations else LtfTickResult()
+            if not observations:
+                last = self.db.last_candle(instrument_id, "H1")
+                if last is not None:
+                    self.db.set_meta(f"ltf:h1:last_close:{instrument_id}", str(last.close_time))
+            self.db.set_meta(f"structure:rules:{instrument_id}", STRUCTURE_RULE_VERSION)
+            return result
         grace_ms = self.cfg.ltf_live_grace_seconds * 1000
         key = f"ltf:h1:last_close:{instrument_id}"
         last_done = int(self.db.get_meta(key) or 0)
@@ -979,9 +992,11 @@ class LtfEngine:
             return
         # replay/повтор: слом, уже записанный в сценарии наблюдения, новый
         # сценарий не открывает
+        from ...services.structure_upgrade import legacy_scenarios
+        legacy = legacy_scenarios(self.db, obs.instrument_id)
         covered = {
             (ev.level_key, ev.stage)
-            for sc0 in self.db.list_ltf_scenarios(observation_id=obs.id)
+            for sc0 in self.db.list_ltf_scenarios(observation_id=obs.id) if sc0.id not in legacy
             for ev in self.db.list_ltf_structure_events(sc0.id)
         }
         primaries = [e for e in primaries if (e.level_key, e.stage) not in covered]
@@ -1296,9 +1311,11 @@ class LtfEngine:
         бесконечно). Используется как фильтр дублей при открытии (§11.5
         по смыслу: одно окно — один сценарий направления).
         """
+        from ...services.structure_upgrade import legacy_scenarios
+        legacy = legacy_scenarios(self.db, obs.instrument_id)
         windows: list[tuple[int, float]] = []
         for sc0 in self.db.list_ltf_scenarios(observation_id=obs.id):
-            if sc0.direction != obs.direction:
+            if sc0.id in legacy or sc0.direction != obs.direction:
                 continue
             events = self.db.list_ltf_structure_events(sc0.id)
             trig = next((e for e in events if e.id == sc0.trigger_event_id), None)
@@ -1381,9 +1398,9 @@ class LtfEngine:
             ]
         cands = find_h1_pivots(up_to, RANGE_PIVOT_LEFT, RANGE_PIVOT_RIGHT)
         pivots = confirmed_pivots(cands, now)
-        res = assign_roles(pivots)
-        for i, p in enumerate(pivots):
-            p.role = res.roles[i]
+        machine, _ = replay_structure(pivots, up_to, now)
+        for p in pivots:
+            p.role = machine.roles.get((p.kind, p.pivot_at), "none")
         self._attach_db_pivot_ids(instrument_id, pivots)
         return pivots
 

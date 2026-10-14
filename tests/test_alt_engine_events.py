@@ -200,7 +200,7 @@ def test_bos_below_l_during_manipulation_gives_entry_a(alt_db, alt_cfg):
     assert s2["setup_state"] == AltState.ACTIVE_CONFIRMED.value
     entry_a = alt_db.find_alt_entry_opportunity(setup.id, "A")
     assert entry_a is not None and entry_a.price == 1.085
-    bos = [r for r in live_structure_rows(alt_db, setup.id) if r.kind == "BOS"]
+    bos = [r for r in live_structure_rows(alt_db, setup.id) if r.kind == "SMS"]
     assert len(bos) == 1 and bos[0].level_price == peak
     assert bos[0].candle_open_time == T0 + 119 * DAY_MS
 
@@ -213,7 +213,7 @@ def test_wick_and_equal_close_do_not_confirm_bos(alt_db, alt_cfg):
     specs.append((1.75, 1.78, 1.60, 1.77))  # повторное закрытие выше уровня
     s2 = eng.process_asset_history(1, 1, candles + post(specs))
 
-    bos = [r for r in live_structure_rows(alt_db, setup.id) if r.kind == "BOS"]
+    bos = [r for r in live_structure_rows(alt_db, setup.id) if r.kind == "SMS"]
     # Ровно один BOS — на свече +9 (Close 1.75 > 1.70); тень (+7) и
     # равенство (+8) слома не дали, повторное закрытие (+10) — тоже
     assert len(bos) == 1
@@ -272,17 +272,16 @@ def test_maturity_and_bos_same_candle(alt_db, alt_cfg):
     eng = AltEngine(alt_db, alt_cfg)
     s = eng.process_asset_history(1, 1, candles)
     assert s["frozen_range_id"] is not None
-    assert s["setup_state"] == AltState.ACTIVE_CONFIRMED.value
-    entry_a = alt_db.find_alt_entry_opportunity(s["setup_id"], "A")
-    assert entry_a is not None and entry_a.price == 1.56
-    assert entry_a.event_time_ms == close_boundary_ms(T0 + 111 * DAY_MS, "D1")
-    bos = [r for r in live_structure_rows(alt_db, s["setup_id"])
-           if r.kind == "BOS"]
-    assert len(bos) == 1
-    assert bos[0].candle_open_time == T0 + 111 * DAY_MS
-    # Уровень подтверждён за 27 свечей до слома — будущие pivots не использованы
-    anchor = json.loads(bos[0].anchors_json)["anchors"][0]
-    assert anchor["formed_at"] == T0 + 81 * DAY_MS
+    assert s["setup_state"] == AltState.MATURE.value
+    assert alt_db.find_alt_entry_opportunity(s["setup_id"], "A") is None
+    # The first internal high (1.9) remains authoritative. A later 1.55 LH
+    # cannot replace it and open an entry prematurely on maturity.
+    s2 = eng.process_asset_history(1, 1, candles + post([(1.56, 1.92, 1.30, 1.91)]))
+    entry = alt_db.find_alt_entry_opportunity(s2["setup_id"], "A")
+    assert entry is not None and entry.price == 1.91
+    sms = [r for r in live_structure_rows(alt_db, s2["setup_id"]) if r.kind == "SMS"]
+    assert sms[-1].level_price == 1.9
+    assert json.loads(sms[-1].anchors_json)["anchors"][0]["formed_at"] == T0 + 21 * DAY_MS
 
 
 # ---------------------------------------------------------------------------
@@ -310,7 +309,7 @@ def test_breakout_strict_close_and_immutable(alt_db, alt_cfg):
     flags = s2["setup_flags"]
     assert flags["upper_excursion"] and flags["breakout_confirmed"]
     # Подтверждение состоялось по breakout — снимок целей с bases=[breakout]
-    assert flags["target_snapshot"]["bases"] == ["breakout"]
+    assert flags["target_snapshot"]["bases"] == ["bos", "breakout"]
     assert s2["setup_state"] == AltState.ACTIVE_CONFIRMED.value
 
 
@@ -337,7 +336,7 @@ def test_retest_zone_rules(alt_db, alt_cfg):
     entry_b = alt_db.find_alt_entry_opportunity(setup.id, "B")
     assert entry_b is not None
     assert json.loads(entry_b.zone_json) == {"lower": M, "upper": U}
-    assert len(alt_db.list_alt_entry_opportunities(setup.id)) == 1  # только B
+    assert [e.kind for e in alt_db.list_alt_entry_opportunities(setup.id)] == ["A", "B"]
     # Второе касание — журнал, глубина ниже M зафиксирована, отмены нет
     assert json.loads(retests[1].payload_json)["journal"] is True
     assert s2["setup_flags"]["retest_received"] is True
@@ -437,7 +436,7 @@ def test_entry_a_then_b_same_setup(alt_db, alt_cfg):
     assert [t["price"] for t in targets] == [U + n * W for n in range(1, 5)]
     # snapshot взят на первом подтверждении (BOS), до breakout
     flags = json.loads(setup.flags_json)
-    assert flags["target_snapshot"]["bases"] == ["bos"]
+    assert flags["target_snapshot"]["bases"] == ["sms"]
 
 
 # ---------------------------------------------------------------------------
@@ -544,7 +543,7 @@ def test_same_candle_cancel_and_entry_cancel_wins(alt_db, alt_cfg):
                 if e.event_type == "entry_a"]
     # Пересечение уровня сохранено как факт с оговоркой о последовательности
     bos = [e for e in events_of(alt_db, setup.id)
-           if e.event_type == "bos_confirmed"]
+           if e.event_type == "sms_confirmed"]
     assert len(bos) == 1
     assert json.loads(bos[0].payload_json)[
         "intra_candle_sequence_unknown"] is True
@@ -670,7 +669,7 @@ def test_full_replay_idempotency_events(alt_db, alt_cfg):
     # SMS (цепочка min=1.0 → high=2.0 → HL) подтверждается на свече
     # breakout — подтверждение с двумя основаниями, вход A и позднее вход B
     assert {t for t, _c in s1["events"]} >= {
-        "manipulation_started", "manipulation_ended", "sms_confirmed",
+        "manipulation_started", "manipulation_ended", "bos_confirmed",
         "breakout", "entry_a", "retest", "entry_b", "target_hit",
         "forming_started", "mature_frozen",
     }

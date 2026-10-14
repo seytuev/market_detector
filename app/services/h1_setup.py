@@ -164,6 +164,11 @@ def _blank_leg(direction: str, event: StructureEventDraft, epoch: int, as_of: in
         "data_quality": "ok",
         "new_revision": None,
         "break_open": int(event.break_candle_open_time),
+        "structure_rule_version": evidence.get("rule_version"),
+        "structure_depth": evidence.get("structure_depth"),
+        "parent_direction": evidence.get("parent_direction"),
+        "parent_origin_price": evidence.get("parent_origin_price"),
+        "parent_extreme_price": evidence.get("parent_extreme_price"),
     }
 
 
@@ -324,8 +329,8 @@ def apply_candle(state: dict, candle: Candle, events: list, pivots: list, candle
     dirty: list[dict] = []
     # §6.1 (правила v1): локальная нога и PD открываются от BOS и SMS
     # на равных; тип события сохраняется в фактах ноги
-    primary = [e for e in events if e.kind in ("BOS", "SMS") and e.stage == "primary"]
-    secondary = [e for e in events if e.kind in ("BOS", "SMS") and e.stage != "primary"]
+    primary = [e for e in events if e.kind == "SMS" or (e.kind == "BOS" and e.stage == "primary")]
+    secondary = [e for e in events if e.kind == "BOS" and e.stage != "primary"]
     if len({_dir_value(e.direction) for e in primary}) > 1:
         state["quality"] = "intrabar_order_unknown"
     primary.sort(key=lambda e: (_dir_value(e.direction), e.level_key))
@@ -536,6 +541,8 @@ class H1LegCursor:
                 while len(self._checkpoints) > 8:
                     self._checkpoints.pop(next(iter(self._checkpoints)))
         if closed:
+            db.set_meta(f"h1:main_structure:{self.instrument_id}",
+                        json.dumps(self.bear.machine.main_structure(), ensure_ascii=False))
             db.set_meta(
                 f"h1:leg:scanned:{self.instrument_id}",
                 str(int(closed[-1].close_time)),
@@ -552,6 +559,11 @@ def _evidence(leg: dict) -> str:
         "data_quality": leg.get("data_quality") or "ok",
         "break_open": leg.get("break_open"),
         "endpoint_status": leg.get("endpoint_status"),
+        "structure_rule_version": leg.get("structure_rule_version"),
+        "structure_depth": leg.get("structure_depth"),
+        "parent_direction": leg.get("parent_direction"),
+        "parent_origin_price": leg.get("parent_origin_price"),
+        "parent_extreme_price": leg.get("parent_extreme_price"),
         "source_candle_refs": [
             v for v in (leg.get("origin_at"), leg.get("break_open"), leg.get("endpoint_at"))
             if v is not None
@@ -1012,6 +1024,7 @@ def build_snapshot(db, cfg, instrument_id: int, as_of: int, mode: str,
         "structure_epoch_id": leg.get("structure_epoch_id"),
         "direction": leg["direction"],
         "trigger_bos": {
+            "kind": str(leg["trigger_bos_key"]).split(":", 1)[0].upper(),
             "key": leg["trigger_bos_key"],
             "at": leg["bos_at"],
             "broken_anchor_key": leg.get("broken_anchor_key"),
@@ -1096,7 +1109,8 @@ def setup_card_lines(snap: Optional[dict]) -> list[str]:
         if rendered:
             lines.append(title + rendered)
     if "context_missing" in (snap.get("exclusion_reasons") or []):
-        lines.append("BOS подтверждён, торговый контекст отсутствует. Это не готовый вход.")
+        kind = (snapshot.get("trigger_bos") or {}).get("kind") or "BOS/SMS"
+        lines.append(f"{kind} подтверждён, торговый контекст отсутствует. Это не готовый вход.")
     if snap.get("history"):
         lines.append("Исторический снимок. Диапазон на время события.")
     return lines

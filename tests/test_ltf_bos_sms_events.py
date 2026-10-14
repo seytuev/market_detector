@@ -68,7 +68,7 @@ def test_evidence_completeness_detect_level():
     # SERIES_A: медвежий primary + secondary (откат есть)
     candles = _series(SERIES_A_HL, SERIES_A_CLOSES)
     res = detect_breaks(_pivots_with_roles(candles), candles, Direction.BEAR,
-                        NOW)
+                        NOW, stop_on_cancellation=False)
     assert [(e.kind, e.stage) for e in res.events] == [
         ("BOS", "primary"), ("BOS", "secondary"),
     ]
@@ -77,15 +77,15 @@ def test_evidence_completeness_detect_level():
     # SERIES_B: самостоятельный SMS
     candles = _series(SERIES_B_HL, {18: 10.9})
     res = detect_breaks(_pivots_with_roles(candles), candles, Direction.BEAR,
-                        NOW)
+                        NOW, stop_on_cancellation=False)
     assert [e.kind for e in res.events] == ["SMS"]
     _assert_full_event(res.events[0])
     # §6.5: accompanying — обе записи с полным evidence
     candles = _series(SERIES_B_HL[:-1] + [(12.5, 8.8)], {18: 8.9})
     res = detect_breaks(_pivots_with_roles(candles), candles, Direction.BEAR,
-                        NOW)
+                        NOW, stop_on_cancellation=False)
     assert [(e.kind, e.accompanying) for e in res.events] == [
-        ("BOS", False), ("SMS", True),
+        ("BOS", False),
     ]
     for ev in res.events:
         _assert_full_event(ev)
@@ -104,7 +104,7 @@ def test_evidence_completeness_engine_reverse_break(db: Database, cfg,
     sc = db.list_ltf_scenarios(observation_id=obs.id)[0]
     events = db.list_ltf_structure_events(sc.id)
     assert {(e.kind, e.direction) for e in events} == {
-        ("BOS", Direction.BEAR), ("BOS", Direction.BULL),
+        ("BOS", Direction.BEAR), ("SMS", Direction.BULL),
     }
     for ev in events:
         _assert_full_event(ev)
@@ -120,7 +120,7 @@ def test_repeated_closes_beyond_level_single_event(db: Database, cfg,
     candles = _series(SERIES_H_HL, SERIES_H_CLOSES, instrument_id)
     # детектор: idx14 (7.9) и idx15-17 (середины < 9.0) — один primary BOS 9.0
     res = detect_breaks(_pivots_with_roles(candles), candles, Direction.BEAR,
-                        NOW)
+                        NOW, stop_on_cancellation=False)
     primaries = [e for e in res.events
                  if e.kind == "BOS" and e.stage == "primary"
                  and e.break_level == 9.0]
@@ -154,7 +154,7 @@ def test_accompanying_candle_single_zone_and_notification_set(
     sc = db.list_ltf_scenarios(observation_id=obs.id)[0]
     struct = db.list_ltf_structure_events(sc.id)
     assert [(e.kind, e.accompanying) for e in struct] == [
-        ("BOS", False), ("SMS", True),
+        ("BOS", False),
     ]
     for ev in struct:
         _assert_full_event(ev)
@@ -173,7 +173,7 @@ def test_accompanying_candle_single_zone_and_notification_set(
     assert [e.kind for e in _events(db, obs.id)] == ["bos"]
     assert len(db.list_ltf_entry_zones(instrument_id=instrument_id)) == n_zones
     assert len(db.list_ltf_scenario_entries(sc.id)) == n_entries
-    assert len(db.list_ltf_structure_events(sc.id)) == 2
+    assert len(db.list_ltf_structure_events(sc.id)) == 1
 
 
 def test_observations_created_only_by_htf_touch(db: Database, cfg,

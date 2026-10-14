@@ -21,9 +21,9 @@ def test_daily_sms_then_bos_requires_strict_daily_close():
     before = daily_structure(bars, bars[16].close_time)
     sms = daily_structure(bars, bars[17].close_time)
     bos = daily_structure(bars, bars[18].close_time)
-    assert not before["events"]
-    assert sms["direction"] == "bull"
-    assert sms["warning"]["direction"] == "bear"
+    assert [(e["kind"], e["direction"], e["level"]) for e in before["events"]] == [("BOS", "bull", 12)]
+    assert sms["direction"] == "bear"
+    assert sms["warning"] is None
     assert sms["last_event"]["kind"] == "SMS"
     assert sms["last_event"]["level"] == 7
     assert bos["last_event"]["kind"] == "BOS"
@@ -57,8 +57,9 @@ def test_confirmed_daily_pair_establishes_initial_structure():
     bars = daily_bars()
     result = daily_structure(bars, bars[13].close_time)
     assert result["direction"] == "bull"
-    assert result["basis"] == "pivot_pair"
-    assert not result["events"]
+    assert result["basis"] == "close_break"
+    assert result["last_event"]["kind"] == "BOS"
+    assert result["last_event"]["level"] == 12
 
 
 def test_missing_stale_and_gapped_daily_history():
