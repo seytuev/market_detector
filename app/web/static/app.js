@@ -3882,13 +3882,20 @@ async function fetchDeskExtras() {
       domainSync.adoptAll(HTF.DomainSync.statusEntries(assetsRes.versions));
     }
   }
+  const previousCurrent = deskData.current;
   deskData.current = cur;
   if (cur && cur.versions) {
     domainSync.adopt(`scenario:${id}`, cur.versions.scenario);
     domainSync.adopt('zones', cur.versions.zones);
     domainSync.adopt(`quote:${id}`, cur.versions.quote);
   }
-  if (state.chartMode === 'h1') {
+  const h1Changed = !state.h1Layers || state.h1Layers.snapshot?.instrument_id !== id ||
+    previousCurrent?.versions?.scenario !== cur?.versions?.scenario ||
+    previousCurrent?.versions?.zones !== cur?.versions?.zones ||
+    previousCurrent?.last_closed_h1 !== cur?.last_closed_h1 ||
+    previousCurrent?.last_processed_h1 !== cur?.last_processed_h1 ||
+    previousCurrent?.context_id !== cur?.context_id;
+  if (state.chartMode === 'h1' && h1Changed) {
     loadH1Markers().catch((e) => console.warn('h1 markers:', e));
   }
   renderDeskExtras();

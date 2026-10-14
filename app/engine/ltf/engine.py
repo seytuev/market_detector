@@ -23,6 +23,7 @@ import json
 import logging
 from dataclasses import dataclass, field, replace
 from typing import Any, Optional
+from functools import wraps
 
 from ...config import DetectorConfig
 from ...db import Database
@@ -69,6 +70,15 @@ from .ranges import (
 )
 from .market_structure import replay_structure
 from .structure import StructureBatch, sync_structure
+from .relevance import activation_history, prime_activation_history
+
+
+def _activation_session(fn):
+    @wraps(fn)
+    def run(self, *args, **kwargs):
+        with activation_history(self.db):
+            return fn(self, *args, **kwargs)
+    return run
 
 # §4/§15: инвалидация родителя — конверсия в Breaker или архив по пробою;
 # WORKED (90%) инвалидацией OB не является (приёмка п.17)
@@ -241,6 +251,7 @@ class LtfEngine:
     # Обработка закрытий H1 (§13)
     # ------------------------------------------------------------------ #
 
+    @_activation_session
     def process_h1_close(
         self, instrument_id: int, now_ms: Optional[int] = None
     ) -> LtfTickResult:
@@ -288,6 +299,7 @@ class LtfEngine:
                     mark_ideas_checkpoint(self.db, instrument_id)
                 return LtfTickResult()
         closed = self.db.get_candles(instrument_id, "H1")
+        prime_activation_history(self.db, instrument_id, closed)
         result = LtfTickResult()
         if not closed:
             return result
@@ -451,6 +463,7 @@ class LtfEngine:
                 _processing_mode(lag, grace_ms), lag, result,
             )
 
+    @_activation_session
     def replay_observation(self, observation_id: int, *, resume: bool = False) -> LtfTickResult:
         """§13: детерминированный прогон по сохранённым свечам тем же кодом.
 
@@ -464,6 +477,7 @@ class LtfEngine:
         if obs is None:
             return result
         closed = self.db.get_candles(obs.instrument_id, "H1")
+        prime_activation_history(self.db, obs.instrument_id, closed)
         # «сейчас» replay — голова истории, а не реальное время: иначе
         # detection_lag_ms событий зависел бы от wall-clock и повторный
         # replay давал бы другое состояние (§13: replay детерминирован)

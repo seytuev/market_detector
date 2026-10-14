@@ -34,5 +34,18 @@ vm.createContext(context); vm.runInContext(body, context);
   await context.reloadAll();
   assert.equal(candleLoads, 1, 'quote versions must not cause a duplicate candle load');
   assert.equal(structureLoads, 1, 'quote versions must not cause a duplicate structure load');
+  const current = {instrument_id: 1, versions: {scenario: 7, zones: 3, quote: 9},
+    last_closed_h1: 100, last_processed_h1: 100, context_id: 2};
+  state.h1Layers = {snapshot: {instrument_id: 1}};
+  context.deskData = {reqSeq: 0, current};
+  let bundle = {assets: {instruments: []}, view: {...current, versions: {...current.versions, quote: 10}}};
+  Object.assign(context, {api: async () => bundle, domainSync: {adopt() {}},
+    renderDeskExtras() {}, renderDeskScenario() {}});
+  vm.runInContext(source.slice(source.indexOf('async function fetchDeskExtras()'), source.indexOf('function scheduleDeskRefresh()')), context);
+  await context.fetchDeskExtras();
+  assert.equal(structureLoads, 1, 'price-age polling must preserve the existing chart');
+  bundle.view = {...bundle.view, versions: {...bundle.view.versions, scenario: 8}};
+  await context.fetchDeskExtras();
+  assert.equal(structureLoads, 2, 'a changed scenario must refresh the chart');
   console.log('H1 loading: single flight, visible snapshot preservation, instrument isolation passed');
 })().catch(error => {console.error(error); process.exitCode = 1;});

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from collections import OrderedDict
+from contextlib import contextmanager
 
 from ...models import Direction
 from .entries import (
@@ -30,10 +32,68 @@ class ActivationCut:
     extreme_before: Optional[float]
 
 
+class ActivationHistory:
+    """Immutable H1 sample shared by all activation cuts in one calculation."""
+    def __init__(self, candles):
+        self.candles = candles
+        self.indices = OrderedDict()
+        self.cuts = OrderedDict()
+
+    def cut(self, zone, as_of, cfg):
+        key = (zone.id, zone.type, zone.direction, zone.lower, zone.upper,
+               zone.formed_at, zone.confirmed_at, zone.validity == 'invalid',
+               zone.evidence.get('invalidated_at'), as_of, cfg.entry_reuse_max_depth)
+        if key in self.cuts:
+            self.cuts.move_to_end(key)
+            return self.cuts[key]
+        from .lifecycle_index import LifecycleIndex
+        if as_of not in self.indices:
+            self.indices[as_of] = LifecycleIndex(self.candles, as_of)
+        self.indices.move_to_end(as_of)
+        index = self.indices[as_of]
+        while len(self.indices) > 2:
+            self.indices.popitem(last=False)
+        value = _cut_result(*index.project(zone, cfg))
+        self.cuts[key] = value
+        if len(self.cuts) > 16384:
+            self.cuts.popitem(last=False)
+        return value
+
+
+@contextmanager
+def activation_history(db):
+    """Never reuse candle inputs across independent calculations/read snapshots."""
+    previous = getattr(db._local, 'activation_histories', None)
+    db._local.activation_histories = {} if previous is None else previous
+    try:
+        yield db._local.activation_histories
+    finally:
+        db._local.activation_histories = previous
+
+
+def prime_activation_history(db, instrument_id, candles):
+    histories = getattr(db._local, 'activation_histories', None)
+    if histories is not None:
+        histories[instrument_id] = ActivationHistory(candles)
+
+
+def _cut_result(z, meta):
+    if meta['data_quality'] == 'gap':
+        return ActivationCut(None, None, None)
+    return ActivationCut(z.max_test_depth, fvg_filled(z) if z.type == 'FVG' else False,
+                         z.test_extreme)
+
+
 def activation_cut(db, zone, as_of: int, cfg) -> ActivationCut:
     """Причинное восстановление глубины/заполнения на отсечку as_of по
     закрытым H1 (та же машина zone_at: без проекции настоящего в прошлое).
     Разрыв истории — unknown (None), а не «свежая» зона."""
+    histories = getattr(db._local, 'activation_histories', None)
+    if histories is not None:
+        if zone.instrument_id not in histories:
+            histories[zone.instrument_id] = ActivationHistory(
+                db.get_candles(zone.instrument_id, 'H1'))
+        return histories[zone.instrument_id].cut(zone, as_of, cfg)
     candles = []
     if zone.confirmed_at is not None:
         start = int(zone.formed_at + HOUR if zone.is_level else zone.confirmed_at)
@@ -43,13 +103,7 @@ def activation_cut(db, zone, as_of: int, cfg) -> ActivationCut:
             zone.instrument_id, "H1", start_ms=start, end_ms=int(as_of),
         )
     z, meta = zone_at(zone, candles, as_of, cfg)
-    if meta["data_quality"] == "gap":
-        return ActivationCut(None, None, None)
-    return ActivationCut(
-        z.max_test_depth,
-        fvg_filled(z) if z.type == "FVG" else False,
-        z.test_extreme,
-    )
+    return _cut_result(z, meta)
 
 
 def relevance_reason(zone, cfg, liquidity_tests=(), cut: Optional[ActivationCut] = None):

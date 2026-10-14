@@ -52,3 +52,38 @@ def test_shared_entry_history_matches_scalar_discovery():
                 indexed = detect_entry_zones(bars, movement, [], direction, cfg,
                                              context_until=cap, confirmed_after=after, history=history)
                 assert indexed == reference
+
+
+@pytest.mark.parametrize('kind', ['OB', 'FVG', 'BSL', 'SSL'])
+@pytest.mark.parametrize('direction', list(Direction))
+def test_activation_history_matches_scalar_without_per_zone_reads(kind, direction):
+    from types import SimpleNamespace
+    from threading import local
+    from app.engine.ltf.relevance import activation_cut, activation_history, prime_activation_history
+    cfg = DetectorConfig()
+    start = 1_800_000_000_000 // H1_MS * H1_MS
+    bars = [make_candle(start+i*H1_MS, 105, 108+i, 102-i, 105, 'H1') for i in range(30)]
+    bars.pop(12)
+    reads = []
+    def load(*args, **kwargs):
+        reads.append(args)
+        return bars
+    db = SimpleNamespace(_local=local(), get_candles=load)
+    zone = LtfEntryZone(1, 1, kind, direction, 100, 100 if kind in ('BSL','SSL') else 110,
+                        start, start+H1_MS-1)
+    cuts = [start+3*H1_MS-1, start+11*H1_MS-1, start+20*H1_MS-1]
+    expected = [activation_cut(db, zone, at, cfg) for at in cuts]
+    reads.clear()
+    with activation_history(db):
+        prime_activation_history(db, 1, bars)
+        for _ in range(100):
+            assert [activation_cut(db, zone, at, cfg) for at in cuts] == expected
+        assert reads == []
+    assert db._local.activation_histories is None
+    # A later independent snapshot must observe repaired/revised inputs.
+    bars[:] = [replace(c, high=106, low=104) for c in bars]
+    changed = activation_cut(db, zone, cuts[0], cfg)
+    reads.clear()
+    with activation_history(db):
+        assert activation_cut(db, zone, cuts[0], cfg) == changed
+        assert len(reads) == 1

@@ -33,7 +33,9 @@ def projection_only(db):
     previous = getattr(db._local, 'projection_only', False)
     db._local.projection_only = True
     try:
-        yield
+        from ..engine.ltf.relevance import activation_history
+        with activation_history(db):
+            yield
     finally:
         db._local.projection_only = previous
 
