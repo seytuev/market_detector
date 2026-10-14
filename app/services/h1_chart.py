@@ -22,6 +22,7 @@ from ..engine.ltf.entries import (
     fvg_fill_status,
 )
 from ..engine.ltf.pivots import PivotCandidate
+from ..engine.ltf.market_structure import replay_structure
 from ..engine.ltf.ranges import current_range
 from ..models import Direction, now_ms
 from ..models_ltf import RULE_VERSION_LTF, LtfEntryZone, LtfPivot
@@ -181,7 +182,7 @@ def annotate_epochs(events: list[StructureEventDraft]) -> None:
     for ev in ordered:
         continuation = False
         before = direction
-        if ev.kind == "BOS" and ev.stage == "primary":
+        if ev.kind in ("BOS", "SMS") and ev.stage == "primary":
             if direction is not None and ev.direction == direction:
                 continuation = True
             else:
@@ -210,7 +211,7 @@ def structure_transition(
     """
     primaries = [
         e for e in events
-        if e.kind == "BOS" and e.stage == "primary" and e.occurred_at <= as_of
+        if e.kind in ("BOS", "SMS") and e.stage == "primary" and e.occurred_at <= as_of
     ]
     primaries.sort(key=lambda e: (e.occurred_at, e.level_key))
     if not primaries:
@@ -707,7 +708,7 @@ def _scan_zones(
     found: list[dict[str, Any]] = []
     seen = set()
     for ev in events:
-        if ev.kind != "BOS" or ev.occurred_at > as_of:
+        if ev.kind not in ("BOS", "SMS") or ev.occurred_at > as_of:
             continue
         movement = build_movement(0, pivots, candles, ev, ev.direction, lookback)
         if movement is None:
@@ -806,7 +807,8 @@ def assemble_h1_layers(
     load_from = horizon
     if window_from is not None:
         load_from = min(load_from, window_from - HISTORY_PAD_MS)
-    raw_pivots = db.list_ltf_pivots(instrument_id, since_ms=load_from)
+    # Display windows never select the main structure's calculation history.
+    raw_pivots = db.list_ltf_pivots(instrument_id)
     # Текущая роль уже верна, если её назначили не позже as_of.
     # Журнал нужен только опорам, которые пересмотрели позже этой точки.
     need_log = [
@@ -815,7 +817,7 @@ def assemble_h1_layers(
     ]
     logs = db.list_ltf_pivot_role_logs(instrument_id, need_log)
     candles = db.get_candles(
-        instrument_id, "H1", start_ms=load_from, end_ms=moment, closed_only=False,
+        instrument_id, "H1", end_ms=moment, closed_only=False,
     )
     cursors_raw = db.get_meta(f"ltf:h1:last_close:{instrument_id}")
     calc_done = cursors_raw is not None or bool(raw_pivots)
@@ -834,13 +836,20 @@ def assemble_h1_layers(
             candidates.append(_to_candidate(pivot, role))
         rows.append(_pivot_row(pivot, role))
 
+    machine, calculated_events = replay_structure(candidates, candles, moment)
+    for pivot in candidates:
+        pivot.role = machine.roles.get((pivot.kind, pivot.pivot_at), "none")
+        role_by_id[pivot.pivot_id] = pivot.role
+    for row in rows:
+        row["role"] = machine.roles.get((row["kind"], row["pivot_at"]), row["role"])
+
     marker_pack = select_pivot_markers(
         rows, as_of=moment, mode=points, window_from=window_from,
         window_to=window_to, include_diagnostic=diagnostic,
         limit=MARKER_LIMIT if points != "history" else max(1, limit),
         page=page,
     )
-    events = scan_instrument_structure(candidates, candles, moment, since_ms=0)
+    events = calculated_events
     annotate_epochs(events)
     by_id = {p.pivot_id: p for p in candidates if p.pivot_id is not None}
     links = _scenario_index(db, instrument_id)
@@ -984,7 +993,7 @@ def assemble_h1_layers(
         r for r in structural_in_sample if r.get("id") in shown_structural_ids
     ]
     scenario_open = _scenario_is_open(db, instrument_id, context_id)
-    from .d1_structure import project_daily
+    from .d1_structure import project_daily, project_weekly
     from .structure_sync import synchronize_scenario
     daily = project_daily(db, instrument_id, moment)
     reference = candles[-1].close if candles else None
@@ -996,6 +1005,8 @@ def assemble_h1_layers(
     ideas.sort(key=lambda idea: rank[idea["structure_sync"]["priority"]])
     return {
         "daily_structure": daily,
+        "weekly_structure": project_weekly(db, instrument_id, moment),
+        "main_structure": machine.main_structure(),
         "pivot_markers": marker_pack["points"],
         "pivot_selection": marker_pack["selection"],
         "anchor_refs": anchors,

@@ -18,7 +18,9 @@ i+r) хранятся раздельно: pivot известен только п
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from collections import deque
 from decimal import Decimal
+from functools import lru_cache
 from typing import Any, Optional
 
 from ...models import Candle, open_times_follow
@@ -93,13 +95,90 @@ def pivot_candidates_at(
     return out
 
 
+@lru_cache(maxsize=65_536, typed=True)
+def _price_decimal(value: float) -> Decimal:
+    # Replay compares the same source prices across many prefixes. Keep the
+    # exact conversion, but avoid rebuilding three Decimals per comparison.
+    return Decimal(str(value))
+
+
 def same_tick(a: float, b: float, tick: float) -> bool:
     """Равенство экстремумов в ЦЕЛЫХ шагах цены (§10.2): |a−b| < tick
     (один тик-шаг). Точная Decimal-арифметика; процентный допуск не
     используется."""
     if tick <= 0:
         return False
-    return abs(Decimal(str(a)) - Decimal(str(b))) < Decimal(str(tick))
+    return abs(_price_decimal(a) - _price_decimal(b)) < _price_decimal(tick)
+
+
+def _plateau_candidate(closed, i, j, side, level, left, right):
+    win_start, win_end = max(0, i - left), j + right
+    members = closed[i:j + 1]
+    if win_end >= len(closed) or not all(
+        open_times_follow(a.open_time, b.open_time, members[0].timeframe)
+        for a, b in zip(members, members[1:])
+    ):
+        return None
+    outside = closed[win_start:i] + closed[j + 1:win_end + 1]
+    if not all(level > c.high if side == "high" else level < c.low for c in outside):
+        return None
+    return PivotCandidate(
+        instrument_id=closed[i].instrument_id, price=level, kind=side,
+        pivot_at=closed[j].open_time, candle_open_time=closed[j].open_time,
+        confirmed_at=closed[win_end].close_time, left=left, right=right,
+        state="confirmed", evidence={
+            "plateau": True, "level": level, "start_open": closed[i].open_time,
+            "end_open": closed[j].open_time, "members": [c.open_time for c in members],
+            "revision": len(members) - 1,
+        },
+    )
+
+
+class _PlateauCursor:
+    """Append-only closed history: finalized groups never change.
+
+    A trailing group stays unconfirmed until it ends and its entire right
+    window is available. StructureBatch resets this cursor on revisions.
+    """
+
+    def __init__(self, left, right, tick):
+        self.params = (left, right, tick)
+        self.processed = 0
+        self.groups = {"high": None, "low": None}
+        self.pending = {"high": deque(), "low": deque()}
+        self.candidates = []
+        self.by_bounds = {}
+
+    def update(self, closed):
+        left, right, tick = self.params
+        if right <= 0:
+            return find_plateaus(closed, left, right, tick)
+        for index in range(self.processed, len(closed)):
+            candle = closed[index]
+            for side in ("high", "low"):
+                level = getattr(candle, side)
+                group = self.groups[side]
+                if group is not None and same_tick(level, group[2], tick):
+                    self.groups[side] = (group[0], index, group[2])
+                else:
+                    if group is not None and group[1] > group[0]:
+                        self.pending[side].append(group)
+                    self.groups[side] = (index, index, level)
+                queue = self.pending[side]
+                while queue and queue[0][1] + right <= index:
+                    start, end, price = queue.popleft()
+                    candidate = _plateau_candidate(closed, start, end, side, price, left, right)
+                    if candidate is None:
+                        continue
+                    key = (candidate.evidence["start_open"], candidate.evidence["end_open"])
+                    opposite = self.by_bounds.get(key)
+                    if opposite is not None and opposite.kind != side:
+                        opposite.state = candidate.state = "ambiguous"
+                        opposite.evidence["both_sides"] = candidate.evidence["both_sides"] = True
+                    self.by_bounds[key] = candidate
+                    self.candidates.append(candidate)
+        self.processed = len(closed)
+        return sorted(self.candidates, key=lambda p: (p.pivot_at, p.kind))
 
 
 def find_plateaus(
@@ -133,37 +212,9 @@ def find_plateaus(
             if j == i:
                 i += 1
                 continue
-            # окно вне группы: строгое доминирование (как у pivot)
-            win_start = max(0, i - left)
-            win_end = j + right
-            members = closed[i : j + 1]
-            if win_end < n and all(
-                open_times_follow(members[k].open_time, members[k + 1].open_time,
-                                  members[0].timeframe)
-                for k in range(len(members) - 1)
-            ):
-                outside = closed[win_start:i] + closed[j + 1 : win_end + 1]
-                dominates = (
-                    all(level > w.high for w in outside) if side == "high"
-                    else all(level < w.low for w in outside)
-                )
-                if dominates:
-                    out.append(PivotCandidate(
-                        instrument_id=closed[i].instrument_id,
-                        price=level, kind=side,
-                        pivot_at=closed[j].open_time,
-                        candle_open_time=closed[j].open_time,
-                        confirmed_at=closed[win_end].close_time,
-                        left=left, right=right,
-                        state="confirmed",
-                        evidence={
-                            "plateau": True, "level": level,
-                            "start_open": closed[i].open_time,
-                            "end_open": closed[j].open_time,
-                            "members": [c.open_time for c in members],
-                            "revision": len(members) - 1,
-                        },
-                    ))
+            candidate = _plateau_candidate(closed, i, j, side, level, left, right)
+            if candidate is not None:
+                out.append(candidate)
             i = j + 1
     # один диапазон — и high-, и low-плато: обе стороны ambiguous
     for a in out:

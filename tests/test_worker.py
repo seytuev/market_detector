@@ -177,6 +177,8 @@ async def test_stale_and_recovery_service_messages():
     adapter.fail = False
     adapter.candles = _fresh_candles()
     await worker.poll_once()
+    for ins in db.get_instruments(enabled_only=True):
+        assert await worker.market_queue.wait_idle(ins.id, 5.0)
     assert db.conn.execute("SELECT recovered_at FROM notification_incident").fetchone()[0] is not None
     await worker.data_sync._write(db.conn.execute, "UPDATE notification_packet SET due_at=0")
     db.conn.commit()

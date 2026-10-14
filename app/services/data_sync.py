@@ -96,6 +96,18 @@ class DataSync:
 
     def recover_interrupted(self):
         """Call only after the worker has acquired calculation ownership."""
+        # A crash can leave these markers outside a manually started job.
+        # The old owner is gone; retaining replaying=1 would make every
+        # subsequent successful sync restore the interrupted replay flag.
+        for key in self.db.meta_prefix("replaying:"):
+            if self.db.get_meta(key) == "1":
+                self.db.set_meta(key, "0")
+        for key in self.db.meta_prefix("data_sync:channel:"):
+            channel = read_json(self.db, key)
+            if channel and channel.get("processing"):
+                channel.update(processing=False, error="interrupted_by_restart",
+                               error_stage="processing", last_error_at=now_ms())
+                self.db.set_meta(key, json.dumps(channel, ensure_ascii=False))
         previous = read_json(self.db, JOB_KEY)
         if previous and previous.get("status") in ACTIVE:
             previous.update(status="failed", finished_at=now_ms(), error="interrupted_by_restart")
@@ -198,12 +210,14 @@ class DataSync:
                 delay = self._retry_until.get(venue, 0) - time.monotonic()
                 if delay > self.request_timeout_seconds:
                     raise AdapterError("rate_limited: ожидание разрешения биржи", retry_after=delay)
-                if delay > 0:
+                while delay > 0:
                     try:
                         await asyncio.wait_for(self.worker._stop.wait(), delay)
                         raise SyncUnavailable("worker_stopping")
                     except asyncio.TimeoutError:
-                        pass
+                        # Windows timers may wake before the monotonic
+                        # deadline. Never send a request ahead of Retry-After.
+                        delay = self._retry_until.get(venue, 0) - time.monotonic()
                 started = time.monotonic()
                 try:
                     result = await asyncio.wait_for(fn(*args, **kwargs), self.request_timeout_seconds)
@@ -622,7 +636,8 @@ class DataSync:
                 # входные метки — внутри try: отмена (shutdown/дедлайн job)
                 # обязана попасть в уборку processing/stale маркеров ниже
                 await self._write(self._save_channel, ins, tf, result)
-                await self._write(self.worker._set_replaying, ins.id, True)
+                if not was_replaying:
+                    await self._write(self.worker._set_replaying, ins.id, True)
                 # Хвост канала — ограниченное окно SQL (§12, этап 7):
                 # окно запроса к источнику и без того ограничено сканом
                 # разрывов по 200 последним закрытым (ниже), а снапшот before
@@ -705,7 +720,10 @@ class DataSync:
                 result["processing_duration_s"] = round(time.monotonic() - processing_started, 3)
                 result.update(processing=False, error=None, error_stage=None, finished_at=now_ms())
                 await self._write(self._save_channel, ins, tf, result)
-                await self._write(self.worker._set_replaying, ins.id, was_replaying)
+                # A borrowed marker belongs to restore/backfill. That owner
+                # may have finished while this request was running.
+                if not was_replaying:
+                    await self._write(self.worker._set_replaying, ins.id, False)
                 status = self.channel_status(ins, tf)
                 await self.worker._check_freshness(ins, tf)
                 await self._write(
@@ -747,7 +765,10 @@ class DataSync:
                 await self._write(self.db.set_meta, f"stale:{ins.id}:{tf}", "1")
                 raise
             finally:
-                await self._write(self.worker._set_replaying, ins.id, was_replaying)
+                # A borrowed marker belongs to restore/backfill. That owner
+                # may have finished while this request was running.
+                if not was_replaying:
+                    await self._write(self.worker._set_replaying, ins.id, False)
 
     async def boundary_tick(self, at=None):
         """Тик у границ баров (§10, AC08): каналы, которым пора, синхронизируются

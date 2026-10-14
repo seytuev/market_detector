@@ -24,8 +24,9 @@ from .breaks import (
     StructureScanResult,
     detect_breaks,
 )
-from .pivots import PivotCandidate, confirmed_pivots, find_h1_pivots, find_plateaus, pivot_candidates_at
-from .roles import RoleChange, assign_roles
+from .pivots import PivotCandidate, _PlateauCursor, confirmed_pivots, find_h1_pivots, find_plateaus, pivot_candidates_at
+from .roles import RoleChange, RoleResult
+from .market_structure import StructureMachine, replay_structure
 
 
 @dataclass
@@ -74,10 +75,22 @@ class StructureBatch:
         self.open_times: list[int] = []
         self.range_memo: dict[tuple, Any] = {}
         self.structure_gen = 0
+        self._plateau_cursor = None
+        self._role_machine = StructureMachine()
+        self._role_pending = []
+        self._role_avail_len = 0
+        self._role_pi = 0
+        self._role_ci = 0
 
     # ---- pivots/avail/роли (инкрементально) ----
 
     def _reset(self, candles: list[Candle], left: int, right: int) -> None:
+        self._plateau_cursor = None
+        self._role_machine = StructureMachine()
+        self._role_pending = []
+        self._role_avail_len = 0
+        self._role_pi = 0
+        self._role_ci = 0
         self.closed = sorted((c for c in candles if c.closed),
                              key=lambda c: c.open_time)
         self.cands = find_h1_pivots(self.closed, left, right)
@@ -89,6 +102,12 @@ class StructureBatch:
         self.structure_gen += 1
         self._fp = (left, right, len(self.closed),
                     self.closed[-1].open_time if self.closed else None)
+
+    def _plateaus_for(self, left, right, tick):
+        params = (left, right, tick)
+        if self._plateau_cursor is None or self._plateau_cursor.params != params:
+            self._plateau_cursor = _PlateauCursor(*params)
+        return self._plateau_cursor.update(self.closed)
 
     def pivots_for(
         self, candles: list[Candle], left: int, right: int, tick: float = 0
@@ -102,7 +121,7 @@ class StructureBatch:
         if self._fp is None or self._fp[0] != left or self._fp[1] != right:
             self._reset(candles, left, right)
             if tick > 0:
-                self.cands = self.cands + find_plateaus(self.closed, left, right, tick)
+                self.cands = self.cands + self._plateaus_for(left, right, tick)
                 self.cands.sort(key=lambda p: (p.pivot_at, p.kind))
             self.new_cands = list(self.cands)
             return self.cands
@@ -128,7 +147,7 @@ class StructureBatch:
         if not same_prefix:
             self._reset(candles, left, right)
             if tick > 0:
-                self.cands = self.cands + find_plateaus(self.closed, left, right, tick)
+                self.cands = self.cands + self._plateaus_for(left, right, tick)
                 self.cands.sort(key=lambda p: (p.pivot_at, p.kind))
             self.new_cands = list(self.cands)
             return self.cands
@@ -146,9 +165,9 @@ class StructureBatch:
         self._fp = (left, right, len(closed),
                     closed[-1].open_time if closed else None)
         if tick > 0:
-            # плато: полный пересчёт групп текущей истории (O(n) на свечу);
-            # ревизии хвостовой группы заменяют прежние формы той же группы
-            plateau = find_plateaus(closed, left, right, tick)
+            # Finalized groups are immutable for an appended prefix. Scan
+            # only new bars and groups whose right window just completed.
+            plateau = self._plateaus_for(left, right, tick)
             new_forms = {
                 (p.kind, p.evidence["start_open"], p.pivot_at, p.confirmed_at)
                 for p in plateau
@@ -192,20 +211,23 @@ class StructureBatch:
         return self.avail
 
     def roles_for(self):
-        """Роли avail (пересчёт только при росте). Пересмотр роли старого
-        pivot → инвалидация курсоров и мемо диапазонов."""
-        if len(self.avail) == len(self._roles):
+        """Causal roles from the same close-driven machine as BOS/SMS."""
+        self._role_pending.extend(sorted(self.avail[self._role_avail_len:],
+                                        key=lambda p: (p.confirmed_at, p.pivot_at, p.kind)))
+        self._role_avail_len = len(self.avail)
+        for candle in self.closed[self._role_ci:]:
+            while (self._role_pi < len(self._role_pending)
+                   and self._role_pending[self._role_pi].confirmed_at <= candle.close_time):
+                self._role_machine.absorb(self._role_pending[self._role_pi])
+                self._role_pi += 1
+            self._role_machine.on_candle(candle, candle.close_time)
+        self._role_ci = len(self.closed)
+        roles = [self._role_machine.roles.get((p.kind, p.pivot_at), "none") for p in self.avail]
+        if roles == self._roles:
             return None
-        res = assign_roles(self.avail)
-        old = self._roles
-        revised = any(res.roles[i] != old[i] for i in range(len(old)))
-        self._roles = res.roles
-        if revised:
-            self.cursors.clear()
-            self._cursor_params.clear()
-            self.range_memo.clear()
-            self.structure_gen += 1
-        return res
+        self._roles = roles
+        self.range_memo.clear()
+        return RoleResult(roles, [])
 
     def existing_for(self, db: Database, instrument_id: int) -> dict:
         """(kind, pivot_at) → строка ltf_pivot; перечитывается только при
@@ -335,14 +357,15 @@ def sync_structure(
     avail = confirmed_pivots(cands, now_ms)
     applied: list[RoleChange] = []
     if avail:
-        res = assign_roles(avail)
+        machine, _ = replay_structure(avail, candles, now_ms)
+        res = RoleResult([machine.roles.get((p.kind, p.pivot_at), "none") for p in avail], [])
         # в БД пишем только финальную роль каждого pivot и только если она
         # отличается от сохранённой: промежуточные пересмотры внутри одного
         # пересчёта (none→HL→internal_low) не были состояниями БД и не должны
         # порождать строки лога при каждом sync
         for i, p in enumerate(avail):
             new_role = res.roles[i]
-            if new_role == "none" or p.role == new_role:
+            if p.role == new_role:
                 continue  # роль не присвоена (§5.2) или не изменилась
             if persist_roles:
                 db.update_ltf_pivot_role(p.pivot_id, new_role, changed_at=now_ms)
@@ -442,7 +465,7 @@ def _sync_structure_batch(
     if res is not None:
         for i, p in enumerate(avail):
             new_role = res.roles[i]
-            if new_role == "none" or p.role == new_role:
+            if p.role == new_role:
                 continue  # роль не присвоена (§5.2) или не изменилась
             if persist_roles:
                 db.update_ltf_pivot_role(p.pivot_id, new_role, changed_at=now_ms)

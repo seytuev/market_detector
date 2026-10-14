@@ -41,14 +41,14 @@ const draw = source.slice(source.indexOf('function drawDailyStructure('), source
       });
     };
     let text = await render();
-    assert.match(text, /HH/); assert.match(text, /BOS/); assert.match(text, /SMS/);
+    assert.match(text, /D1 HH/); assert.match(text, /D1 BOS/); assert.match(text, /D1 SMS/);
     await page.evaluate(() => {
       state.instrumentId = 1;
       window.deskData = {current:{instrument:{id:1},asset:{trade_setup:{daily_alignment:{target:{
         price:12, type:'OB', text:'Цель до OB D1 12'
       }}}}}};
     });
-    assert.match(await render(), /Цель · OB/);
+    assert.match(await render(), /Цель · OB D1/);
     await page.evaluate(() => $('layer-structure-d1').checked = false);
     assert.equal(await render(), '');
     await page.evaluate(() => {
@@ -56,7 +56,7 @@ const draw = source.slice(source.indexOf('function drawDailyStructure('), source
       state.candles = fixture.bars.flatMap(b => Array.from({length:24}, (_, i) => ({...b,time:b.time+i*3600})));
       state.candleSeries.setData(state.candles); state.chart.timeScale().fitContent();
     });
-    assert.match(await render(), /BOS/);
+    assert.match(await render(), /D1 BOS/);
     await page.evaluate(() => {
       state.candles = fixture.bars.filter((b,i) => i%7===0).map((b,i) => {
         const week = fixture.bars.slice(i*7, i*7+7);
@@ -64,7 +64,7 @@ const draw = source.slice(source.indexOf('function drawDailyStructure('), source
       });
       state.candleSeries.setData(state.candles); state.chart.timeScale().fitContent();
     });
-    assert.match(await render(), /BOS/);
+    assert.match(await render(), /D1 BOS/);
     // History view must filter before limiting the last 20 points / 50 events.
     await page.evaluate(() => {
       const day = 86400;
@@ -84,9 +84,9 @@ const draw = source.slice(source.indexOf('function drawDailyStructure('), source
       state.chart.timeScale().setVisibleRange({from:fixture.bars[0].time, to:fixture.bars.at(-1).time});
     });
     text = await render();
-    assert.match(text, /HH/); assert.match(text, /BOS/);
+    assert.match(text, /D1 HH/); assert.match(text, /D1 BOS/);
     await page.evaluate(() => state.dailyStructure = null);
-    assert.match(await render(), /Структура не загружена/);
+    assert.match(await render(), /Структура D1 не загружена/);
     assert.deepEqual(errors, []);
     console.log('D1 chart: daily/hourly/weekly, history viewport, layer toggle and missing-data status passed');
   } finally { await browser.close(); }

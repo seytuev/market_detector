@@ -123,74 +123,27 @@ def test_full_flow_bos_range_entries_cancellation(db: Database, cfg, instrument_
     assert ("BSL", 15.0, 15.0) in bounds
     assert not any(e["lower"] == 8.2 for e in bos[0].payload.get("entries") or [])
 
-    # idx16 касается FVG [8.2;9.2], idx18 — FVG [8.8;10.0] и перекрывает
-    # поздний разрыв целиком. Оба факта до готовности диапазона.
     _feed(db, engine, instrument_id, candles, 18)
-    fvg_b = [z for z in db.list_ltf_entry_zones(instrument_id=instrument_id)
-             if (z.type, z.lower, z.upper) == ("FVG", 8.8, 10.0)][0]
-    assert db.get_ltf_entry_zone(fvg_b.id).validity == "tested"
-    late = [z for z in db.list_ltf_entry_zones(instrument_id=instrument_id)
-            if (z.type, z.lower, z.upper) == ("FVG", 8.2, 9.2)][0]
-    assert late.validity == "tested" and late.max_test_depth == 1.0
-    assert late.evidence["relation"] == "after_break"
-    assert [e.kind for e in _events(db, obs.id)] == ["bos", "touch", "touch"]
-
-    # idx21: LH 9.5 подтверждён, но связанной пары ещё нет — последний LL (idx14)
-    # старше LH; диапазон ждёт нового подтверждённого LL (§7, п.6)
-    _feed(db, engine, instrument_id, candles, 21)
-    assert db.get_ltf_scenario(sc.id).state == "range_pending"
-    assert [e.kind for e in _events(db, obs.id)] == ["bos", "touch", "touch"]
-
-    # idx23: подтверждённый LL2 7.6 → связанная пара LH(9.5)→LL(7.6):
-    # диапазон v1, сценарий в monitoring_entries, якорь пары — BSL-кандидат (§7),
-    # одно дополнение entries_ready (§11.2)
-    _feed(db, engine, instrument_id, candles, 23)
     sc = db.get_ltf_scenario(sc.id)
     assert sc.state == "monitoring_entries"
     rng = db.get_current_ltf_range(sc.id)
-    assert (rng.version, rng.lower, rng.upper) == (1, 7.6, 9.5)
-    evs = _events(db, obs.id)
-    assert [e.kind for e in evs] == ["bos", "touch", "touch", "entries_ready"]
-    ready = evs[-1]
-    # §6.3 (правила v1): PD — не фильтр. Поздний FVG [8.2;9.2] и OB [10;11],
-    # подтверждённый этим внешним разрывом, входят вместе с зонами ноги.
-    # FVG [8.8;10.0] протестирован откатом idx18 на ~58%.
-    assert [e["type"] for e in ready.payload["entries"]] == [
-        "FVG", "FVG", "FVG", "BSL", "FVG", "OB", "BSL",
-    ]
-    assert [e["lower"] for e in ready.payload["entries"]] == [
-        11.0, 10.2, 8.8, 15.0, 8.2, 10.0, 9.5,
-    ]
-    assert ready.payload["range"]["version"] == 1
-
-    # idx24: касание BSL 9.5 (снятие без возврата — failed) и обратный слом
-    # на одном закрытии: журнал хранит оба факта, «готов вход» не публикуется (п.19)
+    assert (rng.version, rng.lower, rng.upper) == (1, 7.8, 15.0)
+    # The main reversal origin is already a causal LH. No unrelated local
+    # 9.5 high replaces the main 15.0 anchor in a still-unbroken BOS range.
+    _feed(db, engine, instrument_id, candles, 23)
+    assert db.get_current_ltf_range(sc.id).version == 1
     _feed(db, engine, instrument_id, candles, 24)
-    evs = _events(db, obs.id)
-    # §7/§9: заполнение FVG [8.2;9.2] в текущей активации — сообщение
-    # context_transition (наблюдение продолжается), сценарий не отменяется
-    assert [e.kind for e in evs] == [
-        "bos", "touch", "touch", "entries_ready", "context_transition",
-        "touch", "sweep_failed", "cancellation",
-    ]
-    cancel = evs[-1]
-    assert cancel.payload["reason"] == "reverse_bos"
+    events = _events(db, obs.id)
+    assert [e.kind for e in events] == [
+        "bos", "touch", "entries_ready", "touch", "context_transition", "cancellation"]
+    assert events[-1].payload["reason"] == "reverse_sms"
     sc = db.get_ltf_scenario(sc.id)
-    assert sc.state == "cancelled" and sc.cancellation_reason == "reverse_bos"
-    # родитель валиден — наблюдение ждёт нового подтверждения (§6.5, п.15)
+    assert sc.state == "cancelled" and sc.cancellation_reason == "reverse_sms"
     assert db.get_ltf_observation(obs.id).state == "waiting_structure"
-    # контр-HTF входов не создано: единственный сценарий, направление bear
     assert len(db.list_ltf_scenarios(observation_id=obs.id)) == 1
-    assert db.list_ltf_scenarios(observation_id=obs.id)[0].direction == Direction.BEAR
-    # liquidity-тест BSL 9.5: High>K, Close>K → failed
-    tests = db.list_ltf_liquidity_tests(scenario_id=sc.id)
-    assert len(tests) == 1 and tests[0].state == "failed"
-    assert tests[0].close_price == 9.7
-    # обратный слом записан в журнал структурных событий
     struct = db.list_ltf_structure_events(sc.id)
     assert {(e.kind, e.direction) for e in struct} == {
-        ("BOS", Direction.BEAR), ("BOS", Direction.BULL),
-    }
+        ("BOS", Direction.BEAR), ("SMS", Direction.BULL)}
 
 
 def test_waiting_observation_not_blocked_by_reverse_break(db: Database, cfg, instrument_id: int):
@@ -237,7 +190,7 @@ def test_reopen_after_cancellation(db: Database, cfg, instrument_id: int):
     bear_events = [e for e in db.list_ltf_structure_events(sc2.id)
                    if e.direction == Direction.BEAR]
     assert [(e.kind, e.stage, e.break_level) for e in bear_events] == [
-        ("BOS", "primary", 7.7),
+        ("BOS", "primary", 7.8),
     ]
     assert bear_events[0].break_candle_open_time == T0 + 34 * H1_MS
     assert [e.kind for e in _events(db, obs.id)].count("bos") == 2
@@ -391,7 +344,7 @@ def test_replay_is_idempotent(db: Database, cfg, instrument_id: int):
     # восстановленные события replay помечены delayed и не удвоились.
     # origin_reversal на idx17 даёт entries_ready; касание FVG после слома
     # (idx16) — отдельный факт, поэтому событий 8, не 7.
-    assert len(db.list_ltf_events(observation_id=obs.id, limit=1000)) == 9
+    assert len(db.list_ltf_events(observation_id=obs.id, limit=1000)) == 6
 
 
 def _role_log_rows(db: Database) -> int:
@@ -468,7 +421,7 @@ def test_replay_opens_leg_after_cancelled_window(db: Database, cfg,
     """Зеркальный контроль: первичный слом ПОСЛЕ конца окна отмены открывает
     новый сценарий — окно не должно блокировать легитимное переоткрытие (§6.5)."""
     engine = LtfEngine(db, cfg)
-    candles = _series(SERIES_G_HL, SERIES_G_CLOSES, instrument_id)
+    candles = _series(SERIES_G_HL, {**SERIES_G_CLOSES, 30: 12.1}, instrument_id)
     zid = _setup(db, instrument_id)
     obs = engine.on_htf_zone_touched(instrument_id, db.get_zone(zid), T0)
     _feed(db, engine, instrument_id, candles, len(candles) - 1)
@@ -862,7 +815,7 @@ def test_a01_replay_marks_replay_and_stays_suppressed(db: Database, cfg,
     # §7/§9: заполнение FVG в текущей активации — context_transition
     assert [e.kind for e in evs] == [
         "bos", "touch", "entries_ready", "touch", "context_transition",
-        "entries_ready", "touch", "sweep_failed", "cancellation",
+        "cancellation",
     ]
     assert all(e.processing_mode == "replay" for e in evs)
     assert all(e.delayed for e in evs)

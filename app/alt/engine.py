@@ -409,150 +409,40 @@ class StructureEvent:
 
 
 class StructureTracker:
-    """Структура D1 по подтверждённым pivots 3+3 (по теням, §10).
+    """D1 adapter of the same nested BOS/SMS machine used by H1/W1."""
 
-    Роли HH/HL/LH/LL — структурные роли относительно предыдущего подтверждённого
-    pivot того же типа, а не подписи любого локального экстремума.
+    def __init__(self):
+        from ..engine.ltf.market_structure import StructureMachine
+        self.machine = StructureMachine()
+        self.roles = {}
+        self.pending = []
 
-    Bullish BOS: Close строго выше защищённого LH (последний подтверждённый
-    pivot high с ролью LH); уровень сгорает при сломе — повторные закрытия
-    за уже пробитым уровнем нового BOS не создают.
-    Bullish SMS: минимум → внутренний high → higher low → Close строго выше
-    внутреннего high; обе опоры и исходный минимум — в anchors.
-    Обратные BOS/SMS — зеркально, как аналитический факт (kind *_REV).
-    Тень и Close == level не подтверждают слом — проверяется только Close,
-    строгое сравнение.
-    """
+    def add_pivot(self, pivot):
+        from ..engine.ltf.pivots import PivotCandidate
+        candidate = PivotCandidate(
+            instrument_id=0, price=pivot.price,
+            kind="high" if pivot.kind == ZoneType.BSL else "low",
+            pivot_at=pivot.formed_at, candle_open_time=pivot.formed_at,
+            confirmed_at=pivot.confirmed_at, left=3, right=3)
+        self.pending.append(candidate)
 
-    def __init__(self) -> None:
-        self.last_high: Optional[PivotRecord] = None
-        self.last_low: Optional[PivotRecord] = None
-        self.roles: dict[int, str] = {}            # formed_at -> HH|HL|LH|LL
-        self.protected_lh: Optional[PivotRecord] = None  # цель bullish BOS
-        self.protected_hl: Optional[PivotRecord] = None  # цель обратного BOS
-        self._bos_fired: set[int] = set()          # formed_at пробитых уровней
-        self._bos_rev_fired: set[int] = set()
-        # Bullish SMS-цепочка: минимум → внутренний high → higher low
-        self.sms_min: Optional[PivotRecord] = None
-        self.sms_high: Optional[PivotRecord] = None
-        self.sms_hl: Optional[PivotRecord] = None
-        self._sms_fired: set[int] = set()          # formed_at внутреннего high
-        # Обратная SMS-цепочка: максимум → внутренний low → lower high
-        self.rev_max: Optional[PivotRecord] = None
-        self.rev_low: Optional[PivotRecord] = None
-        self.rev_lh: Optional[PivotRecord] = None
-        self._sms_rev_fired: set[int] = set()
-
-    def add_pivot(self, p: PivotRecord) -> None:
-        """Роль и уровни по свежеподтверждённому pivot (вызов — в момент
-        подтверждения, будущие свечи недоступны)."""
-        if p.kind == ZoneType.BSL:
-            if self.last_high is None or p.price > self.last_high.price:
-                self.roles[p.formed_at] = "HH"
-            else:
-                self.roles[p.formed_at] = "LH"
-                self.protected_lh = p  # новый защищённый LH медвежьей структуры
-            self.last_high = p
-            # bullish SMS: первый внутренний high после минимума
-            if (
-                self.sms_min is not None
-                and p.formed_at > self.sms_min.formed_at
-                and self.sms_high is None
-            ):
-                self.sms_high = p
-            # обратная SMS: новый максимум сбрасывает цепочку; иначе lower high
-            if self.rev_max is None or p.price > self.rev_max.price:
-                self.rev_max, self.rev_low, self.rev_lh = p, None, None
-            elif self.rev_low is not None and p.formed_at > self.rev_low.formed_at:
-                self.rev_lh = p
-        else:  # SSL — pivot low
-            if self.last_low is None or p.price > self.last_low.price:
-                self.roles[p.formed_at] = "HL"
-                self.protected_hl = p  # защищённый HL для обратного BOS
-            else:
-                self.roles[p.formed_at] = "LL"
-            self.last_low = p
-            # bullish SMS: новый минимум сбрасывает цепочку; иначе higher low
-            if self.sms_min is None or p.price < self.sms_min.price:
-                self.sms_min, self.sms_high, self.sms_hl = p, None, None
-            elif self.sms_high is not None and p.formed_at > self.sms_high.formed_at:
-                self.sms_hl = p
-            # обратная SMS: первый внутренний low после максимума
-            if (
-                self.rev_max is not None
-                and p.formed_at > self.rev_max.formed_at
-                and self.rev_low is None
-            ):
-                self.rev_low = p
-
-    def on_close(self, open_time: int, close: float) -> list[StructureEvent]:
-        """События структуры на закрытии свечи (только Close, строго)."""
-        out: list[StructureEvent] = []
-        lh = self.protected_lh
-        if (
-            lh is not None
-            and lh.formed_at not in self._bos_fired
-            and close > lh.price
-        ):
-            self._bos_fired.add(lh.formed_at)
-            self.protected_lh = None
-            out.append(StructureEvent(
-                "BOS", lh.price, close, open_time,
-                anchors=[{"formed_at": lh.formed_at, "price": lh.price,
-                          "role": "LH"}],
-            ))
-        if (
-            self.sms_min is not None
-            and self.sms_high is not None
-            and self.sms_hl is not None
-            and self.sms_high.formed_at not in self._sms_fired
-            and close > self.sms_high.price
-        ):
-            self._sms_fired.add(self.sms_high.formed_at)
-            out.append(StructureEvent(
-                "SMS", self.sms_high.price, close, open_time,
-                anchors=[
-                    {"formed_at": self.sms_min.formed_at,
-                     "price": self.sms_min.price, "role": "min"},
-                    {"formed_at": self.sms_high.formed_at,
-                     "price": self.sms_high.price, "role": "internal_high"},
-                    {"formed_at": self.sms_hl.formed_at,
-                     "price": self.sms_hl.price, "role": "higher_low"},
-                ],
-            ))
-        hl = self.protected_hl
-        if (
-            hl is not None
-            and hl.formed_at not in self._bos_rev_fired
-            and close < hl.price
-        ):
-            self._bos_rev_fired.add(hl.formed_at)
-            self.protected_hl = None
-            out.append(StructureEvent(
-                "BOS_REV", hl.price, close, open_time,
-                anchors=[{"formed_at": hl.formed_at, "price": hl.price,
-                          "role": "HL"}],
-            ))
-        if (
-            self.rev_max is not None
-            and self.rev_low is not None
-            and self.rev_lh is not None
-            and self.rev_low.formed_at not in self._sms_rev_fired
-            and close < self.rev_low.price
-        ):
-            self._sms_rev_fired.add(self.rev_low.formed_at)
-            out.append(StructureEvent(
-                "SMS_REV", self.rev_low.price, close, open_time,
-                anchors=[
-                    {"formed_at": self.rev_max.formed_at,
-                     "price": self.rev_max.price, "role": "max"},
-                    {"formed_at": self.rev_low.formed_at,
-                     "price": self.rev_low.price, "role": "internal_low"},
-                    {"formed_at": self.rev_lh.formed_at,
-                     "price": self.rev_lh.price, "role": "lower_high"},
-                ],
-            ))
-        return out
+    def on_close(self, open_time, close):
+        boundary = close_boundary_ms(open_time, "D1")
+        ready = sorted((p for p in self.pending if p.confirmed_at <= boundary),
+                       key=lambda p: (p.confirmed_at, p.pivot_at, p.kind))
+        self.pending = [p for p in self.pending if p.confirmed_at > boundary]
+        for pivot in ready:
+            self.machine.absorb(pivot)
+        candle = SimpleNamespace(open_time=open_time, close_time=boundary,
+                                 close=close, closed=True)
+        facts = self.machine.on_candle(candle, boundary)
+        self.roles = {at: role for (_, at), role in self.machine.roles.items()}
+        return [StructureEvent(
+            event.kind + ("_REV" if event.direction == Direction.BEAR else ""),
+            event.break_level, close, open_time,
+            anchors=[{"formed_at": event.evidence["broken_pivot_id"],
+                      "price": event.break_level,
+                      "role": event.evidence["role_at_event"]}]) for event in facts]
 
 
 def _ssl_zone(price: float, formed_at: int, confirmed_at: int) -> Zone:

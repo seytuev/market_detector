@@ -699,6 +699,7 @@ select, input, textarea {
 .h1-pd-line.confirmed { border-top-style: solid; }
 .h1-pd-line.provisional { border-top-style: dashed; }
 .h1-pd-line.mid { border-top-style: dotted; }
+.h1-pd-line.main { border-top-width: 2px; opacity: .85; }
 .h1-pd-label {
   position: absolute;
   left: 4px;

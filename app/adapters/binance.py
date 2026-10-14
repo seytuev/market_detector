@@ -33,9 +33,9 @@ class BinanceSpotAdapter:
 
     venue = "binance"
 
-    def __init__(self, base_url: str, client: Optional[httpx.AsyncClient] = None):
+    def __init__(self, base_url: str, client: Optional[httpx.AsyncClient] = None, *, trust_env: bool = True):
         self._base = base_url.rstrip("/")
-        self._client = client or httpx.AsyncClient(base_url=self._base, timeout=30.0)
+        self._client = client or httpx.AsyncClient(base_url=self._base, timeout=30.0, trust_env=trust_env)
         self._own_client = client is None
         # Этап 5 (§10): последний известный вес X-MBX-USED-WEIGHT-1M от
         # источника (учёт лимитов; только наблюдение, троттлинг не меняется).

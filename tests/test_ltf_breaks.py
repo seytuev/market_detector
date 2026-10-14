@@ -164,25 +164,19 @@ def test_continuous_fall_without_pullback_is_not_two_stages():
     assert [(e.kind, e.stage) for e in res.events] == [("BOS", "primary")]
 
 
-def test_secondary_bos_allowed_in_each_anchor_regime():
-    # два якоря (HH 15 idx9 и HH 12.5 idx30) — вторичный слом в каждой ноге;
-    # защёлка secondary_done сбрасывается новым якорем, дубли режет level_key
+def test_internal_lower_high_does_not_create_a_new_bos_regime():
     candles = _series(SERIES_G_HL, SERIES_G_CLOSES)
     res = detect_breaks(_pivots_with_roles(candles), candles, Direction.BEAR, NOW)
-    assert [(e.kind, e.stage) for e in res.events] == [
-        ("BOS", "primary"), ("BOS", "secondary"),
-        ("BOS", "primary"), ("BOS", "secondary"),
-    ]
-    assert [e.break_level for e in res.events] == [9, 8, 8.4, 7.5]
-    assert res.events[2].break_candle_open_time == T0 + 34 * H1_MS
-    assert res.events[3].break_candle_open_time == T0 + 42 * H1_MS
-    assert len({e.level_key for e in res.events}) == 4        # разные уровни
+    assert [(e.kind, e.stage, e.break_level) for e in res.events] == [
+        ("BOS", "primary", 9), ("BOS", "secondary", 8), ("BOS", "secondary", 7.8)]
+    assert res.events[-1].break_candle_open_time == T0 + 42 * H1_MS
+    assert len({e.level_key for e in res.events}) == 3
 
 
 def test_bear_sms_standalone():
     # §6.3: SMS без BOS — L_ref=9 не пробит (закрытие 10.9 > 9)
     candles = _series(SERIES_B_HL, {18: 10.9})
-    res = detect_breaks(_pivots_with_roles(candles), candles, Direction.BEAR, NOW)
+    res = detect_breaks(_pivots_with_roles(candles), candles, Direction.BEAR, NOW, stop_on_cancellation=False)
     assert len(res.events) == 1
     ev = res.events[0]
     assert ev.kind == "SMS" and ev.stage == "primary"
@@ -193,7 +187,7 @@ def test_bear_sms_standalone():
 def test_bull_sms_standalone():
     # §6.4: зеркальный SMS — H_ref=15 не пробит (закрытие 13.2 < 15)
     candles = _series(SERIES_C_HL, {18: 13.2})
-    res = detect_breaks(_pivots_with_roles(candles), candles, Direction.BULL, NOW)
+    res = detect_breaks(_pivots_with_roles(candles), candles, Direction.BULL, NOW, stop_on_cancellation=False)
     assert len(res.events) == 1
     ev = res.events[0]
     assert ev.kind == "SMS"
@@ -205,14 +199,13 @@ def test_one_candle_bos_with_accompanying_sms():
     # §6.5: одна свеча пересекает внутренний (11) и внешний (9) уровни —
     # основное событие BOS + сопутствующий SMS
     candles = _series(SERIES_B_HL[:-1] + [(12.5, 8.8)], {18: 8.9})
-    res = detect_breaks(_pivots_with_roles(candles), candles, Direction.BEAR, NOW)
+    res = detect_breaks(_pivots_with_roles(candles), candles, Direction.BEAR, NOW, stop_on_cancellation=False)
     assert [(e.kind, e.accompanying) for e in res.events] == [
-        ("BOS", False), ("SMS", True),
+        ("BOS", False),
     ]
     assert res.events[0].break_level == 9
-    assert res.events[1].break_level == 11
     same_candle = res.events[0].break_candle_open_time
-    assert res.events[1].break_candle_open_time == same_candle == T0 + 18 * H1_MS
+    assert same_candle == T0 + 18 * H1_MS
 
 
 def test_bull_bos_primary_and_secondary():
@@ -310,7 +303,7 @@ def test_trace_reject_pullback_missing_on_continuous_fall():
     assert [(e.kind, e.stage) for e in res.events] == [("BOS", "primary")]
     sec_rej = [e for e in trace.rejects()
                if e.check == "secondary_bos" and e.direction == "bear"]
-    assert "pullback_missing" in {e.reason for e in sec_rej}
+    assert not sec_rej  # no armed continuation before a confirmed correction
     assert not [e for e in trace.accepts() if e.check == "secondary_bos"]
 
 
@@ -318,7 +311,7 @@ def test_trace_standalone_sms_records_internal_level():
     candles = _series(SERIES_B_HL, {18: 10.9})
     trace = ScanTrace()
     detect_breaks(_pivots_with_roles(candles), candles, Direction.BEAR,
-                  NOW, trace=trace)
+                  NOW, trace=trace, stop_on_cancellation=False)
     acc = [e for e in trace.accepts() if e.check == "sms"]
     assert len(acc) == 1
     e = acc[0]
@@ -367,11 +360,11 @@ def test_sync_structure_materializes_and_dedups(db, cfg, instrument_id):
     ))
     obs = db.insert_ltf_observation(LtfObservation(
         id=None, instrument_id=instrument_id, zone_id=zid, zone_version=1,
-        cycle_id=1, direction=Direction.BEAR, activated_at=T0,
+        cycle_id=1, direction=Direction.BEAR, activated_at=T0 + 10 * H1_MS,
     ))
     sc = db.insert_ltf_scenario(LtfScenario(
         id=None, observation_id=obs.id, direction=Direction.BEAR,
-        trigger="BOS", stage="primary",
+        trigger="SMS", stage="primary", created_at=T0 + 10 * H1_MS,
     ))
 
     r1 = sync_structure(db, cfg, instrument_id, candles, NOW)
@@ -379,7 +372,7 @@ def test_sync_structure_materializes_and_dedups(db, cfg, instrument_id):
     roles = {p.pivot_at: p.role for p in db.list_ltf_pivots(instrument_id)}
     assert roles[T0 + 9 * H1_MS] == "HH"               # H_peak
     assert roles[T0 + 6 * H1_MS] == "HL"               # опорный HL
-    assert roles[T0 + 12 * H1_MS] == "internal_low"    # участник SMS (§6.3)
+    assert roles[T0 + 12 * H1_MS] == "HL"    # участник SMS (§6.3)
     # пересмотры ролей записаны в историю
     hl_id = [p.id for p in db.list_ltf_pivots(instrument_id)
              if p.pivot_at == T0 + 12 * H1_MS][0]
@@ -436,11 +429,11 @@ def test_sync_structure_genuine_role_revision_logged_once(db, cfg, instrument_id
     # сам idx15 — новый pivot с первой ролью
     r = sync_structure(db, cfg, instrument_id, candles, NOW)
     assert [(c.old_role, c.new_role) for c in r.role_changes] == [
-        ("HL", "internal_low"), ("none", "LH"),
+        ("none", "LH"),
     ]
     il_id = [p.id for p in db.list_ltf_pivots(instrument_id)
              if p.pivot_at == T0 + 12 * H1_MS][0]
     # полная история genuine-пересмотров, без дублей от повторных пересчётов
     assert [
         (e["old_role"], e["new_role"]) for e in db.list_ltf_pivot_role_log(il_id)
-    ] == [("none", "HL"), ("HL", "internal_low")]
+    ] == [("none", "HL")]

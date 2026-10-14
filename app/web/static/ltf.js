@@ -777,7 +777,7 @@ async function renderCard() {
       <dt>Середина</dt><dd>${fmtPrice(rng.mid)}</dd>`;
     } else {
       // §4.4: после слома без диапазона — не «слома нет»
-      html += `<dt>Диапазон</dt><dd>BOS подтверждён. Ждём подтверждения опор диапазона</dd>`;
+      html += `<dt>Диапазон</dt><dd>${esc(sc.trigger || 'BOS/SMS')} подтверждён. Ждём подтверждения опор диапазона</dd>`;
     }
     const sctx = sc.context;
     if (sctx && sctx.complete) {

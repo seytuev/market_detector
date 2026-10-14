@@ -160,9 +160,9 @@ async def async_main() -> None:
     migrate_saved_htf_profile_v3(db, settings)
 
     adapters = {
-        "binance": BinanceSpotAdapter(settings.binance_base_url),
-        "hyperliquid": HyperliquidSpotAdapter(settings.hyperliquid_base_url),
-        "bybit": BybitSpotAdapter(settings.bybit_base_url),
+        "binance": BinanceSpotAdapter(settings.binance_base_url, trust_env=settings.market_trust_env),
+        "hyperliquid": HyperliquidSpotAdapter(settings.hyperliquid_base_url, trust_env=settings.market_trust_env),
+        "bybit": BybitSpotAdapter(settings.bybit_base_url, trust_env=settings.market_trust_env),
     }
     if settings.telegram_token:
         sender = TelegramSender(

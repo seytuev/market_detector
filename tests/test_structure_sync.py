@@ -69,9 +69,12 @@ def test_asset_has_target_and_d1_flip_does_not_cancel_stored_scenario(db, instru
     _leg(db, instrument_id, "bull", 10, 20, origin=3, end=15)
     target = _zone(db, instrument_id, Direction.BEAR, 12, 14, kind=ZoneType.FVG)
     seq = db.get_state_seq()
-    before = project_asset(db, instrument_id, daily_bars()[17].close_time, price=10)
+    before = project_asset(db, instrument_id, daily_bars()[16].close_time, price=10)
     assert before["trade_setup"]["daily_alignment"]["priority"] == "main"
-    assert before["daily_structure"]["warning"]["direction"] == "bear"
+    assert before["daily_structure"]["direction"] == "bull"
+    after_sms = project_asset(db, instrument_id, daily_bars()[17].close_time, price=10)
+    assert after_sms["daily_structure"]["direction"] == "bear"
+    assert after_sms["trade_setup"]["daily_alignment"]["priority"] == "countertrend"
     asset = project_asset(db, instrument_id, AT, price=10)
     sync = asset["trade_setup"]["daily_alignment"]
     assert sync["priority"] == "countertrend"

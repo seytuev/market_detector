@@ -465,6 +465,8 @@ class Settings:
     binance_base_url: str = field(
         default_factory=lambda: _env("BINANCE_BASE_URL", "https://data-api.binance.vision")
     )
+    market_trust_env: bool = field(
+        default_factory=lambda: parse_bool(_env("HTF_MARKET_TRUST_ENV", "1")))
     hyperliquid_base_url: str = field(
         default_factory=lambda: _env("HYPERLIQUID_BASE_URL", "https://api.hyperliquid.xyz")
     )

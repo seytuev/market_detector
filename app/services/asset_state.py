@@ -11,7 +11,7 @@ from typing import Any, Optional
 
 from ..notify.formatting import fmt_price_ru, fmt_time_msk
 from .h1_setup import local_leg_at, revision_at
-from .d1_structure import project_daily
+from .d1_structure import project_daily, project_weekly
 from .structure_sync import synchronize_scenario
 
 RULE_VERSION = "asset-context-3"
@@ -97,6 +97,13 @@ def project_asset(
         state, transition if proven else None, evidence, display_zones, pd,
         invalidation, quality_text, leg, quality_bad, forming_note, moment,
     )
+    main = _main_structure(db, instrument_id, moment)
+    if main and main.get("lower") is not None and main.get("upper") is not None:
+        compact_rows.append({
+            "kind": "pd", "k": "Основной PD H1",
+            "v": f"{fmt_price_ru(main['lower'])} → {fmt_price_ru(main['upper'])} · 50% {fmt_price_ru(main['eq'])}",
+            "note": "BOS ↑" if main["direction"] == "bull" else "BOS ↓",
+        })
     daily = project_daily(db, instrument_id, moment)
     alignment = synchronize_scenario(
         db, instrument_id, daily, state["trade_direction"], moment,
@@ -143,8 +150,10 @@ def project_asset(
             "movement_id": int(leg["id"]) if leg else None,
             "last_transition": transition if proven else None,
             "proven": proven,
+            "main": _main_structure(db, instrument_id, moment),
         },
         "daily_structure": daily,
+        "weekly_structure": project_weekly(db, instrument_id, moment),
         "trade_setup": {
             "daily_alignment": alignment,
             "state": state["setup_state"],
@@ -182,7 +191,7 @@ def project_asset(
                   for e in [next((e for e in reversed(daily["events"]) if e["kind"] == "BOS"), None)]
                   if e is not None],
                 *([alignment["target_text"]] if alignment["target_text"] else []),
-                "D1 задаёт приоритет. Направление меняет BOS; SMS предупреждает о возможной смене.",
+                "BOS меняет основную структуру D1; SMS меняет локальное направление внутри её опор.",
                 "Новый контртрендовый сценарий требует подтверждения H1 из HTF-зоны.",
                 "Обратный BOS D1 меняет приоритет действующего сценария, сохраняя его зоны входа.",
                 "Цель контртренда — ближняя граница актуальной противоположной OB/FVG/Breaker/PRB D1.",
@@ -204,6 +213,13 @@ def project_asset(
             ),
         },
     }
+
+
+def _main_structure(db, instrument_id, as_of):
+    snapshot = _loads(db.get_meta(f"h1:main_structure:{instrument_id}"))
+    if snapshot and int(snapshot.get("as_of") or 0) <= as_of:
+        return snapshot
+    return None
 
 
 def _transition(db, leg: dict) -> dict[str, Any]:

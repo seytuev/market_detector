@@ -42,10 +42,11 @@ class BybitSpotAdapter:
         base_url: str = DEFAULT_BASE_URL,
         timeout: float = 30.0,
         client: Optional[httpx.AsyncClient] = None,
+        *, trust_env: bool = True,
     ):
         self._base = base_url.rstrip("/")
         self._client = client or httpx.AsyncClient(
-            base_url=self._base, timeout=timeout
+            base_url=self._base, timeout=timeout, trust_env=trust_env
         )
         self._own_client = client is None
 

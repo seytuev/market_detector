@@ -648,7 +648,7 @@ class Worker:
                 await self._poll_instrument(ins)
             except AdapterError as exc:
                 log.warning("%s: источник недоступен: %s", ins.symbol, exc)
-                await self._mark_stale(ins, str(exc))
+                await self._mark_stale(ins, str(exc), timeframes=["quote"])
             except Exception:
                 log.exception("ошибка опроса %s", ins.symbol)
         await self.dispatcher.retry_pending()
@@ -660,7 +660,12 @@ class Worker:
                 await self.data_sync.sync_candles(ins, tf)
             except Exception as exc:
                 log.warning("%s %s: %s", ins.symbol, tf, exc)
-                await self._mark_stale(ins, str(exc))
+                # sync_candles records failures for this channel. A failed W1
+                # request must not invalidate an H1 channel that already
+                # recovered (or confuse calculation failures with outages).
+                if (isinstance(exc, (AdapterError, asyncio.TimeoutError))
+                        and self.data_sync.channel_status(ins, tf).get("error_stage") != "processing"):
+                    await self._mark_stale(ins, str(exc), timeframes=[tf])
 
         # F02: при включённом быстром цикле котировку обновляет он
         # (quote_loop) — HTF-цикл цену не запрашивает; выключен
@@ -697,6 +702,8 @@ class Worker:
             raise
         result.update(last_success_at=now_ms(), error=None)
         await _save(self.data_sync._save_channel, ins, "quote", result)
+        await _save(self.dispatcher.services.recovered, ins, "quote")
+        await _save(self.db.set_meta, f"stale:{ins.id}:quote", "0")
         return await self._ingest_quote(ins, tick, source)
 
     async def _ingest_quote(self, ins: Instrument, tick: QuoteTick, source: str) -> Optional[QuoteTick]:
@@ -901,6 +908,8 @@ class Worker:
         result.update(
             last_attempt_at=now_ms(), last_success_at=now_ms(), error=None)
         await self.data_sync._write(self.data_sync._save_channel, ins, "quote", result)
+        await self.data_sync._write(self.dispatcher.services.recovered, ins, "quote")
+        await self.data_sync._write(self.db.set_meta, f"stale:{ins.id}:quote", "0")
 
     # ---------- быстрый цикл котировок (F02/A02) ----------
 
@@ -1622,7 +1631,7 @@ class Worker:
                 except Exception:
                     log.exception("LTF %s: стартовая обработка H1 не удалась", ins.symbol)
                 continue
-            self._set_replaying(ins.id, True)
+            await self.data_sync._write(self._set_replaying, ins.id, True)
             try:
                 cursor_raw = self.db.get_meta(f"ltf:h1:last_close:{ins.id}")
                 last = self.db.last_candle(ins.id, "H1")
@@ -1649,7 +1658,7 @@ class Worker:
                     for c in candles:
                         c.instrument_id = ins.id
                     if candles:
-                        self.db.insert_candles(candles)
+                        await self.data_sync._write(self.db.insert_candles, candles)
                 if caught_up:
                     # Хвост, если он вставился, проходит инкрементально.
                     # Из restore не доставляем: retry заберёт только
@@ -1669,12 +1678,20 @@ class Worker:
                     )
                     log.info("LTF %s: восстановлено наблюдений: %d",
                              ins.symbol, len(observations))
+                # Restore processes all open observations. Publish the same
+                # scenario checkpoint as normal channel processing only after success.
+                cursor_raw = self.db.get_meta(f"ltf:h1:last_close:{ins.id}")
+                if cursor_raw:
+                    await self.data_sync._write(
+                        self.db.set_meta,
+                        f"ltf:h1:scenario_last_close:{ins.id}", cursor_raw,
+                    )
             except AdapterError as exc:
                 log.warning("LTF %s: восстановление пропущено: %s", ins.symbol, exc)
             except Exception:
                 log.exception("LTF: ошибка восстановления %s", ins.symbol)
             finally:
-                self._set_replaying(ins.id, False)
+                await self.data_sync._write(self._set_replaying, ins.id, False)
 
     # ---------- Altcoins D1 accumulation (ТЗ 07.10.2026 §4, §18) ----------
 
@@ -1770,13 +1787,16 @@ class Worker:
             self.db.set_meta(key, value)
             self.db.bump_state_seq()
 
-    async def _mark_stale(self, ins: Instrument, reason: str) -> None:
-        """Источник недоступен целиком: одно сообщение на инструмент,
-        флаги stale — на все ТФ (восстановление отслеживается по каждому)."""
+    async def _mark_stale(self, ins: Instrument, reason: str, *, timeframes=None) -> None:
+        """Record an outage only for the affected streams; recovery is per stream.
+
+        Without an explicit list, all scanning timeframes are affected.
+        """
         log.warning("Source %s:%s unavailable: %s", ins.venue, ins.symbol, reason)
         # записи — в потоке (контракт storage: busy у цикла событий мгновенный)
-        await self.data_sync._write(self.dispatcher.services.failed, ins, self.scan_tfs, "network")
-        for tf in self.scan_tfs:
+        affected = self.scan_tfs if timeframes is None else timeframes
+        await self.data_sync._write(self.dispatcher.services.failed, ins, affected, "network")
+        for tf in affected:
             self._stale[(ins.id, tf)] = True
             await self.data_sync._write(self.db.set_meta, f"stale:{ins.id}:{tf}", "1")
 
