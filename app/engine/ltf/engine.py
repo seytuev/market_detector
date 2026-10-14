@@ -1843,9 +1843,7 @@ class LtfEngine:
             z0 = self.db.get_ltf_entry_zone(zid)
             if z0 is not None:
                 linked[(z0.type, z0.direction, z0.lower, z0.upper, z0.formed_at)] = z0.id
-        market: dict[tuple, LtfEntryZone] = {}
-        for z0 in self.db.list_ltf_entry_zones(instrument_id=obs.instrument_id):
-            market[(z0.type, z0.direction, z0.lower, z0.upper, z0.formed_at)] = z0
+        market: Optional[dict[tuple, LtfEntryZone]] = None
         rng = self.db.get_current_ltf_range(sc.id)
         rng_draft = self._row_to_draft(rng, sc.direction) if rng else None
         ver = rng.version if rng else 0
@@ -1862,6 +1860,11 @@ class LtfEngine:
             key = (z.type, z.direction, z.lower, z.upper, z.formed_at)
             if key in linked:
                 continue
+            if market is None:
+                market = {
+                    (z0.type, z0.direction, z0.lower, z0.upper, z0.formed_at): z0
+                    for z0 in self.db.list_ltf_entry_zones(instrument_id=obs.instrument_id)
+                }
             ez = market.get(key)
             if ez is None:
                 ez = self.db.insert_ltf_entry_zone(LtfEntryZone(
