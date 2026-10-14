@@ -356,7 +356,9 @@ def _scenario_index(db: Database, instrument_id: int) -> dict[tuple, list[int]]:
 
 # Живой снимок идей. Исторический as_of сюда не кладётся: прошлый момент
 # должен остаться активным, даже если сейчас идея уже закрыта.
-_LIVE_PROJECTION: dict[tuple, tuple] = {}
+from .projection_cache import ProjectionCache, structural_version
+_LIVE_PROJECTION = ProjectionCache()
+_DISCOVERY = ProjectionCache()
 
 
 def _project_for_chart(db, instrument_id, cfg, moment, zones, candles, *, live: bool):
@@ -364,18 +366,12 @@ def _project_for_chart(db, instrument_id, cfg, moment, zones, candles, *, live: 
     from ..engine.ltf.relevance import VERSION
     last = db.last_candle(instrument_id, "H1")
     cacheable = live and last is not None and moment >= last.close_time
-    seq = db.get_state_seq() if cacheable else None
-    key = (id(db), instrument_id)
-    if cacheable:
-        hit = _LIVE_PROJECTION.get(key)
-        if hit is not None and hit[0] == seq and hit[1] == VERSION:
-            return hit[2]
-    result = project_ideas(
-        db, instrument_id, cfg, moment, zones=zones, candles=candles,
-    )
-    if cacheable:
-        _LIVE_PROJECTION[key] = (seq, VERSION, result)
-    return result
+    def load():
+        return project_ideas(db, instrument_id, cfg, moment, zones=zones, candles=candles)
+    return (_LIVE_PROJECTION.get(db, instrument_id,
+                                (structural_version(db, instrument_id, cfg), VERSION,
+                                 (moment + 1) // H1_MS), load)
+            if cacheable else load())
 
 
 def _geometry_key(type_: str, direction: str, formed_at: int, lower: float, upper: float):
@@ -707,10 +703,12 @@ def _scan_zones(
     context_bounds = context_bounds or {}
     found: list[dict[str, Any]] = []
     seen = set()
+    from ..engine.ltf.entries import EntryHistory
+    history = EntryHistory(candles)
     for ev in events:
         if ev.kind not in ("BOS", "SMS") or ev.occurred_at > as_of:
             continue
-        movement = build_movement(0, pivots, candles, ev, ev.direction, lookback)
+        movement = build_movement(0, pivots, candles, ev, ev.direction, lookback, ordered=True)
         if movement is None:
             continue
         key = (ev.level_key, ev.kind, ev.stage, ev.occurred_at)
@@ -723,6 +721,7 @@ def _scan_zones(
         detection = detect_entry_zones(
             candles, movement, pivots, ev.direction, cfg,
             context_until=context_until,
+            history=history,
         )
         for draft in detection.zones:
             if draft.formed_at > as_of:
@@ -880,6 +879,8 @@ def assemble_h1_layers(
     lifecycle_candles = db.get_candles(
         instrument_id, "H1", start_ms=life_from, end_ms=moment,
     )
+    from ..engine.ltf.lifecycle_index import LifecycleIndex
+    lifecycle = LifecycleIndex(lifecycle_candles, moment)
     ideas, idea_links, lifecycle_facts = _project_for_chart(
         db, instrument_id, cfg, moment, stored, lifecycle_candles,
         live=as_of is None,
@@ -910,10 +911,14 @@ def assemble_h1_layers(
                 end = excluded if end is None else min(end, excluded)
             zones[-1].update(lifecycle="ended", display_until=end, recently_taken=False)
     if candles:
-        for extra in _scan_zones(
-            candidates, candles, events, cfg, moment, index,
-            _context_bounds(db, instrument_id, links),
-        ):
+        def discover():
+            return _scan_zones(candidates, candles, events, cfg, moment, index,
+                               _context_bounds(db, instrument_id, links))
+        discovered = (_DISCOVERY.get(db, instrument_id,
+                      (structural_version(db, instrument_id, cfg), (moment + 1) // H1_MS), discover)
+                      if as_of is None else discover())
+        for cached_extra in discovered:
+            extra = dict(cached_extra)
             key = _geometry_key(
                 extra["type"], extra["direction"], extra["formed_at"],
                 extra["lower"], extra["upper"],
@@ -927,7 +932,7 @@ def assemble_h1_layers(
                 direction=Direction(extra["direction"]), lower=extra["lower"], upper=extra["upper"],
                 formed_at=extra["formed_at"], confirmed_at=extra["confirmed_at"],
             )
-            rebuilt, fact = zone_at(ghost, lifecycle_candles, moment, cfg)
+            rebuilt, fact = lifecycle.project(ghost, cfg)
             extra.update(relevance=fact, idea_links=[], max_test_depth=rebuilt.max_test_depth,
                          first_test_at=rebuilt.first_test_at, validity=rebuilt.validity)
             if fact["reason"] not in ("ok", "data_gap", "unconfirmed"):
@@ -997,6 +1002,10 @@ def assemble_h1_layers(
     from .structure_sync import synchronize_scenario
     daily = project_daily(db, instrument_id, moment)
     reference = candles[-1].close if candles else None
+    if not zone_history:
+        # The selector already hides closed ideas in the default view. Keep
+        # their large zone-id histories on the explicit history request.
+        ideas = [idea for idea in ideas if idea['state'] != 'closed']
     ideas = [{**idea, "structure_sync": synchronize_scenario(
         db, instrument_id, daily, idea["direction"], moment,
         reference=reference, h1_confirmed=True, has_htf_source=True,

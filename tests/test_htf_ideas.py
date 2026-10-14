@@ -15,6 +15,41 @@ from tests.conftest import make_candle, H1_MS
 T = 1_800_000_000_000 // H1_MS * H1_MS
 
 
+def test_quote_ticks_do_not_invalidate_closed_bar_ideas_checkpoint(db, instrument_id):
+    from app.services.htf_ideas import mark_ideas_checkpoint, ideas_checkpoint_fresh
+    rows = bars(db, instrument_id, n=10)
+    mark_ideas_checkpoint(db, instrument_id)
+    assert ideas_checkpoint_fresh(db, instrument_id)
+    with db.batch_writes():
+        db.set_quote(instrument_id, 101, rows[-1].close_time+100)
+        db.bump_domain(f'seq:quote:{instrument_id}')
+        db.bump_state_seq()
+    assert ideas_checkpoint_fresh(db, instrument_id)
+    db.insert_candles([replace(rows[-1], open_time=rows[-1].open_time+H1_MS,
+                              close_time=rows[-1].close_time+H1_MS)])
+    assert not ideas_checkpoint_fresh(db, instrument_id)
+
+
+def test_projection_context_witnesses_preserve_the_original_journal_window(db, instrument_id):
+    from app.models_ltf import LtfEvent
+    from app.engine.ltf.context import context_flags, context_complete
+    _, obs, sc, _ = seed(db, instrument_id)
+    with db.batch_writes():
+        for i in range(1050):
+            fact = 'htf_fvg50' if i % 7 == 0 else 'counter_sweep'
+            db.insert_ltf_event(LtfEvent(id=None, observation_id=obs.id, scenario_id=sc.id,
+                kind='context_update' if i % 3 else 'entries_ready', payload={'fact': fact, 'sample': i},
+                occurred_at=T+i, detected_at=T+i, dedupe_key=f'projection:{i}'))
+    original = db.list_ltf_events(scenario_id=sc.id, limit=1000)
+    compact = db.ltf_projection_bundle(instrument_id, T+2000)['ltf_events'][sc.id]
+    assert len(compact) == 2
+    for as_of in (T+10, T+70, T+550, T+2000):
+        before = context_flags([e for e in original if e.occurred_at <= as_of])
+        after = context_flags([e for e in compact if e.occurred_at <= as_of])
+        assert context_complete(before) == context_complete(after)
+        assert before['htf_fvg50'] == after['htf_fvg50']
+
+
 def seed(db, iid, direction=Direction.BEAR, kind="OB"):
     parent = db.insert_zone(Zone(
         id=None, instrument_id=iid, type=ZoneType.OB if direction == Direction.BEAR else ZoneType.FVG,

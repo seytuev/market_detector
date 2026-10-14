@@ -12,6 +12,7 @@ SSL (low-уровень противоположной стороны) с одн
 его смысл показывается аннотациями entries_ready/touch.
 """
 from __future__ import annotations
+from bisect import bisect_left, bisect_right
 
 from typing import Any, Optional
 
@@ -57,6 +58,7 @@ def detect_counter_sweeps(
     since_at: int,
     *,
     only_after: Optional[int] = None,
+    ordered: bool = False,
 ) -> list[dict[str, Any]]:
     """Снятия уровней противоположной стороны с момента триггера сценария.
 
@@ -76,8 +78,14 @@ def detect_counter_sweeps(
     zone_type = "SSL" if bear else "BSL"
     # фильтр и сортировка — один раз на вызов, а не на каждый pivot:
     # per-pivot sorted() по всей истории H1 делал replay квадратично-кубическим
+    sample = candles
+    if ordered:
+        first = bisect_left(candles, since_at, key=lambda c: c.close_time)
+        if only_after is not None:
+            first = max(first, bisect_right(candles, only_after, key=lambda c: c.close_time))
+        sample = candles[first:]
     ordered = sorted(
-        (c for c in candles
+        (c for c in sample
          if c.closed and c.close_time >= since_at
          and (only_after is None or c.close_time > only_after)),
         key=lambda c: c.open_time,
@@ -166,6 +174,7 @@ def scenario_context(
     pivots: list[PivotCandidate], candles: list[Candle],
     since_at: int, *, as_of: Optional[int] = None,
     sweep_only_after: Optional[int] = None,
+    ordered: bool = False,
 ) -> dict[str, Any]:
     """Агрегатор §18: снятые контр-уровни и тест 50% D1 FVG экстремумом
     движения (минимум Low / максимум High закрытых H1 от триггера).
@@ -176,8 +185,9 @@ def scenario_context(
     считается полностью от триггера."""
     bear = direction == Direction.BEAR
     swept = detect_counter_sweeps(direction, pivots, candles, since_at,
-                                  only_after=sweep_only_after)
-    tail = [c for c in candles if c.closed and c.close_time >= since_at]
+                                  only_after=sweep_only_after, ordered=ordered)
+    sample = candles[bisect_left(candles, since_at, key=lambda c: c.close_time):] if ordered else candles
+    tail = [c for c in sample if c.closed and c.close_time >= since_at]
     fvg50 = None
     if tail:
         bar = (

@@ -65,12 +65,40 @@ def _is_impulse_color(candle: Candle, direction: Direction) -> bool:
     return candle.is_bull if direction == Direction.BULL else not candle.is_bull
 
 
+class BaseIndex:
+    """Immutable, causal lookup shared by all FVGs of one candle sample."""
+    def __init__(self, candles):
+        self.closed = sorted((c for c in candles if c.closed), key=lambda c: c.open_time)
+        self.positions = {c.open_time: i for i, c in enumerate(self.closed)}
+        self.members = {}
+        for j in range(2, len(self.closed)):
+            c1, c2, c3 = self.closed[j-2:j+1]
+            if c1.high < c3.low or c1.low > c3.high:
+                for c in (c1, c2, c3):
+                    self.members.setdefault(c.open_time, c3.open_time)
+
+    def update(self, candles):
+        """Append an immutable ordered prefix supplied by the H1 engine."""
+        n = len(self.closed)
+        if len(candles) < n or (n and candles[n-1] != self.closed[-1]):
+            self.__init__(candles)
+            return
+        self.closed.extend(c for c in candles[n:] if c.closed)
+        for j in range(n, len(self.closed)):
+            self.positions[self.closed[j].open_time] = j
+        for j in range(max(2, n), len(self.closed)):
+            c1, c2, c3 = self.closed[j-2:j+1]
+            if c1.high < c3.low or c1.low > c3.high:
+                for c in (c1, c2, c3):
+                    self.members.setdefault(c.open_time, c3.open_time)
+
+
 def find_base(
-    candles: list[Candle], fvg: FvgRecord, cfg: DetectorConfig
+    candles: list[Candle], fvg: FvgRecord, cfg: DetectorConfig, *, index=None
 ) -> Optional[BaseRecord]:
     """Восстанавливает консолидацию перед FVG. None — база не найдена."""
-    closed = sorted((c for c in candles if c.closed), key=lambda c: c.open_time)
-    idx_by_ot = {c.open_time: i for i, c in enumerate(closed)}
+    closed = index.closed if index is not None else sorted((c for c in candles if c.closed), key=lambda c: c.open_time)
+    idx_by_ot = index.positions if index is not None else {c.open_time: i for i, c in enumerate(closed)}
     i1 = idx_by_ot.get(fvg.candle_open_times[0])
     if i1 is None or i1 == 0:
         return None
@@ -83,7 +111,7 @@ def find_base(
     # (hard stop ломает согласованную эталонную геометрию §13.19, T24);
     # флаг выводится в диагностику спорных примеров (№550/549/131, T15)
     fvg_member_times: set[int] = set()
-    for j in range(2, len(closed)):
+    for j in range(2, len(closed) if index is None else 2):
         c1, c3 = closed[j - 2], closed[j]
         if c1.high < c3.low or c1.low > c3.high:
             fvg_member_times.update(
@@ -130,7 +158,8 @@ def find_base(
             # ТЗ 06.10.2026 §8: флаг самостоятельного движения — диагностика,
             # не основание исключения (открытая калибровка, см. docstring)
             **({"independent_fvg_member": True}
-               if c.open_time in fvg_member_times else {}),
+               if (c.open_time in fvg_member_times if index is None else
+                   index.members.get(c.open_time, float('inf')) <= fvg.candle_open_times[2]) else {}),
         })
         members.append(c)
         lo = min(lo, c.low)

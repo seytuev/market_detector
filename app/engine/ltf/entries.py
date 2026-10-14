@@ -108,6 +108,7 @@ def build_movement(
     direction: Direction,
     lookback_ms: int,
     start_pivot: Optional[PivotCandidate] = None,
+    *, ordered: bool = False,
 ) -> Optional[MovementDraft]:
     """Нога, приведшая к слому: для bear — от последнего high-pivot до свечи
     слома (LL/свеча слома как конец, §8.1), для bull — зеркально.
@@ -128,10 +129,11 @@ def build_movement(
         start = max(starts, key=lambda p: p.pivot_at)
     ends = [p for p in pivots if p.kind == kind_end and p.pivot_at <= break_t]
     end = max(ends, key=lambda p: p.pivot_at) if ends else start
-    source = [
-        c.open_time for c in candles
-        if c.closed and start.pivot_at <= c.open_time <= break_t
-    ]
+    sample = (candles[bisect_left(candles, start.pivot_at, key=lambda c: c.open_time):
+                      bisect_right(candles, break_t, key=lambda c: c.open_time)]
+              if ordered else candles)
+    source = [c.open_time for c in sample
+              if c.closed and start.pivot_at <= c.open_time <= break_t]
     return MovementDraft(
         scenario_id=scenario_id,
         direction=direction,
@@ -250,6 +252,27 @@ def _timing(movement: MovementDraft, fvg_formed_at: int) -> dict[str, Any]:
     }
 
 
+class EntryHistory:
+    """Discovery and test lookups shared across movements of one snapshot."""
+    def __init__(self, candles):
+        from ..orderblock import BaseIndex
+        from .lifecycle_index import LifecycleIndex
+        self.base_index = BaseIndex(candles)
+        self.closed = self.base_index.closed
+        self.fvgs = scan_fvgs(self.closed, 'H1')
+        self.starts = [self.base_index.positions[f.candle_open_times[0]] for f in self.fvgs]
+        self.ends = [f.confirmed_at for f in self.fvgs]
+        self.lifecycle = LifecycleIndex(self.closed, self.closed[-1].close_time if self.closed else 0)
+        self.bases = {}
+        self.stats = {}
+
+    def tests(self, lower, upper, direction, after_open):
+        key = (lower, upper, direction, after_open)
+        if key not in self.stats:
+            self.stats[key] = self.lifecycle.tests(*key)
+        return self.stats[key]
+
+
 def detect_entry_zones(
     candles: list[Candle],
     movement: MovementDraft,
@@ -259,6 +282,8 @@ def detect_entry_zones(
     *,
     context_until: Optional[int] = None,
     confirmed_after: Optional[int] = None,
+    history: Optional[EntryHistory] = None,
+    base_index=None,
 ) -> EntryDetection:
     """Все свежие/протестированные зоны контекста, без выбора «лучшей»
     и без ранжирования (§8, приёмка п.9).
@@ -270,7 +295,8 @@ def detect_entry_zones(
     зона, подтверждённая позже, к уже завершённому контексту не относится.
     None — контекст ещё действует, верхней отсечки нет.
     """
-    closed = sorted((c for c in candles if c.closed), key=lambda c: c.open_time)
+    base_index = history.base_index if history is not None else base_index
+    closed = base_index.closed if base_index is not None else sorted((c for c in candles if c.closed), key=lambda c: c.open_time)
     zones: list[EntryZoneDraft] = []
     rejected: list[dict[str, Any]] = []
 
@@ -278,7 +304,14 @@ def detect_entry_zones(
     first = bisect_left(closed, movement.window_start, key=lambda c: c.open_time)
     if confirmed_after is not None:
         first = max(first, bisect_left(closed, confirmed_after, key=lambda c: c.close_time) - 2)
-    for f in scan_fvgs(closed[first:], "H1"):
+    # context_until bounds discovery, not the lifecycle sample. Do not scan
+    # years of later FVGs merely to reject each one for an ended context.
+    stop = (bisect_right(closed, context_until - 1, key=lambda c: c.close_time)
+            if context_until is not None else len(closed))
+    fvgs = (history.fvgs[bisect_left(history.starts, first):
+                        bisect_right(history.ends, context_until) if context_until is not None else None]
+            if history is not None else scan_fvgs(closed[first:stop], "H1"))
+    for f in fvgs:
         if confirmed_after is not None and f.confirmed_at <= confirmed_after:
             continue
         if f.candle_open_times[0] < movement.window_start:
@@ -309,8 +342,9 @@ def detect_entry_zones(
             })
             continue
         timing = _timing(movement, f.formed_at)
-        first_test, extreme = _range_test_stats(
-            closed, f.lower, f.upper, direction, after_open=f.candle_open_times[2]
+        test_stats = history.tests if history is not None else lambda lo, hi, dr, after_open: _range_test_stats(closed, lo, hi, dr, after_open)
+        first_test, extreme = test_stats(
+            f.lower, f.upper, direction, after_open=f.candle_open_times[2]
         )
         fz = EntryZoneDraft(
             type="FVG", direction=direction, lower=f.lower, upper=f.upper,
@@ -324,17 +358,22 @@ def detect_entry_zones(
         zones.append(fz)
         # OB: база перед FVG; без внешнего подтверждающего FVG — кандидат,
         # не готовая зона (§8.3). Внутренний FVG OB не подтверждает.
-        base = find_base(
-            [c for c in closed if c.open_time <= f.candle_open_times[2]], f, cfg
-        )
+        base_key = (f.formed_at, cfg.uncalibrated_consolidation_max_candles)
+        if history is not None:
+            if base_key not in history.bases:
+                history.bases[base_key] = find_base(closed, f, cfg, index=history.base_index)
+            base = history.bases[base_key]
+        else:
+            base = find_base(closed, f, cfg, index=base_index) if base_index is not None else find_base(
+                [c for c in closed if c.open_time <= f.candle_open_times[2]], f, cfg)
         if base is None or not is_external(base, f):
             rejected.append({
                 "type": "OB", "formed_at": f.formed_at,
                 "reason": "нет подтверждающего внешнего FVG — кандидат (§8.3)",
             })
             continue
-        ob_first_test, ob_extreme = _range_test_stats(
-            closed, base.lower, base.upper, direction,
+        ob_first_test, ob_extreme = test_stats(
+            base.lower, base.upper, direction,
             after_open=f.candle_open_times[2],
         )
         oz = EntryZoneDraft(

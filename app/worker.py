@@ -175,6 +175,8 @@ class Worker:
         self.seed_catalog_max_attempts = 5
 
     async def _calculate(self, fn, *args, **kwargs):
+        from functools import wraps
+        @wraps(fn)
         def atomic_calculation():
             from .services.runtime import CALC_OWNER, assert_owner
             claim = getattr(self, "_calc_claim", None)

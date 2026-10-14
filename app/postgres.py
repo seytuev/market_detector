@@ -20,13 +20,14 @@ SCHEMA_VERSION = 1
 
 
 class Row(tuple):
-    def __new__(cls, names, values):
+    def __new__(cls, names, values, index=None):
         row = super().__new__(cls, values)
         row._names = names
+        row._index = index if index is not None else {name: i for i, name in reversed(list(enumerate(names)))}
         return row
 
     def __getitem__(self, key):
-        return super().__getitem__(self._names.index(key) if isinstance(key, str) else key)
+        return tuple.__getitem__(self, self._index[key] if isinstance(key, str) else key)
 
     def keys(self):
         return self._names
@@ -34,7 +35,8 @@ class Row(tuple):
 
 def row_factory(cursor):
     names = tuple(c.name for c in cursor.description) if cursor.description else ()
-    return lambda values: Row(names, values)
+    index = {name: i for i, name in reversed(list(enumerate(names)))}
+    return lambda values: Row(names, values, index)
 
 
 def bind(parameters):

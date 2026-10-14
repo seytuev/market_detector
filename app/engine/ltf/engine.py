@@ -253,7 +253,7 @@ class LtfEngine:
             self._h1_cursors.pop(instrument_id, None)
             observations = [o for o in self.db.list_ltf_observations(instrument_id=instrument_id)
                             if o.state in ("waiting_structure", "active")]
-            result = self.replay_observation(observations[0].id) if observations else LtfTickResult()
+            result = self.replay_observation(observations[0].id, resume=True) if observations else LtfTickResult()
             if not observations:
                 last = self.db.last_candle(instrument_id, "H1")
                 if last is not None:
@@ -328,13 +328,16 @@ class LtfEngine:
                 # дольше — catchup: массовый догоняющий бэклог не уходит как
                 # текущий (§13)
                 lag = max(0, now - c.close_time)
-                self._process_candle(
-                    instrument_id, closed, idx,
-                    detected_at=now,
-                    processing_mode=_processing_mode(lag, grace_ms),
-                    detection_lag_ms=lag, result=result,
-                )
-                self.db.set_meta(key, str(c.close_time))
+                self.db._note_external_epoch()
+                with self.db.batch_writes():
+                    self._process_candle(
+                        instrument_id, closed, idx,
+                        detected_at=now,
+                        processing_mode=_processing_mode(lag, grace_ms),
+                        detection_lag_ms=lag, result=result,
+                        persist_roles=idx == len(closed) - 1,
+                    )
+                    self.db.set_meta(key, str(c.close_time))
                 fingerprint[str(c.open_time)] = [c.open, c.high, c.low, c.close]
                 fp_dirty = True
         finally:
@@ -448,7 +451,7 @@ class LtfEngine:
                 _processing_mode(lag, grace_ms), lag, result,
             )
 
-    def replay_observation(self, observation_id: int) -> LtfTickResult:
+    def replay_observation(self, observation_id: int, *, resume: bool = False) -> LtfTickResult:
         """§13: детерминированный прогон по сохранённым свечам тем же кодом.
 
         detected_at = закрытие свечи, события processing_mode='replay'
@@ -465,9 +468,41 @@ class LtfEngine:
         # detection_lag_ms событий зависел бы от wall-clock и повторный
         # replay давал бы другое состояние (§13: replay детерминирован)
         now = closed[-1].close_time if closed else _real_now_ms()
+        from .market_structure import RULE_VERSION as structure_rules
+        checkpoint_key = f"structure:replay_cursor:{obs.instrument_id}:{structure_rules}"
+        checkpoint = int(self.db.get_meta(checkpoint_key) or 0) if resume else 0
+        if resume and not checkpoint:
+            # Before the first observation/context there are no domain
+            # transitions to replay. Structure/local-leg inputs still warm
+            # from the entire prefix below; the upgrade already persisted its
+            # local-leg history in one pass.
+            starts = [o.activated_at for o in self.db.list_ltf_observations(
+                instrument_id=obs.instrument_id) if o.state in ('waiting_structure', 'active')]
+            row = self.db.conn.execute(
+                'SELECT MIN(started_at) FROM htf_context_episode WHERE instrument_id=?',
+                (obs.instrument_id,)).fetchone()
+            if row and row[0] is not None:
+                starts.append(int(row[0]))
+            if starts:
+                checkpoint = max((c.close_time for c in closed if c.close_time < min(starts)), default=0)
         self._batch = StructureBatch() if self.scan_cursors else None
         try:
+            if checkpoint and self._batch is not None:
+                # Restore pure machines from immutable inputs, without replaying
+                # already committed scenario/zone mutations after a restart.
+                prefix = [c for c in closed if c.close_time <= checkpoint]
+                if prefix:
+                    sync = sync_structure(self.db, self.cfg, obs.instrument_id, prefix,
+                                          prefix[-1].close_time, persist_roles=False,
+                                          batch=self._batch)
+                    from ...services.h1_setup import H1LegCursor
+                    cursor = H1LegCursor(obs.instrument_id, ordered_candles=True)
+                    cursor.advance(self.db, sync.avail, prefix, prefix[-1].close_time,
+                                   self.cfg, persist=False)
+                    self._h1_cursors[obs.instrument_id] = cursor
             for idx, c in enumerate(closed):
+                if c.close_time <= checkpoint:
+                    continue
                 # Refresh external publications between bars, then publish one
                 # atomic bar. Cached reads inside it need no separate epoch SQL.
                 self.db._note_external_epoch()
@@ -479,6 +514,8 @@ class LtfEngine:
                         # Historical roles are persisted only at the head.
                         persist_roles=idx == len(closed) - 1,
                     )
+                    if resume:
+                        self.db.set_meta(checkpoint_key, str(c.close_time))
         finally:
             self._batch = None
         if closed:
@@ -511,6 +548,12 @@ class LtfEngine:
         # (3) структура: pivots/роли идемпотентно в БД; события — далее
         sync = sync_structure(self.db, self.cfg, instrument_id, up_to, now,
                               persist_roles=persist_roles, batch=self._batch)
+        if self._batch is not None:
+            from ..orderblock import BaseIndex
+            if self._batch.base_index is None:
+                self._batch.base_index = BaseIndex(up_to)
+            else:
+                self._batch.base_index.update(up_to)
         result.pivots_new += sync.pivots_new
         # роли — из только что выполненного пересчёта (in-memory), а не из БД:
         # в replay роли в БД пишутся только на голове истории
@@ -524,6 +567,11 @@ class LtfEngine:
         if cursor is None:
             cursor = H1LegCursor(instrument_id, generation=gen, batch_id=batch_id,
                                  ordered_candles=True)
+            scanned = int(self.db.get_meta(f'h1:leg:scanned:{instrument_id}') or 0)
+            if 0 < scanned < candle.close_time:
+                prefix = [c for c in up_to if c.close_time <= scanned]
+                if prefix:
+                    cursor.advance(self.db, avail, prefix, scanned, self.cfg, persist=False)
             self._h1_cursors[instrument_id] = cursor
         else:
             # Новый пакет начинает structure_gen с единицы. Это не смена ролей:
@@ -533,7 +581,7 @@ class LtfEngine:
         cursor.advance(self.db, avail, up_to, candle.close_time, self.cfg)
         from ...services.htf_context import apply_context_bar, plan_context_bar
         self._bar_plan = plan_context_bar(
-            self.db, self.cfg, instrument_id, candle, avail, up_to, now,
+            self.db, self.cfg, instrument_id, candle, avail, up_to, now, batch=self._batch,
         )
         try:
             for obs in self.db.list_ltf_observations(instrument_id=instrument_id):
@@ -976,12 +1024,10 @@ class LtfEngine:
         if self._batch is not None:
             # пакетная обработка (replay/backlog): курсорный скан — та же
             # траектория машин, что у полного перескана на эту свечу
-            cur = self._batch.cursor(
-                ("open", obs.id), obs.direction, since,
+            scan = self._batch.scan(
+                obs.direction, since, now,
                 stop_on_cancellation=False, cancel_not_before_ms=None,
             )
-            scan = cur.scan(self._batch.avail, self._batch.closed,
-                            self._batch.open_times, now)
         else:
             scan = detect_breaks(avail, up_to, obs.direction, now,
                                  since_ms=since,
@@ -1266,6 +1312,7 @@ class LtfEngine:
             self.db, self._scenario_instrument(sc), sc.direction,
             avail, up_to, since, as_of=event_as_of,
             sweep_only_after=self._ctx_sweep_cursor.get(sc.id),
+            ordered=True,
         )
         if head is not None and head.closed:
             self._ctx_sweep_cursor[sc.id] = max(
@@ -1846,7 +1893,8 @@ class LtfEngine:
                  and previous[0] == signature and previous[1] <= candle.close_time + 1
                  else None)
         det = detect_entry_zones(up_to, movement, avail, sc.direction, self.cfg,
-                                 confirmed_after=since)
+                                 confirmed_after=since,
+                                 base_index=self._batch.base_index if self._batch is not None else None)
         linked: dict[tuple, int] = {}
         for zid in self._scenario_zone_ids(sc.id):
             z0 = self.db.get_ltf_entry_zone(zid)
@@ -2002,7 +2050,8 @@ class LtfEngine:
         )
         if mv is None:
             return
-        det = detect_entry_zones(up_to, mv, avail, sc.direction, self.cfg)
+        det = detect_entry_zones(up_to, mv, avail, sc.direction, self.cfg,
+                                 base_index=self._batch.base_index if self._batch is not None else None)
         movements = self.db.list_ltf_movements(sc.id)
         movement_id = movements[-1].id if movements else 0
         rng = self.db.get_current_ltf_range(sc.id)
@@ -2135,7 +2184,8 @@ class LtfEngine:
         if sc.origin_movement_id is None and se_id == sc.origin_break_event_id:
             self.db.update_ltf_scenario(sc.id, origin_movement_id=movement_id)
             sc.origin_movement_id = movement_id
-        det = detect_entry_zones(up_to, mv, avail, sc.direction, self.cfg)
+        det = detect_entry_zones(up_to, mv, avail, sc.direction, self.cfg,
+                                 base_index=self._batch.base_index if self._batch is not None else None)
         rng = self.db.get_current_ltf_range(sc.id)
         rng_draft = self._row_to_draft(rng, sc.direction) if rng else None
         ver = rng.version if rng else 0

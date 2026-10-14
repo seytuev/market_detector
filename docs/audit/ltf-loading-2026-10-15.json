@@ -1,0 +1,66 @@
+{
+  "date": "2026-10-15",
+  "environment": "Isolated copy of the application database; local PostgreSQL; 390x844 headless Chromium",
+  "baseline_production_structure_seconds": 132.677,
+  "optimized_service_seconds": {
+    "structure_cold": 5.486,
+    "structure_warm": 1.542,
+    "current": 0.569
+  },
+  "browser": {
+    "results": [
+      {
+        "events": 28,
+        "zones": 877,
+        "markers": 20,
+        "seconds": 8.721,
+        "page": "/?instrument=1&mode=h1#desk"
+      },
+      {
+        "events": 28,
+        "zones": 877,
+        "markers": 20,
+        "seconds": 4.679,
+        "page": "/ltf.html?instrument=1"
+      }
+    ],
+    "errors": [],
+    "requests": [
+      {
+        "url": "/api/ltf/instruments",
+        "status": 200
+      },
+      {
+        "url": "/api/ltf/instruments/1/current",
+        "status": 200
+      },
+      {
+        "url": "/api/ltf/instruments/1/structure?points=recent",
+        "status": 200
+      },
+      {
+        "url": "/api/ltf/instruments/1/workspace?include_chart=false",
+        "status": 200
+      },
+      {
+        "url": "/api/ltf/instruments/1/structure?points=recent",
+        "status": 200
+      }
+    ]
+  },
+  "restart_seconds": {
+    "no_new_h1": 0.001,
+    "first_new_h1": 8.631
+  },
+  "repair_checkpoint_run": {
+    "processed_h1": 5387,
+    "seconds": 487.14
+  },
+  "verification": {
+    "sqlite_focused_suite_passed": 200,
+    "postgres_behavior_suite_passed": 84,
+    "postgres_native_contracts_passed": 10,
+    "frontend_single_flight_check": "passed"
+  },
+  "note": "Local measurements, not a production latency guarantee. Historical rule migration is resumable and remains a background warm-up; normal requests use closed-bar caches."
+}

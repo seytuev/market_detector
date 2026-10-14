@@ -29,6 +29,7 @@ from ..db import Database
 from ..engine.ltf.context import context_complete
 from ..engine.ltf.eligibility import evaluate_final
 from ..models import now_ms
+from ..services.h1_setup import projection_only
 from ..models_ltf import (
     LTF_LEGACY_DECISIONS,
     LTF_REVIEW_DECISIONS,
@@ -258,7 +259,7 @@ def register_ltf_routes(app, db: Database, settings, require_auth, ltf_engine=No
         # сборка слоёв — app/services/overview.py (используется и ботом);
         # F04: чтение в одной read-транзакции, state_version — из того же
         # счётчика state_seq, что и /current (клиент сверяет версии пакета)
-        with db.read_tx():
+        with projection_only(db), db.read_tx():
             layers = observation_chart_layers(db, settings, observation_id)
             seq = db.get_state_seq()
         if layers is None:
@@ -332,7 +333,7 @@ def register_ltf_routes(app, db: Database, settings, require_auth, ltf_engine=No
             raise HTTPException(status_code=400, detail="Неизвестный режим точек")
         if limit < 1 or limit > 2000 or page < 0:
             raise HTTPException(status_code=400, detail="Некорректная страница истории")
-        with db.read_tx():
+        with projection_only(db), db.read_tx():
             data = instrument_structure(
                 db, settings, instrument_id, context_id=context_id,
                 as_of=as_of, window_from=window_from, window_to=window_to,
@@ -386,6 +387,40 @@ def register_ltf_routes(app, db: Database, settings, require_auth, ltf_engine=No
                 for e in sorted(events, key=lambda e: (e.occurred_at, e.id))
             ],
         }
+
+    @app.get('/api/ltf/instruments/{instrument_id}/workspace', dependencies=[Depends(require_auth)])
+    def ltf_workspace(instrument_id: int, points: str = 'recent', diagnostic: bool = False,
+                      zone_history: bool = False, include_chart: bool = True,
+                      window_from: Optional[int] = Query(None, alias='from'),
+                      window_to: Optional[int] = Query(None, alias='to')):
+        """One committed snapshot for the whole LTF workspace.
+
+        Separate HTTP reads can never agree on state_seq during a quote stream
+        or historical replay. Read the six components in one transaction.
+        """
+        if points not in ('recent', 'history', 'hidden'):
+            raise HTTPException(status_code=400, detail='Неизвестный режим точек')
+        with projection_only(db), db.read_tx():
+            view = ltf_instrument_current(instrument_id)
+            if not include_chart:
+                return dict(view=view, assets=ltf_instruments())
+            obs_id = view.get('selected_context_id')
+            layers = ltf_observation_chart(obs_id) if obs_id else None
+            h1 = instrument_structure(db, settings, instrument_id, context_id=obs_id,
+                                      points=points, diagnostic=diagnostic,
+                                      zone_history=zone_history,
+                                      window_from=window_from, window_to=window_to,
+                                      context_layers=layers)
+            candles = db.get_candles(instrument_id, 'H1', closed_only=False, limit=2500)
+            return dict(view=view, h1=h1,
+                        layers=layers,
+                        journal=ltf_observation_journal(obs_id) if obs_id else None,
+                        assets=ltf_instruments(),
+                        candles=[dict(time=c.open_time//1000, open=c.open, high=c.high,
+                                      low=c.low, close=c.close, closed=c.closed) for c in candles],
+                        candleVersion=db.get_state_seq(),
+                        candleVersions=dict(candles=db.get_domain(f'seq:candles:{instrument_id}:H1'),
+                                            quote=db.get_domain(f'seq:quote:{instrument_id}')))
 
     # ------------------------- таблица Entry Zones (§3.4) -------------------------
 

@@ -115,6 +115,11 @@ class Database:
         self.ltf_cache_enabled = ltf_cache
         self._ltf_cache_lock = threading.RLock()
         self._ltf_cache_version = 0
+        self._ltf_full_version = 0
+        self._ltf_table_versions: dict[str, int] = {}
+        self._ltf_bulk_versions: dict[str, int] = {}
+        self._ltf_row_versions: dict[tuple, int] = {}
+        self._ltf_sc_obs: dict[int, int] = {}
         self._ltf_cache: dict[tuple, tuple[int, Any]] = {}
         # Кэш выборок get_zones: сканер при реплее дёргает её несколько раз
         # на свечу, каждый раз десериализуя все зоны. Инвалидация — любой
@@ -264,7 +269,7 @@ class Database:
 
     def _note_external_epoch(self) -> None:
         """Сбросить кэши, если state_seq изменил другой процесс."""
-        if self._batch_depth:
+        if self._batch_depth or self._read_depth:
             return
         now = time.monotonic()
         with self._epoch_lock:
@@ -288,11 +293,9 @@ class Database:
     def _drop_read_caches(self) -> None:
         """Полный сброс in-memory кэшей чтения (после rollback батча)."""
         with self._zone_cache_lock:
-            self._zone_cache_version += 1
             self._zone_cache.clear()
         self._zone_obj_cache.clear()
         with self._ltf_cache_lock:
-            self._ltf_cache_version += 1
             self._ltf_cache.clear()
         with self._read_cache_lock:
             self._visits_cache.clear()
@@ -1488,13 +1491,28 @@ class Database:
 
     # ---------- кэш горячих LTF-чтений (replay: per-candle N+1) ----------
 
-    def _bump_ltf_cache(self) -> None:
+    def _bump_ltf_cache(self, table: Optional[str] = None, row_id: Optional[int] = None) -> None:
         """Инвалидация кэша LTF-чтений — вызывается из каждого метода записи
         в ltf_* таблицы (insert/update/upsert/delete)."""
         with self._ltf_cache_lock:
             self._ltf_cache_version += 1
-            self._ltf_cache.clear()
+            if table is None:
+                self._ltf_full_version += 1
+                self._ltf_cache.clear()
+            else:
+                self._ltf_table_versions[table] = self._ltf_table_versions.get(table, 0) + 1
+                if row_id is None:
+                    self._ltf_bulk_versions[table] = self._ltf_bulk_versions.get(table, 0) + 1
+                else:
+                    key = (table, row_id)
+                    self._ltf_row_versions[key] = self._ltf_row_versions.get(key, 0) + 1
+                    if table == 'ltf_scenario':
+                        obs_id = self._ltf_sc_obs.get(row_id)
+                        if obs_id is not None:
+                            key = ('scenario_observation', obs_id)
+                            self._ltf_row_versions[key] = self._ltf_row_versions.get(key, 0) + 1
         self.bump_state_seq()
+        self.bump_domain('seq:ltf')
 
     def _ltf_cached(self, key: tuple, loader) -> Any:
         """Выборка через кэш версии _ltf_cache_version. Списки отдаются
@@ -1503,7 +1521,23 @@ class Database:
             return loader()
         self._note_external_epoch()
         with self._ltf_cache_lock:
-            version = self._ltf_cache_version
+            table = {
+                'ltf_obs': 'ltf_observation', 'ltf_obs_zone': 'ltf_observation', 'ltf_obs_list': 'ltf_observation',
+                'ltf_sc': 'ltf_scenario', 'ltf_sc_list': 'ltf_scenario', 'ltf_sc_active': 'ltf_scenario', 'ltf_sc_ins': 'ltf_scenario',
+                'ltf_pivot': 'ltf_pivot', 'ltf_pivots': 'ltf_pivot',
+                'ltf_has_se': 'ltf_structure_event', 'ltf_se_list': 'ltf_structure_event',
+                'ltf_mv_list': 'ltf_movement', 'ltf_rng_cur': 'ltf_range', 'ltf_rng_list': 'ltf_range',
+                'ltf_ez': 'ltf_entry_zone', 'ltf_sce': 'ltf_scenario_entry',
+                'ltf_lt': 'ltf_liquidity_test', 'ltf_ev': 'ltf_event',
+            }.get(key[0])
+            def token():
+                if key[0] in ('ltf_obs', 'ltf_sc', 'ltf_pivot', 'ltf_ez', 'ltf_sc_active'):
+                    scope = 'scenario_observation' if key[0] == 'ltf_sc_active' else table
+                    return (self._ltf_full_version, self._ltf_bulk_versions.get(table, 0),
+                            self._ltf_row_versions.get((scope, key[1]), 0))
+                return ((self._ltf_full_version, self._ltf_table_versions.get(table, 0))
+                        if table else self._ltf_cache_version)
+            version = token()
             hit = self._ltf_cache.get(key)
             if hit is not None and hit[0] == version:
                 value = hit[1]
@@ -1511,7 +1545,7 @@ class Database:
         value = loader()
         with self._ltf_cache_lock:
             # версия могла измениться, пока шёл запрос — тогда не кэшируем
-            if version == self._ltf_cache_version:
+            if version == token():
                 self._ltf_cache[key] = (version, value)
         return list(value) if isinstance(value, list) else value
 
@@ -2351,7 +2385,11 @@ class Database:
         cols = ", ".join(f'"{k}"=?' for k in norm)
         self.conn.execute(f"UPDATE {table} SET {cols} WHERE id=?", (*norm.values(), row_id))
         self._commit()
-        self._bump_ltf_cache()
+        if table == 'ltf_scenario' and row_id not in self._ltf_sc_obs:
+            row = self.conn.execute('SELECT observation_id FROM ltf_scenario WHERE id=?', (row_id,)).fetchone()
+            if row:
+                self._ltf_sc_obs[row_id] = row[0]
+        self._bump_ltf_cache(table, row_id)
 
     def _ltf_observation_iid(self, observation_id: int) -> Optional[int]:
         """instrument_id наблюдения — иммутабелен, кэшируется на процесс
@@ -2406,13 +2444,13 @@ class Database:
             (payload["instrument_id"], payload["scenario_id"], payload["rule_version"], encoded),
         )
         self._commit()
-        self._bump_ltf_cache()
+        self._bump_ltf_cache('htf_idea')
 
     def close_htf_idea(self, idea_id: int, closed_at: int) -> None:
         self.conn.execute("UPDATE htf_idea SET manual_closed_at=COALESCE(manual_closed_at,?) WHERE id=?",
                           (closed_at, idea_id))
         self._commit()
-        self._bump_ltf_cache()
+        self._bump_ltf_cache('htf_idea')
 
     def insert_ltf_observation(self, o: LtfObservation) -> LtfObservation:
         """Идемпотентно по UNIQUE(zone_id, cycle_id): повторное HTF-событие
@@ -2430,7 +2468,7 @@ class Database:
              o.created_at, o.updated_at, json.dumps(o.evidence, ensure_ascii=False)),
         )
         self._commit()
-        self._bump_ltf_cache()
+        self._bump_ltf_cache('ltf_observation')
         if cur.rowcount == 1:
             o.id = int(cur.lastrowid)
             # новое наблюдение — состояние сценарного домена инструмента (§13)
@@ -2534,7 +2572,7 @@ class Database:
              s.created_at, s.updated_at),
         )
         self._commit()
-        self._bump_ltf_cache()
+        self._bump_ltf_cache('ltf_scenario')
         s.id = int(cur.lastrowid)
         iid = self._ltf_observation_iid(s.observation_id)
         if iid is not None:
@@ -2598,16 +2636,17 @@ class Database:
             return [self._to_ltf_scenario(r) for r in rows]
         return self._ltf_cached(("ltf_sc_ins", instrument_id), load)
 
-    def ltf_projection_bundle(self, instrument_id: int) -> dict[str, Any]:
+    def ltf_projection_bundle(self, instrument_id: int, as_of: Optional[int] = None) -> dict[str, Any]:
         """Дети сценариев инструмента одним проходом на таблицу.
 
         Порядок внутри списков совпадает с list_ltf_*: события структуры
         по occurred_at, движения по start_at, привязки по added_at,
-        диапазоны по version, тесты по touch_at. Журнал ltf_event — не
-        больше 1000 последних на сценарий, свежие первыми: context_flags
-        оставляет последнюю запись htf_fvg50 из этого окна.
+        диапазоны по version, тесты по touch_at. Для context_complete
+        достаточно одного counter_sweep и последнего применяемого htf_fvg50
+        из прежнего окна 1000 событий; полный журнал здесь не материализуется.
         """
         def load() -> dict[str, Any]:
+            moment = as_of if as_of is not None else now_ms()
             scenarios = self.list_ltf_scenarios_for_instrument(instrument_id)
             by_obs: dict[int, list[LtfScenario]] = {}
             for sc in scenarios:
@@ -2632,12 +2671,24 @@ class Database:
             )
             entries = self._bundle_by_scenario(
                 instrument_id,
-                """SELECT e.* FROM ltf_scenario_entry e
-                   JOIN ltf_scenario s ON s.id = e.scenario_id
-                   JOIN ltf_observation o ON o.id = s.observation_id
-                   WHERE o.instrument_id=?
-                   ORDER BY e.added_at, e.id""",
+                """WITH versions AS (
+                       SELECT scenario_id, MAX(version) AS version FROM ltf_range
+                       WHERE available_at<=? GROUP BY scenario_id
+                   ), ranked AS (
+                       SELECT e.*, ROW_NUMBER() OVER (
+                           PARTITION BY e.scenario_id, e.entry_zone_id
+                           ORDER BY e.added_at, e.id) AS _first,
+                           COALESCE(v.version, 0) AS _version
+                       FROM ltf_scenario_entry e
+                       JOIN ltf_scenario s ON s.id=e.scenario_id
+                       JOIN ltf_observation o ON o.id=s.observation_id
+                       LEFT JOIN versions v ON v.scenario_id=s.id
+                       WHERE o.instrument_id=? AND e.added_at<=?
+                   ) SELECT * FROM ranked
+                   WHERE _first=1 OR range_version=_version
+                   ORDER BY added_at, id""",
                 self._to_ltf_scenario_entry,
+                parameters=(moment, instrument_id, moment),
             )
             ranges = self._bundle_by_scenario(
                 instrument_id,
@@ -2659,7 +2710,7 @@ class Database:
             )
             ltf_events = self._bundle_by_scenario(
                 instrument_id,
-                """SELECT * FROM (
+                """WITH ranked AS (
                      SELECT e.*, ROW_NUMBER() OVER (
                        PARTITION BY e.scenario_id
                        ORDER BY e.occurred_at DESC, e.id DESC
@@ -2668,8 +2719,13 @@ class Database:
                      JOIN ltf_scenario s ON s.id = e.scenario_id
                      JOIN ltf_observation o ON o.id = s.observation_id
                      WHERE o.instrument_id=?
-                   ) ranked
-                   WHERE _rn <= 1000
+                   ), facts AS (
+                     SELECT ranked.*, ROW_NUMBER() OVER (
+                       PARTITION BY scenario_id, json_extract(payload, '$.fact')
+                       ORDER BY occurred_at, id) AS _fact_rn
+                     FROM ranked WHERE _rn<=1000 AND kind='context_update'
+                       AND json_extract(payload, '$.fact') IN ('counter_sweep','htf_fvg50')
+                   ) SELECT * FROM facts WHERE _fact_rn=1
                    ORDER BY occurred_at DESC, id DESC""",
                 self._to_ltf_event,
             )
@@ -2693,11 +2749,11 @@ class Database:
                 "ltf_events": ltf_events,
                 "discovered": discovered,
             }
-        return self._ltf_cached(("ltf_proj", instrument_id), load)
+        return self._ltf_cached(("ltf_proj", instrument_id, as_of), load)
 
-    def _bundle_by_scenario(self, instrument_id: int, sql: str, convert) -> dict[int, list]:
+    def _bundle_by_scenario(self, instrument_id: int, sql: str, convert, *, parameters=None) -> dict[int, list]:
         grouped: dict[int, list] = {}
-        for row in self.conn.execute(sql, (instrument_id,)).fetchall():
+        for row in self.conn.execute(sql, parameters if parameters is not None else (instrument_id,)).fetchall():
             item = convert(row)
             if item.scenario_id is None:
                 continue
@@ -2740,7 +2796,7 @@ class Database:
              p.calc_version_id, p.superseded_by),
         )
         self._commit()
-        self._bump_ltf_cache()
+        self._bump_ltf_cache('ltf_pivot')
         return int(cur.lastrowid)
 
     def get_or_create_calc_version(
@@ -2794,7 +2850,7 @@ class Database:
             (calc_version_id, instrument_id),
         )
         self._commit()
-        self._bump_ltf_cache()
+        self._bump_ltf_cache('ltf_pivot')
         return cur.rowcount
 
     def get_ltf_pivot(self, pivot_id: int) -> Optional[LtfPivot]:
@@ -2840,7 +2896,7 @@ class Database:
             "DELETE FROM ltf_pivot WHERE instrument_id=?", (instrument_id,)
         )
         self._commit()
-        self._bump_ltf_cache()
+        self._bump_ltf_cache('ltf_pivot')
         return cur.rowcount
 
     def update_ltf_pivot_role(self, pivot_id: int, new_role: str, changed_at: int) -> None:
@@ -2861,7 +2917,7 @@ class Database:
             (pivot_id, old_role, new_role, changed_at),
         )
         self._commit()
-        self._bump_ltf_cache()
+        self._bump_ltf_cache('ltf_pivot')
 
     def list_ltf_pivot_role_log(self, pivot_id: int) -> list[dict[str, Any]]:
         return [
@@ -2949,7 +3005,7 @@ class Database:
              json.dumps(e.evidence, ensure_ascii=False)),
         )
         self._commit()
-        self._bump_ltf_cache()
+        self._bump_ltf_cache('ltf_structure_event')
         if cur.rowcount == 1:
             e.id = int(cur.lastrowid)
             return e
@@ -3037,7 +3093,7 @@ class Database:
              m.provenance_status),
         )
         self._commit()
-        self._bump_ltf_cache()
+        self._bump_ltf_cache('ltf_movement')
         return int(cur.lastrowid)
 
     def get_ltf_movement(self, movement_id: int) -> Optional[LtfMovement]:
@@ -3085,7 +3141,7 @@ class Database:
              rng.structural_epoch_id),
         )
         self._commit()
-        self._bump_ltf_cache()
+        self._bump_ltf_cache('ltf_range')
         return int(cur.lastrowid)
 
     def get_current_ltf_range(self, scenario_id: int) -> Optional[LtfRange]:
@@ -3213,7 +3269,7 @@ class Database:
              z.rule_version, z.evidence_json()),
         )
         self._commit()
-        self._bump_ltf_cache()
+        self._bump_ltf_cache('ltf_entry_zone')
         if cur.rowcount == 1:
             z.id = int(cur.lastrowid)
             return z
@@ -3301,7 +3357,7 @@ class Database:
              se.overlap, se.state, se.reason, se.added_at, se.updated_at),
         )
         self._commit()
-        self._bump_ltf_cache()
+        self._bump_ltf_cache('ltf_scenario_entry')
         # после upsert lastrowid ненадёжен — читаем строку по уникальному ключу
         r = self.conn.execute(
             """SELECT * FROM ltf_scenario_entry
@@ -3383,7 +3439,7 @@ class Database:
              t.candle_open_time, t.state, t.close_price, t.sweep_at, t.resolved_at),
         )
         self._commit()
-        self._bump_ltf_cache()
+        self._bump_ltf_cache('ltf_liquidity_test')
         return int(cur.lastrowid)
 
     def update_ltf_liquidity_test(self, test_id: int, **fields: Any) -> None:
@@ -3440,7 +3496,7 @@ class Database:
              e.processing_mode, e.detection_lag_ms),
         )
         self._commit()
-        self._bump_ltf_cache()
+        self._bump_ltf_cache('ltf_event')
         if cur.rowcount == 1:
             e.id = int(cur.lastrowid)
             iid = self._ltf_observation_iid(e.observation_id)
@@ -3506,7 +3562,7 @@ class Database:
             "UPDATE ltf_event SET delivered=1 WHERE id=?", (event_id,)
         )
         self._commit()
-        self._bump_ltf_cache()
+        self._bump_ltf_cache('ltf_event')
 
     def update_ltf_event_chart(self, event_id: int, state: str,
                                bump_attempts: bool = False) -> None:
@@ -3524,7 +3580,7 @@ class Database:
                 (state, event_id),
             )
         self._commit()
-        self._bump_ltf_cache()
+        self._bump_ltf_cache('ltf_event')
 
     def pending_ltf_charts(self, limit: int = 50) -> list[LtfEvent]:
         """События с доставленным текстом, но недоставленным графиком —
@@ -4607,7 +4663,7 @@ class Database:
              json.dumps(list(members)), revision, state, confirmed_at, created_at),
         )
         self._commit()
-        self._bump_ltf_cache()
+        self._bump_ltf_cache('ltf_plateau')
         if cur.rowcount == 1:
             return int(cur.lastrowid)
         row = self.conn.execute(

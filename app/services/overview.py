@@ -1757,6 +1757,7 @@ def instrument_structure(
     page: int = 0,
     limit: int = 500,
     zone_history: bool = False,
+    context_layers: Optional[dict[str, Any]] = None,
 ) -> Optional[dict[str, Any]]:
     """Общая структура H1 инструмента (F12–F14).
 
@@ -1811,7 +1812,7 @@ def instrument_structure(
             and obs.instrument_id == instrument_id
             and eligible_htf_parent(parent, settings.detector, as_of=now)
         ):
-            layers = observation_chart_layers(db, settings, obs.id)
+            layers = context_layers if context_layers is not None else observation_chart_layers(db, settings, obs.id)
             if layers is not None:
                 used_context = obs.id
                 ranges = layers["ranges"]
@@ -1838,7 +1839,7 @@ def instrument_structure(
     from .h1_chart import assemble_h1_layers
     extra = assemble_h1_layers(
         db, settings, instrument_id,
-        as_of=now, window_from=window_from, window_to=window_to,
+        as_of=as_of, window_from=window_from, window_to=window_to,
         points=points, diagnostic=diagnostic, page=page, limit=limit,
         context_id=used_context, zone_history=zone_history,
         # Заполненный now — не запрос прошлого кадра. История PD только у явного as_of.

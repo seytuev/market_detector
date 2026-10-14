@@ -1,5 +1,6 @@
 """Synchronization acceptance: real engines, deterministic exchange and clock."""
 from __future__ import annotations
+import json
 
 import asyncio
 import threading
@@ -306,6 +307,20 @@ async def test_restart_marks_interrupted_job(market):
     DataSync(worker).recover_interrupted()
     assert read_json(db, JOB_KEY)["error"] == "interrupted_by_restart"
     assert read_json(db, "data_sync:job:interrupted")["status"] == "failed"
+
+
+@pytest.mark.parametrize('status', ['failed', 'partial'])
+async def test_restart_clears_timed_out_job_that_was_still_processing(market, status):
+    db, worker, _, _, _, _ = market
+    db.set_meta(JOB_KEY, json.dumps(dict(job_id='timed-out', status=status,
+        processing_continues=True, results=[dict(status='processing')],
+        stages=[dict(name='quotes', status='waiting_calculation')])))
+    worker.data_sync.recover_interrupted()
+    job = read_json(db, JOB_KEY)
+    assert job['processing_continues'] is False
+    assert job['results'][0]['status'] == 'failed'
+    assert job['stages'][0]['status'] == 'failed'
+    assert job['error'] == 'interrupted_by_restart'
 
 
 async def test_api_auth_availability_status_and_job(market):

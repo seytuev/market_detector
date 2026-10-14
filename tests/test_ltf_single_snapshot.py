@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import pytest
+import threading
 from fastapi.testclient import TestClient
 
 from app.config import Settings
@@ -28,6 +29,32 @@ from tests.conftest import make_candle
 TOKEN = "test-token"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
 T0 = 1_780_000_000_000
+
+
+@pytest.mark.parametrize('replaying', [False, True])
+def test_workspace_is_one_snapshot_even_when_quote_commits_mid_request(client, db, settings, instrument_id, monkeypatch, replaying):
+    import app.web.ltf_api as routes
+    _make_live(db, instrument_id, 100)
+    db.set_meta(f'replaying:{instrument_id}', str(int(replaying)))
+    original = routes.instrument_structure
+    def interleaved(*args, **kwargs):
+        def publish():
+            with db.batch_writes():
+                db.set_quote(instrument_id, 101, now_ms()+100)
+                db.bump_state_seq()
+        writer = threading.Thread(target=publish)
+        writer.start(); writer.join(timeout=3)
+        assert not writer.is_alive()
+        return original(*args, **kwargs)
+    monkeypatch.setattr(routes, 'instrument_structure', interleaved)
+    assert client.get(f'/api/ltf/instruments/{instrument_id}/workspace').status_code == 401
+    response = client.get(f'/api/ltf/instruments/{instrument_id}/workspace', headers=AUTH)
+    assert response.status_code == 200
+    result = response.json()
+    version = result['view']['state_version']
+    assert result['candleVersion'] == result['assets']['state_version'] == result['h1']['snapshot']['state_version'] == version
+    assert db.get_state_seq() > version
+    assert result['view']['price'] == 100
 
 
 @pytest.fixture()

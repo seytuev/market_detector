@@ -739,6 +739,8 @@ def create_app(
                 domain_version_provider=db.get_domain)
 
     app = FastAPI(title="LevelFrame", version=APP_VERSION, lifespan=metrics_lifespan)
+    from starlette.middleware.gzip import GZipMiddleware
+    app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=3)
     app.state.db = db
     app.state.settings = settings
     app.state.instance_id = str(uuid.uuid4())

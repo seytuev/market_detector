@@ -174,6 +174,31 @@ def test_replay_state_identical_with_and_without_cache():
     assert diffs == [], f"расхождения таблиц: {diffs}"
 
 
+def test_resumable_replay_matches_uninterrupted_replay_after_crash():
+    snapshots = []
+    for interrupted in (False, True):
+        db = _build_db(20, ltf_cache=True)
+        obs = db.list_ltf_observations()[0]
+        engine = LtfEngine(db, _CFG)
+        if interrupted:
+            original = engine._process_candle
+            count = 0
+            def crash(*args, **kwargs):
+                nonlocal count
+                count += 1
+                original(*args, **kwargs)
+                if count == 22:
+                    raise RuntimeError('simulated crash inside atomic bar')
+            engine._process_candle = crash
+            with pytest.raises(RuntimeError, match='simulated crash'):
+                engine.replay_observation(obs.id, resume=True)
+            engine = LtfEngine(db, _CFG)
+        engine.replay_observation(obs.id, resume=True)
+        snapshots.append(_dump_state(db))
+        db.close()
+    assert snapshots[0] == snapshots[1]
+
+
 def test_replay_state_identical_random_walk_multi_obs():
     """Стресс-идентичность: 600 свечей random-walk (фиксированный seed),
     два наблюдения (BEAR+BULL), промежуточные replay — состояние всех

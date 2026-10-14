@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from copy import deepcopy
 from typing import Any, Optional
 
@@ -24,6 +25,17 @@ from ..models_ltf import LtfEntryZone
 
 H1_MS = 3_600_000
 FRAME_PAD_BARS = 6
+
+
+@contextmanager
+def projection_only(db):
+    """HTTP reads never compete with the worker to reconstruct local legs."""
+    previous = getattr(db._local, 'projection_only', False)
+    db._local.projection_only = True
+    try:
+        yield
+    finally:
+        db._local.projection_only = previous
 
 
 def pd_bounds(direction: str, origin: float, endpoint: float):
@@ -461,7 +473,7 @@ class H1LegCursor:
             return True
         return False
 
-    def advance(self, db, pivots, candles, as_of: int, cfg=None) -> None:
+    def advance(self, db, pivots, candles, as_of: int, cfg=None, *, persist=True) -> None:
         if self._guard:
             return
         # The engine supplies an already ordered prefix of closed H1 bars.
@@ -493,7 +505,7 @@ class H1LegCursor:
                 fresh = []
             else:
                 self._clear()
-                self.advance(db, pivots, candles, as_of, cfg)
+                self.advance(db, pivots, candles, as_of, cfg, persist=persist)
                 return
         fresh.sort(key=lambda p: (int(p.confirmed_at), int(p.pivot_at)))
         if self.ps and fresh and (
@@ -503,7 +515,7 @@ class H1LegCursor:
             self._guard = True
             self._clear()
             self._guard = False
-            self.advance(db, pivots, candles, as_of, cfg)
+            self.advance(db, pivots, candles, as_of, cfg, persist=persist)
             return
         for pivot in fresh:
             self.ps.append(pivot)
@@ -527,11 +539,14 @@ class H1LegCursor:
             emitted = self.bear.on_candle(candle) + self.bull.on_candle(candle)
             seen.append(candle)
             dirty = apply_candle(self.state, candle, emitted, self.known, seen)
-            for leg in dirty:
-                _persist_leg(db, self.instrument_id, leg)
+            if persist:
+                for leg in dirty:
+                    _persist_leg(db, self.instrument_id, leg)
             self.last_open = int(candle.open_time)
             self._candle_signatures.append(self._candle_signature(candle))
-            if self.checkpoint_interval > 0 and (position + 1) % self.checkpoint_interval == 0:
+            if (self.checkpoint_interval > 0
+                    and (position + 1) % self.checkpoint_interval == 0
+                    and position >= len(closed) - 8 * self.checkpoint_interval):
                 self._checkpoints[self.last_open] = {
                     "close": int(candle.close_time),
                     "length": position + 1,
@@ -540,14 +555,15 @@ class H1LegCursor:
                 }
                 while len(self._checkpoints) > 8:
                     self._checkpoints.pop(next(iter(self._checkpoints)))
-        if closed:
+        if closed and persist:
             db.set_meta(f"h1:main_structure:{self.instrument_id}",
                         json.dumps(self.bear.machine.main_structure(), ensure_ascii=False))
             db.set_meta(
                 f"h1:leg:scanned:{self.instrument_id}",
                 str(int(closed[-1].close_time)),
             )
-        db._commit()
+        if persist:
+            db._commit()
 
 
 def _evidence(leg: dict) -> str:
@@ -680,7 +696,7 @@ def ensure_local_legs(db, cfg, instrument_id: int, candles, pivots, as_of: int) 
     """
     # The worker owns reconstruction during replay. UI polling must use the
     # persisted snapshot instead of launching another full history calculation.
-    if db.get_meta(f"replaying:{instrument_id}") == "1":
+    if getattr(db._local, 'projection_only', False) or db.get_meta(f"replaying:{instrument_id}") == "1":
         return
     latest = max(
         (int(c.close_time) for c in candles if c.closed and int(c.close_time) <= int(as_of)),

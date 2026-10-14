@@ -3830,15 +3830,27 @@ function renderDeskExtras() {
 // блокирует его; ошибка чтения — карточка/зоны скрываются, график живёт
 async function loadDeskExtras() {
   const id = state.instrumentId;
+  if (deskData.pending && deskData.pending.id === id) return deskData.pending.promise;
+  const pending = {id};
+  deskData.pending = pending;
+  pending.promise = fetchDeskExtras().finally(() => {
+    if (deskData.pending === pending) deskData.pending = null;
+  });
+  return pending.promise;
+}
+
+async function fetchDeskExtras() {
+  const id = state.instrumentId;
   const req = ++deskData.reqSeq;
   let assetsRes = null;
   let cur = null;
   let failed = false;
   try {
-    [assetsRes, cur] = await Promise.all([
-      api('/api/ltf/instruments'),
-      id ? api(`/api/ltf/instruments/${id}/current`) : Promise.resolve(null),
-    ]);
+    if (id) {
+      const bundle = await api(`/api/ltf/instruments/${id}/workspace?include_chart=false`);
+      assetsRes = bundle.assets;
+      cur = bundle.view;
+    } else assetsRes = await api('/api/ltf/instruments');
   } catch (e) {
     failed = true;
   }
@@ -3854,7 +3866,7 @@ async function loadDeskExtras() {
     if (!deskData.versionRetried) {
       deskData.versionRetried = true;
       deskData.reqSeq -= 1;
-      return loadDeskExtras();
+      return fetchDeskExtras();
     }
     deskData.readError = true;
     renderDeskScenario();
@@ -4030,7 +4042,9 @@ async function loadH1Markers() {
     return;
   }
   const q = window.H1Layers.queryString(h1QueryExtra());
-  const key = JSON.stringify([id, mode, q, state.candleVersion, deskData.current?.state_version]);
+  // A quote or forming candle must not replace an in-flight structure read.
+  // Otherwise a slow response is discarded forever by the next refresh.
+  const key = JSON.stringify([id, mode, q]);
   if (state.h1Pending && state.h1Pending.key === key) return state.h1Pending.promise;
   const pending = { key };
   state.h1Pending = pending;
@@ -4052,13 +4066,14 @@ async function fetchH1Markers(id, mode, q) {
   } catch (e) {
     if (token !== state.h1Req || id !== state.instrumentId || state.chartMode !== mode) return;
     state.h1LoadError = true;
-    state.h1Layers = {
+    const hadLayers = state.h1Layers?.snapshot?.instrument_id === id;
+    state.h1Layers = hadLayers ? state.h1Layers : {
       detected_zones: [],
       structural_events: [],
       layer_status: { zones: { state: 'error', total: 0 } },
       snapshot: {},
     };
-    state.candleSeries.setMarkers([]);
+    if (!hadLayers) state.candleSeries.setMarkers([]);
     drawZones();
     return;
   }

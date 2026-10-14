@@ -734,7 +734,7 @@ def note_opposing_source_passed(db, zone: Zone, pass_at: int, cfg=None) -> bool:
 
 
 def _note_reverse_break_for_opposing(
-    db, instrument_id: int, candle, avail, candles, now: int, cfg=None,
+    db, instrument_id: int, candle, avail, candles, now: int, cfg=None, *, batch=None,
 ) -> None:
     """Факт (б) возврата: обратный BOS/SMS H1 в направлении A, пока действует
     встречный контекст B. Первый обратный слом сохраняется (правило 8/R36:
@@ -758,7 +758,7 @@ def _note_reverse_break_for_opposing(
         return
     event = _primary_break(
         avail, candles, Direction(pred_dir), candle, now,
-        since_ms=int(ctx["started_at"]),
+        since_ms=int(ctx["started_at"]), batch=batch,
     )
     if event is None:
         return
@@ -985,12 +985,12 @@ def remember_break(
     _commit(db)
 
 
-def _primary_break(avail, candles, direction: Direction, candle, now: int, since_ms: int):
+def _primary_break(avail, candles, direction: Direction, candle, now: int, since_ms: int, *, batch=None):
     """Причинное структурное событие свечи: BOS и SMS равноправны (§6.1),
     тип сохраняется (SMS не переименовывается в BOS). На одной свече оба —
     детерминированный выбор по доступности уровня: раньше подтверждённый
     pivot, затем level_key; тип в выборе не участвует."""
-    scan = detect_breaks(
+    scan = batch.scan(direction, since_ms, now, stop_on_cancellation=False) if batch is not None else detect_breaks(
         avail, candles, direction, now, since_ms=since_ms, stop_on_cancellation=False,
     )
     hits = [
@@ -1018,12 +1018,12 @@ def _order_unknown(sources: list[dict], candle) -> bool:
     return False
 
 
-def plan_context_bar(db, cfg, instrument_id: int, candle, avail, candles, now: int) -> Optional[dict]:
+def plan_context_bar(db, cfg, instrument_id: int, candle, avail, candles, now: int, *, batch=None) -> Optional[dict]:
     """Решение по бару до журнала отмен: ключ перехода и можно ли открыть long/short."""
     # §4: сначала факты машины возврата — обратный BOS/SMS в направлении A
     # фиксируется независимо от наличия ожидающего эпизода; §8: контрольная
     # дата горизонта (продление вместо календарного закрытия)
-    _note_reverse_break_for_opposing(db, instrument_id, candle, avail, candles, now, cfg)
+    _note_reverse_break_for_opposing(db, instrument_id, candle, avail, candles, now, cfg, batch=batch)
     _check_horizon(db, cfg, instrument_id, candle)
     current = open_episode(db, instrument_id)
     if current is None:
@@ -1053,8 +1053,8 @@ def plan_context_bar(db, cfg, instrument_id: int, candle, avail, candles, now: i
         for s in sources
     ):
         since = min(since, int(candle.open_time))
-    bull = _primary_break(avail, candles, Direction.BULL, candle, now, since)
-    bear = _primary_break(avail, candles, Direction.BEAR, candle, now, since)
+    bull = _primary_break(avail, candles, Direction.BULL, candle, now, since, batch=batch)
+    bear = _primary_break(avail, candles, Direction.BEAR, candle, now, since, batch=batch)
     if bull is not None and bear is not None:
         return {
             "episode_id": current["id"],

@@ -437,7 +437,18 @@ async function selectInstrument(id) {
   await reloadCurrent({ keepRange: false });
 }
 
-async function reloadCurrent({ keepRange }) {
+async function reloadCurrent(options) {
+  const id = state.instrumentId;
+  if (state.currentPending && state.currentPending.id === id) return state.currentPending.promise;
+  const pending = {id};
+  state.currentPending = pending;
+  pending.promise = fetchCurrent(options).finally(() => {
+    if (state.currentPending === pending) state.currentPending = null;
+  });
+  return pending.promise;
+}
+
+async function fetchCurrent({ keepRange }) {
   const id = state.instrumentId;
   // D01: защита от поздних ответов при быстром переключении активов —
   // применяется только последний запрос и только для текущего инструмента
@@ -450,26 +461,12 @@ async function reloadCurrent({ keepRange }) {
   // версий означает, что запись вклинилась между запросами, — пакет
   // перечитывается целиком, левая карточка не рисует счётчик чужого состояния
   const loadBundle = async () => {
-    const view = await api(`/api/ltf/instruments/${id}/current`);
-    if (stale()) return null;
-    const obsId = view.selected_context_id;
     const h1q = window.H1Layers
-      ? window.H1Layers.queryString(Object.assign({ context_id: obsId || undefined }, visibleWindowMs()))
+      ? window.H1Layers.queryString(visibleWindowMs())
       : '';
-    const [layers, candleBundle, journal, assets, h1] = await Promise.all([
-      obsId ? api(`/api/ltf/observations/${obsId}/chart`) : Promise.resolve(null),
-      api(`/api/candles?instrument_id=${id}&timeframe=H1&limit=2500&with_version=true`),
-      obsId ? api(`/api/ltf/observations/${obsId}/journal`) : Promise.resolve(null),
-      api('/api/ltf/instruments'),
-      api(`/api/ltf/instruments/${id}/structure?${h1q}`).catch(() => ({ __error: true })),
-    ]);
+    const bundle = await api(`/api/ltf/instruments/${id}/workspace?${h1q}`);
     if (stale()) return null;
-    const versioned = candleBundle && !Array.isArray(candleBundle);
-    const candleRows = versioned ? (candleBundle.candles || []) : (Array.isArray(candleBundle) ? candleBundle : []);
-    const candleVersion = versioned && candleBundle.state_version != null
-      ? candleBundle.state_version : view.state_version;
-    const candleVersions = versioned && candleBundle.versions ? candleBundle.versions : null;
-    return { view, layers, candles: candleRows, candleVersion, candleVersions, journal, assets, h1 };
+    return bundle;
   };
   const mismatch = (b) =>
     b.candleVersion !== b.view.state_version ||
@@ -1407,12 +1404,23 @@ function closeH1Card() {
 async function loadH1Structure() {
   const id = state.instrumentId;
   if (!id || !window.H1Layers) return;
-  const token = ++state.h1Req;
   const obsId = state.current && state.current.selected_context_id;
   const q = window.H1Layers.queryString(Object.assign(
     { context_id: obsId || undefined },
     visibleWindowMs(),
   ));
+  const key = JSON.stringify([id, q]);
+  if (state.h1Pending && state.h1Pending.key === key) return state.h1Pending.promise;
+  const pending = {key};
+  state.h1Pending = pending;
+  pending.promise = fetchH1Structure(id, q).finally(() => {
+    if (state.h1Pending === pending) state.h1Pending = null;
+  });
+  return pending.promise;
+}
+
+async function fetchH1Structure(id, q) {
+  const token = ++state.h1Req;
   try {
     const data = await api(`/api/ltf/instruments/${id}/structure?${q}`);
     if (token !== state.h1Req || id !== state.instrumentId) return;
@@ -1421,7 +1429,7 @@ async function loadH1Structure() {
   } catch (e) {
     if (token !== state.h1Req || id !== state.instrumentId) return;
     state.h1LoadError = true;
-    state.h1Layers = {
+    state.h1Layers = state.h1Layers?.snapshot?.instrument_id === id ? state.h1Layers : {
       detected_zones: [],
       structural_events: [],
       layer_status: { zones: { state: 'error', total: 0 } },

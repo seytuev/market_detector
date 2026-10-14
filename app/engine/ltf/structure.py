@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import bisect
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import Any, Optional
 
@@ -81,6 +81,9 @@ class StructureBatch:
         self._role_avail_len = 0
         self._role_pi = 0
         self._role_ci = 0
+        self.events: list[StructureEventDraft] = []
+        self.event_opens: list[int] = []
+        self.base_index = None
 
     # ---- pivots/avail/роли (инкрементально) ----
 
@@ -91,6 +94,9 @@ class StructureBatch:
         self._role_avail_len = 0
         self._role_pi = 0
         self._role_ci = 0
+        self.events = []
+        self.event_opens = []
+        self.base_index = None
         self.closed = sorted((c for c in candles if c.closed),
                              key=lambda c: c.open_time)
         self.cands = find_h1_pivots(self.closed, left, right)
@@ -220,7 +226,9 @@ class StructureBatch:
                    and self._role_pending[self._role_pi].confirmed_at <= candle.close_time):
                 self._role_machine.absorb(self._role_pending[self._role_pi])
                 self._role_pi += 1
-            self._role_machine.on_candle(candle, candle.close_time)
+            events = self._role_machine.on_candle(candle, candle.close_time)
+            self.events.extend(events)
+            self.event_opens.extend(e.break_candle_open_time for e in events)
         self._role_ci = len(self.closed)
         roles = [self._role_machine.roles.get((p.kind, p.pivot_at), "none") for p in self.avail]
         if roles == self._roles:
@@ -228,6 +236,23 @@ class StructureBatch:
         self._roles = roles
         self.range_memo.clear()
         return RoleResult(roles, [])
+
+    def scan(self, direction, since_ms, now_ms, *, stop_on_cancellation=True,
+             cancel_not_before_ms=None):
+        """Filter the one canonical event stream instead of replaying it per scenario."""
+        first = bisect.bisect_left(self.event_opens, since_ms)
+        events, cancellation = [], None
+        for event in self.events[first:]:
+            if cancellation is not None and stop_on_cancellation and event.occurred_at > cancellation.event.occurred_at:
+                break
+            current = replace(event, detected_at=now_ms)
+            if event.direction == direction:
+                events.append(current)
+            elif cancellation is None and (cancel_not_before_ms is None or event.occurred_at >= cancel_not_before_ms):
+                cancellation = CancellationSignal(
+                    'reverse_bos' if event.kind == 'BOS' else 'reverse_sms', current)
+        events.sort(key=lambda e: (e.occurred_at, e.kind))
+        return StructureScanResult(events, cancellation)
 
     def existing_for(self, db: Database, instrument_id: int) -> dict:
         """(kind, pivot_at) → строка ltf_pivot; перечитывается только при
@@ -494,11 +519,10 @@ def _sync_structure_batch(
             if ev.id == sc.trigger_event_id:
                 cancel_not_before = ev.occurred_at
                 break
-        cur = batch.cursor(
-            ("sc", sc.id), sc.direction, obs.activated_at,
+        scan = batch.scan(
+            sc.direction, obs.activated_at, now_ms,
             stop_on_cancellation=True, cancel_not_before_ms=cancel_not_before,
         )
-        scan = cur.scan(avail, batch.closed, batch.open_times, now_ms)
         # отсекаем уже записанные в БД события (UNIQUE scenario/level/stage)
         fresh = [
             e for e in scan.events

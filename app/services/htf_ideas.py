@@ -7,6 +7,7 @@ attempt history, so legacy ideas can be recovered without rewriting that history
 from __future__ import annotations
 
 from dataclasses import replace
+import json
 
 from ..engine.ltf.relevance import VERSION, zone_at
 from ..engine.ltf.eligibility import evaluate_entry, evaluate_final
@@ -41,21 +42,30 @@ def _stored_terminal(zone, as_of):
     }
 
 
-def ideas_checkpoint_fresh(db, instrument_id) -> bool:
-    """Снимок идей совпадает с текущей версией правил и state_seq.
+def _input_version(db, instrument_id):
+    last = db.last_candle(instrument_id, 'H1')
+    return json.dumps([db.get_domain('seq:ltf'), db.get_domain('seq:zones'),
+                       db.get_domain('seq:config'),
+                       last.close_time if last else None,
+                       db.latest_candle_revision_at(instrument_id, 'H1')])
 
-    Метка seq пишется после reconcile и якорей. Иначе следующий пустой
+
+def ideas_checkpoint_fresh(db, instrument_id) -> bool:
+    """Снимок идей совпадает с версиями структуры, зон и закрытых свечей.
+
+    Метка входов пишется после reconcile и якорей. Иначе следующий пустой
     опрос снова видит устаревший снимок и считает его заново.
     """
     return (
         db.get_meta(f"htf_ideas:version:{instrument_id}") == VERSION
-        and db.get_meta(f"htf_ideas:seq:{instrument_id}") == str(db.get_state_seq())
+        and db.get_meta(f"htf_ideas:inputs:{instrument_id}") == _input_version(db, instrument_id)
     )
 
 
 def mark_ideas_checkpoint(db, instrument_id) -> None:
     db.set_meta(f"htf_ideas:version:{instrument_id}", VERSION)
     db.set_meta(f"htf_ideas:seq:{instrument_id}", str(db.get_state_seq()))
+    db.set_meta(f"htf_ideas:inputs:{instrument_id}", _input_version(db, instrument_id))
 
 
 def project_ideas(db, instrument_id, cfg, as_of, *, zones=None, candles=None):
@@ -73,10 +83,12 @@ def project_ideas(db, instrument_id, cfg, as_of, *, zones=None, candles=None):
     if pending:
         if candles is None:
             candles = db.get_candles(instrument_id, "H1", end_ms=as_of)
+        from ..engine.ltf.lifecycle_index import LifecycleIndex
+        lifecycle = LifecycleIndex(candles, as_of)
         for z in pending:
-            facts[z.id] = zone_at(z, candles, as_of, cfg)
+            facts[z.id] = lifecycle.project(z, cfg)
     saved = {i["scenario_id"]: i for i in db.list_htf_ideas(instrument_id)}
-    bundle = db.ltf_projection_bundle(instrument_id)
+    bundle = db.ltf_projection_bundle(instrument_id, as_of)
     ideas = []
     links = {}
     for obs in db.list_ltf_observations(instrument_id=instrument_id):

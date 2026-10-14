@@ -109,8 +109,9 @@ class DataSync:
                                error_stage="processing", last_error_at=now_ms())
                 self.db.set_meta(key, json.dumps(channel, ensure_ascii=False))
         previous = read_json(self.db, JOB_KEY)
-        if previous and previous.get("status") in ACTIVE:
-            previous.update(status="failed", finished_at=now_ms(), error="interrupted_by_restart")
+        if previous and (previous.get("status") in ACTIVE or previous.get("processing_continues")):
+            previous.update(status="failed", finished_at=now_ms(), error="interrupted_by_restart",
+                            processing_continues=False)
             for channel in previous.get("results", []):
                 if channel.get("status") in ACTIVE | {"processing", "pending"}:
                     channel.update(status="failed", error="interrupted_by_restart")
