@@ -162,6 +162,7 @@ def claim_owner(db, key: str, identity: dict[str, Any], *, lease_ms: int = 120_0
     identity = {"host": socket.gethostname(), **identity,
                 "instance_id": identity.get("instance_id") or db.runtime_instance_id}
     with db.batch_writes():
+        db.lock_meta(key)
         current = _read_claim(db, key)
         stamp = now_ms()
         if current and current.get("instance_id") != identity["instance_id"] and current.get("expires_at", 0) > stamp:
@@ -217,6 +218,7 @@ def assert_owner(db, key, claim, *, check_expiry=True):
 
 def renew_owner(db, key, claim, *, lease_ms=120_000):
     with db.batch_writes():
+        db.lock_meta(key)
         assert_owner(db, key, claim, check_expiry=False)
         stamp = now_ms()
         current = _read_claim(db, key)
@@ -227,6 +229,7 @@ def renew_owner(db, key, claim, *, lease_ms=120_000):
 
 def release_owner(db, key, claim):
     with db.batch_writes():
+        db.lock_meta(key)
         try:
             assert_owner(db, key, claim, check_expiry=False)
         except RuntimeError:
@@ -245,8 +248,8 @@ async def lease_heartbeat(db, key, claim, stop):
             try:
                 await asyncio.to_thread(renew_owner, db, key, claim)
             except Exception as exc:
-                import sqlite3
-                if isinstance(exc,sqlite3.OperationalError) and "locked" in str(exc):
+                from ..db import _is_busy
+                if _is_busy(exc):
                     continue  # an active unit of work still fences takeover
                 raise
 

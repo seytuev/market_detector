@@ -1917,7 +1917,9 @@ def create_app_from_env() -> FastAPI:
     """Фабрика для uvicorn из командной строки:
     ``uvicorn --factory app.web.api:create_app_from_env --host 127.0.0.1 --port 8000``"""
     settings = load_settings()
-    db = Database(settings.db_path)
+    from ..services.postgres_migration import ensure_postgres
+    ensure_postgres(settings)
+    db = Database(settings.database_target)
     from ..services.htf_profile import (
         migrate_saved_htf_profile,
         migrate_saved_htf_profile_v3,

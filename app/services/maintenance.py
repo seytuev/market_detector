@@ -11,6 +11,25 @@ from ..models import now_ms
 def backup(db, destination, settings=None):
     target = Path(destination).resolve()
     target.mkdir(parents=True, exist_ok=False)
+    if db.is_postgres:
+        from .postgres_backup import export_database
+        manifest, profile = export_database(db,target)
+    else:
+        manifest, profile = _sqlite_backup(db,target)
+    if profile:
+        (target / "settings.json").write_text(json.dumps({"detector":json.loads(profile)}, ensure_ascii=False, indent=2), encoding="utf-8")
+    root = Path(settings.db_path if settings else db.path).parent
+    media = root / "charts"
+    if media.exists():
+        shutil.copytree(media, target / "charts")
+    labels = root / "labels.jsonl"
+    if labels.exists():
+        shutil.copy2(labels, target / "labels.jsonl")
+    (target / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    return manifest
+
+
+def _sqlite_backup(db, target):
     db_target = target / "htf_zones.db"
     with db.read_tx():
         profile = db.get_meta("settings:active_profile")
@@ -22,18 +41,8 @@ def backup(db, destination, settings=None):
                 raise RuntimeError("Backup integrity check failed")
         finally:
             raw.close()
-    if profile:
-        (target / "settings.json").write_text(json.dumps({"detector":json.loads(profile)}, ensure_ascii=False, indent=2), encoding="utf-8")
-    root = Path(db.path).parent
-    media = root / "charts"
-    if media.exists():
-        shutil.copytree(media, target / "charts")
-    labels = root / "labels.jsonl"
-    if labels.exists():
-        shutil.copy2(labels, target / "labels.jsonl")
     manifest = {"created_at":now_ms(), "state_version":version, "database":"htf_zones.db", "media_optional":True}
-    (target / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-    return manifest
+    return manifest, profile
 
 
 def retain(db, *, processed_days=30, job_days=30):
@@ -71,7 +80,7 @@ async def run(db, settings, stop):
         owner = _read_claim(db,CALC_OWNER) or {}
         if owner.get("instance_id") != getattr(db,"runtime_instance_id",None) or owner.get("expires_at",0)<=now_ms():
             return
-        status = disk_status(db.path)
+        status = disk_status(settings.db_path)
         get_registry().gauge("disk_free_bytes",status["free_bytes"])
         get_registry().gauge("disk_degraded",int(status["degraded"]))
         retain(db)
@@ -81,7 +90,7 @@ async def run(db, settings, stop):
         last = int(db.get_meta("maintenance:last_backup_at") or 0)
         if settings.backup_enabled and now_ms()-last >= max(1,settings.backup_interval_hours)*3600_000:
             label = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
-            destination = Path(db.path).resolve().parent / "backups" / label
+            destination = Path(settings.db_path).resolve().parent / "backups" / label
             backup(db,destination,settings)
             db.set_meta("maintenance:last_backup_at",str(now_ms()))
     while not stop.is_set():

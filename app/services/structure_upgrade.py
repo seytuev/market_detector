@@ -33,7 +33,7 @@ def prepare_upgrade(db, cfg, instrument_id, as_of):
     recorded = db.get_meta(legacy_key)
     if recorded is not None:
         return True
-    if db.path != ":memory:":
+    if db.path != ":memory:" and not db.is_postgres:
         source_path = Path(db.path).resolve()
         backup = source_path.parent / "backups" / f"{source_path.stem}-before-{RULE_VERSION}.db"
         if not backup.exists():

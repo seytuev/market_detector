@@ -255,12 +255,12 @@ class DataSync:
         # переход несёт полный снимок; транзитный busy (потоковый расчёт
         # держит писателя) пропускаем — финальная запись идёт через
         # _save_job_final (FIFO-писатель ждёт окно)
-        import sqlite3 as _sqlite3
+        from ..db import _is_busy
         try:
             self.db.set_meta(JOB_KEY, json.dumps(job, ensure_ascii=False))
             self.db.set_meta(f"data_sync:job:{job['job_id']}", json.dumps(job, ensure_ascii=False))
-        except _sqlite3.OperationalError as exc:
-            if "locked" not in str(exc):
+        except Exception as exc:
+            if not _is_busy(exc):
                 raise
             log.warning("data_sync: сохранение job %s отложено (db busy)", job["job_id"])
         if self.worker.broadcast:

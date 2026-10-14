@@ -144,12 +144,12 @@ class CalcQueue:
         держит блокировку писателя, busy_timeout цикла событий — 0) не должен
         убивать потребителя или валить продюсера: пропущенная запись
         дочитывается рестартом как pending."""
-        import sqlite3
+        from ..db import _is_busy
 
         try:
             fn(*args)
-        except sqlite3.OperationalError as exc:
-            if "locked" not in str(exc):
+        except Exception as exc:
+            if not _is_busy(exc):
                 raise
             self._metrics.counter("calc_queue_db_busy", labels={"task_kind": "persist"})
             log.warning("calc_queue: durable-запись отложена (db busy): %s", exc)

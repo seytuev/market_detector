@@ -457,6 +457,11 @@ class Settings:
     db_path: str = field(
         default_factory=lambda: resolve_db_path(_env("HTF_DB_PATH", "data/htf_zones.db"))
     )
+    database_url: str = field(default_factory=lambda: _env("DATABASE_URL", "").strip(), repr=False)
+
+    @property
+    def database_target(self) -> str:
+        return self.database_url or self.db_path
     telegram_token: str = field(default_factory=lambda: _env("TELEGRAM_TOKEN", ""))
     telegram_chat_id: str = field(default_factory=lambda: _env("TELEGRAM_CHAT_ID", ""))
     auth_token: str = field(default_factory=lambda: _env("HTF_AUTH_TOKEN", "dev-token"))
