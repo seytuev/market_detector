@@ -61,6 +61,13 @@ class Outbox:
             "SELECT * FROM notification_member WHERE packet_id=? ORDER BY id",
             (packet_id,)).fetchall()
 
+    async def _write(self, sql, parameters=()):
+        # Connection gives worker threads a busy timeout and their own SQLite
+        # connection. Never wait for another writer on the event loop.
+        def execute():
+            return self.db.conn.execute(sql, parameters).rowcount
+        return await asyncio.to_thread(execute)
+
     def put(self, channel, key, card, members, *, quiet=False):
         """Idempotent enqueue; late equivalent contexts update a sent card."""
         if any(event_id is None for event_id in members):
@@ -115,9 +122,8 @@ class Outbox:
     async def _card(self, row):
         render = self.renderers.get(row["channel"])
         card = await render(row, self.members(row["id"])) if render else Card(**json.loads(row["card"]))
-        self.db.conn.execute("UPDATE notification_packet SET card=? WHERE id=?",
+        await self._write("UPDATE notification_packet SET card=? WHERE id=?",
                              (json.dumps(asdict(card), ensure_ascii=False), row["id"]))
-        self.db.conn.commit()
         return card
 
     def _failure(self, row, exc):
@@ -144,11 +150,10 @@ class Outbox:
     async def flush(self):
         async with self.lock:
             stamp = now_ms()
-            self._recover_completed()
-            self.db.conn.execute(
+            await asyncio.to_thread(self._recover_completed)
+            await self._write(
                 "UPDATE notification_packet SET status='uncertain',reason='send lease expired' "
                 "WHERE destination=? AND status='sending' AND lease_until<?", (self.destination, stamp))
-            self.db.conn.commit()
             # No unbounded catch-up burst: bounded work; remaining packets stay durable.
             rows = self.db.conn.execute(
                 "SELECT * FROM notification_packet WHERE destination=? AND "
@@ -167,26 +172,24 @@ class Outbox:
                         card = await self._card(row)
                         if row["message_id"]:
                             await self.sender.edit_card(row["message_id"], card, row["id"], photo=bool(row["photo"]))
-                        self.db.conn.execute("UPDATE notification_packet SET dirty=0 WHERE id=?", (row["id"],))
-                        self.db.conn.commit()
-                        self.db.set_meta(edit_key, "{}")
-                        self._finish(row, "sent")
+                        await self._write("UPDATE notification_packet SET dirty=0 WHERE id=?", (row["id"],))
+                        await asyncio.to_thread(self.db.set_meta, edit_key, "{}")
+                        await asyncio.to_thread(self._finish, row, "sent")
                     except Exception as exc:
                         attempts = edit_state.get("attempts", 0) + 1
                         wait = getattr(exc, "retry_after", 30 * 2 ** attempts)
                         seconds = wait.total_seconds() if hasattr(wait, "total_seconds") else float(wait)
-                        self.db.set_meta(edit_key, json.dumps({"attempts": attempts, "due_at": stamp + int(seconds * 1000)}))
+                        await asyncio.to_thread(self.db.set_meta, edit_key, json.dumps({"attempts": attempts, "due_at": stamp + int(seconds * 1000)}))
                         if attempts >= 5:
-                            self.db.conn.execute("UPDATE notification_packet SET dirty=0,reason='edit attempts exhausted' WHERE id=?", (row["id"],))
-                            self.db.conn.commit()
+                            await self._write("UPDATE notification_packet SET dirty=0,reason='edit attempts exhausted' WHERE id=?", (row["id"],))
                         log.warning("Unable to update notification %s: %s", row["id"], type(exc).__name__)
                     continue
-                verdict = self.validators.get(row["channel"], lambda r, m: None)(row, self.members(row["id"]))
+                verdict = await asyncio.to_thread(self.validators.get(row["channel"], lambda r, m: None), row, self.members(row["id"]))
                 if verdict == "wait":
                     continue
                 if verdict:
-                    self.suppress(row["id"], verdict)
-                    self._finish(row, "suppressed")
+                    await asyncio.to_thread(self.suppress, row["id"], verdict)
+                    await asyncio.to_thread(self._finish, row, "suppressed")
                     continue
                 if row["quiet"] and row["channel"] not in ("digest", "chart"):
                     quiet.append(row)
@@ -207,7 +210,7 @@ class Outbox:
                     selected = {r["id"]: r for r in quiet}
                     for r in extra:
                         validate = self.validators.get(r["channel"])
-                        if validate and validate(r, self.members(r["id"])) is None:
+                        if validate and await asyncio.to_thread(validate, r, self.members(r["id"])) is None:
                             selected[r["id"]] = r
                     await self._digest(list(selected.values()))
 
@@ -242,41 +245,41 @@ class Outbox:
         if cooldown > now_ms():
             return
         # A single conditional UPDATE is the cross-process claim.
-        cur = self.db.conn.execute(
+        claimed = await self._write(
             "UPDATE notification_packet SET status='sending',attempts=attempts+1,lease_until=? "
             "WHERE id=? AND status IN ('pending','failed') AND due_at<=?",
             (now_ms() + 300_000, row["id"], now_ms()))
-        self.db.conn.commit()
-        if not cur.rowcount:
+        if not claimed:
             return
         row = self.get(row["id"])
         try:
             if row["channel"] == "digest":
-                verdict = self.validate_digest(row)
+                verdict = await asyncio.to_thread(self.validate_digest, row)
                 if verdict:
-                    self.db.conn.execute("UPDATE notification_packet SET status=?,due_at=? WHERE id=?",
+                    await self._write("UPDATE notification_packet SET status=?,due_at=? WHERE id=?",
                         ("failed" if verdict == "wait" else "suppressed", now_ms() + 30_000, row["id"]))
-                    self.db.conn.commit()
                     return
             card = await self._card(row)
             message_id = await self.sender.send_card(card, row["id"], quiet=bool(row["quiet"]))
         except Exception as exc:
-            self._failure(row, exc)
+            await asyncio.to_thread(self._failure, row, exc)
             return
-        self.db.conn.execute(
+        await self._write(
             "UPDATE notification_packet SET status='sent',message_id=?,photo=?,sent_at=? WHERE id=?",
             (message_id, int(bool(card.image_path)), now_ms(), row["id"]))
-        self.db.conn.commit()
-        self._finish(row, "sent")
+        await asyncio.to_thread(self._finish, row, "sent")
         if row["channel"] == "digest":
             children = self.db.conn.execute("SELECT * FROM notification_packet WHERE parent_id=? AND status='bundled'", (row["id"],)).fetchall()
             for child in children:
-                self.db.conn.execute("UPDATE notification_packet SET status='sent',sent_at=? WHERE id=?",
+                await self._write("UPDATE notification_packet SET status='sent',sent_at=? WHERE id=?",
                                      (now_ms(), child["id"]))
-                self._finish(child, "sent")
-            self.db.conn.commit()
+                await asyncio.to_thread(self._finish, child, "sent")
 
     async def _digest(self, rows):
+        packet_id = await asyncio.to_thread(self._create_digest, rows)
+        await self._send(self.get(packet_id))
+
+    def _create_digest(self, rows):
         # Freeze membership before sending. Retry uses this very same packet.
         key = fingerprint(sorted(r["id"] for r in rows))
         with self.db.batch_writes():
@@ -295,7 +298,7 @@ class Outbox:
                     "UPDATE notification_packet SET parent_id=?,status='bundled' WHERE id=? AND status IN ('pending','failed')",
                     (packet_id, row["id"]))
             self.db.conn.commit()
-        await self._send(self.get(packet_id))
+        return packet_id
 
     def validate_digest(self, row):
         children = self.db.conn.execute("SELECT * FROM notification_packet WHERE parent_id=? AND status='bundled'", (row["id"],)).fetchall()
@@ -317,7 +320,7 @@ class Outbox:
         children = self.db.conn.execute("SELECT * FROM notification_packet WHERE parent_id=? AND status IN ('bundled','sent') ORDER BY id", (row["id"],)).fetchall()
         blocks, details, targets = [], [], []
         for child in children:
-            verdict = None if child["status"] == "sent" else self.validators.get(child["channel"], lambda r, m: "wait")(child, self.members(child["id"]))
+            verdict = None if child["status"] == "sent" else await asyncio.to_thread(self.validators.get(child["channel"], lambda r, m: "wait"), child, self.members(child["id"]))
             if verdict:
                 continue
             card = Card(**json.loads(child["card"])) if child["status"] == "sent" else await self._card(child)
@@ -344,7 +347,7 @@ class Outbox:
             if state.get("attempts", 0) >= 5 or state.get("due_at", 0) > now_ms():
                 continue
             attempts = state.get("attempts", 0) + 1
-            self.db.set_meta(key, json.dumps({"attempts": attempts, "due_at": now_ms() + 60_000 * 2 ** attempts}))
+            await asyncio.to_thread(self.db.set_meta, key, json.dumps({"attempts": attempts, "due_at": now_ms() + 60_000 * 2 ** attempts}))
             try:
                 card = await renderer({**dict(row), "status": "media_retry"}, self.members(row["id"]))
             except Exception:
@@ -354,12 +357,11 @@ class Outbox:
                 continue
             media = Card("📊 График к событию\n" + previous["text"].split("\n")[0],
                          previous["details"], card.image_path, previous["targets"])
-            packet_id = self.put("chart", f"media:{row['id']}", media, [], quiet=False)
-            self.db.conn.execute("UPDATE notification_packet SET quiet=1 WHERE id=?", (packet_id,))
+            packet_id = await asyncio.to_thread(self.put, "chart", f"media:{row['id']}", media, [], quiet=False)
+            await self._write("UPDATE notification_packet SET quiet=1 WHERE id=?", (packet_id,))
             previous["chart_pending"] = False
-            self.db.conn.execute("UPDATE notification_packet SET card=? WHERE id=?",
+            await self._write("UPDATE notification_packet SET card=? WHERE id=?",
                                  (json.dumps(previous, ensure_ascii=False), row["id"]))
-            self.db.conn.commit()
             queued += 1
         return queued
 

@@ -341,6 +341,11 @@ class LtfDispatcher:
         return text
 
     async def deliver(self, events: list[LtfEvent]) -> int:
+        pending = await asyncio.to_thread(self._enqueue, events)
+        await self.outbox.flush_inline()
+        return sum(bool(self.db.get_ltf_event(i).delivered) for i in pending)
+
+    def _enqueue(self, events: list[LtfEvent]) -> list[int]:
         from .outbox import Card
         from .compact import ltf_key
         pending = []
@@ -405,8 +410,7 @@ class LtfDispatcher:
                     (ev.scenario_id, ev.occurred_at))
                 self.db.conn.commit()
             pending.append(ev.id)
-        await self.outbox.flush_inline()
-        return sum(bool(self.db.get_ltf_event(i).delivered) for i in pending)
+        return pending
 
     def _keyboard(self, ev: LtfEvent, ctx: LtfContext):
         """Единый набор кнопок под сигналом (ТЗ бота п.10)."""

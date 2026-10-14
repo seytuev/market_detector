@@ -1,6 +1,7 @@
 """Regression scenarios from the October 9 notification flood."""
 import asyncio
 import json
+import sqlite3
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -23,6 +24,71 @@ def make_box(db, sender=None, interval=900):
     box.register("test", lambda r, m: None, lambda i, s: None)
     box.renderers["digest"] = box.render_digest
     return box, sender
+
+
+@pytest.mark.parametrize("operation", ["flush", "digest", "enqueue"])
+async def test_outbox_waits_for_writer_without_blocking_event_loop(db, operation):
+    box, sender = make_box(db)
+    packet = box.put("test", "contended", Card("First"), [1], quiet=operation == "digest")
+    row = box.get(packet)
+    if operation == "enqueue":
+        from app.notify.alt_queue import AltDispatcher
+        from tests.test_alt_notify import _seed, _event, _settings, FakeSender
+        _seed(db)
+        event = _event(db, 1, "ssl_taken", {"level_price": 1.1, "close": 1.2})
+        dispatcher = AltDispatcher(db, _settings(), FakeSender())
+    writer = sqlite3.connect(db.conn._target, isolation_level=None)
+    writer.execute("BEGIN IMMEDIATE")
+    released = asyncio.Event()
+
+    def release():
+        writer.rollback()
+        released.set()
+
+    timer = asyncio.get_running_loop().call_later(.1, release)
+    try:
+        if operation == "enqueue":
+            await asyncio.wait_for(dispatcher.dispatch_pending(), 3)
+            assert db.get_alt_event(event.id).delivered
+        elif operation == "digest":
+            await asyncio.wait_for(box._digest([row]), 3)
+        else:
+            await asyncio.wait_for(box.flush(), 3)
+        assert released.is_set()
+        if operation != "enqueue":
+            assert box.get(packet)["status"] == "sent"
+            assert len(sender.cards) == 1
+    finally:
+        timer.cancel()
+        writer.rollback()
+        writer.close()
+
+
+@pytest.mark.parametrize("fail", [False, True])
+async def test_send_result_is_persisted_when_another_writer_takes_lock(db, fail):
+    writer = sqlite3.connect(db.conn._target, isolation_level=None)
+    timers = []
+
+    class ContendedSender(LogSender):
+        async def send_card(self, *args, **kwargs):
+            writer.execute("BEGIN IMMEDIATE")
+            timers.append(asyncio.get_running_loop().call_later(.1, writer.rollback))
+            if fail:
+                raise TimeoutError("ambiguous network result")
+            return await super().send_card(*args, **kwargs)
+
+    box, sender = make_box(db, ContendedSender())
+    packet = box.put("test", "result", Card("First"), [1])
+    try:
+        await asyncio.wait_for(box.flush(), 3)
+        assert box.get(packet)["status"] == ("uncertain" if fail else "sent")
+        await box.flush()
+        assert len(sender.cards) == (0 if fail else 1)
+    finally:
+        for timer in timers:
+            timer.cancel()
+        writer.rollback()
+        writer.close()
 
 
 def due(db):

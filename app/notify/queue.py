@@ -377,6 +377,12 @@ class EventDispatcher:
         return Card(text, details, payload.image_path, targets, bool(self.charts_dir and not payload.image_path))
 
     async def dispatch(self, events: list[Event]) -> list[Delivery]:
+        ids = await asyncio.to_thread(self._enqueue, events)
+        if not getattr(self,"defer_flush",False):
+            await self.outbox.flush_inline()
+        return self._deliveries_by_ids(ids)
+
+    def _enqueue(self, events: list[Event]) -> list[int]:
         from .outbox import Card, fingerprint
         groups, ids = {}, []
         important_zones = {e.zone_id for e in events if e.kind not in self._QUIET and not e.delayed}
@@ -451,9 +457,7 @@ class EventDispatcher:
                         self.db.conn.execute("UPDATE notification_member SET reason='superseded' WHERE id=?", (old["id"],))
                         self._finish_packet(old["event_id"], "suppressed")
                     self.db.conn.commit()
-        if not getattr(self,"defer_flush",False):
-            await self.outbox.flush_inline()
-        return self._deliveries_by_ids(ids)
+        return ids
 
     async def notify_service(self, text: str) -> None:
         self.services.note(text)
@@ -461,6 +465,12 @@ class EventDispatcher:
             await self.outbox.flush_inline()
 
     async def retry_pending(self) -> list[Delivery]:
+        await asyncio.to_thread(self._adopt_pending)
+        if not getattr(self,"defer_flush",False):
+            await self.outbox.flush_inline()
+        return self.db.pending_deliveries()
+
+    def _adopt_pending(self):
         # Adopt legacy unsent rows once; never touch successful history.
         for delivery in self.db.pending_deliveries():
             if None in delivery.event_ids:
@@ -492,9 +502,6 @@ class EventDispatcher:
                     continue
                 from .outbox import Card
                 self.outbox.put("htf", f"legacy:{event_id}", Card(""), [event_id], quiet=True)
-        if not getattr(self,"defer_flush",False):
-            await self.outbox.flush_inline()
-        return self.db.pending_deliveries()
 
     def _deliveries_by_ids(self, ids: list[int]) -> list[Delivery]:
         if not ids:
