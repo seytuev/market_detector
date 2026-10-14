@@ -528,3 +528,21 @@ async def test_persist_failure_rolls_back_candles_cursor_and_channel_meta(market
     assert status["new_bars"] == 4  # 7 закрытых у источника, 3 были в БД
     assert len(db.get_candles(ins.id, tf)) == 7
     assert db.get_meta(f"data_sync:processed:{ins.id}:{tf}") is not None
+
+
+@pytest.mark.parametrize("owner_finishes", [False, True])
+async def test_sync_does_not_restore_borrowed_replay_marker(market, monkeypatch, owner_finishes):
+    db, worker, exchange, _, instruments, _ = market
+    ins = instruments[0]
+    db.set_meta(f"replaying:{ins.id}", "1")
+    original = exchange.klines
+
+    async def fetch(*args, **kwargs):
+        rows = await original(*args, **kwargs)
+        if owner_finishes:
+            await worker.data_sync._write(worker._set_replaying, ins.id, False)
+        return rows
+
+    monkeypatch.setattr(exchange, "klines", fetch)
+    await worker.data_sync.sync_candles(ins, "D1")
+    assert db.get_meta(f"replaying:{ins.id}") == ("0" if owner_finishes else "1")

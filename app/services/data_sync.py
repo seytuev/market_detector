@@ -636,7 +636,8 @@ class DataSync:
                 # входные метки — внутри try: отмена (shutdown/дедлайн job)
                 # обязана попасть в уборку processing/stale маркеров ниже
                 await self._write(self._save_channel, ins, tf, result)
-                await self._write(self.worker._set_replaying, ins.id, True)
+                if not was_replaying:
+                    await self._write(self.worker._set_replaying, ins.id, True)
                 # Хвост канала — ограниченное окно SQL (§12, этап 7):
                 # окно запроса к источнику и без того ограничено сканом
                 # разрывов по 200 последним закрытым (ниже), а снапшот before
@@ -719,7 +720,10 @@ class DataSync:
                 result["processing_duration_s"] = round(time.monotonic() - processing_started, 3)
                 result.update(processing=False, error=None, error_stage=None, finished_at=now_ms())
                 await self._write(self._save_channel, ins, tf, result)
-                await self._write(self.worker._set_replaying, ins.id, was_replaying)
+                # A borrowed marker belongs to restore/backfill. That owner
+                # may have finished while this request was running.
+                if not was_replaying:
+                    await self._write(self.worker._set_replaying, ins.id, False)
                 status = self.channel_status(ins, tf)
                 await self.worker._check_freshness(ins, tf)
                 await self._write(
@@ -761,7 +765,10 @@ class DataSync:
                 await self._write(self.db.set_meta, f"stale:{ins.id}:{tf}", "1")
                 raise
             finally:
-                await self._write(self.worker._set_replaying, ins.id, was_replaying)
+                # A borrowed marker belongs to restore/backfill. That owner
+                # may have finished while this request was running.
+                if not was_replaying:
+                    await self._write(self.worker._set_replaying, ins.id, False)
 
     async def boundary_tick(self, at=None):
         """Тик у границ баров (§10, AC08): каналы, которым пора, синхронизируются
