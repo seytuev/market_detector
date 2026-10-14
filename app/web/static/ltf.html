@@ -9,6 +9,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
   <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/mobile-analysis.css">
+  <link rel="stylesheet" href="/mobile-pages.css">
   <script src="/vendor/lightweight-charts.js"></script>
 </head>
 <body class="app-body">
@@ -59,28 +61,34 @@
   </aside>
   <div class="shell">
     <div class="data-sync-bar" aria-label="Синхронизация данных">
-      <button type="button" id="btn-data-sync" class="btn" title="Свечи и котировки всех включённых основных активов">Обновить данные</button>
+      <button type="button" id="btn-data-sync" class="btn" aria-label="Обновить данные" title="Свечи и котировки всех включённых основных активов">Обновить данные</button>
       <span id="data-sync-status" role="status" aria-live="polite">Свечи и котировки всех включённых активов</span>
-      <details><summary>Свежесть данных</summary><div id="data-sync-details"></div></details>
+      <details><summary><span class="sync-label-full">Свежесть данных</span><span class="sync-label-short">Данные</span></summary><div id="data-sync-details"></div></details>
     </div>
     <header class="topbar ltf-topbar">
+      <h1 class="mobile-page-title">Анализ H1</h1>
       <div class="top-right">
-        <button id="btn-ltf-settings" class="btn">LTF</button>
+        <button id="btn-ltf-settings" class="btn"><span class="sync-label-full">LTF</span><span class="sync-label-short">Настройки</span></button>
       </div>
     </header>
   <!-- §4.1: инструмент, биржа, рынок, H1, цена и котировка, закрытая H1,
        раздельные индикаторы данных, режим и масштаб -->
   <div class="context-row"><div class="context-controls">
-      <button id="ltf-burger" class="btn ltf-burger" title="Список активов">☰</button>
-      <select id="ltf-instrument" title="Актив"></select>
+      <button id="ltf-burger" class="btn ltf-burger" aria-label="Список активов" title="Список активов">☰</button>
+      <select id="ltf-instrument" title="Актив" aria-label="Актив"></select>
         <span id="ltf-venue" class="badge" title="Биржа"></span>
         <span id="ltf-market" class="badge" title="Рынок"></span>
         <span class="tf-badge" title="Таймфрейм структуры">H1</span>
         <span id="ltf-last-price" class="last-price" title="Текущая цена">—</span>
         <span id="ltf-quote-at" class="quote-at" title="Время последней котировки"></span>
+        <details class="mobile-disclosure ltf-data-disclosure" data-mobile-fold open>
+        <summary class="mobile-disclosure-summary">Данные H1</summary>
+        <div class="ltf-data-status">
         <span id="ltf-last-candle" class="last-candle" title="Последняя закрытая H1-свеча">—</span>
         <span id="ltf-ind-data" class="data-ind" title="Поступление данных">—</span>
         <span id="ltf-ind-processed" class="data-ind" title="Обработка последней закрытой свечи движком">—</span>
+        </div>
+        </details>
         <span class="sep"></span>
         <span class="mode-tabs" role="group" aria-label="Режим анализа">
           <a class="mode-tab" id="lnk-desk" href="/#desk">Контекст</a>

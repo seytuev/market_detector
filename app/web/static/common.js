@@ -453,6 +453,55 @@ window.HTF = (() => {
   };
 })();
 
+/* Consistent mobile navigation on every workspace route. Keep existing links,
+   listeners and current-page markers; the icons are decorative. */
+(() => {
+  const icons = {
+    now: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
+    desk: '<path d="M4 4v16h16M7 14l4-5 4 3 5-7"/>',
+    review: '<rect x="5" y="4" width="14" height="17" rx="3"/><path d="M9 3h6v4H9zM9 14l2 2 4-4"/>',
+    alt: '<path d="M5 4v16M12 4v16M19 4v16M2 8h6M9 15h6M16 10h6"/>',
+    more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
+  };
+  document.querySelectorAll('.mobile-nav > a, .mobile-nav > button').forEach(item => {
+    if (item.querySelector('svg')) return;
+    const href = item.getAttribute('href') || '';
+    const key = item.id === 'nav-more' ? 'more' : href.includes('alt.html') ? 'alt' : href.split('#')[1];
+    if (!icons[key]) return;
+    const text = document.createElement('span'); text.textContent = item.textContent;
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('width', '21'); svg.setAttribute('height', '21');
+    svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('fill', 'none');
+    svg.setAttribute('aria-hidden', 'true'); svg.innerHTML = icons[key];
+    item.replaceChildren(svg, text);
+  });
+})();
+
+/* Secondary mobile controls start folded. Retain their values and keep all
+   controls visible on desktop, including when the viewport changes. */
+(() => {
+  const mobile = window.matchMedia('(max-width: 767px)');
+  const panels = [...document.querySelectorAll('details[data-mobile-fold]')];
+  const adapt = () => panels.forEach(panel => { panel.open = !mobile.matches; });
+  const count = panel => {
+    const badge = panel.querySelector('[data-filter-count]');
+    if (!badge) return;
+    const active = [...panel.querySelectorAll('input, select')].filter(el =>
+      el.type === 'checkbox' || el.type === 'radio' ? el.checked : String(el.value).trim()).length;
+    badge.textContent = active ? String(active) : '';
+  };
+  panels.forEach(panel => {
+    panel.addEventListener('input', () => count(panel));
+    panel.addEventListener('change', () => count(panel));
+    // Deep links may fill the controls after the initial paint.
+    panel.addEventListener('toggle', () => count(panel));
+    count(panel);
+  });
+  adapt();
+  mobile.addEventListener('change', adapt);
+  document.addEventListener('lf-filters-changed', () => panels.forEach(count));
+})();
+
 /* Панель «Ещё» мобильной навигации. Общая для страниц со shell. */
 (() => {
   const btn = document.getElementById('nav-more');

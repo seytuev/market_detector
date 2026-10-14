@@ -1,0 +1,295 @@
+/* Shared mobile surfaces. Analysis controls and navigation use mobile-analysis.css.
+   All page overrides stay below 768px; desktop layouts retain their own rules. */
+.mobile-disclosure-summary, .mobile-page-title { display: none; }
+.alt-buckets, .ltf-data-disclosure, .ltf-data-status { display: contents; }
+
+@media (max-width: 767px) {
+  .app-body { font-size: 13px; line-height: 1.5; }
+  .app-footer { display: none; }
+  .shell-main { min-width: 0; }
+  .app-body .btn, .app-body select, .app-body input:not([type="checkbox"]):not([type="radio"]), .app-body textarea {
+    border-radius: 10px; min-height: 44px; max-width: 100%;
+  }
+  .app-body .btn { font-size: 12px; }
+  .app-body select, .app-body input:not([type="checkbox"]):not([type="radio"]), .app-body textarea { font-size: 16px; min-width: 0; }
+  .app-body input[type="checkbox"], .app-body input[type="radio"] { min-height: 0; accent-color: var(--lf-brand); }
+  .app-body :where(p, dd, .field-desc, .state-sub, .journal-text) { overflow-wrap: anywhere; }
+  .app-body .now-page, .app-body .journal-page, .app-body .settings-page, .app-body .events-page { padding: 16px 12px 20px; }
+  .app-body .now-over, .app-body .review-over { font-size: 10px; line-height: 16px; letter-spacing: .07em; }
+  .app-body .now-title, .app-body .review-title, .app-body .alt-fresh h1 { font-size: 23px; line-height: 30px; font-weight: 600; letter-spacing: -.6px; margin: 3px 0 4px; }
+  .app-body .now-sub, .app-body .review-sub { font-size: 12px; line-height: 18px; margin: 0 0 12px; }
+  .app-body :where(.now-assets, .now-card, .now-recent, .lf-panel, .journal-list, .review-queue, .review-inspector, .alt-list, .alt-card, .alt-chart-col, .alt-journal, .alt-table-mode) { border-radius: 14px; }
+  .app-body .lf-panel { padding: 14px; }
+  .app-body :where(.now-assets-head, .lf-panel-head) { padding: 12px; gap: 8px; }
+  .app-body .lf-panel-head { padding: 0; }
+  .app-body :where(.now-assets-head h2, .lf-panel h2, .review-queue h2, .review-inspector h2) { font-size: 14px; line-height: 20px; }
+  .app-body :where(.now-filters, .settings-sections, .lf-analysis-tabs, .bottom-tabs, .alt-modes, .alt-tf) {
+    min-width: 0; max-width: 100%; gap: 3px; padding: 4px; border-radius: 12px;
+    background: var(--lf-raised); overflow-x: auto; overscroll-behavior-x: contain;
+  }
+  .app-body :where(.now-filter, .settings-sections button, .bottom-tab, .alt-modes button, .alt-tf button) {
+    flex: none; min-height: 44px; padding: 0 10px; border: 0; border-radius: 9px;
+    font-size: 12px; line-height: 18px; white-space: nowrap; background: transparent; color: var(--lf-text2);
+  }
+  .app-body :where(.now-filter.active, .settings-sections button.active, .bottom-tab.active, .alt-modes button[aria-pressed="true"], .alt-tf button[aria-pressed="true"]) {
+    background: var(--lf-surface); color: var(--lf-brand); box-shadow: 0 2px 6px #1020300d; font-weight: 600;
+  }
+  .mobile-disclosure { display: block; min-width: 0; border: 1px solid var(--lf-border); border-radius: 14px; background: var(--lf-surface); }
+  .mobile-disclosure-summary { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 10px 12px; font-size: 12px; font-weight: 500; cursor: pointer; list-style: none; }
+  .mobile-disclosure-summary::-webkit-details-marker { display: none; }
+  .mobile-disclosure-summary::after { content: '⌄'; margin-left: auto; color: var(--lf-text2); }
+  .mobile-disclosure[open] > .mobile-disclosure-summary::after { transform: rotate(180deg); }
+  .mobile-filter-count { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; min-height: 20px; padding: 0 5px; border-radius: 6px; background: var(--lf-selected); color: var(--lf-brand); font-size: 11px; }
+  .mobile-filter-count:empty { display: none; }
+
+  /* Watchlist: pair and price at the top, concise facts below. */
+  #view-now .now-market { gap: 6px 10px; padding: 10px 12px; border-radius: 14px; margin-bottom: 12px; font-size: 12px; }
+  #view-now .now-market .side-open { min-height: 44px; }
+  #view-now .now-stats { gap: 6px; margin-bottom: 12px; }
+  #view-now .metric-filter { min-width: 0; padding: 10px 8px; border-radius: 12px; border-color: var(--lf-border); background: var(--lf-surface); }
+  #view-now .metric-filter .stat-label { font-size: 10px; line-height: 14px; }
+  #view-now .metric-filter .stat-value { font-size: 22px; line-height: 28px; margin: 4px 0 0; }
+  #view-now .now-assets { background: transparent; border: 0; overflow: visible; }
+  #view-now .now-assets-head { padding: 0 0 10px; }
+  #view-now .now-filters { width: 100%; }
+  #view-now .now-filter { flex: 1; padding: 0 7px; }
+  #now-table, #now-table tbody { display: block; width: 100%; }
+  #now-table thead { display: none; }
+  #now-table tbody { display: grid; gap: 8px; }
+  #now-table tbody tr {
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px 12px;
+    padding: 12px; min-width: 0; border: 1px solid var(--lf-border); border-radius: 14px;
+    background: var(--lf-surface); box-shadow: 0 2px 8px #10203004;
+  }
+  #now-table td, #now-table td.num { display: block; width: auto; min-width: 0; padding: 0; border: 0; text-align: left; font-size: 12px; }
+  #now-table td::before { display: block; content: attr(data-label); margin-bottom: 2px; color: var(--lf-text2); font-size: 10px; white-space: normal; }
+  #now-table td:nth-child(1) { grid-column: 1; grid-row: 1; }
+  #now-table td:nth-child(1)::before { display: none; }
+  #now-table .asset-open { min-height: 28px; font-size: 16px; line-height: 24px; }
+  #now-table .asset-sub { font-size: 10px; }
+  #now-table td:nth-child(5) { grid-column: 2; grid-row: 1; text-align: right; }
+  #now-table td:nth-child(5) :where(.price-val, .price-age) { text-align: right; }
+  #now-table .price-val { font-size: 16px; line-height: 24px; font-weight: 600; }
+  #now-table .price-age { font-size: 10px; }
+  #now-table td:nth-child(2) { grid-column: 1 / -1; padding-top: 8px; border-top: 1px solid var(--lf-border); }
+  #now-table td:nth-child(3) { grid-column: 1; }
+  #now-table td:nth-child(4) { grid-column: 2; }
+  #now-table td:nth-child(6) { grid-column: 1 / -1; }
+  #now-table td:nth-child(6)::before { display: none; }
+  #now-table .asset-off { width: 100%; margin-top: 4px; background: var(--lf-selected); color: var(--lf-brand); border: 0; }
+  #view-now .now-recent-list { padding: 0 12px 8px; }
+  #view-now .now-foot { font-size: 11px; line-height: 17px; }
+
+  /* Review keeps the chart and decisions in a single scrollable flow. */
+  #view-review { overflow: auto; }
+  #view-review .review-head { padding: 16px 12px 0; gap: 4px; }
+  #view-review .review-count { align-self: flex-start; padding: 4px 8px; border-radius: 7px; background: var(--lf-selected); font-size: 11px; }
+  #view-review .review-layout { display: flex; flex-direction: column; flex: none; gap: 10px; padding: 12px; }
+  #view-review .review-queue { max-height: none; padding: 12px; overflow: visible; }
+  #view-review .rail-head { padding: 0; margin-bottom: 8px; }
+  #view-review .review-queue-filters { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 6px; }
+  #view-review #btn-download-labels { min-height: 44px; padding: 5px 8px; font-size: 11px; }
+  #view-review .candidates { max-height: 180px; overflow: auto; overscroll-behavior: contain; }
+  #view-review .candidate-card { padding: 10px; border-radius: 10px; font-size: 12px; }
+  #view-review #review-chart-container { flex: none; height: clamp(300px, 44svh, 480px); border-radius: 14px; }
+  #view-review .review-keys { display: none; }
+  #view-review .review-inspector { max-height: none; overflow: visible; padding: 14px; }
+  #view-review .review-inspector dl { grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 6px 10px; font-size: 12px; }
+  #view-review .rv-actions-main { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+  #view-review .rv-actions-main > :last-child { grid-column: 1 / -1; }
+  #view-review .rv-status { border-radius: 10px; padding: 10px; }
+
+  /* Journal: readable timeline and optional filters. */
+  #view-journal .journal-head { gap: 10px; margin-bottom: 10px; }
+  #journal-filters { width: 100%; }
+  #view-journal .journal-filter-panel { margin-bottom: 10px; }
+  #view-journal .journal-tools { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 0; padding: 0 12px 12px; }
+  #view-journal .journal-tools label { min-width: 0; font-size: 11px; }
+  #view-journal .journal-tools input, #view-journal .journal-tools select { width: 100%; min-width: 0; }
+  #view-journal .journal-tools label:last-child { grid-column: 1 / -1; }
+  #view-journal #journal-scope { margin: 8px 2px; font-size: 11px; line-height: 17px; }
+  #view-journal .journal-list { padding: 0 12px; }
+  #view-journal .journal-row { grid-template-columns: 54px minmax(0, 1fr); gap: 6px 10px; padding: 12px 0; align-items: start; }
+  #view-journal .journal-time { font-size: 12px; color: var(--lf-brand); }
+  #view-journal .journal-time small { font-size: 9px; line-height: 14px; letter-spacing: 0; }
+  #view-journal .journal-title { font-size: 13px; line-height: 19px; }
+  #view-journal .journal-text { font-size: 12px; line-height: 18px; }
+  #view-journal .journal-side { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; grid-column: 2; width: 100%; min-width: 0; gap: 4px; }
+  #view-journal .journal-status { font-size: 11px; white-space: normal; }
+  #view-journal .journal-open { margin-left: auto; padding: 4px 8px; border: 0; background: var(--lf-selected); color: var(--lf-brand); font-size: 11px; }
+  #view-journal .journal-id { grid-column: 2; overflow-wrap: anywhere; font-size: 10px; }
+  #view-journal .journal-count { font-size: 11px; padding: 0 0 8px; }
+  #journal-more, #journal-new { width: 100%; margin-top: 10px; }
+
+  /* Settings and reference pages use the same card rhythm. */
+  #view-settings .settings-page { display: flex; padding-bottom: 0; }
+  #view-settings .review-head { padding: 0; }
+  #view-settings .settings-sections { width: 100%; margin-bottom: 12px; }
+  #view-settings .settings-panes { padding-bottom: 12px; }
+  #view-settings .settings-form select { width: 100%; min-width: 0; }
+  #view-settings .settings-field-info { flex: 1; }
+  #view-settings .field-title { font-size: 13px; line-height: 19px; }
+  #view-settings .field-desc { font-size: 11px; line-height: 17px; }
+  #view-settings .asset-switch { padding: 10px 0; gap: 8px; }
+  #view-settings .theme-choices { gap: 6px; }
+  #view-settings .theme-choice { padding: 8px; border-radius: 10px; gap: 6px; }
+  #view-settings .theme-name { font-size: 11px; }
+  #view-settings .theme-swatch { height: 28px; }
+  #view-settings .chip { min-height: 44px; padding: 6px 10px; font-size: 12px; }
+  #view-settings .settings-sticky { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin: 0 -12px; padding: 10px 12px; background: var(--lf-surface); }
+  #view-settings .settings-sticky .btn { min-width: 0; padding: 4px; font-size: 11px; }
+  #view-settings .settings-status { grid-column: 1 / -1; font-size: 11px; }
+  #view-settings .settings-status:empty { display: none; }
+  #view-help .help-block { padding: 0 12px 12px; margin-bottom: 10px; }
+  #view-help .now-assets-head { padding: 12px 0; }
+  #view-help .help-dl { grid-template-columns: minmax(0, 1fr); gap: 3px; font-size: 12px; }
+  #view-help .help-dl dt:not(:first-child) { padding-top: 10px; border-top: 1px solid var(--lf-border); margin-top: 7px; }
+  #view-help .help-dl dt { color: var(--lf-brand); }
+
+  /* Screener: scrollable categories, a contained table, compact chart tools. */
+  #alt-page { overflow: auto; padding-bottom: 12px; }
+  #alt-page .alt-fresh { padding: 14px 12px 10px; border: 0; }
+  #alt-page .alt-fresh-main { display: block; min-width: 0; }
+  #alt-page .alt-fresh-main > p { font-size: 11px; margin: 3px 0; }
+  #alt-page .alt-fresh .h1-events-context { font-size: 11px; gap: 6px; margin-top: 6px; }
+  #alt-page .alt-tabs { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: end; gap: 8px; padding: 0 12px 12px; border: 0; }
+  #alt-page .alt-buckets { display: flex; grid-column: 1 / -1; gap: 3px; min-width: 0; overflow-x: auto; overscroll-behavior-x: contain; padding: 4px; background: var(--lf-raised); border-radius: 12px; }
+  #alt-page .alt-tab { flex: none; min-height: 44px; white-space: nowrap; padding: 0 10px; border: 0; border-radius: 9px; font-size: 12px; }
+  #alt-page .alt-tab[aria-selected="true"] { background: var(--lf-surface); color: var(--lf-brand); box-shadow: 0 2px 6px #1020300d; }
+  #alt-page .alt-venue-label { min-width: 0; font-size: 10px; }
+  #alt-page .alt-venue-label select { width: 100%; }
+  #alt-page .alt-chips { padding: 0 12px 10px; border: 0; }
+  #alt-page .alt-chip-btn { min-height: 36px; padding: 5px 9px; font-size: 11px; }
+  #alt-page .alt-table-mode { flex: 1; min-height: 200px; margin: 0 12px; padding: 10px; }
+  #alt-page #alt-table-mode .alt-list-head { gap: 8px; padding: 4px 0 10px; }
+  #alt-page #alt-table-mode .alt-list-head label { min-width: 0; flex: 1 1 130px; font-size: 11px; }
+  #alt-page .alt-table-tools { gap: 6px; margin-bottom: 8px; }
+  #alt-page .alt-table-scroll { min-width: 0; max-width: 100%; overflow: auto; overscroll-behavior: contain; }
+  #alt-table { font-size: 12px; }
+  #alt-table th { font-size: 10px; }
+  #alt-table td, #alt-table th { padding: 10px 8px; }
+  #alt-page .alt-work { padding: 0 12px; }
+  #alt-page .alt-chart-col { padding: 10px; border-radius: 14px; }
+  #alt-page .alt-asset-head { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  #alt-page .alt-asset-head h2 { font-size: 19px; line-height: 26px; }
+  #alt-page .alt-back { justify-self: start; border: 0; padding: 0; background: transparent; color: var(--lf-text2); font-size: 11px; }
+  #alt-page .alt-asset-head p { font-size: 11px; }
+  #alt-page .lf-analysis-tabs { gap: 3px; margin: 0 12px 12px; padding: 4px; border: 0; }
+  #alt-page .lf-analysis-tabs .btn { flex: 1; min-width: 0; padding: 0 4px; border: 0; background: transparent; color: var(--lf-text2); }
+  #alt-page .lf-analysis-tabs .btn[aria-pressed="true"] { background: var(--lf-surface); color: var(--lf-brand); }
+  #alt-page .alt-toolbar { position: static; gap: 6px; }
+  #alt-page .alt-toolbar .btn { padding: 0 8px; font-size: 11px; }
+  #alt-page .alt-modes { flex: 1 1 100%; }
+  #alt-page .alt-modes button { flex: 1; padding: 0 5px; }
+  #alt-page #alt-card-toggle { display: none; }
+  #alt-page #chart-container { flex: none; height: max(300px, calc(100svh - 400px)); min-height: 300px; border-radius: 12px; }
+  #alt-page .chart-expanded #chart-container { height: max(300px, calc(100svh - 330px)); }
+  #alt-page .alt-card { border-radius: 14px; }
+  #alt-page .alt-card-head { padding: 12px; }
+  #alt-page .alt-card-head h2 { font-size: 14px; }
+  #alt-page #alt-card-body { font-size: 13px; padding: 0 12px 12px; }
+  #alt-page .alt-journal { padding: 12px; max-height: none; border-radius: 12px; }
+  #alt-page .alt-journal-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #alt-page .alt-journal-filters label:first-child { grid-column: 1 / -1; }
+  #alt-page .alt-event { grid-template-columns: minmax(0, 1fr); gap: 4px; padding: 10px 0; font-size: 12px; }
+  #alt-page .alt-filter-panel, #alt-page .alt-layers, #alt-page .alt-columns { position: fixed; inset: auto 12px calc(var(--mobile-nav-height) + 12px); width: auto; max-height: 72dvh; overflow: auto; padding: 16px; border: 1px solid var(--lf-border); border-radius: 18px; box-shadow: 0 12px 40px #10203030; z-index: 60; }
+  #alt-page .alt-filter-panel label { flex: 1 1 120px; min-width: 0; }
+  #alt-page .alt-filter-panel input, #alt-page .alt-filter-panel select { width: 100%; }
+  #alt-page .alt-filter-actions { width: 100%; }
+  #alt-page .alt-filter-actions .btn { flex: 1; }
+  #alt-page .alt-layers label { min-height: 44px; }
+  #alt-page .alt-layers input[type="checkbox"] { width: 18px; height: 18px; }
+
+  /* Market and calendar: smaller typography and shorter card spacing. */
+  #events-root .market-header { align-items: flex-start; gap: 10px; }
+  #events-root .market-header > div { min-width: 0; }
+  #events-root .market-intro { margin: 5px 0 0; font-size: 12px; line-height: 18px; }
+  #events-root #market-refresh { flex: none; padding: 0 8px; font-size: 11px; }
+  #events-root .events-modes { display: flex; flex-wrap: nowrap; overflow-x: auto; gap: 3px; padding: 4px; margin: 14px 0 8px; border: 0; background: var(--lf-raised); border-radius: 12px; }
+  #events-root .events-modes .btn { flex: none; min-height: 44px; white-space: nowrap; padding: 0 10px; border-radius: 9px; font-size: 12px; }
+  #events-root .events-modes .btn.active { background: var(--lf-surface); color: var(--lf-brand); box-shadow: 0 2px 6px #1020300d; }
+  #events-root .market-status { font-size: 11px; line-height: 17px; margin: 6px 2px 12px; }
+  #events-root .events-card, #events-root .market-hero { padding: 14px; border-radius: 14px; margin-bottom: 10px; line-height: 1.5; box-shadow: 0 2px 8px #10203004; }
+  #events-root .events-card h2 { font-size: 14px; line-height: 20px; }
+  #events-root .market-hero { border-left-width: 3px; }
+  #events-root .market-hero .side-state { font-size: 23px; line-height: 30px; }
+  #events-root .market-hero .events-line { font-size: 13px; }
+  #events-root .events-service { font-size: 11px; line-height: 17px; }
+  #events-root .market-reasons { padding: 10px; margin: 12px 0; gap: 8px; border-radius: 10px; }
+  #events-root .market-reason { padding: 9px; }
+  #events-root .market-reasons .events-reason { font-size: 12px; }
+  #events-root .market-card-head { gap: 8px; margin-bottom: 8px; }
+  #events-root .market-icon, #events-root .market-card-head .market-icon { width: 28px; height: 28px; flex-basis: 28px; font-size: 18px; border-radius: 8px; }
+  #events-root .market-metrics, #events-root .market-detail-grid, #events-root .events-split, #events-root .cal-layout { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  #events-root .market-direction { font-size: 17px; }
+  #events-root .market-facts li { padding: 10px 0; }
+  #events-root .market-fact-head strong { font-size: 13px; }
+  #events-root .market-votes { flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  #events-root .market-votes > span:first-child { flex: 1 1 100%; padding: 0; }
+  #events-root .market-votes > span { min-width: 0; padding: 8px; font-size: 11px; }
+  #events-root .market-votes strong { font-size: 20px; }
+  #events-root .events-checks li { flex-wrap: wrap; font-size: 12px; gap: 4px 8px; }
+  #events-root .events-src-row { padding: 10px 0; font-size: 12px; }
+  #events-root .lf-calendar-head { gap: 8px; margin-bottom: 12px; }
+  #events-root .lf-calendar-head h2 { font-size: 15px; }
+  #events-root .lf-calendar-head .btn { width: 44px; padding: 0; flex: none; }
+  #events-root .lf-calendar-grid { gap: 3px; }
+  #events-root .lf-calendar-grid .btn { min-width: 0; min-height: 48px; padding: 3px 0; font-size: 12px; border-radius: 8px; }
+  #events-root .lf-calendar-grid small { font-size: 9px; }
+  #events-root .lf-calendar-agenda { margin-top: 14px; padding-top: 12px; font-size: 12px; }
+
+  /* Legacy H1 route (?stay=1) gets the same mobile shell and readable flow. */
+  .app-body .ltf-topbar { flex-direction: row; align-items: center; justify-content: space-between; min-height: 52px; padding: 4px 12px; gap: 8px; }
+  .ltf-topbar .mobile-page-title { display: block; margin: 0; font-size: 19px; line-height: 26px; font-weight: 600; }
+  .ltf-topbar .top-right { margin-left: auto; }
+  .app-body:has(#ltf-main) .shell-main { overflow: auto; }
+  .app-body:has(#ltf-main) .shell { overflow: auto; }
+  .app-body:has(#ltf-main) .context-row { padding: 8px 12px; border-bottom: 0; }
+  .app-body:has(#ltf-main) .context-controls { gap: 6px; }
+  #ltf-instrument { flex: 1; width: 150px; max-width: none; }
+  #ltf-last-price { font-size: 20px; line-height: 28px; margin-left: auto; }
+  #ltf-quote-at { font-size: 10px; }
+  .app-body:has(#ltf-main) .mode-tabs { flex: 1 1 100%; padding: 4px; border-radius: 12px; background: var(--lf-raised); }
+  .app-body:has(#ltf-main) .mode-tab { flex: 1; justify-content: center; min-height: 44px; padding: 0 8px; border: 0; border-radius: 9px; font-size: 12px; }
+  .app-body:has(#ltf-main) .mode-tab.active { background: var(--lf-surface); color: var(--lf-brand); }
+  .app-body:has(#ltf-main) .context-controls .sep { display: none; }
+  .ltf-data-disclosure { flex: 1 1 100%; }
+  .ltf-data-status { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px 12px; }
+  .ltf-data-status .last-candle { display: inline; font-size: 11px; }
+  .app-body:has(#ltf-main) .ltf-tab { min-height: 44px; padding: 0 9px; font-size: 12px; border-radius: 9px; }
+  .app-body:has(#ltf-main) .ltf-layout { flex: none; padding: 4px 12px 12px; gap: 10px; }
+  .app-body:has(#ltf-main) .ltf-layout .chart-block { grid-template-rows: auto max(300px, 48svh); border: 1px solid var(--lf-border); border-radius: 14px; overflow: hidden; }
+  .app-body:has(#ltf-main) .chart-toolbar { flex-wrap: wrap; height: auto; min-height: 52px; padding: 4px 10px; border: 0; gap: 6px; }
+  .app-body:has(#ltf-main) #chart-container { border: 0; border-radius: 0; min-height: 300px; }
+  .app-body:has(#ltf-main) .layer-toggles { max-width: 100%; flex-wrap: wrap; font-size: 11px; }
+  .app-body:has(#ltf-main) .layer-toggles label { min-height: 44px; }
+  .app-body:has(#ltf-main) .ltf-inspector { position: static; display: block; order: 2; padding: 0; background: transparent; overflow: visible; }
+  .app-body:has(#ltf-main) .ltf-inspector .panel { width: 100%; max-height: none; padding: 14px; border-radius: 14px; }
+  .app-body:has(#ltf-main) .ltf-inspector .drawer-close { display: none; }
+  .app-body:has(#ltf-main) .ltf-bottom { order: 3; min-height: 0; border-radius: 14px; overflow: hidden; }
+  .app-body:has(#ltf-main) .bottom-head { flex-wrap: wrap; padding: 6px; gap: 6px; }
+  .app-body:has(#ltf-main) .bottom-tabs { flex: 1 1 100%; }
+  .app-body:has(#ltf-main) .ltf-obs-panel { bottom: var(--mobile-nav-height); border-radius: 0 16px 16px 0; width: min(320px, 90vw); padding: 12px; }
+  .app-body:has(#ltf-main) .layer-options { position: fixed; inset: auto 12px calc(var(--mobile-nav-height) + 12px); width: auto; max-height: 70dvh; border-radius: 18px; padding: 16px; }
+
+  /* Dialogs stay within the usable viewport, including the phone keyboard. */
+  .app-body .modal { padding: 12px; }
+  .app-body .modal-card { width: min(100%, 480px); min-width: 0; max-height: calc(100dvh - 24px); overflow: auto; padding: 16px; border-radius: 18px; }
+  .app-body .modal-actions { flex-wrap: wrap; gap: 6px; }
+  .app-body .modal-actions .btn { flex: 1 1 100px; }
+  .app-body .lf-drawer { border-radius: 18px 18px 0 0; }
+  .app-body .lf-drawer-backdrop { align-items: flex-end; }
+  .app-body .lf-drawer { max-height: 90dvh; }
+  .app-body .lf-drawer header { padding: 12px 16px; gap: 8px; }
+  .app-body .lf-drawer header h2 { font-size: 18px; }
+  .app-body .lf-drawer-body { padding: 14px; font-size: 13px; }
+  .app-body .lf-facts { grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 8px; font-size: 12px; }
+  .app-body .lf-export > div { right: 0; bottom: 48px; border-radius: 12px; }
+}
+
+@media (max-width: 359px) {
+  #view-now .now-filter { padding: 0 4px; font-size: 11px; }
+  #view-journal .journal-row { grid-template-columns: 44px minmax(0, 1fr); gap: 6px; }
+  #events-root .market-header { flex-wrap: wrap; }
+  #events-root #market-refresh { margin-left: auto; }
+}

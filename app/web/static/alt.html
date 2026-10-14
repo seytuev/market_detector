@@ -10,6 +10,8 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
   <link rel="stylesheet" href="/style.css">
   <link rel="stylesheet" href="/redesign.css">
+  <link rel="stylesheet" href="/mobile-analysis.css">
+  <link rel="stylesheet" href="/mobile-pages.css">
   <script src="/vendor/lightweight-charts.js"></script>
 </head>
 <body class="app-body">
@@ -71,11 +73,13 @@
     </section>
 
     <div class="alt-tabs" role="tablist" aria-label="Группы сетапов">
+      <div class="alt-buckets">
       <button type="button" class="alt-tab" data-bucket="eligible" title="Активные сетапы без стадии «требует проверки». Не означает, что вход доступен.">Все активные</button>
       <button type="button" class="alt-tab" data-bucket="new_entries">Новые условия входа</button>
       <button type="button" class="alt-tab" data-bucket="awaiting_retest">Ожидание ретеста</button>
       <button type="button" class="alt-tab" data-bucket="review">Требуют проверки</button>
       <button type="button" class="alt-tab" data-bucket="history">История</button>
+      </div>
       <label class="alt-venue-label">Биржа
         <select id="flt-venue"><option value="">Все</option></select>
       </label>

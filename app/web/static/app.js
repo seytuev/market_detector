@@ -929,16 +929,15 @@ function drawDailyStructure(overlay, ts, paneRight, height) {
     // W1 maps each D1 anchor onto its containing weekly candle.
     return ts.timeToCoordinate(bars[lo].time);
   };
-  const label = (x, y, text, color, title) => {
+  const label = (x, y, text, role, title) => {
     const el = document.createElement('span');
-    el.className = 'd1-structure-label';
+    el.className = 'd1-structure-label ltf-pivot role-' + role;
     el.textContent = text; el.title = title;
-    Object.assign(el.style, {position:'absolute', left:Math.max(0, Math.min(x, paneRight - 110)) + 'px',
-      top:y + 'px', color, fontSize:'11px', background:'var(--bg, #131722)',
-      padding:'1px 3px', fontWeight:'600', pointerEvents:'auto', zIndex:'15'});
+    Object.assign(el.style, {position:'absolute', left:x + 'px',
+      top:y + 'px', whiteSpace:'nowrap', zIndex:'15'});
     overlay.appendChild(el);
+    el.style.left = Math.max(0, Math.min(x, paneRight - el.offsetWidth - 4)) + 'px';
     if (mobile) {
-      el.style.left = Math.max(0, Math.min(x, paneRight - el.offsetWidth - 4)) + 'px';
       mobileLabels.push(el);
     }
   };
@@ -949,10 +948,11 @@ function drawDailyStructure(overlay, ts, paneRight, height) {
   (daily.pivots || []).filter(p => ['HH','HL','LH','LL'].includes(p.role) && visiblePoint(p)).slice(-20).forEach(p => {
     const x = xAt(p.pivot_at), y = state.candleSeries.priceToCoordinate(p.price);
     if (x == null || x < 0 || x > paneRight || y == null || y < 12 || y > height - 40) return;
-    label(x, y + (p.kind === 'high' ? -17 : 4), 'D1 ' + p.role, '#8056c7',
+    label(x - 5, y + (p.kind === 'high' ? -17 : 4), 'D1 ' + p.role, p.role,
       `D1 ${p.role} · ${fmtPrice(p.price)} · подтверждение ${fmtTime(p.confirmed_at)}`);
   });
-  const line = (anchor, end, level, text, color, title, dashed = false) => {
+  const line = (anchor, end, level, text, title, options = {}) => {
+    const {kind = '', direction = 'bull', expected = false, color = null} = options;
     const x2 = end == null ? paneRight : xAt(end);
     const y = state.candleSeries.priceToCoordinate(level);
     if (x2 == null || x2 < 0 || y == null || y < 0 || y > height - 35) return;
@@ -960,23 +960,38 @@ function drawDailyStructure(overlay, ts, paneRight, height) {
     const left = Math.max(0, x1 == null ? 0 : x1), right = Math.min(paneRight, x2);
     if (right < left) return;
     const el = document.createElement('div');
-    el.className = 'd1-structure-line';
+    el.className = 'd1-structure-line ' + (expected
+      ? 'ltf-expected ltf-expected-' + kind.toLowerCase()
+      : 'ltf-break ltf-' + kind.toLowerCase() + (direction === 'bull' ? ' ltf-up' : ' ltf-down'));
     Object.assign(el.style, {position:'absolute', left:left+'px', top:y+'px',
-      width:(right-left)+'px', borderTop:`2px ${dashed ? 'dashed' : 'solid'} ${color}`, pointerEvents:'none', zIndex:'14'});
+      width:(right-left)+'px', zIndex:'14'});
+    if (color) { el.style.borderColor = color; el.style.color = color; }
+    el.title = title;
+    const caption = document.createElement('span');
+    caption.className = 'd1-structure-label ' + (expected
+      ? (direction === 'bull' ? 'lbl-above' : 'lbl-below') : 'h1-break-label');
+    caption.textContent = text;
+    caption.title = title;
+    if (color) caption.style.color = color;
+    el.appendChild(caption);
     overlay.appendChild(el);
-    label(Math.max(left, right - 105), y - 17, text, color, title);
+    caption.style.left = Math.max(-left, Math.min(expected ? 2 : 0,
+      paneRight - left - caption.offsetWidth - 4)) + 'px';
+    if (mobile) mobileLabels.push(caption);
   };
   (daily.events || []).filter(e => {
     const end = xAt(e.open_time), start = xAt(e.anchor_at);
     return end != null && end >= 0 && (start == null || start <= paneRight);
   }).slice(-50).forEach(e => line(e.anchor_at, e.open_time, e.level,
-    'D1 ' + e.kind + (e.direction === 'bull' ? ' ↑' : ' ↓'), '#8056c7',
-    `D1 ${e.kind} · ${fmtPrice(e.level)} · закрытие ${fmtTime(e.occurred_at)}`));
+    'D1 ' + e.kind + (e.direction === 'bull' ? ' ↑' : ' ↓'),
+    `D1 ${e.kind} · ${fmtPrice(e.level)} · закрытие ${fmtTime(e.occurred_at)}`,
+    {kind:e.kind, direction:e.direction}));
   if (daily.data_quality === 'ok') Object.entries(daily.expected || {}).forEach(([dir, conditions]) => {
     Object.values(conditions).filter(c => c.status === 'ready' && c.level != null).forEach(c => {
       line(c.pivot?.pivot_at || bars[0].time * 1000, null, c.level,
-        'D1 ждём ' + c.kind + (dir === 'bull' ? ' ↑' : ' ↓'), '#8d7bb5',
-        `Условие ${c.kind} D1: закрытие дня строго ${dir === 'bull' ? 'выше' : 'ниже'} ${fmtPrice(c.level)}`, true);
+        'D1 ждём ' + c.kind + (dir === 'bull' ? ' ↑' : ' ↓'),
+        `Условие ${c.kind} D1: закрытие дня строго ${dir === 'bull' ? 'выше' : 'ниже'} ${fmtPrice(c.level)}`,
+        {kind:c.kind, direction:dir, expected:true});
     });
   });
   const current = typeof deskData === 'undefined' ? null : deskData.current;
@@ -984,7 +999,7 @@ function drawDailyStructure(overlay, ts, paneRight, height) {
     ? current.asset?.trade_setup?.daily_alignment : null;
   const target = sync?.target;
   if (target) line(bars[0].time * 1000, null, target.price,
-    'Цель · ' + target.type + ' D1', '#c88a35', target.text, true);
+    'Цель · ' + target.type + ' D1', target.text, {expected:true, color:'#c88a35'});
   if (mobile) {
     // Current conditions and targets are drawn last: give them priority over
     // older event/pivot captions. Keep every level line at its actual price.

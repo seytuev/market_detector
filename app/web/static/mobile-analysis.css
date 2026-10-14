@@ -1,5 +1,5 @@
-/* Mobile analysis: one toolbar, one panel switcher, room for the chart.
-   Loaded by the main workspace only. Desktop styles remain in redesign.css. */
+/* Shared mobile shell and compact analysis controls.
+   Page-specific mobile surfaces are in mobile-pages.css. */
 .sync-label-short, .mobile-control-icon { display: none; }
 
 @media (max-width: 767px) {

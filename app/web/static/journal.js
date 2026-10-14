@@ -26,6 +26,7 @@ window.LFJournal = (() => {
       if (query.has(key)) url.searchParams.set(key,query.get(key)); else url.searchParams.delete(key);
     });
     history.replaceState(null,'',url.pathname+url.search+url.hash);
+    document.dispatchEvent(new Event('lf-filters-changed'));
   }
 
   function clock(ms) {
@@ -310,6 +311,7 @@ window.LFJournal = (() => {
       if (el.tagName === 'SELECT' && value && ![...el.options].some(o => o.value === value)) el.add(new Option(value,value));
       el.value = value;
     });
+    document.dispatchEvent(new Event('lf-filters-changed'));
     document.querySelectorAll('#journal-filters [data-kind]').forEach((btn) => {
       const on = btn.dataset.kind === kind;
       btn.classList.toggle('active', on);

@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="/style.css">
   <link rel="stylesheet" href="/redesign.css">
   <link rel="stylesheet" href="/mobile-analysis.css">
+  <link rel="stylesheet" href="/mobile-pages.css">
   <script src="/vendor/lightweight-charts.js"></script>
 </head>
 <body class="app-body">
@@ -337,6 +338,8 @@
           <button type="button" class="now-filter" data-kind="delivery" aria-pressed="false">Уведомления</button>
         </div>
       </header>
+      <details class="mobile-disclosure journal-filter-panel" data-mobile-fold open>
+      <summary class="mobile-disclosure-summary">Фильтры <span class="mobile-filter-count" data-filter-count></span></summary>
       <div class="journal-tools">
         <label>Актив <select id="journal-instrument"><option value="">Все</option></select></label>
         <label>С даты <input id="journal-from" type="date"></label>
@@ -345,6 +348,7 @@
         <label>Область <select id="journal-scope-filter"><option value="">Все источники</option><option value="htf">Зоны D1/W1</option><option value="ltf">Структура H1</option><option value="alt">Скринер</option><option value="context">Рыночный фон</option></select></label>
         <label>Поиск <input id="journal-query" type="search" placeholder="По всей истории"></label>
       </div>
+      </details>
       <p class="field-desc" id="journal-scope">Поиск в загруженных событиях. Вся история базы этим полем не охватывается.</p>
       <button type="button" id="journal-new" class="btn hidden">Новые записи</button>
       <div id="journal-list" class="journal-list" aria-live="polite"></div>
