@@ -11,6 +11,36 @@ from app.services import runtime
 from .test_worker import FakeAdapter, _make_worker
 
 
+async def test_seed_waits_for_sqlite_writer_without_stopping_event_loop(db):
+    import threading
+    from app.models import Instrument
+
+    legacy = db.upsert_instrument(Instrument(None, "HYPE", "binance", "spot", "HYPEUSDT", "USDT"))
+    worker, _ = _make_worker(db, FakeAdapter())
+    held = threading.Event()
+    release = threading.Event()
+
+    def writer():
+        with db.batch_writes():
+            db.set_meta("test:startup_writer", "held")
+            held.set()
+            assert release.wait(3)
+
+    writing = asyncio.create_task(asyncio.to_thread(writer))
+    await asyncio.wait_for(asyncio.to_thread(held.wait), 2)
+    seeding = asyncio.create_task(worker.seed_instruments())
+    try:
+        await asyncio.sleep(0.03)
+        assert not seeding.done(), "seed must wait for the writer, rather than fail with SQLITE_BUSY"
+        release.set()
+        await asyncio.wait_for(seeding, 2)
+        assert not db.get_instrument(legacy).enabled
+    finally:
+        release.set()
+        await writing
+        await asyncio.gather(seeding, return_exceptions=True)
+
+
 @pytest.mark.parametrize("handoff", ["expiry", "release"])
 async def test_wait_for_owner_preserves_active_lease_then_takes_over(db, monkeypatch, handoff):
     stamp = 1_000_000

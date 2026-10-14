@@ -220,10 +220,10 @@ class Worker:
         # оставаться активным после обновления существующей базы.
         for old in self.db.get_instruments():
             if old.venue == "binance" and old.symbol == "HYPEUSDT":
-                self.db.set_instrument_enabled(old.id, False)
+                await self.data_sync._write(self.db.set_instrument_enabled, old.id, False)
         # @207 и повторный HYPE — один и тот же спот. Пустой дубль
         # удаляется, дубль с историей скрывается. Публичное имя одно.
-        self.db.collapse_hyperliquid_hype()
+        await self.data_sync._write(self.db.collapse_hyperliquid_hype)
         catalogs: dict[str, Optional[list]] = {}
         for venue, symbol in SEED:
             adapter = self.adapters.get(venue)
@@ -257,7 +257,7 @@ class Worker:
                     f"проверьте идентификатор, подмена не выполняется."
                 )
                 continue
-            iid = self.db.upsert_instrument(match)
+            iid = await self.data_sync._write(self.db.upsert_instrument, match)
             log.info("инструмент подключён: %s %s (id=%s)", venue, symbol, iid)
         if self._seed_pending_venues:
             self._schedule_catalog_retry()
