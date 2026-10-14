@@ -467,16 +467,17 @@ class LtfEngine:
         self._batch = StructureBatch() if self.scan_cursors else None
         try:
             for idx, c in enumerate(closed):
-                self._process_candle(
-                    obs.instrument_id, closed, idx,
-                    detected_at=c.close_time, processing_mode="replay",
-                    detection_lag_ms=max(0, now - c.close_time), result=result,
-                    # роли в БД переписываем только на голове истории — иначе
-                    # каждый replay прокручивает промежуточные роли против
-                    # финальных и множит строки ltf_pivot_role_log (§13: replay
-                    # не должен менять прошлое)
-                    persist_roles=idx == len(closed) - 1,
-                )
+                # Refresh external publications between bars, then publish one
+                # atomic bar. Cached reads inside it need no separate epoch SQL.
+                self.db._note_external_epoch()
+                with self.db.batch_writes():
+                    self._process_candle(
+                        obs.instrument_id, closed, idx,
+                        detected_at=c.close_time, processing_mode="replay",
+                        detection_lag_ms=max(0, now - c.close_time), result=result,
+                        # Historical roles are persisted only at the head.
+                        persist_roles=idx == len(closed) - 1,
+                    )
         finally:
             self._batch = None
         if closed:
