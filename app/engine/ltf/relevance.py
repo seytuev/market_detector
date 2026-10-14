@@ -34,7 +34,14 @@ def activation_cut(db, zone, as_of: int, cfg) -> ActivationCut:
     """Причинное восстановление глубины/заполнения на отсечку as_of по
     закрытым H1 (та же машина zone_at: без проекции настоящего в прошлое).
     Разрыв истории — unknown (None), а не «свежая» зона."""
-    candles = db.get_candles(zone.instrument_id, "H1", end_ms=int(as_of))
+    candles = []
+    if zone.confirmed_at is not None:
+        start = int(zone.formed_at + HOUR if zone.is_level else zone.confirmed_at)
+        if start % HOUR == HOUR - 1:
+            start += 1
+        candles = db.get_candles(
+            zone.instrument_id, "H1", start_ms=start, end_ms=int(as_of),
+        )
     z, meta = zone_at(zone, candles, as_of, cfg)
     if meta["data_quality"] == "gap":
         return ActivationCut(None, None, None)
