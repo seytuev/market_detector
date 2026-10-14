@@ -148,7 +148,7 @@ def _bull_ob_with_fvg_candles(iid: int):
         make_candle(T0 + 0 * H4_MS, 105.0, 106.0, 100.0, 101.0, "H4", iid),
         make_candle(T0 + 1 * H4_MS, 101.0, 110.0, 101.0, 109.0, "H4", iid),
         make_candle(T0 + 2 * H4_MS, 109.0, 111.0, 105.0, 110.0, "H4", iid),
-        make_candle(T0 + 3 * H4_MS, 110.0, 113.0, 110.5, 112.0, "H4", iid),
+        make_candle(T0 + 3 * H4_MS, 110.5, 113.0, 110.5, 112.0, "H4", iid),
     ]
 
 
