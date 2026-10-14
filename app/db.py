@@ -179,11 +179,14 @@ class Database:
             self.conn.commit()
 
     @contextlib.contextmanager
-    def batch_writes(self, *, immediate=True):
+    def batch_writes(self, *, immediate=True, join_repository_writes=False):
         """Synchronous unit of work, owned by this thread and connection.
 
         Nested units use savepoints. Never hold this context across await.
         Readers on other threads use their own committed WAL snapshots.
+        join_repository_writes lets a coordinated calculation own all its
+        repository writes; errors must propagate out of that calculation.
+        Explicit nested batch_writes still establish their own savepoints.
         """
         with self.conn.session() if self.is_postgres else contextlib.nullcontext():
             raw = self.conn._conn
@@ -204,6 +207,8 @@ class Database:
             domain_dirty_before = set(self._domain_seq_dirty)
             self._batch_depth += 1
             self.conn.unit_depth += 1
+            previous_join = getattr(self._local, 'join_repository_writes', False)
+            self._local.join_repository_writes = previous_join or join_repository_writes
             try:
                 yield
                 if outer and self._state_seq_dirty:
@@ -226,6 +231,7 @@ class Database:
                 self._drop_read_caches()
                 raise
             finally:
+                self._local.join_repository_writes = previous_join
                 self._batch_depth -= 1
                 self.conn.unit_depth -= 1
                 if outer:
@@ -4836,7 +4842,8 @@ def _transactional(method):
     def run(self, *args, **kwargs):
         # These branches only mark the enclosing unit dirty. Opening another
         # SAVEPOINT merely to set a Python flag adds two database round trips.
-        if self._batch_depth and method.__name__ in {'bump_state_seq', 'bump_domain'}:
+        if self._batch_depth and (getattr(self._local, 'join_repository_writes', False)
+                                 or method.__name__ in {'bump_state_seq', 'bump_domain'}):
             return method(self, *args, **kwargs)
         with self.batch_writes():
             return method(self, *args, **kwargs)

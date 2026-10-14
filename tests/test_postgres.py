@@ -84,6 +84,35 @@ def test_deferred_publication_flags_do_not_open_nested_postgres_units(pg, monkey
     assert pg.get_domain('seq:flag-test')==1
 
 
+def test_coordinated_repository_bar_and_explicit_postgres_savepoint(pg, monkeypatch):
+    from app.postgres import Session
+    statements=[]
+    native=Session.execute
+    def counted(self,sql,parameters=None):
+        statements.append(sql)
+        return native(self,sql,parameters)
+    monkeypatch.setattr(Session,'execute',counted)
+    published=[]
+    with pg.batch_writes(join_repository_writes=True):
+        pg.set_meta('coordinated:outer','1')
+        with pytest.raises(psycopg.errors.DivisionByZero):
+            with pg.batch_writes():
+                pg.set_meta('coordinated:nested','1')
+                pg.conn.execute('SELECT 1/0')
+        pg.on_commit(lambda: published.append('committed'))
+    assert sum(sql.startswith('SAVEPOINT') for sql in statements)==1
+    assert pg.get_meta('coordinated:outer')=='1'
+    assert pg.get_meta('coordinated:nested') is None
+    with pytest.raises(ValueError):
+        with pg.batch_writes(join_repository_writes=True):
+            pg.set_meta('coordinated:failed','1')
+            pg.on_commit(lambda: published.append('incorrect'))
+            raise ValueError('failed bar')
+    assert pg.get_meta('coordinated:failed') is None
+    assert published==['committed']
+    assert not pg._local.join_repository_writes
+
+
 def test_identity_conflict_and_nested_rollback(pg):
     iid = pg.upsert_instrument(Instrument(id=None, asset="BTC", venue="binance", market_type="spot", symbol="BTCUSDT", quote_asset="USDT"))
     assert iid>0

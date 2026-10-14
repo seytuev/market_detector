@@ -42,7 +42,7 @@ def prepare_upgrade(db, cfg, instrument_id, as_of):
                 with sqlite3.connect(str(backup)) as destination:
                     source.backup(destination)
     # One publication instead of an autocommit/fsync for every historical row.
-    with db.batch_writes():
+    with db.batch_writes(join_repository_writes=True):
         scenarios = db.list_ltf_scenarios_for_instrument(instrument_id)
         for scenario in scenarios:
             db.conn.execute("UPDATE ltf_event SET delayed=1 WHERE scenario_id=? AND delivered=0", (scenario.id,))

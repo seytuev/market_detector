@@ -185,3 +185,31 @@ def test_deferred_version_flags_need_no_savepoints_and_follow_outer_rollback(db)
         assert db.get_domain('seq:flag-test')==1
     finally:
         db.conn._conn.set_trace_callback(None)
+
+
+def test_coordinated_repository_writes_keep_explicit_nested_rollback(db):
+    statements=[]
+    published=[]
+    db.conn._conn.set_trace_callback(statements.append)
+    try:
+        with db.batch_writes(join_repository_writes=True):
+            db.set_meta('coordinated:outer','1')
+            with pytest.raises(ValueError):
+                with db.batch_writes():
+                    db.set_meta('coordinated:nested','1')
+                    raise ValueError('nested failure')
+            db.on_commit(lambda: published.append('success'))
+        assert sum(sql.startswith('SAVEPOINT') for sql in statements)==1
+        assert db.get_meta('coordinated:outer')=='1'
+        assert db.get_meta('coordinated:nested') is None
+        assert published==['success']
+        with pytest.raises(ValueError):
+            with db.batch_writes(join_repository_writes=True):
+                db.set_meta('coordinated:failed','1')
+                db.on_commit(lambda: published.append('incorrect'))
+                raise ValueError('bar failure')
+        assert db.get_meta('coordinated:failed') is None
+        assert published==['success']
+        assert not db._local.join_repository_writes
+    finally:
+        db.conn._conn.set_trace_callback(None)

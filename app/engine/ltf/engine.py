@@ -344,7 +344,7 @@ class LtfEngine:
                 # текущий (§13)
                 lag = max(0, now - c.close_time)
                 self.db._note_external_epoch()
-                with self.db.batch_writes():
+                with self.db.batch_writes(join_repository_writes=True):
                     self._process_candle(
                         instrument_id, closed, idx,
                         detected_at=now,
@@ -529,7 +529,7 @@ class LtfEngine:
                 sample = get_registry().profile('ltf_replay_bar' if sampled == 0 else 'ltf_replay_warm_bar',
                     instrument_id=obs.instrument_id, close_time=c.close_time) if resume and sampled in (0,9) else nullcontext()
                 sampled += 1
-                with sample, self.db.batch_writes():
+                with sample, self.db.batch_writes(join_repository_writes=True):
                     self._process_candle(
                         obs.instrument_id, closed, idx,
                         detected_at=c.close_time, processing_mode="replay",
