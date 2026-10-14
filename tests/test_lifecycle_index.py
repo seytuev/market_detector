@@ -100,3 +100,36 @@ def test_current_pivots_select_latest_row_before_loading_histories(db, instrumen
     assert current[0].id == ids[-1]
     assert current[0].price == 149
     assert len(db.list_ltf_pivots(instrument_id, include_superseded=True)) == 50
+
+
+@pytest.mark.parametrize('direction', list(Direction))
+@pytest.mark.parametrize('kind', ['OB', 'FVG', 'BSL', 'SSL'])
+def test_activation_cut_many_dates_share_one_tree_and_preserve_causality(direction, kind, monkeypatch):
+    from app.engine.ltf.relevance import ActivationHistory, ActivationCut
+    from app.engine.ltf.entries import fvg_filled
+    built = []
+    native = LifecycleIndex.__init__
+    def counted(self, *args):
+        built.append(1)
+        native(self, *args)
+    monkeypatch.setattr(LifecycleIndex, '__init__', counted)
+    start = 1_800_000_000_000 // H1_MS * H1_MS
+    rng = random.Random(732)
+    cfg = DetectorConfig()
+    bars = [make_candle(start+i*H1_MS, 105, rng.randrange(105,125),
+                        rng.randrange(85,105), 105, 'H1') for i in range(100)]
+    for i in (11,33,77):
+        bars[i] = replace(bars[i], closed=False)
+    # Both inclusive and exclusive close timestamps occur in stored histories.
+    bars = [replace(c, close_time=c.close_time+(i%2)) for i,c in enumerate(bars)]
+    history = ActivationHistory(bars)
+    for i in range(100):
+        at = start+i*H1_MS+rng.choice([-1,0,1,H1_MS//2])
+        zone = LtfEntryZone(i, 1, kind, direction, 100, 100 if kind in ('BSL','SSL') else 110,
+                            start, start+H1_MS-1)
+        z, meta = zone_at(zone, bars, at, cfg)
+        expected = ActivationCut(None,None,None) if meta['data_quality']=='gap' else ActivationCut(
+            z.max_test_depth, fvg_filled(z) if kind=='FVG' else False, z.test_extreme)
+        assert history.cut(zone, at, cfg) == expected
+        history.cuts.clear()  # evicted cut entries must not rebuild the tree
+    assert len(built) == 1

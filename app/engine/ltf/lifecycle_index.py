@@ -63,10 +63,10 @@ class LifecycleIndex:
         visit(1, 0, self.size)
         return first, extreme
 
-    def extreme(self, start, bull):
+    def extreme(self, start, bull, end=None):
         tree, pick = (self.low, min) if bull else (self.high, max)
         result = float('inf') if bull else float('-inf')
-        left, right = start + self.size, len(self.rows) + self.size
+        left, right = start + self.size, (len(self.rows) if end is None else end) + self.size
         while left < right:
             if left & 1:
                 result = pick(result, tree[left]); left += 1

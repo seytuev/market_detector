@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from collections import OrderedDict
 from contextlib import contextmanager
+from bisect import bisect_left, bisect_right
 
 from ...models import Direction
 from .entries import (
@@ -36,7 +37,7 @@ class ActivationHistory:
     """Immutable H1 sample shared by all activation cuts in one calculation."""
     def __init__(self, candles):
         self.candles = candles
-        self.indices = OrderedDict()
+        self.index = None
         self.cuts = OrderedDict()
 
     def cut(self, zone, as_of, cfg):
@@ -47,17 +48,46 @@ class ActivationHistory:
             self.cuts.move_to_end(key)
             return self.cuts[key]
         from .lifecycle_index import LifecycleIndex
-        if as_of not in self.indices:
-            self.indices[as_of] = LifecycleIndex(self.candles, as_of)
-        self.indices.move_to_end(as_of)
-        index = self.indices[as_of]
-        while len(self.indices) > 2:
-            self.indices.popitem(last=False)
-        value = _cut_result(*index.project(zone, cfg))
+        if self.index is None:
+            self.index = LifecycleIndex(self.candles, max(
+                (c.close_time for c in self.candles if c.closed), default=0))
+        index = self.index
+        # All activation dates share one tree. Every query is bounded by its
+        # own closed-bar cutoff; later bars cannot affect past freshness.
+        if zone.confirmed_at is None or zone.confirmed_at > as_of:
+            value = ActivationCut(0.0, False, None)
+        elif zone.is_level:
+            # Levels have no depth; scalar lifecycle only contributes gaps.
+            value = self._range_cut(zone, as_of, index, level=True)
+        else:
+            value = self._range_cut(zone, as_of, index)
         self.cuts[key] = value
         if len(self.cuts) > 16384:
             self.cuts.popitem(last=False)
         return value
+
+    @staticmethod
+    def _range_cut(zone, as_of, index, level=False):
+        start = zone.formed_at + HOUR if level else zone.confirmed_at
+        if start % HOUR == HOUR - 1:
+            start += 1
+        left = bisect_left(index.opens, start)
+        right = bisect_right(index.rows, as_of, key=lambda candle: candle.close_time)
+        gap = ((left < right and index.opens[left] != start)
+               or index.gaps[right] - index.gaps[min(left + 1, right)] > 0)
+        expected = index.opens[right - 1] + HOUR if left < right else start
+        if gap or expected + HOUR - 1 <= as_of:
+            return ActivationCut(None, None, None)
+        extreme = None
+        if left < right and not level:
+            bull = zone.direction == Direction.BULL
+            candidate = index.extreme(left, bull, right)
+            if (candidate <= zone.upper if bull else candidate >= zone.lower):
+                extreme = candidate
+        projected = replace(zone, max_test_depth=test_depth_of(zone, extreme), test_extreme=extreme)
+        return ActivationCut(projected.max_test_depth,
+                             fvg_filled(projected) if zone.type == 'FVG' else False,
+                             extreme)
 
 
 @contextmanager
