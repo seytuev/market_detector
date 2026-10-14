@@ -1525,13 +1525,14 @@ class Database:
                 'ltf_obs': 'ltf_observation', 'ltf_obs_zone': 'ltf_observation', 'ltf_obs_list': 'ltf_observation',
                 'ltf_sc': 'ltf_scenario', 'ltf_sc_list': 'ltf_scenario', 'ltf_sc_active': 'ltf_scenario', 'ltf_sc_ins': 'ltf_scenario',
                 'ltf_pivot': 'ltf_pivot', 'ltf_pivots': 'ltf_pivot',
-                'ltf_has_se': 'ltf_structure_event', 'ltf_se_list': 'ltf_structure_event',
+                'ltf_se_keys': 'ltf_structure_event', 'ltf_se_list': 'ltf_structure_event',
                 'ltf_mv_list': 'ltf_movement', 'ltf_rng_cur': 'ltf_range', 'ltf_rng_list': 'ltf_range',
                 'ltf_ez': 'ltf_entry_zone', 'ltf_sce': 'ltf_scenario_entry',
                 'ltf_lt': 'ltf_liquidity_test', 'ltf_ev': 'ltf_event',
             }.get(key[0])
             def token():
-                if key[0] in ('ltf_obs', 'ltf_sc', 'ltf_pivot', 'ltf_ez', 'ltf_sc_active'):
+                if key[0] in ('ltf_obs', 'ltf_sc', 'ltf_pivot', 'ltf_ez', 'ltf_sc_active',
+                              'ltf_se_keys', 'ltf_se_list'):
                     scope = 'scenario_observation' if key[0] == 'ltf_sc_active' else table
                     return (self._ltf_full_version, self._ltf_bulk_versions.get(table, 0),
                             self._ltf_row_versions.get((scope, key[1]), 0))
@@ -3005,7 +3006,7 @@ class Database:
              json.dumps(e.evidence, ensure_ascii=False)),
         )
         self._commit()
-        self._bump_ltf_cache('ltf_structure_event')
+        self._bump_ltf_cache('ltf_structure_event', e.scenario_id)
         if cur.rowcount == 1:
             e.id = int(cur.lastrowid)
             return e
@@ -3025,14 +3026,12 @@ class Database:
         return self._to_ltf_structure_event(r) if r else None
 
     def has_ltf_structure_event(self, scenario_id: int, level_key: str, stage: str) -> bool:
-        def load() -> bool:
-            row = self.conn.execute(
-                """SELECT 1 FROM ltf_structure_event
-                   WHERE scenario_id=? AND level_key=? AND stage=?""",
-                (scenario_id, level_key, stage),
-            ).fetchone()
-            return row is not None
-        return self._ltf_cached(("ltf_has_se", scenario_id, level_key, stage), load)
+        def load():
+            return frozenset((row['level_key'], row['stage']) for row in self.conn.execute(
+                'SELECT level_key, stage FROM ltf_structure_event WHERE scenario_id=?',
+                (scenario_id,)).fetchall())
+        keys = self._ltf_cached(("ltf_se_keys", scenario_id), load)
+        return (level_key, stage) in keys
 
     def list_ltf_structure_events(self, scenario_id: int) -> list[LtfStructureEvent]:
         def load() -> list[LtfStructureEvent]:

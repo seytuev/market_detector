@@ -25,5 +25,14 @@ vm.createContext(context); vm.runInContext(body, context);
   assert.equal(state.h1Layers.detected_zones.length, 1);
   const switched = context.loadH1Markers(); state.instrumentId = 2; resolve({markers: ['old asset']}); await switched;
   assert.deepEqual(painted, ['BOS'], 'response for another instrument must not apply');
+  state.instrumentId = 1; state.h1Layers = {snapshot: {state_version: 50}};
+  let candleLoads = 0, structureLoads = 0;
+  Object.assign(context, {loadCandles: async () => {candleLoads++;},
+    loadZones: async () => {}, loadEvents: async () => {}, loadCandidates: async () => {}});
+  vm.runInContext(source.slice(source.indexOf('async function reloadAll()'), source.indexOf('function initSettingsSections()')), context);
+  context.loadH1Markers = async () => {structureLoads++;};
+  await context.reloadAll();
+  assert.equal(candleLoads, 1, 'quote versions must not cause a duplicate candle load');
+  assert.equal(structureLoads, 1, 'quote versions must not cause a duplicate structure load');
   console.log('H1 loading: single flight, visible snapshot preservation, instrument isolation passed');
 })().catch(error => {console.error(error); process.exitCode = 1;});

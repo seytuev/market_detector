@@ -113,6 +113,34 @@ def _count_entry_queries(db: Database, fn) -> dict:
     return hits
 
 
+def test_structure_event_membership_loads_once_and_tracks_writes(monkeypatch):
+    from dataclasses import replace
+    db = _build_db(0, ltf_cache=True)
+    scenario = db.list_ltf_scenarios_for_instrument(1)[0]
+    event = db.list_ltf_structure_events(scenario.id)[0]
+    reads = []
+    execute = db.conn.execute
+    def counted(sql, parameters=None):
+        if sql.lstrip().upper().startswith('SELECT') and 'FROM ltf_structure_event' in sql:
+            reads.append(sql)
+        return execute(sql, parameters) if parameters is not None else execute(sql)
+    monkeypatch.setattr(db.conn, 'execute', counted)
+    for i in range(100):
+        assert not db.has_ltf_structure_event(scenario.id, f'absent:{i}', 'primary')
+    assert len(reads) == 1
+    assert db.has_ltf_structure_event(scenario.id, event.level_key, event.stage)
+    fresh = replace(event, id=None, level_key='new-membership')
+    db.insert_ltf_structure_event(fresh)
+    assert db.has_ltf_structure_event(scenario.id, fresh.level_key, fresh.stage)
+    with pytest.raises(ValueError):
+        with db.batch_writes():
+            db.insert_ltf_structure_event(replace(event, id=None, level_key='rolled-back'))
+            assert db.has_ltf_structure_event(scenario.id, 'rolled-back', event.stage)
+            raise ValueError('rollback')
+    assert not db.has_ltf_structure_event(scenario.id, 'rolled-back', event.stage)
+    db.close()
+
+
 def test_replay_entry_queries_not_linear_in_candles():
     """SELECT ltf_scenario_entry на replay ограничены числом изменений состояния,
     а не длиной истории: хвост +200/+400 свечей запросов не добавляет

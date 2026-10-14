@@ -133,3 +133,18 @@ def test_sql_instrumentation_smoke(db: Database):
     assert any("kind=read" in k for k in kinds)
     assert any("kind=write" in k for k in kinds)
     assert any("op=commit" in k for k in kinds)
+
+
+def test_query_diagnostics_are_bounded_and_hide_values():
+    from app.services.metrics import MetricsRegistry
+    registry = MetricsRegistry()
+    registry.query("SELECT * FROM meta WHERE key='private-token' AND n=123", .2)
+    registry.query("SELECT * FROM meta WHERE key='another-token' AND n=456", .3)
+    registry.query("UPDATE meta SET value='never-display'", 1)
+    report = registry.snapshot()['sql_queries']
+    assert report == [dict(query='SELECT * FROM meta WHERE key=? AND n=?', count=2,
+                           total_ms=500.0, max_ms=300.0)]
+    for i in range(200):
+        registry.query(f'SELECT field_{i} FROM t', .01)
+    assert len(registry._queries) <= 129
+    assert 'private-token' not in str(registry.snapshot())

@@ -228,7 +228,9 @@ class Connection:
                 get_registry().counter("sql_busy_errors",labels={"op":"execute"})
             raise
         finally:
-            get_registry().histogram("sql_duration", time.monotonic()-started,
+            elapsed = time.monotonic() - started
+            get_registry().query(sql, elapsed)
+            get_registry().histogram("sql_duration", elapsed,
                 {"op":"execute", "kind":"read" if query.upper().startswith(("SELECT", "WITH")) else "write"})
 
     def executemany(self, sql, parameters):

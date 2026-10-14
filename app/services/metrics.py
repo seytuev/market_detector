@@ -14,16 +14,26 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 import threading
 import time
 from collections import deque
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import Any, Iterator, Optional
 
 log = logging.getLogger(__name__)
 
 _KINDS = ("counter", "histogram", "gauge")
+
+
+@lru_cache(maxsize=512)
+def _query_shape(sql: str) -> str:
+    # Parameters never enter this function; remove literal values as well.
+    sql = re.sub(r"'(?:''|[^'])*'", "?", sql)
+    sql = re.sub(r"\b\d+(?:\.\d+)?\b", "?", sql)
+    return ' '.join(sql.split())[:600]
 
 
 def _percentile(sorted_values: list[float], pct: float) -> float:
@@ -67,7 +77,21 @@ class MetricsRegistry:
         self._max_series = max(1, max_series)
         self._lock = threading.Lock()
         self._series: dict[str, dict[str, Any]] = {}
+        self._queries: dict[str, list[float]] = {}
         self._started = time.monotonic()
+
+    def query(self, sql: str, seconds: float) -> None:
+        """Bounded SQL shapes for diagnosing N+1 reads; never bind values."""
+        if not sql.lstrip().upper().startswith(('SELECT', 'WITH')):
+            return
+        shape = _query_shape(sql)
+        with self._lock:
+            if shape not in self._queries and len(self._queries) >= 128:
+                shape = 'other'
+            stats = self._queries.setdefault(shape, [0, 0.0, 0.0])
+            stats[0] += 1
+            stats[1] += seconds
+            stats[2] = max(stats[2], seconds)
 
     def register(self, name: str, kind: str, label_keys: tuple[str, ...] = ()) -> None:
         """Объявить серию и допустимые ключи меток. Повторная регистрация
@@ -170,6 +194,7 @@ class MetricsRegistry:
         """JSON-сериализуемый снимок: uptime_s, collected_at, series{...}."""
         with self._lock:
             uptime = time.monotonic() - self._started
+            queries = [(shape, list(stats)) for shape, stats in self._queries.items()]
             copied = {
                 name: (meta["kind"], meta["label_keys"],
                        {key: holder for key, holder in meta["series"].items()})
@@ -209,6 +234,10 @@ class MetricsRegistry:
             "uptime_s": round(uptime, 3),
             "collected_at": datetime.now(timezone.utc).isoformat(),
             "series": out,
+            "sql_queries": [dict(query=shape, count=stats[0],
+                                 total_ms=round(stats[1] * 1000, 3),
+                                 max_ms=round(stats[2] * 1000, 3))
+                            for shape, stats in sorted(queries, key=lambda item: -item[1][1])[:20]],
         }
 
 

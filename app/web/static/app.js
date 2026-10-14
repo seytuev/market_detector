@@ -4121,11 +4121,6 @@ async function reloadAll() {
   await loadCandles();
   if (id !== state.instrumentId) return;
   await Promise.all([loadZones(), loadEvents(), loadCandidates(), loadH1Markers()]);
-  if (id === state.instrumentId && state.chartMode === 'h1' && state.h1Layers && state.h1Layers.snapshot &&
-      state.h1Layers.snapshot.state_version != null && state.h1Layers.snapshot.state_version !== state.candleVersion) {
-    await loadCandles();
-    if (id === state.instrumentId) await loadH1Markers();
-  }
 }
 
 function initSettingsSections() {
