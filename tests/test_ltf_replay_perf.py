@@ -28,6 +28,29 @@ LTF_TABLES = [
     "ltf_scenario_entry", "ltf_liquidity_test", "ltf_event",
 ]
 
+
+def test_replay_reuses_pivot_rows_until_storage_count_changes(db, instrument_id, monkeypatch):
+    from app.engine.ltf.structure import StructureBatch
+    from app.models_ltf import LtfPivot
+    batch = StructureBatch()
+    reads = []
+    original = db.list_ltf_pivots
+
+    def counted(iid):
+        reads.append(iid)
+        return original(iid)
+
+    monkeypatch.setattr(db, "list_ltf_pivots", counted)
+    for _ in range(100):
+        assert batch.existing_for(db, instrument_id) == {}
+    assert len(reads) == 1
+    db.insert_ltf_pivot(LtfPivot(
+        id=None, instrument_id=instrument_id, kind="low", price=10,
+        pivot_at=1, candle_open_time=1, confirmed_at=2,
+    ))
+    assert ("low", 1) in batch.existing_for(db, instrument_id)
+    assert len(reads) == 2
+
 _CFG = DetectorConfig()
 
 # 37 свечей: слом → диапазон → касания FVG/BSL → отмена → переоткрытие

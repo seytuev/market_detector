@@ -232,8 +232,12 @@ class StructureBatch:
     def existing_for(self, db: Database, instrument_id: int) -> dict:
         """(kind, pivot_at) → строка ltf_pivot; перечитывается только при
         изменении числа pivots в БД (append-only внутри пакета)."""
-        rows = db.list_ltf_pivots(instrument_id)
-        if self._existing_fp != len(rows):
+        count = db.conn.execute(
+            "SELECT COUNT(*) FROM ltf_pivot WHERE instrument_id=?",
+            (instrument_id,),
+        ).fetchone()[0]
+        if self._existing_fp != count:
+            rows = db.list_ltf_pivots(instrument_id)
             self.existing = {(p.kind, p.pivot_at): p for p in rows}
             self._existing_fp = len(rows)
         return self.existing
