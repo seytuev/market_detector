@@ -143,8 +143,12 @@ async def async_main() -> None:
     # получит тот же итоговый конфиг, что виден в веб-настройках
     settings.detector = load_detector_config()
     settings.alt_config = load_alt_config()
-    db = await asyncio.to_thread(Database, settings.db_path)
-    if settings.db_path != ":memory:":
+    from .services.postgres_migration import ensure_postgres
+    await asyncio.to_thread(ensure_postgres, settings)
+    db = await asyncio.to_thread(Database, settings.database_target)
+    if db.is_postgres:
+        log.info("база PostgreSQL подключена; файлы приложения: %s", Path(settings.db_path).parent)
+    elif settings.db_path != ":memory:":
         try:
             db_bytes = Path(settings.db_path).stat().st_size
         except OSError:

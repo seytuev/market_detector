@@ -32,7 +32,8 @@ class ServiceNotifications:
     def failed(self, ins, timeframes, reason="network"):
         stamp = now_ms()
         changed = False
-        with self.db.conn._lock:
+        with self.db.batch_writes():
+            self.db.lock_meta(f"incident:{ins.venue}:{reason}")
             self.db.conn.execute(
                 "INSERT OR IGNORE INTO notification_incident(venue,reason,started_at) VALUES(?,?,?)",
                 (ins.venue, reason, stamp))
@@ -42,7 +43,7 @@ class ServiceNotifications:
             for tf in timeframes:
                 cur = self.db.conn.execute(
                     "INSERT INTO notification_incident_stream(incident_id,instrument_id,timeframe,recovered) "
-                    "VALUES(?,?,?,0) ON CONFLICT(incident_id,instrument_id,timeframe) DO UPDATE SET recovered=0 WHERE recovered<>0",
+                    "VALUES(?,?,?,0) ON CONFLICT(incident_id,instrument_id,timeframe) DO UPDATE SET recovered=0 WHERE notification_incident_stream.recovered<>0",
                     (incident["id"], ins.id, tf))
                 changed |= cur.rowcount > 0
             self.db.conn.commit()

@@ -76,8 +76,8 @@ def _sql_kind(sql: Any) -> str:
     return "read" if parts and parts[0].lower() in _SQL_READ else "write"
 
 
-def _is_busy(exc: sqlite3.OperationalError) -> bool:
-    return "locked" in str(exc)
+def _is_busy(exc: Exception) -> bool:
+    return (isinstance(exc,sqlite3.OperationalError) and "locked" in str(exc)) or getattr(exc,"sqlstate",None) in {"40001","40P01","55P03"}
 
 
 def _seq_less(a: str, b: str) -> bool:
@@ -90,11 +90,18 @@ def _seq_less(a: str, b: str) -> bool:
 
 class Database:
     def __init__(self, path: str = ":memory:", *, ltf_cache: bool = True):
-        if path != ":memory:":
+        self.is_postgres = path.startswith(("postgres://", "postgresql://"))
+        if not self.is_postgres and path != ":memory:" and Path(path+".postgres-migrated").exists():
+            raise RuntimeError("This SQLite database was migrated to PostgreSQL; configure DATABASE_URL")
+        if path != ":memory:" and not self.is_postgres:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         from .storage import Connection
         self._local = threading.local()
-        self.conn = Connection(path)
+        if self.is_postgres:
+            from .postgres import Connection as PostgresConnection
+            self.conn = PostgresConnection(path)
+        else:
+            self.conn = Connection(path)
         self.path = path
         # Кэш горячих LTF-чтений: replay движка на каждой H1-свече повторяет
         # одни и те же выборки (list_ltf_scenario_entries, list_ltf_pivots,
@@ -235,6 +242,8 @@ class Database:
             callback()
 
     def _migrate_stabilization(self):
+        if self.is_postgres:
+            return
         columns = {r["name"] for r in self.conn.execute("PRAGMA table_info(quote_spool)")}
         for name, ddl in {
             "status": "TEXT NOT NULL DEFAULT 'pending'", "attempts": "INTEGER NOT NULL DEFAULT 0",
@@ -290,6 +299,9 @@ class Database:
             self._event_cache.clear()
 
     def migrate(self) -> None:
+        if self.is_postgres:
+            self.conn.migrate()
+            return
         cur = self.conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'"
         )
@@ -679,6 +691,13 @@ class Database:
         r = self.conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
         return r["value"] if r else None
 
+    def lock_meta(self, key: str) -> None:
+        """Protect read/modify/write of a single metadata key on PostgreSQL."""
+        if self.is_postgres:
+            if not self._batch_depth:
+                raise RuntimeError("Metadata locks require a unit of work")
+            self.conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(?,0))", (key,))
+
     def meta_prefix(self, prefix: str) -> dict[str, str]:
         """Все meta-ключи с этим префиксом. Префикс — литерал, не шаблон."""
         like = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
@@ -763,6 +782,7 @@ class Database:
             received_at if received_at is not None else ts_ms
         )
         with self.conn._lock:
+            self.lock_meta(key)
             existing = self.get_quote_detail(instrument_id)
             if existing is not None:
                 stored_basis = (
@@ -1343,7 +1363,7 @@ class Database:
         self.conn.execute(
             """INSERT INTO meta (key, value) VALUES ('state_seq', '1')
                ON CONFLICT (key) DO UPDATE SET
-               value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)"""
+               value = CAST(CAST(meta.value AS INTEGER) + 1 AS TEXT)"""
         )
 
     def bump_state_seq(self) -> None:
@@ -1371,7 +1391,7 @@ class Database:
         self.conn.execute(
             """INSERT INTO meta (key, value) VALUES (?, '1')
                ON CONFLICT (key) DO UPDATE SET
-               value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)""",
+               value = CAST(CAST(meta.value AS INTEGER) + 1 AS TEXT)""",
             (key,),
         )
 

@@ -15,6 +15,7 @@ ENV HTF_HOST=0.0.0.0
 # Том Railway монтируется поверх /data уже после сборки и принадлежит root.
 # USER здесь нельзя: процесс не смог бы создать WAL рядом с существующей базой.
 COPY tools/docker_entrypoint.py /srv/tools/docker_entrypoint.py
+COPY tools/restore_postgres_backup.py /srv/tools/restore_postgres_backup.py
 ENTRYPOINT ["python", "/srv/tools/docker_entrypoint.py"]
 
 EXPOSE 8000

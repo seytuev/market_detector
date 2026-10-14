@@ -480,8 +480,9 @@ def get_source_states(db) -> dict[str, dict]:
 
 def upsert_metric(db, *, series: str, bucket_start: int, payload: dict) -> None:
     db.conn.execute(
-        """INSERT OR REPLACE INTO events_metric (series, bucket_start, payload_json)
-           VALUES (?,?,?)""",
+        """INSERT INTO events_metric (series, bucket_start, payload_json)
+           VALUES (?,?,?) ON CONFLICT(series,bucket_start)
+           DO UPDATE SET payload_json=excluded.payload_json""",
         (series, bucket_start, _dump(payload)),
     )
     db._commit()

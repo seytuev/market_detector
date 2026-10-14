@@ -1819,7 +1819,7 @@ class Worker:
         try:
             from .services.taken_levels_migration import run as _migrate_taken
 
-            rep = _migrate_taken(self.settings.db_path)
+            rep = {"counters": {}} if self.db.is_postgres else _migrate_taken(self.settings.db_path)
             if any(rep["counters"].values()):
                 log.info("миграция taken_levels: %s", rep["counters"])
                 self.db.invalidate_zone_cache()
