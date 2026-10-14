@@ -73,6 +73,9 @@ def main(argv: list[str]) -> None:
         os.setgroups([])
         os.setgid(user.pw_gid)
         os.setuid(user.pw_uid)
+        os.environ["HOME"] = user.pw_dir
+        os.environ["USER"] = user.pw_name
+        os.environ["LOGNAME"] = user.pw_name
     os.execvp(argv[0], argv)
 
 
