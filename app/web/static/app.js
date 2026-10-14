@@ -3578,6 +3578,7 @@ function renderDeskScenario() {
       visualHtml: '',
       hideDetails: true,
       simpleTradeTitle: true,
+      deskLayout: true,
     }) +
       `<button type="button" id="desk-watch-btn" class="btn desk-watch ${watching ? 'is-on' : 'is-off'}" aria-pressed="${watching}">${watching ? '✓ Наблюдение включено' : 'Наблюдение выключено'}</button>` +
       '<button type="button" class="btn small" id="desk-data-details">Качество и время данных</button>' +
