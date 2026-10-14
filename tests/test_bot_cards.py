@@ -169,6 +169,11 @@ def seeded(db):
     db.update_ltf_scenario(sc.id, trigger_event_id=se.id)
     # якорная структура для «ожидаемого BOS» bull-контекста
     db.insert_ltf_pivot(LtfPivot(
+        id=None, instrument_id=eth, price=100.0, kind="low",
+        pivot_at=now - 9_000, candle_open_time=now - 9_000,
+        confirmed_at=now - 8_500, role="LL", state="confirmed",
+    ))
+    db.insert_ltf_pivot(LtfPivot(
         id=None, instrument_id=eth, price=110.0, kind="high",
         pivot_at=now - 8_000, candle_open_time=now - 8_000,
         confirmed_at=now - 7_000, role="LH", state="confirmed",

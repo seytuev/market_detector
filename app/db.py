@@ -1070,8 +1070,6 @@ class Database:
             prices = (candle.open, candle.high, candle.low, candle.close)
             if (
                 not all(math.isfinite(price) for price in prices)
-                or candle.low > min(candle.open, candle.close)
-                or candle.high < max(candle.open, candle.close)
                 or candle.low > candle.high
             ):
                 raise ValueError(
