@@ -749,11 +749,12 @@ select, input, textarea {
 .ltf-level.ltf-entry-bsl { border-color: var(--c-bsl-border); }
 .ltf-level.ltf-entry-ssl { border-color: var(--c-ssl-border); }
 .ltf-break { position: absolute; border-top: 2px solid; height: 0; pointer-events: auto; z-index: 6; }
-.ltf-break.ltf-bos { border-color: var(--accent); }
-.ltf-break.ltf-sms { border-color: #ab71ed; }
+.ltf-break.ltf-bos.ltf-up { border-color: var(--lf-positive, var(--green)); }
+.ltf-break.ltf-bos.ltf-down { border-color: var(--lf-negative, var(--red)); }
+.ltf-break.ltf-sms { border-color: #c79a19; }
 .ltf-break.ltf-up .h1-break-label { color: var(--lf-positive, var(--green)); }
 .ltf-break.ltf-down .h1-break-label { color: var(--lf-negative, var(--red)); }
-.ltf-break.ltf-sms .h1-break-label { color: #ab71ed; }
+.ltf-break.ltf-sms .h1-break-label { color: #c79a19; }
 .ltf-break.accompanying { border-top-style: dotted; }
 .h1-break-label {
   position: absolute; left: 0; bottom: 4px;
@@ -850,7 +851,7 @@ select, input, textarea {
   font-size: 10px; line-height: 0; user-select: none;
 }
 .ltf-expected-bos { border-color: var(--accent); color: var(--accent); }
-.ltf-expected-sms { border-color: #ab71ed; color: #ab71ed; }
+.ltf-expected-sms { border-color: #c79a19; color: #c79a19; }
 .ltf-expected span {
   position: absolute; left: 2px; white-space: nowrap;
   background: var(--lf-surface); padding: 1px 4px; border-radius: 2px;
@@ -871,7 +872,7 @@ select, input, textarea {
   font-size: 10px; line-height: 0; user-select: none;
   pointer-events: auto;
 }
-.ltf-expected-sms { border-color: #ab71ed; color: #ab71ed; }
+.ltf-expected-sms { border-color: #c79a19; color: #c79a19; }
 .ltf-pivot {
   font-size: 10px; font-weight: 600;
   color: var(--text-dim);

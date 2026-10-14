@@ -102,6 +102,7 @@ function structurePointColor(role) {
   if (name === 'LL' || name === 'LH') {
     return css.getPropertyValue('--lf-negative').trim() || '#F08D98';
   }
+  if (name === 'INTERNAL_HIGH' || name === 'INTERNAL_LOW') return '#c79a19';
   return css.getPropertyValue('--lf-text2').trim() || '#A2B0C5';
 }
 
@@ -903,7 +904,8 @@ function drawDailyStructure(overlay, ts, paneRight, height) {
   if (!$('layer-structure-d1')?.checked) return;
   const status = document.createElement('span');
   status.className = 'd1-structure-status';
-  status.textContent = daily ? daily.text : 'Структура D1 не загружена · обновите данные';
+  status.textContent = daily ? daily.text.replace(/\bD1\b/g, '').replace(/\s+/g, ' ').trim()
+    : 'Структура не загружена · обновите данные';
   status.title = status.textContent;
   Object.assign(status.style, {position:'absolute', left:'8px', top:'8px',
     maxWidth:Math.max(100, paneRight - 24)+'px', padding:'4px 6px',
@@ -938,10 +940,14 @@ function drawDailyStructure(overlay, ts, paneRight, height) {
     const x = xAt(p.pivot_at);
     return x != null && x >= 0 && x <= paneRight;
   };
-  (daily.pivots || []).filter(p => ['HH','HL','LH','LL'].includes(p.role) && visiblePoint(p)).slice(-20).forEach(p => {
+  const pointNames = {HH:'HH', HL:'HL', LH:'LH', LL:'LL', internal_high:'iH', internal_low:'iL'};
+  const breakColor = (kind, direction) => kind === 'SMS' ? '#c79a19'
+    : direction === 'bull' ? '#25834a' : '#c73c48';
+  (daily.pivots || []).filter(p => pointNames[p.role] && visiblePoint(p)).slice(-20).forEach(p => {
     const x = xAt(p.pivot_at), y = state.candleSeries.priceToCoordinate(p.price);
     if (x == null || x < 0 || x > paneRight || y == null || y < 12 || y > height - 40) return;
-    label(x, y + (p.kind === 'high' ? -17 : 4), 'D1 ' + p.role, '#8056c7',
+    label(x, y + (p.kind === 'high' ? -17 : 4), pointNames[p.role],
+      p.role.startsWith('internal_') ? '#c79a19' : '#8056c7',
       `D1 ${p.role} · ${fmtPrice(p.price)} · подтверждение ${fmtTime(p.confirmed_at)}`);
   });
   const line = (anchor, end, level, text, color, title, dashed = false) => {
@@ -962,12 +968,12 @@ function drawDailyStructure(overlay, ts, paneRight, height) {
     const end = xAt(e.open_time), start = xAt(e.anchor_at);
     return end != null && end >= 0 && (start == null || start <= paneRight);
   }).slice(-50).forEach(e => line(e.anchor_at, e.open_time, e.level,
-    'D1 ' + e.kind + (e.direction === 'bull' ? ' ↑' : ' ↓'), '#8056c7',
+    e.kind + (e.direction === 'bull' ? ' ↑' : ' ↓'), breakColor(e.kind, e.direction),
     `D1 ${e.kind} · ${fmtPrice(e.level)} · закрытие ${fmtTime(e.occurred_at)}`));
   if (daily.data_quality === 'ok') Object.entries(daily.expected || {}).forEach(([dir, conditions]) => {
     Object.values(conditions).filter(c => c.status === 'ready' && c.level != null).forEach(c => {
       line(c.pivot?.pivot_at || bars[0].time * 1000, null, c.level,
-        'D1 ждём ' + c.kind + (dir === 'bull' ? ' ↑' : ' ↓'), '#8d7bb5',
+        'Ждём ' + c.kind + (dir === 'bull' ? ' ↑' : ' ↓'), breakColor(c.kind, dir),
         `Условие ${c.kind} D1: закрытие дня строго ${dir === 'bull' ? 'выше' : 'ниже'} ${fmtPrice(c.level)}`, true);
     });
   });
@@ -976,7 +982,7 @@ function drawDailyStructure(overlay, ts, paneRight, height) {
     ? current.asset?.trade_setup?.daily_alignment : null;
   const target = sync?.target;
   if (target) line(bars[0].time * 1000, null, target.price,
-    'Цель · ' + target.type + ' D1', '#c88a35', target.text, true);
+    'Цель · ' + target.type, '#c88a35', target.text, true);
 }
 
 function drawH1Breaks(overlay, ts, paneRight, height) {
