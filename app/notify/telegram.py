@@ -342,7 +342,10 @@ class TelegramSender:
         host = urlparse(self.site_base_url).hostname or ""
         if host not in {"127.0.0.1", "localhost", "0.0.0.0", "::1"}:
             from urllib.parse import urlencode
-            chart_url = f"{self.site_base_url}/?{urlencode({'zone': zone_id, 'token': self.auth_token})}"
+            params = {"zone": zone_id}
+            if self.auth_token:
+                params["token"] = self.auth_token
+            chart_url = f"{self.site_base_url}/?{urlencode(params)}"
             buttons.append(
                 [InlineKeyboardButton("Открыть рабочее место", url=chart_url)]
             )

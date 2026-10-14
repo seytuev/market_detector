@@ -6,6 +6,7 @@ from __future__ import annotations
 import contextlib
 import functools
 import json
+import math
 import sqlite3
 import threading
 import time
@@ -1064,6 +1065,19 @@ class Database:
 
     def insert_candles(self, candles: Iterable[Candle]) -> int:
         candles = list(candles)
+        # Validate the entire batch before revisions or any other writes.
+        for candle in candles:
+            prices = (candle.open, candle.high, candle.low, candle.close)
+            if (
+                not all(math.isfinite(price) for price in prices)
+                or candle.low > min(candle.open, candle.close)
+                or candle.high < max(candle.open, candle.close)
+                or candle.low > candle.high
+            ):
+                raise ValueError(
+                    f"Invalid OHLC: {candle.instrument_id}/{candle.timeframe} "
+                    f"at {candle.open_time}"
+                )
         # §10.3: ревизия уже закрытой свечи — факт в candle_revision (старые
         # и новые OHLC) + счётчик candle.revision. Дедуп по (instrument, tf,
         # open_time, новый OHLC): повторная доставка той же ревизии не
