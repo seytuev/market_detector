@@ -4834,6 +4834,10 @@ for _name, _factory in (("_state_seq_dirty", bool), ("_seen_epoch", lambda: None
 def _transactional(method):
     @functools.wraps(method)
     def run(self, *args, **kwargs):
+        # These branches only mark the enclosing unit dirty. Opening another
+        # SAVEPOINT merely to set a Python flag adds two database round trips.
+        if self._batch_depth and method.__name__ in {'bump_state_seq', 'bump_domain'}:
+            return method(self, *args, **kwargs)
         with self.batch_writes():
             return method(self, *args, **kwargs)
     return run

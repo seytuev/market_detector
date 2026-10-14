@@ -163,3 +163,25 @@ def test_disable_cancels_pending_work_and_preserves_receipt(db,instrument_id):
     receipt = db.conn.execute("SELECT * FROM quote_spool WHERE id=?",(row,)).fetchone()
     assert receipt["status"] == "cancelled" and receipt["last_error"] == "instrument_disabled"
     assert db.get_state_seq() > version
+def test_deferred_version_flags_need_no_savepoints_and_follow_outer_rollback(db):
+    previous=db.get_state_seq()
+    trace=[]
+    db.conn._conn.set_trace_callback(trace.append)
+    try:
+        with db.batch_writes():
+            db.bump_state_seq()
+            db.bump_state_seq()
+            db.bump_domain('seq:flag-test')
+            db.bump_domain('seq:flag-test')
+        assert not any(sql.startswith('SAVEPOINT') for sql in trace)
+        assert db.get_state_seq()==previous+1
+        assert db.get_domain('seq:flag-test')==1
+        with pytest.raises(ValueError):
+            with db.batch_writes():
+                db.bump_state_seq()
+                db.bump_domain('seq:flag-test')
+                raise ValueError('rollback')
+        assert db.get_state_seq()==previous+1
+        assert db.get_domain('seq:flag-test')==1
+    finally:
+        db.conn._conn.set_trace_callback(None)

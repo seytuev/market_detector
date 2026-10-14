@@ -66,6 +66,24 @@ def test_scenario_entry_returning_and_version_selection(pg):
     test_scenario_entry_upsert(pg,sc,iid)
 
 
+def test_deferred_publication_flags_do_not_open_nested_postgres_units(pg, monkeypatch):
+    from app.postgres import Session
+    statements=[]
+    native=Session.execute
+    def counted(self,sql,parameters=None):
+        statements.append(sql)
+        return native(self,sql,parameters)
+    monkeypatch.setattr(Session,'execute',counted)
+    initial=pg.get_state_seq()
+    with pg.batch_writes():
+        for _ in range(100):
+            pg.bump_state_seq()
+            pg.bump_domain('seq:flag-test')
+    assert not any(sql.startswith('SAVEPOINT') for sql in statements)
+    assert pg.get_state_seq()==initial+1
+    assert pg.get_domain('seq:flag-test')==1
+
+
 def test_identity_conflict_and_nested_rollback(pg):
     iid = pg.upsert_instrument(Instrument(id=None, asset="BTC", venue="binance", market_type="spot", symbol="BTCUSDT", quote_asset="USDT"))
     assert iid>0
