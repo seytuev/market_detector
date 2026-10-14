@@ -40,7 +40,8 @@ def test_search_precedes_limit_and_is_unicode(seeded, db):
 
 
 def test_context_publications_and_delivery_are_separate(seeded, db):
-    apply_events_schema(db.conn)
+    if not db.is_postgres:
+        apply_events_schema(db.conn)
     db.conn.execute("INSERT INTO events_publication(pub_key,bundle_id,kind,assessment_id,payload_json,created_at) VALUES (?,?,?,?,?,?)",
                     ('pub1', 1, 'changes', 'a1', json.dumps({'text': 'Оценка изменилась'}), BASE))
     db.conn.execute("INSERT INTO events_delivery(bundle_id,recipient,channel,status,created_at) VALUES (1,'owner','telegram','unavailable',?)", (BASE,))

@@ -197,6 +197,7 @@ def journal_page(db: Database, *, kind: str = "all", limit: int = 100,
     from ..texts_ru import ALT_EVENT_KIND_RU
 
     params: list[Any] = []
+    json_object = 'json_build_object' if db.is_postgres else 'json_object'
 
     def labels(column, mapping):
         cases = []
@@ -211,56 +212,56 @@ def journal_page(db: Database, *, kind: str = "all", limit: int = 100,
         SELECT e.id, e.occurred_at AS at, 'htf' AS source, 'market' AS category,
           e.kind, {labels('e.kind', KIND_RU)} AS label,
           'Цена ' || e.price AS text, i.symbol, z.instrument_id,
-          json_object('event_id',e.id,'zone_id',e.zone_id) AS ref_json, '' AS status
+          {json_object}('event_id',e.id,'zone_id',e.zone_id) AS ref_json, '' AS status
         FROM event e LEFT JOIN zone z ON z.id=e.zone_id
         LEFT JOIN instrument i ON i.id=z.instrument_id WHERE e.kind!='approach'
     """, f"""
         SELECT e.id, e.occurred_at, 'ltf', 'market', e.kind,
           {labels('e.kind', LTF_EVENT_KIND_RU)}, '', i.symbol, o.instrument_id,
-          json_object('event_id',e.id,'observation_id',e.observation_id,
+          {json_object}('event_id',e.id,'observation_id',e.observation_id,
             'scenario_id',e.scenario_id), ''
         FROM ltf_event e LEFT JOIN ltf_observation o ON o.id=e.observation_id
         LEFT JOIN instrument i ON i.id=o.instrument_id
     """, f"""
         SELECT r.id,r.created_at,'htf','decisions',r.decision,
           'Решение: ' || {labels('r.decision', DECISION_RU)},r.text,i.symbol,z.instrument_id,
-          json_object('review_id',r.id,'zone_id',r.zone_id),''
+          {json_object}('review_id',r.id,'zone_id',r.zone_id),''
         FROM review r LEFT JOIN zone z ON z.id=r.zone_id
         LEFT JOIN instrument i ON i.id=z.instrument_id
     """, f"""
         SELECT r.id,r.created_at,'ltf','decisions',r.decision,
           'Решение: ' || {labels('r.decision', DECISION_RU)},r.text,i.symbol,z.instrument_id,
-          json_object('review_id',r.id,'entry_zone_id',r.entry_zone_id,
+          {json_object}('review_id',r.id,'entry_zone_id',r.entry_zone_id,
             'scenario_id',r.scenario_id,'observation_id',s.observation_id),''
         FROM ltf_review r LEFT JOIN ltf_entry_zone z ON z.id=r.entry_zone_id
         LEFT JOIN ltf_scenario s ON s.id=r.scenario_id
         LEFT JOIN instrument i ON i.id=z.instrument_id
-    """, """
+    """, f"""
         SELECT d.id,COALESCE(d.delivered_at,0),'htf','delivery',d.status,
           'Уведомление',d.destination,NULL,NULL,
-          json_object('delivery_id',d.id),d.status FROM delivery d
+          {json_object}('delivery_id',d.id),d.status FROM delivery d
     """]
     tables = {r[0] for r in db.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if 'alt_event' in tables:
         branches.append(f"""
             SELECT e.id,e.event_time_ms,'alt','market',e.event_type,
               {labels('e.event_type', ALT_EVENT_KIND_RU)},'',a.symbol,NULL,
-              json_object('event_id',e.id,'setup_id',e.setup_id),''
+              {json_object}('event_id',e.id,'setup_id',e.setup_id),''
             FROM alt_event e LEFT JOIN alt_setup s ON s.id=e.setup_id
             LEFT JOIN alt_asset a ON a.id=s.asset_id
         """)
     if 'events_publication' in tables:
-        branches.append("""
+        branches.append(f"""
             SELECT p.id,p.created_at,'context','market',p.kind,'Рыночный фон',
               COALESCE(json_extract(p.payload_json,'$.text'),''),NULL,NULL,
-              json_object('event_id',p.id,'assessment_id',p.assessment_id,
+              {json_object}('event_id',p.id,'assessment_id',p.assessment_id,
                 'bundle_id',p.bundle_id),'' FROM events_publication p
         """)
     if 'events_delivery' in tables:
-        branches.append("""
+        branches.append(f"""
             SELECT d.id,COALESCE(d.delivered_at,d.created_at),'context','delivery',
               d.status,'Уведомление о рынке',d.channel,NULL,NULL,
-              json_object('delivery_id',d.id,'bundle_id',d.bundle_id),d.status
+              {json_object}('delivery_id',d.id,'bundle_id',d.bundle_id),d.status
             FROM events_delivery d
         """)
     cte = 'WITH entries AS (' + ' UNION ALL '.join(branches) + ') '
@@ -277,12 +278,15 @@ def journal_page(db: Database, *, kind: str = "all", limit: int = 100,
     if to_ms is not None:
         where.append('at<?')
         filters.append(to_ms)
-    # SQLite's built-in lower is ASCII-only: use a deterministic Unicode
-    # function on this connection for Russian text search.
-    db.conn.create_function('lf_casefold', 1, lambda v: str(v or '').casefold(), deterministic=True)
     if query:
-        where.append("instr(lf_casefold(COALESCE(symbol,'') || ' ' || label || ' ' || text),?)>0")
-        filters.append(query.casefold())
+        if db.is_postgres:
+            where.append("strpos(lower(COALESCE(symbol,'') || ' ' || label || ' ' || text),?)>0")
+            filters.append(query.lower())
+        else:
+            # SQLite's lower is ASCII-only; Russian search needs casefold.
+            db.conn.create_function('lf_casefold', 1, lambda v: str(v or '').casefold(), deterministic=True)
+            where.append("instr(lf_casefold(COALESCE(symbol,'') || ' ' || label || ' ' || text),?)>0")
+            filters.append(query.casefold())
     predicate = ' AND '.join(where)
     total = db.conn.execute(cte + 'SELECT count(*) FROM entries WHERE ' + predicate,
                             params + filters).fetchone()[0]
@@ -311,7 +315,8 @@ def journal_page(db: Database, *, kind: str = "all", limit: int = 100,
     items = []
     for row in rows[:limit]:
         item = dict(row)
-        item['ref'] = json.loads(item.pop('ref_json'))
+        ref = item.pop('ref_json')
+        item['ref'] = ref if isinstance(ref, dict) else json.loads(ref)
         item['title'] = _title(item['symbol'], item.pop('label'))
         item['uid'] = f"{item['source']}:{item['category']}:{item['id']}"
         items.append(item)

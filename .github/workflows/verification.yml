@@ -28,7 +28,7 @@ jobs:
           python-version: '3.11'
       - run: python -m pip install --constraint requirements.lock '.[dev]'
       - run: python -m pytest tests/test_postgres.py -q
-      - run: python -m pytest -p tools.pytest_postgres tests/test_ltf_notify.py tests/test_events_store_v2.py tests/test_journal.py tests/test_data_sync.py tests/test_runtime_startup.py -q
+      - run: python -m pytest -p tools.pytest_postgres tests/test_ltf_notify.py tests/test_events_store_v2.py tests/test_journal.py tests/test_redesign_journal.py tests/test_data_sync.py tests/test_runtime_startup.py -q
   tests:
     strategy:
       fail-fast: false
