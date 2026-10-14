@@ -264,6 +264,11 @@ async def test_restore_replays_once_per_instrument():
     ]
     assert len(open_obs) == 2
 
+    candles = make_h1_candles(
+        [(110.0, 112.0, 108.0, 111.0)] * 8,
+        now_ms() - 10 * H1_MS, ins.id,
+    )
+    db.insert_candles(candles)
     calls: list[int] = []
     orig = engine.replay_observation
 
@@ -273,6 +278,9 @@ async def test_restore_replays_once_per_instrument():
 
     engine.replay_observation = spy
     try:
+        await worker._ltf_restore_all()
+        assert int(db.get_meta(f"ltf:h1:last_close:{ins.id}")) == candles[-1].close_time
+        assert int(db.get_meta(f"ltf:h1:scenario_last_close:{ins.id}")) == candles[-1].close_time
         await worker._ltf_restore_all()
     finally:
         engine.replay_observation = orig

@@ -1631,7 +1631,7 @@ class Worker:
                 except Exception:
                     log.exception("LTF %s: стартовая обработка H1 не удалась", ins.symbol)
                 continue
-            self._set_replaying(ins.id, True)
+            await self.data_sync._write(self._set_replaying, ins.id, True)
             try:
                 cursor_raw = self.db.get_meta(f"ltf:h1:last_close:{ins.id}")
                 last = self.db.last_candle(ins.id, "H1")
@@ -1658,7 +1658,7 @@ class Worker:
                     for c in candles:
                         c.instrument_id = ins.id
                     if candles:
-                        self.db.insert_candles(candles)
+                        await self.data_sync._write(self.db.insert_candles, candles)
                 if caught_up:
                     # Хвост, если он вставился, проходит инкрементально.
                     # Из restore не доставляем: retry заберёт только
@@ -1678,12 +1678,20 @@ class Worker:
                     )
                     log.info("LTF %s: восстановлено наблюдений: %d",
                              ins.symbol, len(observations))
+                # Restore processes all open observations. Publish the same
+                # scenario checkpoint as normal channel processing only after success.
+                cursor_raw = self.db.get_meta(f"ltf:h1:last_close:{ins.id}")
+                if cursor_raw:
+                    await self.data_sync._write(
+                        self.db.set_meta,
+                        f"ltf:h1:scenario_last_close:{ins.id}", cursor_raw,
+                    )
             except AdapterError as exc:
                 log.warning("LTF %s: восстановление пропущено: %s", ins.symbol, exc)
             except Exception:
                 log.exception("LTF: ошибка восстановления %s", ins.symbol)
             finally:
-                self._set_replaying(ins.id, False)
+                await self.data_sync._write(self._set_replaying, ins.id, False)
 
     # ---------- Altcoins D1 accumulation (ТЗ 07.10.2026 §4, §18) ----------
 
