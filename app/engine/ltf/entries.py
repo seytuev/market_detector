@@ -258,6 +258,7 @@ def detect_entry_zones(
     cfg: DetectorConfig,
     *,
     context_until: Optional[int] = None,
+    confirmed_after: Optional[int] = None,
 ) -> EntryDetection:
     """Все свежие/протестированные зоны контекста, без выбора «лучшей»
     и без ранжирования (§8, приёмка п.9).
@@ -275,7 +276,11 @@ def detect_entry_zones(
 
     # --- FVG H1 (§8.2) и OB H1 (§8.3) ---
     first = bisect_left(closed, movement.window_start, key=lambda c: c.open_time)
+    if confirmed_after is not None:
+        first = max(first, bisect_left(closed, confirmed_after, key=lambda c: c.close_time) - 2)
     for f in scan_fvgs(closed[first:], "H1"):
+        if confirmed_after is not None and f.confirmed_at <= confirmed_after:
+            continue
         if f.candle_open_times[0] < movement.window_start:
             continue  # древняя история вне окна базы — не кандидат
         if f.direction != direction:
@@ -354,6 +359,8 @@ def detect_entry_zones(
     type_ = "BSL" if direction == Direction.BEAR else "SSL"
     for p in pivots:
         if p.kind != kind or p.state != "confirmed":
+            continue
+        if confirmed_after is not None and p.confirmed_at <= confirmed_after:
             continue
         if not (movement.start_at <= p.pivot_at <= movement.end_at):
             continue

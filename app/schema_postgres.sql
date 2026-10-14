@@ -1189,6 +1189,9 @@ CREATE INDEX ix_htf_idea_instrument ON htf_idea(instrument_id);
 
 CREATE INDEX ix_inner_level_ob ON inner_level (parent_ob_id, status);
 
+CREATE INDEX ix_ltf_entry_zone_identity ON ltf_entry_zone
+    (instrument_id, type, direction, lower, upper, formed_at, id);
+
 CREATE INDEX ix_ltf_entry_zone_instr ON ltf_entry_zone (instrument_id, validity);
 
 CREATE INDEX ix_ltf_entry_zone_movement ON ltf_entry_zone (movement_id);

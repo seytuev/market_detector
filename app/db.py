@@ -3241,6 +3241,14 @@ class Database:
     def update_ltf_entry_zone(self, entry_zone_id: int, **fields: Any) -> None:
         self._update_ltf_row("ltf_entry_zone", entry_zone_id, fields)
 
+    def find_ltf_entry_zone_identity(self, instrument_id, type_, direction, lower, upper, formed_at):
+        row = self.conn.execute(
+            "SELECT * FROM ltf_entry_zone WHERE instrument_id=? AND type=? AND direction=? "
+            "AND lower=? AND upper=? AND formed_at=? ORDER BY id DESC LIMIT 1",
+            (instrument_id, type_, direction.value, lower, upper, formed_at),
+        ).fetchone()
+        return self._to_ltf_entry_zone(row) if row else None
+
     def list_ltf_entry_zones(
         self,
         movement_id: Optional[int] = None,

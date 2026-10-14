@@ -126,6 +126,7 @@ class LtfEngine:
         # гасятся дедупом событий. Без курсора replay всей H1-истории шёл
         # десятки часов и голодал веб/API (GIL + замок БД).
         self._ctx_sweep_cursor: dict[int, int] = {}
+        self._context_zone_scans: dict[int, tuple] = {}
         self._bar_plan: Optional[dict] = None
         # Инкрементальная локальная нога H1. Полный проход — один раз на пакет,
         # дальше только новая свеча. События и уведомления отсюда не создаются.
@@ -1838,13 +1839,20 @@ class LtfEngine:
         if built is None:
             return
         row, movement = built
-        det = detect_entry_zones(up_to, movement, avail, sc.direction, self.cfg)
+        signature = (row.id, movement.start_at, movement.end_at, movement.window_start,
+                     hash(repr(self.cfg)))
+        previous = self._context_zone_scans.get(sc.id)
+        since = (previous[1] if self.scan_cursors and not recover and previous
+                 and previous[0] == signature and previous[1] <= candle.close_time + 1
+                 else None)
+        det = detect_entry_zones(up_to, movement, avail, sc.direction, self.cfg,
+                                 confirmed_after=since)
         linked: dict[tuple, int] = {}
         for zid in self._scenario_zone_ids(sc.id):
             z0 = self.db.get_ltf_entry_zone(zid)
             if z0 is not None:
                 linked[(z0.type, z0.direction, z0.lower, z0.upper, z0.formed_at)] = z0.id
-        market: Optional[dict[tuple, LtfEntryZone]] = None
+        market: dict[tuple, LtfEntryZone] = {}
         rng = self.db.get_current_ltf_range(sc.id)
         rng_draft = self._row_to_draft(rng, sc.direction) if rng else None
         ver = rng.version if rng else 0
@@ -1861,12 +1869,9 @@ class LtfEngine:
             key = (z.type, z.direction, z.lower, z.upper, z.formed_at)
             if key in linked:
                 continue
-            if market is None:
-                market = {
-                    (z0.type, z0.direction, z0.lower, z0.upper, z0.formed_at): z0
-                    for z0 in self.db.list_ltf_entry_zones(instrument_id=obs.instrument_id)
-                }
-            ez = market.get(key)
+            ez = market.get(key) or self.db.find_ltf_entry_zone_identity(
+                obs.instrument_id, z.type, z.direction, z.lower, z.upper, z.formed_at,
+            )
             if ez is None:
                 ez = self.db.insert_ltf_entry_zone(LtfEntryZone(
                     id=None, instrument_id=obs.instrument_id, type=z.type,
@@ -1876,7 +1881,7 @@ class LtfEngine:
                     validity=z.validity, max_test_depth=z.max_test_depth,
                     test_extreme=z.test_extreme, evidence=z.evidence,
                 ))
-                market[key] = ez
+            market[key] = ez
             linked[key] = ez.id
             result.entry_zones_processed.append(ez.id)
             # Один прямоугольник на инструмент. movement_id строки — нога
@@ -1903,6 +1908,7 @@ class LtfEngine:
                 historical.append(ez.id)
         if historical:
             self._mark_announced(sc.id, historical)
+        self._context_zone_scans[sc.id] = (signature, candle.close_time + 1)
 
     def rescan_active_context_zones(
         self, instrument_id: Optional[int] = None,

@@ -387,6 +387,8 @@ CREATE TABLE IF NOT EXISTS ltf_entry_zone (
 );
 CREATE INDEX IF NOT EXISTS ix_ltf_entry_zone_instr ON ltf_entry_zone (instrument_id, validity);
 CREATE INDEX IF NOT EXISTS ix_ltf_entry_zone_movement ON ltf_entry_zone (movement_id);
+CREATE INDEX IF NOT EXISTS ix_ltf_entry_zone_identity ON ltf_entry_zone
+    (instrument_id, type, direction, lower, upper, formed_at, id);
 
 -- Привязка Entry Zone к сценарию с версией диапазона (§7, §8.5)
 CREATE TABLE IF NOT EXISTS ltf_scenario_entry (
