@@ -346,8 +346,8 @@ def admitted_scenario_entries(
     ver = cur.version if cur is not None else 0
     # §6.3 (правила v1): PD — не фильтр; строки out_of_range рассматриваются
     # наравне, контекстное исключение §18 как условие допуска не требуется
-    rows = db.list_ltf_scenario_entries(scenario_id, state="fresh")
-    rows += db.list_ltf_scenario_entries(scenario_id, state="out_of_range")
+    rows = db.list_ltf_scenario_entries(scenario_id, state="fresh", range_version=ver)
+    rows += db.list_ltf_scenario_entries(scenario_id, state="out_of_range", range_version=ver)
     allow_outside = context_complete(
         context_flags(db.list_ltf_events(scenario_id=scenario_id, limit=1000))
     )

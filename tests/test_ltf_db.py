@@ -265,7 +265,69 @@ def test_scenario_entry_upsert(db: Database, scenario: LtfScenario, instrument_i
     ))
     assert len(db.list_ltf_scenario_entries(scenario.id)) == 2
     assert len(db.list_ltf_scenario_entries(scenario.id, state="out_of_range")) == 1
+    assert [e.id for e in db.list_ltf_scenario_entries(scenario.id, range_version=1)] == [se1.id]
+    assert len(db.list_ltf_scenario_entries(scenario.id, range_version=2)) == 1
+    assert db.ltf_scenario_zone_ids(scenario.id) == {ez.id}
     assert db.get_ltf_scenario_entry(se1.id).overlap == "none"
+
+
+def test_entry_insertion_preserves_other_row_and_scenario_caches(db, scenario, instrument_id, monkeypatch):
+    from dataclasses import replace
+    zone = db.insert_ltf_entry_zone(LtfEntryZone(None,instrument_id,'OB',Direction.BULL,98,102,T0))
+    first = db.upsert_ltf_scenario_entry(LtfScenarioEntry(
+        None,scenario.id,zone.id,range_version=1,added_at=T0,updated_at=T0))
+    assert db.get_ltf_entry_zone(zone.id)
+    assert db.list_ltf_scenario_entries(999) == []
+    reads=[]
+    execute=db.conn.execute
+    def counted(sql,*args,**kwargs):
+        if sql.lstrip().startswith('SELECT'):
+            reads.append((sql,args))
+        return execute(sql,*args,**kwargs)
+    monkeypatch.setattr(db.conn,'execute',counted)
+    db.insert_ltf_entry_zone(replace(zone,id=None,lower=90,upper=94))
+    db.get_ltf_entry_zone(zone.id)
+    assert not any('FROM ltf_entry_zone WHERE id=' in sql for sql,args in reads)
+    db.upsert_ltf_scenario_entry(replace(first,state='out_of_range',updated_at=T0+1))
+    reads.clear()
+    assert db.list_ltf_scenario_entries(999) == []
+    assert not any('FROM ltf_scenario_entry' in sql for sql,args in reads)
+    assert db.list_ltf_scenario_entries(scenario.id,range_version=1)[0].state=='out_of_range'
+    db.set_ltf_scenario_entry_reason(first.id,'changed')
+    assert db.list_ltf_scenario_entries(scenario.id,range_version=1)[0].reason=='changed'
+
+
+def test_known_context_facts_skip_writes_only_after_commit(db, scenario, instrument_id, cfg, monkeypatch):
+    import app.engine.ltf.engine as module
+    from app.engine.ltf.engine import LtfEngine,LtfTickResult
+    from tests.conftest import make_candle
+    engine=LtfEngine(db,cfg)
+    obs=db.get_ltf_observation(scenario.observation_id)
+    candle=make_candle(T0,100,110,90,105,'H1',instrument_id)
+    monkeypatch.setattr(module,'scenario_context',lambda *a,**kw:dict(counter_swept=[],htf_fvg50={
+        'zone_id':123,'tf':'D1','confirmed':True,'tested_at':T0}))
+    def update():
+        engine._update_scenario_context(obs,scenario,[],[candle],candle.close_time,'replay',0,LtfTickResult())
+    with pytest.raises(ValueError):
+        with db.batch_writes():
+            update()
+            raise ValueError('rollback')
+    assert engine._known_context_keys==set()
+    assert db.list_ltf_events(scenario_id=scenario.id)==[]
+    with db.batch_writes():
+        update()
+    assert len(engine._known_context_keys)==1
+    calls=[]
+    insert=db.insert_ltf_event
+    def counted(e):
+        calls.append(e)
+        return insert(e)
+    monkeypatch.setattr(db,'insert_ltf_event',counted)
+    with db.batch_writes():
+        update()
+    assert calls==[]
+    assert len(db.list_ltf_events(scenario_id=scenario.id))==1
+    assert db.ltf_context_event_keys(instrument_id)==engine._known_context_keys
 
 
 # ---------- liquidity tests ----------

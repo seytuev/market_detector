@@ -138,6 +138,7 @@ class LtfEngine:
         # десятки часов и голодал веб/API (GIL + замок БД).
         self._ctx_sweep_cursor: dict[int, int] = {}
         self._context_zone_scans: dict[int, tuple] = {}
+        self._known_context_keys: set[str] = set()
         self._bar_plan: Optional[dict] = None
         # Инкрементальная локальная нога H1. Полный проход — один раз на пакет,
         # дальше только новая свеча. События и уведомления отсюда не создаются.
@@ -301,6 +302,7 @@ class LtfEngine:
                 return LtfTickResult()
         closed = self.db.get_candles(instrument_id, "H1")
         prime_activation_history(self.db, instrument_id, closed)
+        self._known_context_keys = self.db.ltf_context_event_keys(instrument_id)
         result = LtfTickResult()
         if not closed:
             return result
@@ -479,6 +481,7 @@ class LtfEngine:
             return result
         closed = self.db.get_candles(obs.instrument_id, "H1")
         prime_activation_history(self.db, obs.instrument_id, closed)
+        self._known_context_keys = self.db.ltf_context_event_keys(obs.instrument_id)
         # «сейчас» replay — голова истории, а не реальное время: иначе
         # detection_lag_ms событий зависел бы от wall-clock и повторный
         # replay давал бы другое состояние (§13: replay детерминирован)
@@ -501,7 +504,7 @@ class LtfEngine:
             if starts:
                 checkpoint = max((c.close_time for c in closed if c.close_time < min(starts)), default=0)
         self._batch = StructureBatch() if self.scan_cursors else None
-        sampled = False
+        sampled = 0
         try:
             if checkpoint and self._batch is not None:
                 # Restore pure machines from immutable inputs, without replaying
@@ -523,9 +526,9 @@ class LtfEngine:
                 # atomic bar. Cached reads inside it need no separate epoch SQL.
                 self.db._note_external_epoch()
                 from ...services.metrics import get_registry
-                sample = get_registry().profile('ltf_replay_bar', instrument_id=obs.instrument_id,
-                                                 close_time=c.close_time) if resume and not sampled else nullcontext()
-                sampled = True
+                sample = get_registry().profile('ltf_replay_bar' if sampled == 0 else 'ltf_replay_warm_bar',
+                    instrument_id=obs.instrument_id, close_time=c.close_time) if resume and sampled in (0,9) else nullcontext()
+                sampled += 1
                 with sample, self.db.batch_writes():
                     self._process_candle(
                         obs.instrument_id, closed, idx,
@@ -660,14 +663,14 @@ class LtfEngine:
             cur = self.db.get_current_ltf_range(sc.id)
             ver = cur.version if cur is not None else 0
             entries = [
-                e for e in self.db.list_ltf_scenario_entries(sc.id, state="fresh")
+                e for e in self.db.list_ltf_scenario_entries(sc.id, state="fresh", range_version=ver)
                 if e.range_version == ver
             ]
             # §6.3 (правила v1): касание отслеживается по полному диапазону
             # зоны — строки вне половины PD получают тот же touch-флоу
             entries += [
                 e for e in self.db.list_ltf_scenario_entries(
-                    sc.id, state="out_of_range")
+                    sc.id, state="out_of_range", range_version=ver)
                 if e.range_version == ver
             ]
             tests = self.db.list_ltf_liquidity_tests(scenario_id=sc.id)
@@ -864,7 +867,7 @@ class LtfEngine:
         if terminal_reason is not None:
             cur = self.db.get_current_ltf_range(sc.id)
             ver = cur.version if cur is not None else 0
-            for e in self.db.list_ltf_scenario_entries(sc.id):
+            for e in self.db.list_ltf_scenario_entries(sc.id, range_version=ver):
                 if e.entry_zone_id != zone.id or e.range_version != ver:
                     continue
                 self.db.upsert_ltf_scenario_entry(LtfScenarioEntry(
@@ -976,7 +979,7 @@ class LtfEngine:
         zone.validity = "tested"
         cur = self.db.get_current_ltf_range(sc.id)
         ver = cur.version if cur is not None else 0
-        for e in self.db.list_ltf_scenario_entries(sc.id):
+        for e in self.db.list_ltf_scenario_entries(sc.id, range_version=ver):
             if e.entry_zone_id != zone.id or e.range_version != ver:
                 continue
             self.db.upsert_ltf_scenario_entry(LtfScenarioEntry(
@@ -1339,20 +1342,28 @@ class LtfEngine:
                 head.close_time, self._ctx_sweep_cursor.get(sc.id, 0)
             )
         for s in ctx["counter_swept"]:
+            key = f"context:{sc.id}:sweep:{s['pivot_ref']}"
+            if key in self._known_context_keys:
+                continue
             self._emit(obs.id, sc.id, "context_update", {
                 "fact": "counter_sweep", "scenario_id": sc.id, **s,
             }, s["swept_at"], now,
-                f"context:{sc.id}:sweep:{s['pivot_ref']}",
+                key,
                 processing_mode, detection_lag_ms, result)
+            self.db.on_commit(lambda key=key: self._known_context_keys.add(key))
         f = ctx["htf_fvg50"]
         if f is not None and f.get("confirmed", False):
+            key = f"context:{sc.id}:fvg50:{f['zone_id']}"
+            if key in self._known_context_keys:
+                return
             # L02: неподтверждённый геометрический fallback не эмитится —
             # контекстное исключение §18 он не включает
             self._emit(obs.id, sc.id, "context_update", {
                 "fact": "htf_fvg50", "scenario_id": sc.id, **f,
             }, f.get("tested_at") or now, now,
-                f"context:{sc.id}:fvg50:{f['zone_id']}",
+                key,
                 processing_mode, detection_lag_ms, result)
+            self.db.on_commit(lambda key=key: self._known_context_keys.add(key))
 
     def _scenario_context(self, scenario_id: int) -> dict[str, Any]:
         """§18: агрегированный контекст сценария из событий context_update."""
@@ -1708,10 +1719,7 @@ class LtfEngine:
         return obs.instrument_id if obs else 0
 
     def _scenario_zone_ids(self, scenario_id: int) -> set[int]:
-        return {
-            e.entry_zone_id
-            for e in self.db.list_ltf_scenario_entries(scenario_id)
-        }
+        return self.db.ltf_scenario_zone_ids(scenario_id)
 
     def _market_transition_fields(self, obs, rev) -> dict[str, Any]:
         """Один слом — один ключ карточки. Журнал сценария остаётся своим."""
@@ -2117,7 +2125,7 @@ class LtfEngine:
         tick = tick_size(instrument) if instrument is not None else 0
         cur = self.db.get_current_ltf_range(sc.id)
         ver = cur.version if cur is not None else 0
-        for entry in self.db.list_ltf_scenario_entries(sc.id):
+        for entry in self.db.list_ltf_scenario_entries(sc.id, range_version=ver):
             if entry.range_version != ver:
                 continue
             if entry.reason not in ("ok", "eligible_provisional"):
@@ -2578,7 +2586,7 @@ class LtfEngine:
             movements = self.db.list_ltf_movements(sc.id)
             tests = self.db.list_ltf_liquidity_tests(scenario_id=sc.id)
             changed = 0
-            for e in self.db.list_ltf_scenario_entries(sc.id):
+            for e in self.db.list_ltf_scenario_entries(sc.id, range_version=ver):
                 if e.range_version != ver:
                     continue  # история версий не переписывается
                 zone = self.db.get_ltf_entry_zone(e.entry_zone_id)

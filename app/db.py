@@ -1528,11 +1528,12 @@ class Database:
                 'ltf_se_keys': 'ltf_structure_event', 'ltf_se_list': 'ltf_structure_event',
                 'ltf_mv_list': 'ltf_movement', 'ltf_rng_cur': 'ltf_range', 'ltf_rng_list': 'ltf_range',
                 'ltf_ez': 'ltf_entry_zone', 'ltf_sce': 'ltf_scenario_entry',
+                'ltf_sce_zones': 'ltf_scenario_entry',
                 'ltf_lt': 'ltf_liquidity_test', 'ltf_ev': 'ltf_event',
             }.get(key[0])
             def token():
                 if key[0] in ('ltf_obs', 'ltf_sc', 'ltf_pivot', 'ltf_ez', 'ltf_sc_active',
-                              'ltf_se_keys', 'ltf_se_list'):
+                              'ltf_se_keys', 'ltf_se_list', 'ltf_sce', 'ltf_sce_zones'):
                     scope = 'scenario_observation' if key[0] == 'ltf_sc_active' else table
                     return (self._ltf_full_version, self._ltf_bulk_versions.get(table, 0),
                             self._ltf_row_versions.get((scope, key[1]), 0))
@@ -2390,7 +2391,7 @@ class Database:
             row = self.conn.execute('SELECT observation_id FROM ltf_scenario WHERE id=?', (row_id,)).fetchone()
             if row:
                 self._ltf_sc_obs[row_id] = row[0]
-        self._bump_ltf_cache(table, row_id)
+        self._bump_ltf_cache(table, None if table == 'ltf_scenario_entry' else row_id)
 
     def _ltf_observation_iid(self, observation_id: int) -> Optional[int]:
         """instrument_id наблюдения — иммутабелен, кэшируется на процесс
@@ -3274,13 +3275,14 @@ class Database:
              z.rule_version, z.evidence_json()),
         )
         self._commit()
-        self._bump_ltf_cache('ltf_entry_zone')
         if cur.rowcount == 1:
             z.id = int(cur.lastrowid)
+            self._bump_ltf_cache('ltf_entry_zone', z.id)
             return z
         found = self._get_ltf_entry_zone_by_key(z)
         if found is None:  # pragma: no cover
             raise RuntimeError("ltf_entry_zone: вставка проигнорирована, строка не найдена")
+        self._bump_ltf_cache('ltf_entry_zone', found.id)
         return found
 
     def _get_ltf_entry_zone_by_key(self, z: LtfEntryZone) -> Optional[LtfEntryZone]:
@@ -3349,7 +3351,7 @@ class Database:
     def upsert_ltf_scenario_entry(self, se: LtfScenarioEntry) -> LtfScenarioEntry:
         """INSERT/UPDATE по UNIQUE(scenario_id, entry_zone_id, range_version):
         пересчёт состояния на той же версии диапазона не плодит строки."""
-        self.conn.execute(
+        cursor = self.conn.execute(
             """INSERT INTO ltf_scenario_entry
                (scenario_id, entry_zone_id, range_version, eligible, overlap,
                 state, reason, added_at, updated_at)
@@ -3357,18 +3359,13 @@ class Database:
                ON CONFLICT (scenario_id, entry_zone_id, range_version)
                DO UPDATE SET eligible=excluded.eligible, overlap=excluded.overlap,
                              state=excluded.state, reason=excluded.reason,
-                             updated_at=excluded.updated_at""",
+                             updated_at=excluded.updated_at RETURNING *""",
             (se.scenario_id, se.entry_zone_id, se.range_version, int(se.eligible),
              se.overlap, se.state, se.reason, se.added_at, se.updated_at),
         )
+        r = cursor.fetchone()
         self._commit()
-        self._bump_ltf_cache('ltf_scenario_entry')
-        # после upsert lastrowid ненадёжен — читаем строку по уникальному ключу
-        r = self.conn.execute(
-            """SELECT * FROM ltf_scenario_entry
-               WHERE scenario_id=? AND entry_zone_id=? AND range_version=?""",
-            (se.scenario_id, se.entry_zone_id, se.range_version),
-        ).fetchone()
+        self._bump_ltf_cache('ltf_scenario_entry', se.scenario_id)
         return self._to_ltf_scenario_entry(r)
 
     def set_ltf_scenario_entry_reason(self, entry_id: int, reason: str) -> None:
@@ -3392,7 +3389,7 @@ class Database:
         return self._to_ltf_scenario_entry(r) if r else None
 
     def list_ltf_scenario_entries(
-        self, scenario_id: int, state: Optional[str] = None
+        self, scenario_id: int, state: Optional[str] = None, *, range_version: Optional[int] = None
     ) -> list[LtfScenarioEntry]:
         def load() -> list[LtfScenarioEntry]:
             q = "SELECT * FROM ltf_scenario_entry WHERE scenario_id=?"
@@ -3400,12 +3397,31 @@ class Database:
             if state is not None:
                 q += " AND state=?"
                 args.append(state)
+            if range_version is not None:
+                q += " AND range_version=?"
+                args.append(range_version)
             q += " ORDER BY added_at, id"
             return [
                 self._to_ltf_scenario_entry(r)
                 for r in self.conn.execute(q, args).fetchall()
             ]
-        return self._ltf_cached(("ltf_sce", scenario_id, state), load)
+        return self._ltf_cached(("ltf_sce", scenario_id, state, range_version), load)
+
+    def ltf_scenario_zone_ids(self, scenario_id: int) -> set[int]:
+        def load():
+            return frozenset(int(row[0]) for row in self.conn.execute(
+                'SELECT DISTINCT entry_zone_id FROM ltf_scenario_entry WHERE scenario_id=?',
+                (scenario_id,)).fetchall())
+        return set(self._ltf_cached(('ltf_sce_zones', scenario_id), load))
+
+    def ltf_context_event_keys(self, instrument_id: int) -> set[str]:
+        return {row[0] for row in self.conn.execute(
+            """SELECT e.dedupe_key FROM ltf_event e
+               JOIN ltf_scenario s ON s.id=e.scenario_id
+               JOIN ltf_observation o ON o.id=s.observation_id
+               WHERE o.instrument_id=? AND e.kind='context_update'
+                 AND s.state IN ('range_pending','monitoring_entries')""",
+            (instrument_id,)).fetchall()}
 
     def list_ltf_scenario_entries_by_zone(
         self, entry_zone_id: int
