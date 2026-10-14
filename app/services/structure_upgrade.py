@@ -24,6 +24,9 @@ def prepare_upgrade(db, cfg, instrument_id, as_of):
     if old is None:
         db.set_meta(key, RULE_VERSION)
         return False
+    candles = db.get_candles(instrument_id, "H1", end_ms=as_of)
+    if not candles:
+        return False
     # Keep the old scenario/event/notification journal. It must not suppress
     # a new calculation's historical events or keep an obsolete entry active.
     legacy_key = f"structure:legacy_scenarios:{instrument_id}"
@@ -50,7 +53,6 @@ def prepare_upgrade(db, cfg, instrument_id, as_of):
             db.update_ltf_observation(observation.id, state="waiting_structure", updated_at=as_of)
     from ..engine.ltf.structure import sync_structure
     from .h1_setup import H1LegCursor
-    candles = db.get_candles(instrument_id, "H1", end_ms=as_of)
     if candles:
         now = candles[-1].close_time
         sync = sync_structure(db, cfg, instrument_id, candles, now)

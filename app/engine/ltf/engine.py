@@ -1332,10 +1332,12 @@ class LtfEngine:
         """§5/§12: эпоха структуры наблюдения — 1 + число отмен обратным
         сломом. Выводится из строк сценариев: replay даёт ту же эпоху
         (детерминизм §13), хранить счётчик в наблюдении не нужно."""
+        from ...services.structure_upgrade import legacy_scenarios
+        legacy = legacy_scenarios(self.db, obs.instrument_id)
         return 1 + sum(
             1
             for s in self.db.list_ltf_scenarios(observation_id=obs.id)
-            if s.cancellation_reason in ("reverse_bos", "reverse_sms")
+            if s.id not in legacy and s.cancellation_reason in ("reverse_bos", "reverse_sms")
         )
 
     def _insert_structure_event(
