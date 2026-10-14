@@ -218,9 +218,10 @@ async def test_restart_restore_no_duplicates():
     assert after == before
 
 
-async def test_restore_skips_replay_when_cursor_is_current_and_applies_tail():
-    """Курсор уже на последней закрытой H1 — полный replay не вызывается.
-    Новая свеча хвоста всё равно обрабатывается."""
+@pytest.mark.parametrize("persisted_tail", [False, True])
+async def test_restore_skips_replay_when_cursor_is_current_and_applies_tail(persisted_tail):
+    """Сохранённый курсор продолжает расчёт без полного replay, включая
+    хвост, который уже успел попасть в БД перед перезапуском."""
     db = Database(":memory:")
     adapter = FakeAdapter()
     start = now_ms() - 6 * H1_MS
@@ -244,6 +245,8 @@ async def test_restore_skips_replay_when_cursor_is_current_and_applies_tail():
         bars[-1].open_time + H1_MS, 12, 14, 11, 13, "H1", ins.id,
     )
     adapter.candles.append(extra)
+    if persisted_tail:
+        db.insert_candles([extra])
     calls: list[int] = []
     orig = engine.replay_observation
 

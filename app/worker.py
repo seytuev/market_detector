@@ -1637,11 +1637,7 @@ class Worker:
                 last = self.db.last_candle(ins.id, "H1")
                 # Курсор уже на последней закрытой H1 — полный прогон
                 # десятков тысяч свечей не нужен. Сравнение до вставки хвоста.
-                caught_up = (
-                    cursor_raw is not None
-                    and last is not None
-                    and int(cursor_raw) >= last.close_time
-                )
+                has_checkpoint = cursor_raw is not None and int(cursor_raw) > 0
                 start = (
                     min(o.activated_at for o in observations)
                     - self.cfg.ltf_history_days * 86_400_000
@@ -1659,7 +1655,7 @@ class Worker:
                         c.instrument_id = ins.id
                     if candles:
                         await self.data_sync._write(self.db.insert_candles, candles)
-                if caught_up:
+                if has_checkpoint:
                     # Хвост, если он вставился, проходит инкрементально.
                     # Из restore не доставляем: retry заберёт только
                     # не-delayed события внутри grace.
@@ -1667,12 +1663,12 @@ class Worker:
                         self.ltf_engine.process_h1_close, ins.id
                     )
                     log.info(
-                        "LTF %s: курсор H1 актуален, полный replay пропущен (%d)",
+                        "LTF %s: H1 восстановлен от сохранённого курсора, полный replay пропущен (%d)",
                         ins.symbol, len(observations),
                     )
                 else:
                     # Один replay на инструмент, а не на каждое наблюдение.
-                    # Курсор пуст или отстаёт — история должна остаться delayed.
+                    # Без сохранённого курсора историю восстанавливаем delayed.
                     await self._calculate(
                         self.ltf_engine.replay_observation, observations[0].id
                     )
