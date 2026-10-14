@@ -18,6 +18,8 @@ AltDispatcher получает события, УЖЕ записанные дв�
 """
 from __future__ import annotations
 
+import asyncio
+
 import logging
 from typing import Any, Optional
 
@@ -156,19 +158,19 @@ class AltDispatcher:
         from .outbox import Card
         if ctx.asset is not None and not ctx.asset.enabled:
             for ev in events:
-                self.db.mark_alt_event_delivered(ev.id)
+                await asyncio.to_thread(self.db.mark_alt_event_delivered, ev.id)
             await self.outbox.flush_inline()
             return 0
         allowed = []
         for ev in events:
             if self._bot_blocked(ev, chat_id):
-                self.db.mark_alt_event_delivered(ev.id)
+                await asyncio.to_thread(self.db.mark_alt_event_delivered, ev.id)
             else:
                 allowed.append(ev)
         if not allowed:
             return 0
         quiet = all(e.event_type in {"forming_started", "data_stale"} for e in allowed)
-        self.outbox.put("alt", f"{allowed[0].setup_id}:{allowed[0].run_id}", Card(""),
+        await asyncio.to_thread(self.outbox.put, "alt", f"{allowed[0].setup_id}:{allowed[0].run_id}", Card(""),
                         [e.id for e in allowed], quiet=quiet)
         await self.outbox.flush_inline()
         return sum(bool(self.db.get_alt_event(e.id).delivered) for e in allowed)
@@ -195,7 +197,7 @@ class AltDispatcher:
                     [e.id for e in evs],
                 )
                 for ev in evs:
-                    self.db.mark_alt_event_delivered(ev.id)
+                    await asyncio.to_thread(self.db.mark_alt_event_delivered, ev.id)
                 continue
             sent += await self._deliver_group(evs, ctx, chat)
         return sent
