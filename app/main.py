@@ -52,8 +52,8 @@ def load_dotenv(path: Path | None = None) -> None:
 async def run_bot_polling(settings, db) -> None:
     """Long polling кнопок/заметок. Без токена — пропуск (§9).
 
-    Один владелец getUpdates на базу. Живой чужой процесс polling не
-    стартует; Conflict от Telegram пишется в состояние сервиса, без
+    Один владелец getUpdates на базу. Пока чужая lease действует, ждём;
+    Conflict от Telegram пишется в состояние сервиса, без
     изменения рыночных фактов."""
     application = build_application(settings, db)
     if application is None:
@@ -61,21 +61,16 @@ async def run_bot_polling(settings, db) -> None:
         return
     from .services.runtime import (
         TELEGRAM_OWNER,
-        claim_owner,
+        wait_for_owner,
         record_telegram_conflict,
         lease_heartbeat,
         release_owner,
     )
-    claim = await asyncio.to_thread(claim_owner, db, TELEGRAM_OWNER, {
+    stop = getattr(db, "runtime_stop", asyncio.Event())
+    claim = await wait_for_owner(db, TELEGRAM_OWNER, {
         "pid": os.getpid(), "role": "telegram",
-    })
-    if not claim["owned"]:
-        owner = claim.get("owner") or {}
-        log.error(
-            "Telegram polling уже ведёт pid %s — второй getUpdates не стартует",
-            owner.get("pid"),
-        )
-        record_telegram_conflict(db, "owner_busy")
+    }, stop)
+    if claim is None:
         return
 
     async def _on_telegram_error(_update, context) -> None:
@@ -85,31 +80,39 @@ async def run_bot_polling(settings, db) -> None:
         if "Conflict" in name or "Conflict" in text:
             record_telegram_conflict(db, text or name)
 
-    application.add_error_handler(_on_telegram_error)
-    base_url = settings.effective_base_url()
-    if "127.0.0.1" in base_url or "localhost" in base_url:
-        log.warning(
-            "Ссылки из Telegram ведут на %s (localhost) — с других устройств "
-            "не откроются; задайте HTF_PUBLIC_BASE_URL", base_url,
-        )
-    async with application:
-        await application.start()
-        await application.updater.start_polling()
-        log.info("Telegram-бот запущен (polling)")
-        stop = getattr(db, "runtime_stop", asyncio.Event())
-        heartbeat = asyncio.create_task(lease_heartbeat(db, TELEGRAM_OWNER, claim["owner"], stop))
-        waiter = asyncio.create_task(stop.wait())
-        try:
-            done, _ = await asyncio.wait([heartbeat, waiter], return_when=asyncio.FIRST_COMPLETED)
-            for task in done:
-                task.result()
-        finally:
-            heartbeat.cancel()
-            waiter.cancel()
-            await asyncio.gather(heartbeat, waiter, return_exceptions=True)
-            await application.updater.stop()
-            await application.stop()
-            await asyncio.to_thread(release_owner, db, TELEGRAM_OWNER, claim["owner"])
+    heartbeat = asyncio.create_task(lease_heartbeat(db, TELEGRAM_OWNER, claim, stop))
+    waiter = asyncio.create_task(stop.wait())
+    try:
+        application.add_error_handler(_on_telegram_error)
+        base_url = settings.effective_base_url()
+        if "127.0.0.1" in base_url or "localhost" in base_url:
+            log.warning(
+                "Ссылки из Telegram ведут на %s (localhost) — с других устройств "
+                "не откроются; задайте HTF_PUBLIC_BASE_URL", base_url,
+            )
+        async with application:
+            started = polling = False
+            try:
+                await application.start()
+                started = True
+                await application.updater.start_polling()
+                polling = True
+                log.info("Telegram-бот запущен (polling)")
+                done, _ = await asyncio.wait([heartbeat, waiter], return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    task.result()
+            finally:
+                try:
+                    if polling:
+                        await application.updater.stop()
+                finally:
+                    if started:
+                        await application.stop()
+    finally:
+        heartbeat.cancel()
+        waiter.cancel()
+        await asyncio.gather(heartbeat, waiter, return_exceptions=True)
+        await asyncio.to_thread(release_owner, db, TELEGRAM_OWNER, claim)
 
 
 def check_deploy_token(settings) -> None:

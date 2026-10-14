@@ -1786,19 +1786,14 @@ class Worker:
         await self.dispatcher.notify_service(text)
 
     async def run(self) -> None:
-        from .services.runtime import CALC_OWNER, claim_owner
-        claim = claim_owner(self.db, CALC_OWNER, {
+        from .services.runtime import CALC_OWNER, wait_for_owner
+        claim = await wait_for_owner(self.db, CALC_OWNER, {
             "pid": os.getpid(), "role": "calc", "instance_id": getattr(self,"instance_id",None),
-        })
-        if not claim["owned"]:
-            owner = claim.get("owner") or {}
-            log.error(
-                "рыночный расчёт уже ведёт pid %s — второй сканер не стартует",
-                owner.get("pid"),
-            )
+        }, self._stop)
+        if claim is None:
             return
         self.readiness.reach("web")
-        self._calc_claim = claim["owner"]
+        self._calc_claim = claim
         from .services.runtime import lease_heartbeat
         self._lease_task = asyncio.create_task(lease_heartbeat(self.db, CALC_OWNER, self._calc_claim, self._stop))
         self.data_sync.recover_interrupted()

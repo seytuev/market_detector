@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import socket
 import uuid
@@ -18,6 +19,7 @@ CALC_OWNER = "runtime:calc_owner"
 TELEGRAM_OWNER = "runtime:telegram_owner"
 TELEGRAM_CONFLICT = "runtime:telegram_conflict"
 LAST_ERROR = "runtime:last_error"
+log = logging.getLogger(__name__)
 
 
 class Readiness:
@@ -174,6 +176,35 @@ def claim_owner(db, key: str, identity: dict[str, Any], *, lease_ms: int = 120_0
         db.set_meta(key, json.dumps(body))
         db.set_meta(key + ":conflict", "")
         return {"owned": True, "owner": body}
+
+
+async def wait_for_owner(db, key, identity, stop, *, retry_seconds=1.0):
+    """Wait for release/expiry without terminating the service or stealing a lease."""
+    import asyncio
+    waiting = False
+    while not stop.is_set():
+        result = await asyncio.to_thread(claim_owner, db, key, identity)
+        if result["owned"]:
+            if stop.is_set():
+                await asyncio.to_thread(release_owner, db, key, result["owner"])
+                return None
+            if waiting:
+                log.info("блокировка %s освобождена — запуск роли", key)
+            return result["owner"]
+        if not waiting:
+            owner = result.get("owner") or {}
+            log.warning(
+                "блокировка %s занята: instance=%s host=%s pid=%s expires_at=%s — "
+                "ожидаем освобождения; веб-сервис продолжает работать",
+                key, owner.get("instance_id"), owner.get("host"),
+                owner.get("pid"), owner.get("expires_at"),
+            )
+            waiting = True
+        try:
+            await asyncio.wait_for(stop.wait(), retry_seconds)
+        except asyncio.TimeoutError:
+            pass
+    return None
 
 
 def assert_owner(db, key, claim, *, check_expiry=True):
