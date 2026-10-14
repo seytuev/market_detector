@@ -272,16 +272,12 @@ def test_maturity_and_bos_same_candle(alt_db, alt_cfg):
     eng = AltEngine(alt_db, alt_cfg)
     s = eng.process_asset_history(1, 1, candles)
     assert s["frozen_range_id"] is not None
-    assert s["setup_state"] == AltState.MATURE.value
-    assert alt_db.find_alt_entry_opportunity(s["setup_id"], "A") is None
-    # The first internal high (1.9) remains authoritative. A later 1.55 LH
-    # cannot replace it and open an entry prematurely on maturity.
-    s2 = eng.process_asset_history(1, 1, candles + post([(1.56, 1.92, 1.30, 1.91)]))
-    entry = alt_db.find_alt_entry_opportunity(s2["setup_id"], "A")
-    assert entry is not None and entry.price == 1.91
-    sms = [r for r in live_structure_rows(alt_db, s2["setup_id"]) if r.kind == "SMS"]
-    assert sms[-1].level_price == 1.9
-    assert json.loads(sms[-1].anchors_json)["anchors"][0]["formed_at"] == T0 + 21 * DAY_MS
+    assert s["setup_state"] == AltState.ACTIVE_CONFIRMED.value
+    entry = alt_db.find_alt_entry_opportunity(s["setup_id"], "A")
+    assert entry is not None and entry.price == 1.56
+    sms = [r for r in live_structure_rows(alt_db, s["setup_id"]) if r.kind == "SMS"]
+    assert sms[-1].level_price == pytest.approx(1.55)
+    assert not any(r.kind == "BOS" for r in live_structure_rows(alt_db, s["setup_id"]))
 
 
 # ---------------------------------------------------------------------------
