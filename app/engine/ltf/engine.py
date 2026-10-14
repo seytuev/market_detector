@@ -467,19 +467,26 @@ class LtfEngine:
             )
 
     @_activation_session
-    def replay_observation(self, observation_id: int, *, resume: bool = False) -> LtfTickResult:
+    def replay_observation(self, observation_id: int, *, resume: bool = False,
+                           start_ms: Optional[int] = None) -> LtfTickResult:
         """§13: детерминированный прогон по сохранённым свечам тем же кодом.
 
         detected_at = закрытие свечи, события processing_mode='replay'
         (delayed=True — в доставку не идут). Повторный replay
         не дублирует pivots/события/зоны/диапазоны (UNIQUE-ключи + дедуп)
         и не воскрешает tested-зоны (состояние читается из БД).
+        start_ms limits domain processing for a newly activated observation;
+        the entire earlier prefix still restores the structural machines.
         """
         result = LtfTickResult()
         obs = self.db.get_ltf_observation(observation_id)
         if obs is None:
             return result
         closed = self.db.get_candles(obs.instrument_id, "H1")
+        if (start_ms is not None and closed and start_ms > closed[-1].close_time
+                and int(self.db.get_meta(f'ltf:h1:last_close:{obs.instrument_id}') or 0)
+                    >= closed[-1].close_time):
+            return result  # This new observation has no closed H1 to process yet.
         prime_activation_history(self.db, obs.instrument_id, closed)
         self._known_context_keys = self.db.ltf_context_event_keys(obs.instrument_id)
         # «сейчас» replay — голова истории, а не реальное время: иначе
@@ -489,7 +496,9 @@ class LtfEngine:
         from .market_structure import RULE_VERSION as structure_rules
         checkpoint_key = f"structure:replay_cursor:{obs.instrument_id}:{structure_rules}"
         checkpoint = int(self.db.get_meta(checkpoint_key) or 0) if resume else 0
-        if resume and not checkpoint:
+        if start_ms is not None:
+            checkpoint = max((c.close_time for c in closed if c.close_time < start_ms), default=0)
+        elif resume and not checkpoint:
             # Before the first observation/context there are no domain
             # transitions to replay. Structure/local-leg inputs still warm
             # from the entire prefix below; the upgrade already persisted its
@@ -506,18 +515,21 @@ class LtfEngine:
         self._batch = StructureBatch() if self.scan_cursors else None
         sampled = 0
         try:
-            if checkpoint and self._batch is not None:
+            if checkpoint:
                 # Restore pure machines from immutable inputs, without replaying
                 # already committed scenario/zone mutations after a restart.
                 prefix = [c for c in closed if c.close_time <= checkpoint]
                 if prefix:
-                    sync = sync_structure(self.db, self.cfg, obs.instrument_id, prefix,
-                                          prefix[-1].close_time, persist_roles=False,
-                                          batch=self._batch)
-                    from ...services.h1_setup import H1LegCursor
-                    cursor = H1LegCursor(obs.instrument_id, ordered_candles=True)
-                    cursor.advance(self.db, sync.avail, prefix, prefix[-1].close_time,
-                                   self.cfg, persist=False)
+                    with self.db.batch_writes(join_repository_writes=True):
+                        sync = sync_structure(self.db, self.cfg, obs.instrument_id, prefix,
+                                              prefix[-1].close_time,
+                                              persist_roles=start_ms is not None and checkpoint==closed[-1].close_time,
+                                              batch=self._batch)
+                        from ...services.h1_setup import H1LegCursor
+                        cursor = H1LegCursor(obs.instrument_id, ordered_candles=True)
+                        scanned = int(self.db.get_meta(f'h1:leg:scanned:{obs.instrument_id}') or 0)
+                        cursor.advance(self.db, sync.avail, prefix, prefix[-1].close_time,
+                                       self.cfg, persist=start_ms is not None and scanned < checkpoint)
                     self._h1_cursors[obs.instrument_id] = cursor
             for idx, c in enumerate(closed):
                 if c.close_time <= checkpoint:

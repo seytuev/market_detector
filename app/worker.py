@@ -1033,7 +1033,8 @@ class Worker:
             # §4: подгрузить историю H1 до касания — предшествующая
             # структура как контекст; события replay помечаются delayed
             await self._ltf_load_h1_history(ins, occurred_at)
-            await self._calculate(self.ltf_engine.replay_observation, obs.id)
+            await self._calculate(self.ltf_engine.replay_observation, obs.id,
+                                  start_ms=obs.activated_at)
             self.db.set_meta(f"ltf:h1:seeded:{obs.id}", "1")
             log.info("LTF: наблюдение %s открыто по %s %s (зона %s)",
                      obs.id, ins.symbol, zone.timeframe, zone.id)
@@ -1154,7 +1155,8 @@ class Worker:
                 "LTF: наблюдение %s сдвинуто к фактическому входу %s",
                 obs.id, reach,
             )
-            await self._calculate(self.ltf_engine.replay_observation, obs.id)
+            await self._calculate(self.ltf_engine.replay_observation, obs.id,
+                                  start_ms=reach)
 
     @instrument_owned
     async def _ltf_on_poll(self, ins: Instrument, events: list[Event]) -> None:
@@ -1220,7 +1222,7 @@ class Worker:
         for c in candles:
             c.instrument_id = ins.id
         if candles:
-            self.db.insert_candles(candles)
+            await self.data_sync._write(self.db.insert_candles, candles)
 
     async def ltf_poll_once(self) -> None:
         """Один проход LTF-цикла: общий поток закрытий H1 (§13), без

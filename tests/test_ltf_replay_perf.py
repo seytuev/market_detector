@@ -149,6 +149,74 @@ def test_structure_event_membership_loads_once_and_tracks_writes(monkeypatch):
     db.close()
 
 
+@pytest.mark.parametrize('existing_watch',[False,True])
+def test_new_observation_replays_only_its_activation_window(existing_watch):
+    from dataclasses import replace
+    states=[]
+    counts=[]
+    for bounded in (False,True):
+        db=Database(':memory:')
+        iid=_instrument(db)
+        candles=_series_h(iid)
+        db.insert_candles(candles)
+        engine=LtfEngine(db,_CFG)
+        if existing_watch:
+            old_zid=_setup(db,iid)
+            engine.on_htf_zone_touched(iid,db.get_zone(old_zid),T0)
+        engine.process_h1_close(iid,now_ms=candles[-1].close_time)
+        if existing_watch:
+            old_zone=db.get_zone(old_zid)
+            zid=db.insert_zone(replace(old_zone,id=None,lower=old_zone.lower+1,
+                                      upper=old_zone.upper+1,formed_at=old_zone.formed_at+1))
+        else:
+            zid=_setup(db,iid)
+        activated=candles[10].open_time
+        obs=engine.on_htf_zone_touched(iid,db.get_zone(zid),activated)
+        result=engine.replay_observation(obs.id,**({'start_ms':activated} if bounded else {}))
+        state=_dump_state(db)
+        for table in ('h1_local_leg','h1_local_leg_revision'):
+            state[table]=[tuple(row) for row in db.conn.execute(f'SELECT * FROM {table} ORDER BY id')]
+        states.append(state)
+        counts.append(result.processed)
+        db.close()
+    assert states[0]==states[1]
+    assert counts[1]==counts[0]-10
+    assert states[1]['ltf_event']
+
+
+def test_current_hour_observation_does_not_replay_closed_history():
+    db=Database(':memory:')
+    iid=_instrument(db)
+    candles=_series_h(iid)
+    db.insert_candles(candles)
+    engine=LtfEngine(db,_CFG)
+    engine.process_h1_close(iid,now_ms=candles[-1].close_time)
+    zid=_setup(db,iid)
+    obs=engine.on_htf_zone_touched(iid,db.get_zone(zid),candles[-1].close_time+1)
+    before=_dump_state(db)
+    result=engine.replay_observation(obs.id,start_ms=obs.activated_at)
+    assert result.processed==0
+    assert _dump_state(db)==before
+    db.close()
+
+
+def test_first_observation_still_publishes_structure_before_its_first_closed_bar():
+    db=Database(':memory:')
+    iid=_instrument(db)
+    candles=_series_h(iid)
+    db.insert_candles(candles)
+    zid=_setup(db,iid)
+    engine=LtfEngine(db,_CFG)
+    obs=engine.on_htf_zone_touched(iid,db.get_zone(zid),candles[-1].close_time+1)
+    result=engine.replay_observation(obs.id,start_ms=obs.activated_at)
+    assert result.processed==0
+    assert db.list_ltf_pivots(iid)
+    assert db.conn.execute('SELECT COUNT(*) FROM h1_local_leg').fetchone()[0]>0
+    assert int(db.get_meta(f'h1:leg:scanned:{iid}'))==candles[-1].close_time
+    assert db.list_ltf_events()==[]
+    db.close()
+
+
 def test_replay_entry_queries_not_linear_in_candles():
     """SELECT ltf_scenario_entry на replay ограничены числом изменений состояния,
     а не длиной истории: хвост +200/+400 свечей запросов не добавляет
