@@ -133,6 +133,8 @@ async def async_main() -> None:
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
+    # Telegram places its bot credential in the URL logged by httpx at INFO.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     load_dotenv()
     settings = load_settings()
     check_deploy_token(settings)
