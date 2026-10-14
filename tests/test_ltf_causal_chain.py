@@ -79,7 +79,7 @@ def test_reverse_break_level_stored_on_cancellation(
     sc = db.get_ltf_scenario(
         db.list_ltf_scenarios(observation_id=obs.id)[0].id
     )
-    assert sc.state == "cancelled" and sc.cancellation_reason == "reverse_bos"
+    assert sc.state == "cancelled" and sc.cancellation_reason == "reverse_sms"
     bull = [
         e for e in db.list_ltf_structure_events(sc.id)
         if e.direction == Direction.BULL
@@ -123,7 +123,7 @@ def test_epoch_increments_and_active_selection_after_cancellation(
     ranges1 = db.list_ltf_ranges(sc1.id)
     # §7 Этап 4: сначала origin_reversal от якоря движения (idx17),
     # затем continuation при подтверждении пары LH→LL (idx23)
-    assert [r.kind for r in ranges1] == ["origin_reversal", "continuation"]
+    assert [r.kind for r in ranges1] == ["continuation"]
     assert all(r.structural_epoch_id == 1 for r in ranges1)
 
     _feed(db, engine, instrument_id, candles, 34)

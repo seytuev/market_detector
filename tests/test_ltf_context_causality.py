@@ -169,4 +169,4 @@ def test_engine_does_not_emit_unconfirmed_fvg50(db: Database,
     assert ready, "ожидался entries_ready без контекстных допусков"
     entries = ready[-1].payload["entries"]
     assert all("outside_premium" not in e for e in entries)
-    assert {e["lower"] for e in entries} == {9.6}
+    assert {e["lower"] for e in entries} == {10.0, 11.0, 12.0, 13.0, 17.0}

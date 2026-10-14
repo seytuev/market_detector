@@ -290,8 +290,8 @@ async def test_05_same_bos_cancels_short_and_confirms_long(db, cfg, instrument_i
     episode = _latest(db, instrument_id)
     assert episode["state"] == "confirmed"
     assert episode["state_v2"] == "opposing_confirmed"
-    cancels = [e for e in _events(db, instrument_id) if e.kind == "cancellation" and e.payload.get("reason") == "reverse_bos"]
-    longs = [e for e in _events(db, instrument_id) if e.kind == "bos" and e.payload.get("reversal_confirmed")]
+    cancels = [e for e in _events(db, instrument_id) if e.kind == "cancellation" and e.payload.get("reason") == "reverse_sms"]
+    longs = [e for e in _events(db, instrument_id) if e.kind == "sms" and e.payload.get("reversal_confirmed")]
     assert cancels and longs
     assert cancels[0].payload["market_transition_key"] == longs[0].payload["market_transition_key"]
     sender = LogSender()

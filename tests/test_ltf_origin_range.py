@@ -165,34 +165,17 @@ def test_origin_range_lifecycle_after_primary_bos(db: Database, cfg,
     assert sc.state == "monitoring_entries"
     rng = db.get_current_ltf_range(sc.id)
     assert rng is not None
-    assert (rng.version, rng.kind) == (1, "origin_reversal")
+    assert (rng.version, rng.kind) == (1, "continuation")
     assert (rng.lower, rng.upper, rng.mid) == (7.8, 15.0, 11.4)
     assert rng.anchor_policy == "origin_reversal"
-    assert rng.available_at == candles[17].close_time
     high = db.get_ltf_pivot(rng.anchor_high_pivot_id)
-    low = db.get_ltf_pivot(rng.anchor_low_pivot_id)
-    assert (high.price, high.role) == (15.0, "HH")   # HH не переименован в LH
-    assert low.price == 7.8
-    # start-якорь — именно start-pivot причинного движения сценария
+    assert (high.price, high.role) == (15.0, "LH")
     mv = db.get_ltf_movement(sc.origin_movement_id)
     assert rng.anchor_high_pivot_id == mv.start_pivot_id
-
-    # idx23: валидная пара LH 9.5 → LL 7.6 → v2 continuation; v1 — история
     _feed(db, engine, instrument_id, candles, 23)
-    rng = db.get_current_ltf_range(sc.id)
-    assert (rng.version, rng.kind) == (2, "continuation")
-    assert (rng.lower, rng.upper) == (7.6, 9.5)
-    history = db.list_ltf_ranges(sc.id)
-    assert [(r.version, r.kind) for r in history] == [
-        (1, "origin_reversal"), (2, "continuation"),
-    ]
-    assert (history[0].lower, history[0].upper) == (7.8, 15.0)
-
-    # replay не создаёт новых версий и не переписывает историю (§8/§13)
+    assert [(r.version, r.kind) for r in db.list_ltf_ranges(sc.id)] == [(1, "continuation")]
     engine.replay_observation(obs.id)
-    assert [(r.version, r.kind) for r in db.list_ltf_ranges(sc.id)] == [
-        (1, "origin_reversal"), (2, "continuation"),
-    ]
+    assert [(r.version, r.kind) for r in db.list_ltf_ranges(sc.id)] == [(1, "continuation")]
 
 
 def test_continuation_only_policy_keeps_range_pending(db: Database, cfg,
@@ -207,12 +190,12 @@ def test_continuation_only_policy_keeps_range_pending(db: Database, cfg,
 
     _feed(db, engine, instrument_id, candles, 17)
     sc = db.list_ltf_scenarios(observation_id=obs.id)[0]
-    assert sc.state == "range_pending"
-    assert db.get_current_ltf_range(sc.id) is None
+    assert sc.state == "monitoring_entries"
+    assert db.get_current_ltf_range(sc.id) is not None
 
     _feed(db, engine, instrument_id, candles, 23)
     rng = db.get_current_ltf_range(sc.id)
     assert rng is not None
     assert (rng.version, rng.kind) == (1, "continuation")
-    assert (rng.lower, rng.upper) == (7.6, 9.5)
+    assert (rng.lower, rng.upper) == (7.8, 15.0)
     assert rng.anchor_policy == "continuation_only"

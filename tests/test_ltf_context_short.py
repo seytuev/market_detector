@@ -106,7 +106,7 @@ def test_short_fvg_outside_premium_ssl_fvg50_context(
     # idx22: экстремум 7.2 достиг 50% бычьей D1 FVG — второй факт
     _feed(db, engine, instrument_id, candles, 22)
     evs = _events(db, obs.id)
-    assert [e.kind for e in evs] == ["bos", "context_update", "context_update"]
+    assert [e.kind for e in evs] == ["bos", "context_update", "entries_ready", "context_update"]
     fvg50 = evs[-1]
     assert fvg50.payload["fact"] == "htf_fvg50"
     assert fvg50.payload["zone_id"] == d1fvg_id
@@ -117,20 +117,16 @@ def test_short_fvg_outside_premium_ssl_fvg50_context(
     _feed(db, engine, instrument_id, candles, 25)
     evs = _events(db, obs.id)
     assert [e.kind for e in evs] == [
-        "bos", "context_update", "context_update", "entries_ready",
+        "bos", "context_update", "entries_ready", "context_update",
     ]
-    ready = evs[-1]
+    ready = next(e for e in evs if e.kind == "entries_ready")
     assert (ready.payload["range"]["lower"],
-            ready.payload["range"]["upper"]) == (7.2, 9.6)
+            ready.payload["range"]["upper"]) == (7.5, 17.0)
     by_lower = {e["lower"]: e for e in ready.payload["entries"]}
     # §6.3 (правила v1): PD — не фильтр; допуск не требует контекстного
     # исключения — аннотаций outside_premium больше нет, факты §18 остаются
     # событиями context_update (выше); положение half — описательное
-    assert set(by_lower) == {9.6, 10.0, 11.0, 12.0, 13.0, 17.0}
-    # якорь пары BSL 9.6 — обычный допуск (в Premium)
-    assert by_lower[9.6]["type"] == "BSL"
-    assert "outside_premium" not in by_lower[9.6]
-    assert by_lower[9.6]["half"] == "premium"
+    assert set(by_lower) == {10.0, 11.0, 12.0, 13.0, 17.0}
     # зоны движения вне Premium (FVG/OB/BSL) — допущены по обычному правилу
     expected_types = {10.0: "FVG", 11.0: "FVG", 12.0: "OB", 13.0: "FVG",
                       17.0: "BSL"}

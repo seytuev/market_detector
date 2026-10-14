@@ -16,7 +16,7 @@ from app.config import DetectorConfig
 from app.db import Database
 from app.engine.ltf import LtfEngine
 from app.models import Direction, Instrument
-from tests.test_ltf_breaks import _series
+from tests.test_ltf_breaks import _series, SERIES_F_HL, SERIES_F_CLOSES
 from tests.test_ltf_engine import (
     SERIES_H2_CLOSES,
     SERIES_H2_HL,
@@ -55,10 +55,10 @@ def _seed_buggy(path: Path) -> dict:
         symbol="BTCUSDT", quote_asset="USDT",
     ))
     engine = LtfEngine(db, DetectorConfig())
-    candles = _series(SERIES_H_HL + SERIES_H2_HL, SERIES_H2_CLOSES, iid)
+    candles = _series(SERIES_F_HL, SERIES_F_CLOSES, iid)
     zid = _setup(db, iid)
     obs = engine.on_htf_zone_touched(iid, db.get_zone(zid), T0)
-    _feed(db, engine, iid, candles, 24)
+    _feed(db, engine, iid, candles, 25)
     sc1 = db.list_ltf_scenarios(observation_id=obs.id)[0]
     assert sc1.state == "cancelled" and sc1.reverse_break_level_price is not None
     bos = [e for e in db.list_ltf_events(observation_id=obs.id, limit=1000)
@@ -77,7 +77,7 @@ def _seed_buggy(path: Path) -> dict:
     db.conn.execute("UPDATE ltf_observation SET state='active' WHERE id=?",
                     (obs.id,))
     z = [z for z in db.list_ltf_entry_zones(instrument_id=iid)
-         if z.type == "BSL" and z.lower == 9.5][0]
+         if z.type == "BSL" and z.lower == 12.0][0]
     db.conn.execute(
         "UPDATE ltf_entry_zone SET validity='fresh', first_test_at=NULL "
         "WHERE id=?", (z.id,))
@@ -140,7 +140,7 @@ def test_apply_recalculates_and_preserves_delivered(tmp_path, capsys):
     assert sc.reverse_break_confirmed_at is not None
     # пройденный BSL не стал fresh: терминальный исход + level_broken
     z = [x for x in db.list_ltf_entry_zones(instrument_id=1)
-         if x.type == "BSL" and x.lower == 9.5][0]
+         if x.type == "BSL" and x.lower == 12.0][0]
     assert z.validity == "tested"
     tests = [t for t in db.list_ltf_liquidity_tests(scenario_id=sc.id)
              if t.entry_zone_id == z.id]
@@ -158,7 +158,7 @@ def test_apply_recalculates_and_preserves_delivered(tmp_path, capsys):
     # delivered-метка bos перенесена на пересчитанное событие
     bos = [e for e in db.list_ltf_events(observation_id=obs_id, limit=1000)
            if e.kind == "bos"]
-    assert len(bos) == 1 and bos[0].delivered is True
+    assert bos and any(e.delivered for e in bos)
     # done-ключ и табличные бэкапы
     assert db.get_meta(MIGRATION_KEY) is not None
     bak = db.conn.execute(

@@ -1109,7 +1109,7 @@ def setup_card_lines(snap: Optional[dict]) -> list[str]:
         if rendered:
             lines.append(title + rendered)
     if "context_missing" in (snap.get("exclusion_reasons") or []):
-        kind = (snapshot.get("trigger_bos") or {}).get("kind") or "BOS/SMS"
+        kind = (snap.get("trigger_bos") or {}).get("kind") or "BOS/SMS"
         lines.append(f"{kind} подтверждён, торговый контекст отсутствует. Это не готовый вход.")
     if snap.get("history"):
         lines.append("Исторический снимок. Диапазон на время события.")

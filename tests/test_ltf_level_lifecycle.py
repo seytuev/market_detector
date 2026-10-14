@@ -81,8 +81,8 @@ def test_close_beyond_level_is_terminal_broken(db: Database, cfg,
                if e.entry_zone_id == zone.id]
     assert entries and all(e.reason == REASON_LEVEL_BROKEN for e in entries)
     kinds = [e.kind for e in _events(db, obs.id)]
-    assert kinds == ["bos", "touch", "sweep_failed"]
-    fail = _events(db, obs.id)[-1]
+    assert kinds == ["bos", "touch", "sweep_failed", "cancellation"]
+    fail = next(e for e in _events(db, obs.id) if e.kind == "sweep_failed")
     assert fail.payload["outcome"] == "failed"
 
     # возврат ниже K: записанный исход пробойной свечи не переписывается
@@ -119,7 +119,7 @@ def test_gap_close_beyond_without_touch(db: Database, cfg, instrument_id: int):
              if t.entry_zone_id == zone.id]
     assert len(tests) == 1 and tests[0].state == "failed"
     kinds = [e.kind for e in _events(db, obs.id)]
-    assert kinds == ["bos", "sweep_failed"]  # touch не было
+    assert kinds == ["bos", "sweep_failed", "cancellation"]  # touch не было
 
 
 def test_equal_close_not_terminal_then_broken(db: Database, cfg,

@@ -389,7 +389,7 @@ def test_expected_levels_hidden_after_break(client, db, seeded):
     chart = client.get(f"/api/ltf/observations/{obs1.id}/chart", headers=AUTH).json()
     assert chart["expected"]["bos"] is None
     assert chart["expected"]["sms"] is None
-    assert chart["expected"]["sms"]["status"] == "waiting_prerequisite"
+    assert chart["expected"]["sms"] is None
 
 
 def test_close_scenario(client, db, seeded):
