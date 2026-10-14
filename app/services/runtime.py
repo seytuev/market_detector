@@ -387,6 +387,7 @@ def build_diagnostics(db, settings, *, role: str, instance_id: str,
                       market_queue=None, calc_queue=None,
                       readiness=None, realtime=None) -> dict[str, Any]:
     """Защищённый снимок runtime. Токены и секреты не включаются."""
+    from ..engine.ltf.market_structure import RULE_VERSION as structure_rules
     cfg = settings.detector
     instruments = []
     for ins in db.get_instruments():
@@ -406,6 +407,8 @@ def build_diagnostics(db, settings, *, role: str, instance_id: str,
             "allowed_types": sorted(policy_types(cfg)),
             "parents_by_reason": _parent_counts(db, ins.id, cfg),
             "replaying": db.get_meta(f"replaying:{ins.id}") == "1",
+            "replay_checkpoint_close": int(db.get_meta(
+                f"structure:replay_cursor:{ins.id}:{structure_rules}") or 0) or None,
             "last_error": db.get_meta(f"runtime:last_error:{ins.id}"),
         })
     calc = _read_claim(db, CALC_OWNER)
