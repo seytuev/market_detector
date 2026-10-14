@@ -29,6 +29,8 @@ touch_bar == False (§8.5). Для уровней равное касание с
 """
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
+
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, Optional
@@ -211,9 +213,8 @@ def _range_test_stats(
     Возвращает (first_test_at, test_extreme)."""
     first: Optional[int] = None
     extreme: Optional[float] = None
-    for c in candles:
-        if c.open_time <= after_open:
-            continue
+    start = bisect_right(candles, after_open, key=lambda c: c.open_time)
+    for c in candles[start:]:
         if not touch_bar(lower, upper, c):
             continue
         if first is None:
@@ -228,9 +229,8 @@ def _first_level_test(
 ) -> Optional[int]:
     """§9: первое достижение уровня после рождения экстремума; равное
     касание считается тестом (консервативный режим свежести)."""
-    for c in candles:
-        if c.open_time <= after_open:
-            continue
+    start = bisect_right(candles, after_open, key=lambda c: c.open_time)
+    for c in candles[start:]:
         if c.high >= level and c.low <= level:
             return c.open_time
     return None
@@ -274,7 +274,8 @@ def detect_entry_zones(
     rejected: list[dict[str, Any]] = []
 
     # --- FVG H1 (§8.2) и OB H1 (§8.3) ---
-    for f in scan_fvgs(closed, "H1"):
+    first = bisect_left(closed, movement.window_start, key=lambda c: c.open_time)
+    for f in scan_fvgs(closed[first:], "H1"):
         if f.candle_open_times[0] < movement.window_start:
             continue  # древняя история вне окна базы — не кандидат
         if f.direction != direction:
