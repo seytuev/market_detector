@@ -31,6 +31,7 @@ window.LFCopy = (() => {
   function assetDetails(asset) {
     const d = (asset && asset.details) || {};
     let html = '';
+    (d.structure_sync || []).forEach((line) => { html += block('D1 → HTF → H1', line); });
     (d.grounds || []).forEach((line) => { html += block('Основание', line); });
     if ((d.zones || []).length) {
       const rows = d.zones.map((line) => esc(line)).join('<br>');

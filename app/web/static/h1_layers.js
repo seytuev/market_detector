@@ -238,6 +238,7 @@
 
   function ideaLabel(idea) {
     return (idea.direction === 'bull' ? '↑ Покупки' : '↓ Продажи') + ' · '
+      + (idea.structure_sync ? idea.structure_sync.status + ' · ' : '')
       + String(idea.parent_type || '').toUpperCase() + ' ' + idea.parent_timeframe
       + ' #' + idea.parent_zone_id + ' · BOS/SMS ' + new Date(idea.trigger_at).toLocaleString('ru-RU');
   }
@@ -246,7 +247,7 @@
     const select = root.document && root.document.getElementById('h1-idea');
     if (!select || !Array.isArray(layers.htf_ideas)) return;
     const choices = layers.htf_ideas.filter((i) => settings.historicalZones || i.state !== 'closed');
-    const signature = JSON.stringify(choices.map((i) => [i.scenario_id, i.state, i.trigger_at]));
+    const signature = JSON.stringify(choices.map((i) => [i.scenario_id, i.state, i.trigger_at, i.structure_sync?.status]));
     if (select.dataset.ideas !== signature) {
       select.replaceChildren();
       const all = root.document.createElement('option');

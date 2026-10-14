@@ -984,7 +984,18 @@ def assemble_h1_layers(
         r for r in structural_in_sample if r.get("id") in shown_structural_ids
     ]
     scenario_open = _scenario_is_open(db, instrument_id, context_id)
+    from .d1_structure import project_daily
+    from .structure_sync import synchronize_scenario
+    daily = project_daily(db, instrument_id, moment)
+    reference = candles[-1].close if candles else None
+    ideas = [{**idea, "structure_sync": synchronize_scenario(
+        db, instrument_id, daily, idea["direction"], moment,
+        reference=reference, h1_confirmed=True, has_htf_source=True,
+    )} for idea in ideas]
+    rank = {"main": 0, "countertrend": 1, "unresolved": 2}
+    ideas.sort(key=lambda idea: rank[idea["structure_sync"]["priority"]])
     return {
+        "daily_structure": daily,
         "pivot_markers": marker_pack["points"],
         "pivot_selection": marker_pack["selection"],
         "anchor_refs": anchors,
