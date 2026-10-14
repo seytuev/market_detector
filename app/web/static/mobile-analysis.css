@@ -1,0 +1,145 @@
+/* Mobile analysis: one toolbar, one panel switcher, room for the chart.
+   Loaded by the main workspace only. Desktop styles remain in redesign.css. */
+.sync-label-short, .mobile-control-icon { display: none; }
+
+@media (max-width: 767px) {
+  .app-body {
+    --lf-bg: #f5f7fa;
+    --lf-raised: #f0f4f8;
+    --lf-border: #dce4ec;
+    --lf-selected: #e7f3f6;
+    --mobile-nav-height: calc(64px + env(safe-area-inset-bottom, 0px));
+    height: 100dvh;
+  }
+  [data-theme="dark"] .app-body {
+    --lf-bg: #0d1219;
+    --lf-raised: #1b2633;
+    --lf-border: #2a3848;
+    --lf-selected: #102b35;
+  }
+  .shell { height: 100dvh; padding-bottom: var(--mobile-nav-height); }
+  .data-sync-bar {
+    flex: none; min-height: 48px; gap: 8px; padding: 2px 12px;
+    background: var(--lf-surface); border-bottom: 1px solid var(--lf-border);
+  }
+  #btn-data-sync {
+    width: 44px; height: 44px; padding: 0; border: 0;
+    background: transparent; color: var(--lf-brand); font-size: 0;
+  }
+  #btn-data-sync::before {
+    content: ''; display: block; width: 19px; height: 19px; background: currentColor;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M20 7v5h-5M4 17v-5h5M5.2 8a7 7 0 0 1 11.6-3L20 8M4 16l3.2 3A7 7 0 0 0 18.8 16' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
+  }
+  #btn-data-sync[aria-busy="true"]::before { animation: mobile-sync-spin 1.4s linear infinite; }
+  #data-sync-status { flex: 1 1 0; font-size: 11px; color: var(--lf-text2); }
+  #data-sync-status[data-state="partial"], #data-sync-status[data-state="failed"] { color: var(--lf-warning); }
+  .data-sync-bar details { max-width: none; }
+  .data-sync-bar summary { min-height: 44px; gap: 5px; font-size: 11px; color: var(--lf-text2); }
+  .data-sync-bar summary::after { content: '⌄'; font-size: 14px; }
+  .sync-label-full { display: none; }
+  .sync-label-short { display: inline; }
+  #data-sync-details { position: fixed; top: 52px; left: 12px; right: 12px; width: auto; max-height: calc(100dvh - 140px); overflow: auto; border-radius: 14px; }
+
+  #view-overview { padding-top: 0; }
+  #view-overview .desk-head { padding: 10px 16px 8px; }
+  #view-overview .desk-all { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; font-size: 11px; }
+  #view-overview .desk-all::before { content: '‹'; font-size: 20px; line-height: 1; }
+  #view-overview .desk-head-row {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start; gap: 10px; margin-top: 2px;
+  }
+  #view-overview .desk-title { min-width: 0; }
+  #view-overview .desk-title h2 { display: block; font-size: clamp(17px, 5vw, 22px); line-height: 28px; font-weight: 600; letter-spacing: -.6px; }
+  #view-overview .desk-title .work-meta { display: block; margin: 3px 0 0; font-size: 11px; }
+  #view-overview .desk-fresh { font-size: 11px; line-height: 16px; overflow-wrap: anywhere; }
+  #view-overview .desk-quote { text-align: right; }
+  #view-overview .desk-price-row { justify-content: flex-end; gap: 4px; }
+  #view-overview .desk-price { font-size: clamp(19px, 5.5vw, 24px); line-height: 28px; font-weight: 600; letter-spacing: -.6px; }
+  #view-overview .desk-price-ccc { font-size: 10px; }
+  #view-overview .desk-quote .price-age { margin-top: 3px; font-size: 10px; }
+
+  #view-overview .workbar {
+    display: grid; grid-template-columns: minmax(0, 1fr) 56px 44px 68px 44px;
+    gap: 6px; min-height: 56px; padding: 6px 12px; background: transparent;
+  }
+  #view-overview .lf-analysis-actions { display: contents; }
+  #view-overview #desk-side-toggle { display: none; }
+  #view-overview #instrument-select { grid-column: 1; grid-row: 1; width: 100%; min-width: 0; font-size: 12px; }
+  #view-overview .tf-switch { grid-column: 2; grid-row: 1; min-width: 0; }
+  #view-overview #tf-select { width: 100%; font-size: 12px; }
+  #view-overview .layer-menu { grid-column: 3; grid-row: 1; min-width: 0; }
+  #view-overview .workbar .layer-menu summary { width: 44px; min-width: 0; padding: 0; justify-content: center; }
+  #view-overview .layer-label, #view-overview .layer-active { display: none; }
+  #view-overview .mobile-control-icon { display: block; }
+  #view-overview #btn-new-zone { grid-column: 4; grid-row: 1; padding: 0 6px; font-size: 12px; white-space: nowrap; }
+  #view-overview #desk-expand { grid-column: 5; grid-row: 1; padding: 0; font-size: 0; }
+  #view-overview #desk-expand::before {
+    content: ''; display: block; width: 17px; height: 17px; background: currentColor;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M9 3H3v6m12-6h6v6M3 15v6h6m12-6v6h-6' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
+  }
+  #view-overview .workbar .btn, #view-overview .workbar select { border-radius: 10px; background-color: var(--lf-surface); border-color: var(--lf-border); }
+  #view-overview .workbar .btn.primary { background: var(--lf-brand); border-color: var(--lf-brand); color: var(--lf-accent-ink); }
+  #view-overview .lf-analysis-tabs {
+    gap: 4px; padding: 4px; margin: 4px 12px 12px; border: 0; border-radius: 12px;
+    background: var(--lf-raised); flex: none;
+  }
+  #view-overview .lf-analysis-tabs button { min-width: 0; padding: 0 4px; border: 0; border-radius: 9px; background: transparent; color: var(--lf-text2); font-size: 12px; font-weight: 500; }
+  #view-overview .lf-analysis-tabs button[aria-pressed="true"] { background: var(--lf-surface); color: var(--lf-brand); box-shadow: 0 2px 6px #1020300d; }
+  #view-overview .overview-layout { display: flex; flex-direction: column; padding: 0 12px 12px; gap: 0; }
+  #view-overview .desk-main, #view-overview .desk-side { display: contents; }
+  #view-overview .chart-block { width: 100%; gap: 0; border: 1px solid var(--lf-border); border-radius: 16px; overflow: hidden; background: var(--lf-surface); }
+  #view-overview .desk-modebar { min-height: 52px; padding: 4px 10px; border: 0; gap: 8px; flex-wrap: nowrap; border-radius: 0; }
+  #view-overview .mode-tabs { gap: 2px; }
+  #view-overview .mode-tab { justify-content: center; min-width: 52px; min-height: 44px; padding: 0 12px; font-size: 12px; border: 0; border-radius: 9px; }
+  #view-overview .mode-tab.active { background: var(--lf-selected); color: var(--lf-brand); }
+  #view-overview #desk-assets-toggle { display: none; }
+  #view-overview .overview-layout #chart-container { height: max(300px, calc(100svh - 388px - env(safe-area-inset-bottom, 0px))); min-height: 300px; border: 0; border-radius: 0; }
+  #view-overview .lf-analysis-bottom-tabs { display: none; }
+  #view-overview .desk-assets { border-radius: 14px; padding: 10px; }
+  #view-overview .desk-assets-list { flex-direction: column; overflow: visible; gap: 6px; }
+  #view-overview .desk-asset-row { width: 100%; }
+  #view-overview .desk-asset { border-radius: 10px; }
+  #view-overview .desk-side .desk-panel { margin-bottom: 12px; }
+  #view-overview[data-mobile-pane="events"] .event-strip { margin: 0 12px 12px; border-radius: 14px; padding: 10px; }
+  #view-overview[data-mobile-pane="events"] .strip-head { flex-wrap: wrap; }
+  #view-overview .layer-menu[open] > .layer-options { left: 12px; right: 12px; bottom: calc(var(--mobile-nav-height) + 12px); padding: 16px; border-radius: 18px; max-height: min(70dvh, 560px); box-shadow: 0 12px 40px #10203030; }
+  #view-overview .layer-options label { min-height: 44px; }
+  #view-overview .layer-options input[type="checkbox"] { min-height: 0; width: 18px; height: 18px; accent-color: var(--lf-brand); }
+  #view-overview .d1-structure-status { max-width: calc(100% - 90px) !important; border: 0 !important; border-radius: 6px !important; font-size: 10px !important; background: var(--lf-surface) !important; }
+  #view-overview .d1-structure-label { border-radius: 4px; font-size: 10px !important; white-space: nowrap; max-width: calc(100% - 82px); overflow: hidden; text-overflow: ellipsis; }
+
+  #view-overview.lf-chart-expanded .desk-head,
+  #view-overview.lf-chart-expanded .lf-analysis-tabs,
+  #view-overview.lf-chart-expanded #instrument-select,
+  #view-overview.lf-chart-expanded .tf-switch,
+  #view-overview.lf-chart-expanded .layer-menu,
+  #view-overview.lf-chart-expanded #btn-new-zone { display: none; }
+  #view-overview.lf-chart-expanded .workbar { display: flex; justify-content: flex-end; }
+  #view-overview.lf-chart-expanded #desk-expand { gap: 8px; padding: 0 12px; font-size: 12px; }
+  #view-overview.lf-chart-expanded .overview-layout #chart-container { height: max(300px, calc(100svh - 240px - env(safe-area-inset-bottom, 0px))); }
+
+  .mobile-nav {
+    height: var(--mobile-nav-height); padding: 4px 8px env(safe-area-inset-bottom, 0px);
+    align-items: stretch; overflow: visible; background: var(--lf-surface);
+    border-color: var(--lf-border); box-shadow: 0 -4px 20px #10203005;
+  }
+  .mobile-nav a, .mobile-nav button {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    flex: 1 1 0; min-width: 0; gap: 4px; min-height: 44px; margin: 0;
+    padding: 5px 0; border-radius: 10px; font-size: 10px; line-height: 14px;
+  }
+  .mobile-nav svg { flex: none; stroke: currentColor; stroke-width: 1.65; stroke-linecap: round; stroke-linejoin: round; }
+  .mobile-nav a.active, .mobile-nav a[aria-current="page"], .mobile-nav button.active,
+  .mobile-nav button[aria-expanded="true"] { color: var(--lf-brand); background: var(--lf-selected); font-weight: 600; }
+  .nav-more-panel { bottom: calc(var(--mobile-nav-height) + 8px); right: 12px; border-radius: 16px; }
+  #lf-error { bottom: calc(var(--mobile-nav-height) + 12px); }
+}
+
+@keyframes mobile-sync-spin { to { transform: rotate(360deg); } }
+@media (max-width: 359px) {
+  #view-overview .workbar { grid-template-columns: minmax(0, 1fr) 48px 44px 44px 44px; gap: 4px; }
+  #view-overview #btn-new-zone { font-size: 0; }
+  #view-overview #btn-new-zone::before { content: '+'; font-size: 23px; font-weight: 400; }
+  #view-overview .desk-title h2 { font-size: 17px; }
+}
+@media (prefers-reduced-motion: reduce) { #btn-data-sync[aria-busy="true"]::before { animation: none; } }

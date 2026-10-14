@@ -902,6 +902,8 @@ async function closeSelectedHtfIdea(ideaId) {
 
 function drawDailyStructure(overlay, ts, paneRight, height) {
   const daily = state.dailyStructure;
+  const mobile = window.matchMedia('(max-width: 767px)').matches;
+  const mobileLabels = [];
   if (!$('layer-structure-d1')?.checked) return;
   const status = document.createElement('span');
   status.className = 'd1-structure-status';
@@ -935,6 +937,10 @@ function drawDailyStructure(overlay, ts, paneRight, height) {
       top:y + 'px', color, fontSize:'11px', background:'var(--bg, #131722)',
       padding:'1px 3px', fontWeight:'600', pointerEvents:'auto', zIndex:'15'});
     overlay.appendChild(el);
+    if (mobile) {
+      el.style.left = Math.max(0, Math.min(x, paneRight - el.offsetWidth - 4)) + 'px';
+      mobileLabels.push(el);
+    }
   };
   const visiblePoint = p => {
     const x = xAt(p.pivot_at);
@@ -979,6 +985,19 @@ function drawDailyStructure(overlay, ts, paneRight, height) {
   const target = sync?.target;
   if (target) line(bars[0].time * 1000, null, target.price,
     'Цель · ' + target.type + ' D1', '#c88a35', target.text, true);
+  if (mobile) {
+    // Current conditions and targets are drawn last: give them priority over
+    // older event/pivot captions. Keep every level line at its actual price.
+    const occupied = [status.getBoundingClientRect()];
+    const bounds = overlay.getBoundingClientRect();
+    for (const el of mobileLabels.reverse()) {
+      const rect = el.getBoundingClientRect();
+      const overlaps = occupied.some(other => rect.left < other.right + 4 &&
+        rect.right + 4 > other.left && rect.top < other.bottom + 3 && rect.bottom + 3 > other.top);
+      if (overlaps || rect.top < bounds.top || rect.bottom > bounds.top + height - 35) el.remove();
+      else occupied.push(rect);
+    }
+  }
 }
 
 function drawH1Breaks(overlay, ts, paneRight, height) {
@@ -4127,6 +4146,8 @@ function initAnalysisPanels() {
     const expanded = view.classList.toggle('lf-chart-expanded');
     $('desk-expand').setAttribute('aria-pressed',String(expanded));
     $('desk-expand').textContent = expanded ? 'Вернуть панели' : 'Развернуть';
+    $('desk-expand').setAttribute('aria-label', expanded ? 'Вернуть панели' : 'Развернуть график');
+    $('desk-expand').title = expanded ? 'Вернуть панели' : 'Развернуть график';
   };
   function setPane(pane) {
     view.dataset.mobilePane = pane;
