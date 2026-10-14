@@ -96,6 +96,18 @@ class DataSync:
 
     def recover_interrupted(self):
         """Call only after the worker has acquired calculation ownership."""
+        # A crash can leave these markers outside a manually started job.
+        # The old owner is gone; retaining replaying=1 would make every
+        # subsequent successful sync restore the interrupted replay flag.
+        for key in self.db.meta_prefix("replaying:"):
+            if self.db.get_meta(key) == "1":
+                self.db.set_meta(key, "0")
+        for key in self.db.meta_prefix("data_sync:channel:"):
+            channel = read_json(self.db, key)
+            if channel and channel.get("processing"):
+                channel.update(processing=False, error="interrupted_by_restart",
+                               error_stage="processing", last_error_at=now_ms())
+                self.db.set_meta(key, json.dumps(channel, ensure_ascii=False))
         previous = read_json(self.db, JOB_KEY)
         if previous and previous.get("status") in ACTIVE:
             previous.update(status="failed", finished_at=now_ms(), error="interrupted_by_restart")
@@ -198,12 +210,14 @@ class DataSync:
                 delay = self._retry_until.get(venue, 0) - time.monotonic()
                 if delay > self.request_timeout_seconds:
                     raise AdapterError("rate_limited: ожидание разрешения биржи", retry_after=delay)
-                if delay > 0:
+                while delay > 0:
                     try:
                         await asyncio.wait_for(self.worker._stop.wait(), delay)
                         raise SyncUnavailable("worker_stopping")
                     except asyncio.TimeoutError:
-                        pass
+                        # Windows timers may wake before the monotonic
+                        # deadline. Never send a request ahead of Retry-After.
+                        delay = self._retry_until.get(venue, 0) - time.monotonic()
                 started = time.monotonic()
                 try:
                     result = await asyncio.wait_for(fn(*args, **kwargs), self.request_timeout_seconds)

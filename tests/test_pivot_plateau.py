@@ -72,6 +72,72 @@ def test_tick_equality_whole_steps_only():
     assert find_plateaus(candles, 3, 3, TICK) == []
 
 
+def test_incremental_plateaus_match_full_scan_for_every_prefix():
+    from app.engine.ltf.pivots import _PlateauCursor
+    from dataclasses import asdict
+    import random
+    rng = random.Random(305)
+    highs = [10 + rng.choice((0, .1, .2, .4, .5, 1)) for _ in range(220)]
+    lows = [8 + rng.choice((0, .1, .2, .4, .5, 1)) for _ in range(220)]
+    # An arbitrarily long live plateau must keep its original first member.
+    highs[20:100] = [12] * 80
+    lows[20:100] = [7] * 80
+    candles = _series(highs, lows=lows)
+    for left, right in ((0, 1), (3, 3), (3, 0)):
+        cursor = _PlateauCursor(left, right, TICK)
+        for end in range(1, len(candles) + 1):
+            prefix = candles[:end]
+            assert [asdict(p) for p in cursor.update(prefix)] == [
+                asdict(p) for p in find_plateaus(prefix, left, right, TICK)
+            ], (left, right, end)
+
+
+def test_incremental_plateaus_preserve_history_gaps():
+    from app.engine.ltf.pivots import _PlateauCursor
+    from dataclasses import asdict, replace
+    candles = _series([10, 11, 12, 12, 12, 10, 9, 8, 7])
+    candles = [replace(c, open_time=c.open_time + H1_MS, close_time=c.close_time + H1_MS)
+               if i >= 3 else c for i, c in enumerate(candles)]
+    cursor = _PlateauCursor(3, 3, TICK)
+    for end in range(1, len(candles) + 1):
+        prefix = candles[:end]
+        assert [asdict(p) for p in cursor.update(prefix)] == [
+            asdict(p) for p in find_plateaus(prefix, 3, 3, TICK)
+        ]
+
+
+def test_structure_batch_plateaus_match_full_scan_and_revision_reset():
+    from app.engine.ltf.structure import StructureBatch
+    from dataclasses import asdict, replace
+    candles = _series([10, 11, 12, 12, 12, 10, 9, 8, 7, 9, 10, 10, 10, 9, 8, 7])
+    batch = StructureBatch()
+    for end in range(1, len(candles) + 1):
+        prefix = candles[:end]
+        assert [asdict(p) for p in batch.pivots_for(prefix, 3, 3, TICK)] == [
+            asdict(p) for p in find_h1_pivots(prefix, 3, 3, TICK)
+        ]
+    revised = candles[:-1] + [replace(candles[-1], high=13)]
+    assert [asdict(p) for p in batch.pivots_for(revised, 3, 3, TICK)] == [
+        asdict(p) for p in find_h1_pivots(revised, 3, 3, TICK)
+    ]
+
+
+def test_plateau_replay_comparisons_grow_with_new_bars(monkeypatch):
+    import app.engine.ltf.pivots as module
+    candles = _series([10 + i % 2 for i in range(2000)])
+    original = module.same_tick
+    calls = 0
+    def count(a, b, tick):
+        nonlocal calls
+        calls += 1
+        return original(a, b, tick)
+    monkeypatch.setattr(module, "same_tick", count)
+    cursor = module._PlateauCursor(3, 3, TICK)
+    for end in range(1, len(candles) + 1):
+        assert cursor.update(candles[:end]) == []
+    assert calls <= 2 * len(candles)
+
+
 def test_single_candle_is_not_plateau():
     candles = _series([10, 11, 12, 10, 9, 8, 7, 6])
     assert find_plateaus(candles, 3, 3, TICK) == []

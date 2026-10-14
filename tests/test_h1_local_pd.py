@@ -88,6 +88,69 @@ def _bull(at_i: int = 5):
     return _bos(Direction.BULL, at_i, 82000, f"bos:primary:bull:{at_i}")
 
 
+def test_endpoint_index_preserves_confirmation_time_and_price():
+    from app.services.h1_setup import _KnownPivots, _endpoint_status
+    known = _KnownPivots()
+    high = _pivot("high", 83400, 5, 8, "HH")
+    assert _endpoint_status("bull", _open(5), 83400, known) == "provisional"
+    known.append(high)  # only after confirmed_at, as in H1LegCursor.advance
+    assert _endpoint_status("bull", _open(5), 83400, known) == "confirmed"
+    assert _endpoint_status("bull", _open(5), 83400.01, known) == "provisional"
+    assert _endpoint_status("bear", _open(5), 83400, known) == "provisional"
+    assert _endpoint_status("bull", None, None, known) == "unresolved"
+
+
+def test_indexed_endpoint_matches_original_replay(db, cfg, instrument_id, monkeypatch):
+    import app.services.h1_setup as setup
+    candles = _series(SERIES_D_HL, SERIES_D_CLOSES, instrument_id)
+    db.insert_candles(candles)
+    engine = LtfEngine(db, cfg)
+    engine.process_h1_close(instrument_id, candles[-1].close_time + 1)
+    def snapshot():
+        return {table: [tuple(row) for row in db.conn.execute(f"SELECT * FROM {table} ORDER BY id")]
+                for table in ("h1_local_leg", "h1_local_leg_revision")}
+    indexed = snapshot()
+    original = setup._endpoint_status
+    monkeypatch.setattr(setup, "_endpoint_status", lambda direction, at, price, pivots:
+                        original(direction, at, price, list(pivots)))
+    db.set_meta(f"ltf:h1:last_close:{instrument_id}", "0")
+    LtfEngine(db, cfg).process_h1_close(instrument_id, candles[-1].close_time + 1)
+    assert snapshot() == indexed
+
+
+def test_leg_checkpoint_is_rejected_after_source_revision(db, instrument_id):
+    from dataclasses import replace
+    from app.services.h1_setup import H1LegCursor
+    candles = _bars()
+    cursor = H1LegCursor(instrument_id, checkpoint_interval=4)
+    cursor.advance(db, [], candles, candles[-1].close_time)
+    assert cursor._rewind([], candles, candles[-1].close_time)
+    revised = [replace(c) for c in candles]
+    revised[0].high += 100
+    assert not cursor._rewind([], revised, revised[-1].close_time)
+
+
+def test_duplicate_pivot_roles_rewind_without_recursive_restart():
+    from app.db import Database
+    from app.services.h1_setup import H1LegCursor
+    snapshots = {}
+    for interval in (0, 4):
+        database = Database(":memory:")
+        cursor = H1LegCursor(1, checkpoint_interval=interval)
+        candles = _bars()
+        pivots = [_pivot("low", 80400, 0, 3, "LL"),
+                  _pivot("high", 83500, 5, 8, "HH"),
+                  _pivot("high", 83400, 5, 8, "LH")]
+        cursor.advance(database, pivots, candles[:9], candles[8].close_time)
+        cursor.advance(database, pivots, candles, candles[-1].close_time)
+        if interval:
+            assert cursor.rewinds > 0
+        snapshots[interval] = {table: [tuple(r) for r in database.conn.execute(f"SELECT * FROM {table} ORDER BY id")]
+                               for table in ("h1_local_leg", "h1_local_leg_revision")}
+        database.close()
+    assert snapshots[0] == snapshots[4]
+
+
 def _drive(db, instrument_id, candles, pivots, events):
     grouped: dict[int, list] = {}
     for event in events:

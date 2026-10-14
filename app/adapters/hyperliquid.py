@@ -53,9 +53,9 @@ class HyperliquidSpotAdapter:
 
     venue = "hyperliquid"
 
-    def __init__(self, base_url: str, client: Optional[httpx.AsyncClient] = None):
+    def __init__(self, base_url: str, client: Optional[httpx.AsyncClient] = None, *, trust_env: bool = True):
         self._base = base_url.rstrip("/")
-        self._client = client or httpx.AsyncClient(base_url=self._base, timeout=30.0)
+        self._client = client or httpx.AsyncClient(base_url=self._base, timeout=30.0, trust_env=trust_env)
         self._own_client = client is None
 
     async def aclose(self) -> None:

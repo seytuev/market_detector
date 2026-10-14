@@ -200,6 +200,40 @@ def test_replay_state_identical_random_walk_multi_obs():
     assert diffs == [], f"расхождения таблиц: {diffs}"
 
 
+def test_local_leg_checkpoints_match_full_role_rebuild(monkeypatch):
+    import random
+    import app.services.h1_setup as setup
+    native = setup.H1LegCursor
+    rng = random.Random(107)
+    price = 100.0
+    bars = []
+    for _ in range(400):
+        close = price + rng.uniform(-2.2, 2.2)
+        bars.append((price, max(price, close) + rng.uniform(0, 1.2),
+                     min(price, close) - rng.uniform(0, 1.2), close))
+        price = close
+    snapshots = {}
+    for interval in (0, 32):
+        def factory(*args, **kwargs):
+            kwargs["ordered_candles"] = bool(interval)
+            return native(*args, **kwargs, checkpoint_interval=interval)
+        monkeypatch.setattr(setup, "H1LegCursor", factory)
+        db = Database(":memory:")
+        iid = _instrument(db)
+        engine = LtfEngine(db, cfg=_CFG)
+        candles = make_h1_candles(bars, T0, iid)
+        db.insert_candles(candles)
+        engine.process_h1_close(iid, now_ms=candles[-1].close_time)
+        snapshots[interval] = _dump_state(db)
+        for table in ("h1_local_leg", "h1_local_leg_revision"):
+            snapshots[interval][table] = [tuple(r) for r in db.conn.execute(f"SELECT * FROM {table} ORDER BY id")]
+        assert snapshots[interval]["h1_local_leg"]
+        if interval:
+            assert engine._h1_cursors[iid].rewinds > 0
+        db.close()
+    assert snapshots[0] == snapshots[32]
+
+
 @pytest.mark.asyncio
 async def test_restore_replays_once_per_instrument():
     """_ltf_restore_all: 2 открытых наблюдения одного инструмента — один replay

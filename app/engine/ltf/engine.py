@@ -507,7 +507,8 @@ class LtfEngine:
         batch_id = id(batch) if batch is not None else 0
         cursor = self._h1_cursors.get(instrument_id)
         if cursor is None:
-            cursor = H1LegCursor(instrument_id, generation=gen, batch_id=batch_id)
+            cursor = H1LegCursor(instrument_id, generation=gen, batch_id=batch_id,
+                                 ordered_candles=True)
             self._h1_cursors[instrument_id] = cursor
         else:
             # Новый пакет начинает structure_gen с единицы. Это не смена ролей:

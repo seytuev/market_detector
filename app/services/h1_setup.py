@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from typing import Any, Optional
 
 from ..engine.ltf.breaks import StructureEventDraft, _SideScan
@@ -68,7 +69,9 @@ def causal_origin(direction, event: StructureEventDraft, pivots, candles):
         and int(p.confirmed_at) <= bos_at and int(p.pivot_at) <= break_open
     ]
     if confirmed:
-        return _origin_from_pivot(max(confirmed, key=lambda p: (p.pivot_at, p.confirmed_at)))
+        origin_id = event.evidence.get("origin_pivot_id")
+        causal = next((p for p in confirmed if (p.pivot_id if p.pivot_id is not None else p.pivot_at) == origin_id), None)
+        return _origin_from_pivot(causal or max(confirmed, key=lambda p: (p.pivot_at, p.confirmed_at)))
     opposite = "high" if bull else "low"
     bounds = [
         p for p in pivots
@@ -218,10 +221,26 @@ def _apply_bounds(leg: dict) -> None:
         leg["reason"] = None
 
 
+class _KnownPivots(list):
+    """Causally available pivots with constant-time endpoint confirmation."""
+
+    def __init__(self):
+        super().__init__()
+        self.endpoint_keys = set()
+
+    def append(self, pivot):
+        super().append(pivot)
+        if pivot.state == "confirmed":
+            self.endpoint_keys.add((pivot.kind, int(pivot.pivot_at), float(pivot.price)))
+
+
 def _endpoint_status(direction: str, endpoint_at, endpoint_price, pivots) -> str:
     if endpoint_at is None or endpoint_price is None:
         return "unresolved"
     kind = "high" if direction == Direction.BULL.value else "low"
+    if isinstance(pivots, _KnownPivots):
+        key = (kind, int(endpoint_at), float(endpoint_price))
+        return "confirmed" if key in pivots.endpoint_keys else "provisional"
     for pivot in pivots:
         if (
             pivot.state == "confirmed"
@@ -372,10 +391,14 @@ def replay_events(events: list, pivots: list, candles: list, as_of: int) -> dict
 class H1LegCursor:
     """Инкрементальный проход машин BOS. Повтор той же свечи ногу не дублирует."""
 
-    def __init__(self, instrument_id: int, generation: int = 0, batch_id: int = 0):
+    def __init__(self, instrument_id: int, generation: int = 0, batch_id: int = 0,
+                 checkpoint_interval: int = 32, ordered_candles: bool = False):
         self.instrument_id = instrument_id
         self.generation = generation
         self.batch_id = batch_id
+        self.checkpoint_interval = checkpoint_interval
+        self.ordered_candles = ordered_candles
+        self.rewinds = 0
         self._clear()
 
     def _clear(self) -> None:
@@ -385,26 +408,67 @@ class H1LegCursor:
         self.seen: set[tuple] = set()
         self._roles: dict[tuple, str] = {}
         self.pi = 0
+        self.known = _KnownPivots()
         self.last_open: Optional[int] = None
         self.state = _new_state()
         self._guard = False
+        self._checkpoints = {}
+        self._candle_signatures = []
+
+    @staticmethod
+    def _signature(pivots):
+        return tuple((p.kind, p.pivot_at, p.confirmed_at, p.price, p.role, p.state)
+                     for p in pivots)
+
+    @staticmethod
+    def _candle_signature(c):
+        return (c.open_time, c.close_time, c.open, c.high, c.low, c.close)
+
+    def _rewind(self, pivots, candles, as_of: int) -> bool:
+        """Reuse only a prefix whose complete pivot inputs still match.
+
+        Role corrections require recomputing the affected suffix, not every
+        candle since the beginning of the instrument's history.
+        """
+        current = sorted((p for p in pivots if p.state == "confirmed"
+                          and int(p.confirmed_at) <= as_of),
+                         key=lambda p: (int(p.confirmed_at), int(p.pivot_at)))
+        for at, checkpoint in reversed(list(self._checkpoints.items())):
+            length = checkpoint["length"]
+            if ([self._candle_signature(c) for c in candles[:length]]
+                    != self._candle_signatures[:length]):
+                continue
+            prefix = [p for p in current if int(p.confirmed_at) <= checkpoint["close"]]
+            if self._signature(prefix) != checkpoint["pivots"]:
+                continue
+            self.bear, self.bull, self.state = deepcopy(checkpoint["state"])
+            self.last_open = at
+            self._candle_signatures = self._candle_signatures[:length]
+            self.ps = current
+            self.pi = len(prefix)
+            self.seen = {(p.kind, int(p.pivot_at)) for p in current}
+            self._roles = {(p.kind, int(p.pivot_at)): p.role for p in current}
+            self.known = _KnownPivots()
+            for pivot in prefix:
+                self.known.append(pivot)
+            self._checkpoints = {key: value for key, value in self._checkpoints.items() if key <= at}
+            self.rewinds += 1
+            return True
+        return False
 
     def advance(self, db, pivots, candles, as_of: int, cfg=None) -> None:
         if self._guard:
             return
-        closed = sorted(
+        # The engine supplies an already ordered prefix of closed H1 bars.
+        # Public/standalone callers retain the sorting and filtering path.
+        closed = candles if self.ordered_candles else sorted(
             (c for c in candles if c.closed and int(c.close_time) <= int(as_of)),
             key=lambda c: c.open_time,
         )
         if self.last_open is not None:
-            opens = [int(c.open_time) for c in closed]
-            if self.last_open not in opens:
+            previous = len(self._candle_signatures) - 1
+            if previous < 0 or previous >= len(closed) or int(closed[previous].open_time) != self.last_open:
                 self._clear()
-            else:
-                # префикс оборван — машины больше не совпадают с историей
-                idx = opens.index(self.last_open)
-                if any(int(c.open_time) != opens[i] for i, c in enumerate(closed[: idx + 1])):
-                    self._clear()
         fresh = []
         role_changed = False
         for pivot in pivots:
@@ -417,11 +481,15 @@ class H1LegCursor:
                 continue
             fresh.append(pivot)
         if role_changed:
-            self._guard = True
-            self._clear()
-            self._guard = False
-            self.advance(db, pivots, candles, as_of, cfg)
-            return
+            if self._rewind(pivots, closed, int(as_of)):
+                # The restored suffix already contains all current inputs.
+                # Re-entering advance would compare duplicate pivot keys
+                # again and can recurse forever when their roles differ.
+                fresh = []
+            else:
+                self._clear()
+                self.advance(db, pivots, candles, as_of, cfg)
+                return
         fresh.sort(key=lambda p: (int(p.confirmed_at), int(p.pivot_at)))
         if self.ps and fresh and (
             (int(fresh[0].confirmed_at), int(fresh[0].pivot_at))
@@ -440,23 +508,33 @@ class H1LegCursor:
         if self.last_open is None:
             start = 0
         else:
-            start = [int(c.open_time) for c in closed].index(self.last_open) + 1
+            start = len(self._candle_signatures)
         seen: list[Candle] = closed[:start]
-        for candle in closed[start:]:
+        for position, candle in enumerate(closed[start:], start):
             while self.pi < len(self.ps) and int(self.ps[self.pi].confirmed_at) <= int(candle.close_time):
                 pivot = self.ps[self.pi]
                 self.bear.absorb(pivot)
                 self.bull.absorb(pivot)
+                self.known.append(pivot)
                 self.pi += 1
             self.bear.now_ms = int(as_of)
             self.bull.now_ms = int(as_of)
             emitted = self.bear.on_candle(candle) + self.bull.on_candle(candle)
             seen.append(candle)
-            known = self.ps[: self.pi]
-            dirty = apply_candle(self.state, candle, emitted, known, seen)
+            dirty = apply_candle(self.state, candle, emitted, self.known, seen)
             for leg in dirty:
                 _persist_leg(db, self.instrument_id, leg)
             self.last_open = int(candle.open_time)
+            self._candle_signatures.append(self._candle_signature(candle))
+            if self.checkpoint_interval > 0 and (position + 1) % self.checkpoint_interval == 0:
+                self._checkpoints[self.last_open] = {
+                    "close": int(candle.close_time),
+                    "length": position + 1,
+                    "pivots": self._signature(self.ps[:self.pi]),
+                    "state": deepcopy((self.bear, self.bull, self.state)),
+                }
+                while len(self._checkpoints) > 8:
+                    self._checkpoints.pop(next(iter(self._checkpoints)))
         if closed:
             db.set_meta(
                 f"h1:leg:scanned:{self.instrument_id}",

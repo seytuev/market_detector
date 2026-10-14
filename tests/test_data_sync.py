@@ -124,6 +124,10 @@ async def test_manual_backlog_all_channels_and_idempotence(market):
 
 async def test_manual_quote_touch_delivered_once_across_resynchronizations(market, monkeypatch):
     db, worker, exchange, clock, instruments, sender = market
+    # Match main.py: ingestion queues deliveries while calculation may own
+    # the SQLite writer; the outbox sends independently after that work.
+    worker.dispatcher.defer_flush = True
+    worker.dispatcher.outbox.inline_delivery = False
     ins = instruments[0]
     for module in ("app.notify.queue", "app.notify.outbox", "app.notify.suppress"):
         monkeypatch.setattr(module + ".now_ms", lambda: clock[0])
@@ -142,6 +146,7 @@ async def test_manual_quote_touch_delivered_once_across_resynchronizations(marke
     exchange.last_price = price
     job = await finish(worker)
     assert job["status"] == "succeeded", job
+    await worker.dispatcher.outbox.flush()
     events = db.conn.execute("SELECT COUNT(*) FROM event WHERE zone_id=?", (zid,)).fetchone()[0]
     assert events > 0 and len(sender.cards) > 0, {
         "packets": [dict(r) for r in db.conn.execute("SELECT status,reason,quiet,due_at,created_at FROM notification_packet")],
@@ -150,6 +155,7 @@ async def test_manual_quote_touch_delivered_once_across_resynchronizations(marke
     cards = len(sender.cards)
     clock[0] += 16_000
     await finish(worker)
+    await worker.dispatcher.outbox.flush()
     assert db.conn.execute("SELECT COUNT(*) FROM event WHERE zone_id=?", (zid,)).fetchone()[0] == events
     assert len(sender.cards) == cards
 
@@ -255,14 +261,16 @@ async def test_manual_and_periodic_do_not_overlap(market):
 async def test_deadline_keeps_ownership_until_thread_finishes(market):
     _, worker, _, _, instruments, _ = market
     sync = worker.data_sync
-    sync.job_timeout_seconds = .05
+    # Allow the job to reach the worker even under CPU load. A 50ms budget
+    # could expire during quote ingestion and never test thread ownership.
+    sync.job_timeout_seconds = 1
     entered = threading.Event()
     release = threading.Event()
     original = worker._process_synced_channel
 
     def blocking():
         entered.set()
-        release.wait(2)
+        release.wait(5)
 
     async def slow(ins, tf, incoming, before, **kwargs):
         await worker._calculate(blocking)
@@ -271,11 +279,14 @@ async def test_deadline_keeps_ownership_until_thread_finishes(market):
     worker._process_synced_channel = slow
     job = sync.start()
     try:
-        for _ in range(100):
-            if entered.is_set():
+        assert await asyncio.to_thread(entered.wait, 2), "calculation never started"
+        import time
+        until = time.monotonic() + 2
+        while time.monotonic() < until:
+            status = read_json(worker.db, JOB_KEY)
+            if status["status"] == "partial" and status.get("processing_continues"):
                 break
-            await asyncio.sleep(.005)
-        await asyncio.sleep(.07)
+            await asyncio.sleep(.02)
         status = read_json(worker.db, JOB_KEY)
         assert status["status"] == "partial" and status["processing_continues"]
         assert status["results"][0]["timeframe"] == "quote"
@@ -388,6 +399,71 @@ async def test_recovered_freshness_is_visible_before_delivery(market):
     worker._deliver_synced_channel = check
     await worker.data_sync.sync_candles(ins, "H1")
     assert delivered == ["0"]
+
+
+@pytest.mark.parametrize("failed_tf", ["D1", "W1"])
+async def test_failed_htf_does_not_invalidate_recovered_h1(market, failed_tf):
+    from app.services.quality import data_quality
+    db, worker, exchange, clock, instruments, _ = market
+    ins = instruments[0]
+    worker.scan_tfs = ("H1", "D1", "W1")
+    exchange.fail.add((ins.symbol, failed_tf))
+    await worker._poll_quote(ins)
+    await worker._poll_instrument(ins)
+    assert db.get_meta(f"stale:{ins.id}:H1") == "0"
+    assert db.get_meta(f"stale:{ins.id}:{failed_tf}") == "1"
+    assert data_quality(db, worker.settings, ins.id, clock[0])["state"] == "ok"
+    exchange.fail.clear()
+    await worker._poll_instrument(ins)
+    assert db.get_meta(f"stale:{ins.id}:{failed_tf}") == "0"
+
+
+async def test_quote_failure_does_not_invalidate_candles_and_recovers(market):
+    db, worker, exchange, _, instruments, _ = market
+    worker.settings.quote_poll_seconds = 0
+    worker.scan_tfs = ("H1", "D1", "W1")
+    exchange.fail.add((instruments[0].symbol, "quote"))
+    await worker.poll_once()
+    ins = instruments[0]
+    assert all(db.get_meta(f"stale:{ins.id}:{tf}") == "0" for tf in worker.scan_tfs)
+    assert db.get_meta(f"stale:{ins.id}:quote") == "1"
+    exchange.fail.clear()
+    await worker.poll_once()
+    assert db.conn.execute("SELECT COUNT(*) FROM notification_incident WHERE recovered_at IS NULL").fetchone()[0] == 0
+
+
+async def test_calculation_timeout_is_not_a_source_outage(market, monkeypatch):
+    db, worker, _, _, instruments, _ = market
+    worker.settings.calc_queue_enabled = False
+    worker.scan_tfs = ("H1", "D1", "W1")
+    original = worker._process_synced_channel
+
+    async def process(ins, tf, incoming, before):
+        if tf == "D1":
+            raise asyncio.TimeoutError("calculation deadline")
+        return await original(ins, tf, incoming, before)
+
+    monkeypatch.setattr(worker, "_process_synced_channel", process)
+    await worker._poll_instrument(instruments[0])
+    assert worker.data_sync.channel_status(instruments[0], "D1")["error_stage"] == "processing"
+    assert db.get_meta(f"stale:{instruments[0].id}:H1") == "0"
+    assert db.conn.execute("SELECT COUNT(*) FROM notification_incident WHERE reason='network'").fetchone()[0] == 0
+
+
+async def test_restart_recovers_orphaned_channel_and_replay_markers(market):
+    db, worker, _, _, instruments, _ = market
+    ins = instruments[0]
+    db.set_meta(f"replaying:{ins.id}", "1")
+    worker.data_sync._save_channel(ins, "H1", {"processing": True, "last_success_at": AT - 1000})
+    worker.data_sync.recover_interrupted()
+    assert db.get_meta(f"replaying:{ins.id}") == "0"
+    channel = worker.data_sync.channel_status(ins, "H1")
+    assert channel["processing"] is False
+    assert channel["error_stage"] == "processing"
+    assert channel["status"] != "ok"
+    await worker.data_sync.sync_candles(ins, "H1")
+    assert worker.data_sync.channel_status(ins, "H1")["status"] == "ok"
+    assert db.get_meta(f"replaying:{ins.id}") == "0"
 
 
 async def test_shutdown_finishes_job_and_clears_processing_marker(market):

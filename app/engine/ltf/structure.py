@@ -24,7 +24,7 @@ from .breaks import (
     StructureScanResult,
     detect_breaks,
 )
-from .pivots import PivotCandidate, confirmed_pivots, find_h1_pivots, find_plateaus, pivot_candidates_at
+from .pivots import PivotCandidate, _PlateauCursor, confirmed_pivots, find_h1_pivots, find_plateaus, pivot_candidates_at
 from .roles import RoleChange, assign_roles
 
 
@@ -74,10 +74,12 @@ class StructureBatch:
         self.open_times: list[int] = []
         self.range_memo: dict[tuple, Any] = {}
         self.structure_gen = 0
+        self._plateau_cursor = None
 
     # ---- pivots/avail/роли (инкрементально) ----
 
     def _reset(self, candles: list[Candle], left: int, right: int) -> None:
+        self._plateau_cursor = None
         self.closed = sorted((c for c in candles if c.closed),
                              key=lambda c: c.open_time)
         self.cands = find_h1_pivots(self.closed, left, right)
@@ -89,6 +91,12 @@ class StructureBatch:
         self.structure_gen += 1
         self._fp = (left, right, len(self.closed),
                     self.closed[-1].open_time if self.closed else None)
+
+    def _plateaus_for(self, left, right, tick):
+        params = (left, right, tick)
+        if self._plateau_cursor is None or self._plateau_cursor.params != params:
+            self._plateau_cursor = _PlateauCursor(*params)
+        return self._plateau_cursor.update(self.closed)
 
     def pivots_for(
         self, candles: list[Candle], left: int, right: int, tick: float = 0
@@ -102,7 +110,7 @@ class StructureBatch:
         if self._fp is None or self._fp[0] != left or self._fp[1] != right:
             self._reset(candles, left, right)
             if tick > 0:
-                self.cands = self.cands + find_plateaus(self.closed, left, right, tick)
+                self.cands = self.cands + self._plateaus_for(left, right, tick)
                 self.cands.sort(key=lambda p: (p.pivot_at, p.kind))
             self.new_cands = list(self.cands)
             return self.cands
@@ -128,7 +136,7 @@ class StructureBatch:
         if not same_prefix:
             self._reset(candles, left, right)
             if tick > 0:
-                self.cands = self.cands + find_plateaus(self.closed, left, right, tick)
+                self.cands = self.cands + self._plateaus_for(left, right, tick)
                 self.cands.sort(key=lambda p: (p.pivot_at, p.kind))
             self.new_cands = list(self.cands)
             return self.cands
@@ -146,9 +154,9 @@ class StructureBatch:
         self._fp = (left, right, len(closed),
                     closed[-1].open_time if closed else None)
         if tick > 0:
-            # плато: полный пересчёт групп текущей истории (O(n) на свечу);
-            # ревизии хвостовой группы заменяют прежние формы той же группы
-            plateau = find_plateaus(closed, left, right, tick)
+            # Finalized groups are immutable for an appended prefix. Scan
+            # only new bars and groups whose right window just completed.
+            plateau = self._plateaus_for(left, right, tick)
             new_forms = {
                 (p.kind, p.evidence["start_open"], p.pivot_at, p.confirmed_at)
                 for p in plateau
