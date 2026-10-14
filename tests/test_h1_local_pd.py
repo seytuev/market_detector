@@ -37,6 +37,20 @@ def _close(i: int) -> int:
     return T0 + i * H1_MS + H1_MS - 1
 
 
+def test_ui_polling_does_not_start_parallel_leg_replay(db, cfg, instrument_id, monkeypatch):
+    from app.services.h1_setup import H1LegCursor, ensure_local_legs
+    calls = []
+    monkeypatch.setattr(H1LegCursor, "advance", lambda self, *args: calls.append(self.instrument_id))
+    candles = make_h1_candles([(10, 12, 9, 11)], T0, instrument_id)
+    db.set_meta(f"replaying:{instrument_id}", "1")
+    for _ in range(10):
+        ensure_local_legs(db, cfg, instrument_id, candles, [], candles[-1].close_time)
+    assert calls == []
+    db.set_meta(f"replaying:{instrument_id}", "0")
+    ensure_local_legs(db, cfg, instrument_id, candles, [], candles[-1].close_time)
+    assert calls == [instrument_id]
+
+
 def _open(i: int) -> int:
     return T0 + i * H1_MS
 

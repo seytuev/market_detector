@@ -678,6 +678,10 @@ def ensure_local_legs(db, cfg, instrument_id: int, candles, pivots, as_of: int) 
 
     Повторный вызов с тем же рядом строк не добавляет. Уведомлений нет.
     """
+    # The worker owns reconstruction during replay. UI polling must use the
+    # persisted snapshot instead of launching another full history calculation.
+    if db.get_meta(f"replaying:{instrument_id}") == "1":
+        return
     latest = max(
         (int(c.close_time) for c in candles if c.closed and int(c.close_time) <= int(as_of)),
         default=0,
