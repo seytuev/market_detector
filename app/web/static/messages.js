@@ -109,20 +109,36 @@ window.LFCopy = (() => {
     return html;
   }
 
-  function rowsHtml(asset) {
+  function rowsHtml(asset, opts = {}) {
     const rows = asset.compact_rows;
     if (Array.isArray(rows) && rows.length) {
-      return '<div class="msg-rows">' + rows.map((row) =>
+      const renderRow = (row) => {
+        const entry = opts.deskLayout && row.kind === 'entry';
+        const text = opts.deskLayout ? String(row.v || '').replace(/(\d) (?=\d)/g, '$1\u00a0') : row.v;
+        const match = entry && /^(FVG|OB|BSL|SSL):\s*(.*)$/.exec(text || '');
+        const value = match
+          ? '<span class="desk-zone-type">' + esc(match[1]) + '</span><span class="desk-zone-price">' + esc(match[2]) + '</span>'
+          : esc(text);
+        return (
         '<div class="msg-row kind-' + esc(row.kind || 'info') +
         (row.dir ? ' dir-' + esc(row.dir) : '') + '"' +
         (row.zone ? ' data-zone-lower="' + esc(row.zone.lower) + '" data-zone-upper="' + esc(row.zone.upper) + '"' : '') + '>' +
-        '<span class="msg-k">' + esc(row.k) + '</span>' +
-        '<span class="msg-v">' + esc(row.v) +
+        (entry ? '' : '<span class="msg-k">' + esc(row.k) + '</span>') +
+        '<span class="msg-v">' + (opts.deskLayout ? '<span class="desk-row-value">' + value + '</span><span class="desk-row-tags">' : value) +
         (row.note ? ' <span class="msg-note">' + esc(row.note) + '</span>' : '') +
         (row.zone ? ' <span class="msg-note msg-zone-inside"' + (row.zone.price_inside ? '' : ' hidden') + '>Цена внутри</span>'
           + (row.zone.invalidated_at != null ? ' <span class="msg-note msg-zone-invalid">Неактуальна · закреп за зоной</span>' : '') : '') +
-        '</span></div>'
-      ).join('') + '</div>';
+        (opts.deskLayout ? '</span>' : '') + '</span></div>');
+      };
+      let html = '<div class="msg-rows">';
+      rows.forEach((row, index) => {
+        if (opts.deskLayout && row.kind === 'entry' && rows[index - 1]?.kind !== 'entry') {
+          html += '<section class="desk-entry-section" aria-label="Зоны входа"><div class="desk-entry-heading">Зоны входа</div>';
+        }
+        html += renderRow(row);
+        if (opts.deskLayout && row.kind === 'entry' && rows[index + 1]?.kind !== 'entry') html += '</section>';
+      });
+      return html + '</div>';
     }
     let html = '';
     (asset.compact || []).slice(0, 5).forEach((line) => {
@@ -218,7 +234,7 @@ window.LFCopy = (() => {
       }
       if (!opts.hideHeadline) html += `<h3 class="asset-status ${dir}">${esc(title)}</h3>`;
       html += visual;
-      html += rowsHtml(asset);
+      html += rowsHtml(asset, opts);
       // кнопка действия выше «Подробнее»; подвал (котировка) — самым последним
       if (opts.extraHtml) html += opts.extraHtml;
       if (!opts.hideDetails) {
