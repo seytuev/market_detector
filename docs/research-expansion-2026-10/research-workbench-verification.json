@@ -112,5 +112,32 @@
       "win_rate": 0.0
     },
     "diagnostic": null
+  },
+  "regression": {
+    "full_suite": {
+      "passed": 2078,
+      "skipped": 24,
+      "xfailed": 1,
+      "failed": 0,
+      "seconds": 721.71
+    },
+    "final_sqlite_domains": {
+      "passed": 70
+    },
+    "final_postgresql_research": {
+      "passed": 56
+    },
+    "postgresql_storage": {
+      "passed": 25
+    },
+    "merged_sync_and_research": {
+      "passed": 53
+    },
+    "browser": {
+      "workflows": 5,
+      "responsive_views": 30,
+      "calendar_views": 6,
+      "javascript_errors": 0
+    }
   }
 }
