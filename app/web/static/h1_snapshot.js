@@ -27,14 +27,14 @@
     const series = chart.addCandlestickSeries({
       ...HTF.candleOptions(theme),
       priceFormat: { type: 'price', precision, minMove: 10 ** -precision },
-      ...(snapshot.quote ? {
-        lastValueVisible: false, priceLineVisible: false,
+      ...(snapshot.quote || snapshot.price_bounds ? {
+        ...(snapshot.quote ? { lastValueVisible: false, priceLineVisible: false } : {}),
         autoscaleInfoProvider: original => {
           const info = original();
           if (!info) return info;
           return { ...info, priceRange: {
-            minValue: Math.min(info.priceRange.minValue, snapshot.quote.price),
-            maxValue: Math.max(info.priceRange.maxValue, snapshot.quote.price),
+            minValue: Math.min(info.priceRange.minValue, snapshot.quote?.price ?? Infinity, snapshot.price_bounds?.min ?? Infinity),
+            maxValue: Math.max(info.priceRange.maxValue, snapshot.quote?.price ?? -Infinity, snapshot.price_bounds?.max ?? -Infinity),
           } };
         },
       } : {}),
@@ -43,7 +43,7 @@
     if (snapshot.quote) series.createPriceLine({
       price: snapshot.quote.price, color: theme.text, lineWidth: 1,
       lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true,
-      title: 'Котировка',
+      title: snapshot.quote.label || 'Котировка',
     });
     const first = bars[0].time, last = bars[bars.length - 1].time;
     const markers = layers && snapshot.layer_settings?.points === 'hidden' ? [] : layers ? H1Layers.seriesMarkers(layers, null, role =>
@@ -101,27 +101,28 @@
       (snapshot.overlays || []).forEach(zone => {
         const x = xOf(zone.from);
         const left = x == null ? 0 : Math.max(0, x);
+        const end = zone.to == null ? right : Math.min(right, xOf(zone.to) ?? 0);
         const upper = series.priceToCoordinate(zone.upper);
         const lower = series.priceToCoordinate(zone.lower);
         const level = zone.lower === zone.upper;
         const type = String(zone.type || 'OB').toLowerCase();
         const direction = type === 'bsl' ? 'bull' : type === 'ssl' ? 'bear'
           : zone.direction === 'bear' ? 'bear' : 'bull';
-        const color = zone.muted ? '#8b95a3' : direction === 'bull' ? theme.up : theme.down;
-        if (upper == null || lower == null || lower < 0 || upper > paneHeight || left >= right) {
+        const color = zone.muted ? '#8b95a3' : zone.color || (direction === 'bull' ? theme.up : theme.down);
+        if (upper == null || lower == null || lower < 0 || upper > paneHeight || left >= end) {
           outside += 1;
           return;
         }
         const box = level ? { top: upper, height: 0 } : H1Layers.clipZoneBox(upper, lower, paneHeight);
         if (!box) { outside += 1; return; }
         const div = add(level ? 'h1-liquidity ltf-level' : 'h1-zone zone-rect z-' + type,
-          left, box.top, right - left);
+          left, box.top, end - left);
         div.style.borderColor = color;
         div.style.color = color;
         if (!level) {
           div.style.height = box.height + 'px';
           div.style.background = zone.muted ? 'rgba(139,149,163,.12)'
-            : direction === 'bull' ? 'rgba(var(--zone-bull-rgb),.12)' : 'rgba(var(--zone-bear-rgb),.12)';
+            : zone.fill || (direction === 'bull' ? 'rgba(var(--zone-bull-rgb),.12)' : 'rgba(var(--zone-bear-rgb),.12)');
           const mid = series.priceToCoordinate(zone.mid ?? (zone.lower + zone.upper) / 2);
           if (mid > box.top && mid < box.top + box.height) {
             const line = document.createElement('span');
@@ -130,7 +131,7 @@
             div.appendChild(line);
           }
         }
-        const label = H1Layers.placeZoneLabel({ left, right, top: box.top,
+        const label = H1Layers.placeZoneLabel({ left, right: end, top: box.top,
           bottom: box.top + box.height }, occupied, right, paneHeight);
         if (label) {
           const tag = add('h1-zone-tag type-' + type, label.left, label.top, label.width);
@@ -138,7 +139,7 @@
           name.className = 'h1-zone-name'; name.textContent = zone.label;
           const price = document.createElement('span');
           price.className = 'h1-zone-price';
-          price.textContent = (level ? '' : '50% ') + fmtPrice(zone.mid ?? zone.lower);
+          price.textContent = zone.price_label || (level ? '' : '50% ') + fmtPrice(zone.mid ?? zone.lower);
           tag.append(name, price);
         }
       });

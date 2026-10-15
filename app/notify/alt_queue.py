@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from html import escape
 
 import logging
 from typing import Any, Optional
@@ -152,28 +151,35 @@ class AltDispatcher:
 
     async def _render_v3(self, row, members):
         from .outbox import Card
-        from ..services.alt_v3 import LABELS
-        from .formatting import fmt_time_msk
+        from pathlib import Path
+        from . import alt_w1
         rows = self._v3_rows(members)
         if not rows:
             return Card("")
-        asset = self.db.get_alt_asset(rows[0]["asset_id"])
-        lines = [f"<b>{escape(asset.symbol if asset else 'ALTs')} · Скринер W1</b>"]
-        for r in rows:
-            e = json.loads(r["payload_json"])
-            p = e.get("payload", {})
-            label = LABELS.get(r["event_type"], r["event_type"])
-            kind = str(p.get("kind") or "")
-            lines.append(escape(f"{label}{' · '+kind if kind else ''}: {e['price']:.8g}"))
-        lines.append(escape(f"Событие: {fmt_time_msk(rows[0]['event_time_ms'])}"))
-        targets = []
+        ctx = await asyncio.to_thread(alt_w1.load_context, self.db, rows)
+        text, details = alt_w1.message(ctx, delivered_at=now_ms())
+        old = json.loads(row["card"])
+        image = None
+        if self.settings and ctx.frame:
+            from .outbox import fingerprint
+            # A packet can gain another simultaneous zone. Its image must
+            # then contain the same contexts as its new caption and details.
+            key = fingerprint([e["id"] for e in ctx.events])[:16]
+            output = Path(self.settings.db_path).parent / "charts" / f"alt_w1_{row['id']}_{key}.png"
+            if output.is_file():
+                image = str(output)
+            else:
+                try:
+                    image = await asyncio.to_thread(alt_w1.render_chart, self.db, ctx, output)
+                except Exception:
+                    log.warning("ALT W1 chart unavailable for packet %s", row["id"], exc_info=True)
+        target = {"kind": "alt_w1", "label": (ctx.asset.symbol if ctx.asset else "ALTs") + " · база W1"}
         base_url = ((self.settings.effective_base_url() if self.settings else "") or "").rstrip("/")
-        if base_url:
-            structure = self.db.conn.execute("SELECT id FROM alt_structure WHERE source_id=? AND structure_key=? AND rules_version='alt-0.5'",
-                                             (rows[0]["source_id"], rows[0]["structure_key"])).fetchone()
-            if structure:
-                targets = [{"label": "Открыть базу W1", "url": f"{base_url}/alt.html?base={structure[0]}&tf=W1"}]
-        return Card("\n".join(lines), targets=targets)
+        if base_url and ctx.structure_id:
+            target["url"] = f"{base_url}/alt.html?base={ctx.structure_id}&tf=W1"
+        card = Card(text, details, image, [target], bool(self.settings and not image))
+        card.replace_image = bool(image and row["status"] == "sent" and image != old.get("image_path"))
+        return card
 
     async def dispatch_v3(self):
         from .outbox import Card
