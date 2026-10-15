@@ -118,6 +118,7 @@ class Worker:
         self._ltf_engines = {}
         self._replay_depth = {}
         self._replay_lock = RLock()
+        self._restoring_instruments = set()
         self.ltf_dispatcher = ltf_dispatcher
         self.alt_runner = alt_runner
         self.alt_dispatcher = alt_dispatcher
@@ -1678,8 +1679,12 @@ class Worker:
         if not self._ltf_active:
             return
         async def restore(ins):
-            async with self.data_sync.instrument(ins.id):
-                await self._ltf_restore_instrument(ins)
+            self._restoring_instruments.add(ins.id)
+            try:
+                async with self.data_sync.instrument(ins.id):
+                    await self._ltf_restore_instrument(ins)
+            finally:
+                self._restoring_instruments.discard(ins.id)
         await asyncio.gather(*(restore(ins) for ins in self.db.get_instruments(enabled_only=True)))
 
     async def _ltf_restore_instrument(self, ins):
@@ -1750,6 +1755,11 @@ class Worker:
                          ins.symbol, len(observations))
             # Restore processes all open observations. Publish the same
             # scenario checkpoint as normal channel processing only after success.
+            last = self.db.last_candle(ins.id, 'H1')
+            if last is not None and int(self.db.get_meta(f'ltf:h1:last_close:{ins.id}') or 0) < last.close_time:
+                # Boundary intake can append a new closed bar while the
+                # historical replay is working on its immutable old sample.
+                await self._calculate(self.ltf_engine.process_h1_close, ins.id)
             cursor_raw = self.db.get_meta(f"ltf:h1:last_close:{ins.id}")
             if cursor_raw:
                 await self.data_sync._write(

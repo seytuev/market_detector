@@ -78,6 +78,7 @@ class DataSync:
         self.cooldown_ms = 15_000
         self._boundary_due = {}
         self._request_limits = {}
+        self._quote_request_limits = {}
         self._retry_until = {}
         # Этап 5 (§10): single-flight по каналу — параллельные вызовы
         # sync_candles(iid, tf) делят один запрос к источнику
@@ -206,9 +207,14 @@ class DataSync:
         # §10 (этап 5): ограниченная параллельность REST — настройка
         # rest_concurrency на venue; весь сетевой путь идёт через этот метод
         # (общий Retry-After venue не обойти через другую очередь, AC09)
-        limit = self._request_limits.setdefault(
+        capacity = max(1, int(getattr(self.worker.settings, 'rest_concurrency', 2)))
+        quotes = endpoint == 'last_price' and capacity > 1
+        pools = self._quote_request_limits if quotes else self._request_limits
+        # Reserve one slot for prices. Two stalled history requests must not
+        # monopolize the venue's entire budget and age every asset's quote.
+        limit = pools.setdefault(
             venue, asyncio.Semaphore(
-                max(1, int(getattr(self.worker.settings, "rest_concurrency", 2)))))
+                1 if quotes else max(1, capacity - 1)))
         for attempt in range(2):
             async with limit:
                 delay = self._retry_until.get(venue, 0) - time.monotonic()
@@ -462,6 +468,9 @@ class DataSync:
                         # (замок ждать нельзя: потребителю нужен он же)
                         await asyncio.wait_for(
                             self.worker._poll_quote(ins), self.request_timeout_seconds)
+                    result['wait_state'] = 'waiting_calculation'
+                    stage['status'] = 'waiting_calculation'
+                    self._save_job(job)
                     left = max(0.1, deadline - time.monotonic())
                     if not await self.worker.market_queue.wait_idle(ins.id, left):
                         raise TimeoutError("market_queue_drain_timeout")
@@ -471,6 +480,7 @@ class DataSync:
                 except Exception as exc:
                     result.update(status="failed", error=str(exc)[:300] or type(exc).__name__)
                     log.exception("data_sync job=%s symbol=%s tf=quote", job["job_id"], ins.symbol)
+                result.pop('wait_state', None)
                 _channel_done(result, ins, "quote")
 
             await asyncio.gather(*(_quote_channel(ins) for ins in instruments))
@@ -770,6 +780,30 @@ class DataSync:
                 if not was_replaying:
                     await self._write(self.worker._set_replaying, ins.id, False)
 
+    async def _prime_restoring_source(self, ins, tf):
+        """Keep real candles visible while old calculations own the asset mutex.
+
+        This only ingests source data. Processing cursors and successful-job
+        markers are untouched; normal recovery consumes appended bars later.
+        """
+        step = TIMEFRAME_MS[tf]
+        head = self.db.last_candle(ins.id, tf)
+        if head is not None and head.close_time >= period_open(tf, now_ms(), head.open_time)-1:
+            return
+        start = head.open_time-step if head else now_ms()-256*step
+        incoming = await self.request(ins.venue, self.worker.adapters[ins.venue].klines,
+                                      ins.symbol, tf, start, now_ms(), include_forming=True)
+        for candle in incoming:
+            candle.instrument_id = ins.id
+        if not incoming:
+            return
+        await self._write(self.db.insert_candles, incoming)
+        last = max((c for c in incoming if c.closed), key=lambda c: c.open_time, default=None)
+        if last is not None and self.worker.broadcast:
+            self.worker.broadcast(dict(type='candle', instrument_id=ins.id, timeframe=tf,
+                open_time=last.open_time, open=last.open, high=last.high, low=last.low, close=last.close,
+                domain_versions={'candles':self.db.get_domain(f'seq:candles:{ins.id}:{tf}')}))
+
     async def boundary_tick(self, at=None):
         """Тик у границ баров (§10, AC08): каналы, которым пора, синхронизируются
         параллельно по инструментам — зависший источник одного актива (до
@@ -794,6 +828,9 @@ class DataSync:
 
         async def _one(ins, tf):
             try:
+                if ins.id in self.worker._restoring_instruments:
+                    await self._prime_restoring_source(ins, tf)
+                    return False  # received source data is not a completed calculation
                 status = await self.sync_candles(ins, tf, "boundary")
                 return status["received_close"] is not None \
                     and status["received_close"] >= status["expected_close"] \

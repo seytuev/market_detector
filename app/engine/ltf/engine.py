@@ -577,6 +577,7 @@ class LtfEngine:
         persist_roles: bool = True,
     ) -> None:
         candle = closed[idx]
+        self._remembered_breaks = set()
         up_to = closed[: idx + 1]
         now = detected_at
         result.processed += 1
@@ -645,6 +646,7 @@ class LtfEngine:
             )
         finally:
             self._bar_plan = None
+            self._remembered_breaks = None
 
     def _scenario_start(self, sc) -> int:
         """Рыночное время старта сценария: occurred_at триггера (fallback —
@@ -1759,10 +1761,15 @@ class LtfEngine:
         plan = self._bar_plan or {}
         if plan.get("transition_key") == key and plan.get("wait_reason") and not plan.get("confirm"):
             fields["long_wait_reason"] = plan["wait_reason"]
-        remember_break(
-            self.db, instrument, rev, anchor, rev.occurred_at,
-            {"anchor": anchor, "scenario_observation": obs.id},
-        )
+        seen = getattr(self, '_remembered_breaks', None)
+        identity = (instrument.id, rev.break_candle_open_time, rev.direction, anchor)
+        if seen is None or identity not in seen:
+            remember_break(
+                self.db, instrument, rev, anchor, rev.occurred_at,
+                {"anchor": anchor, "scenario_observation": obs.id},
+            )
+            if seen is not None:
+                seen.add(identity)
         return fields
 
     def _annotate_reversal_event(self, obs, sc, event, payload: dict[str, Any]) -> None:

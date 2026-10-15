@@ -106,6 +106,9 @@ async def test_htf_touch_starts_observation_idempotent():
     zone = _parent_zone(db, ins.id, Direction.BULL)
 
     await worker.poll_once()
+    # Quotes are ingested before their durable FIFO consumer evaluates HTF
+    # contacts. Polling another instrument is no longer an implicit delay.
+    assert await worker.market_queue.wait_idle(ins.id, 5)
     obs = db.get_ltf_observation_by_zone(zone.id, zone.cycle_id)
     assert obs is not None
     assert obs.state == "waiting_structure"
@@ -115,6 +118,7 @@ async def test_htf_touch_starts_observation_idempotent():
     assert db.get_meta(f"ltf:h1:seeded:{obs.id}")
 
     await worker.poll_once()  # повторное HTF-событие не дублирует наблюдение
+    assert await worker.market_queue.wait_idle(ins.id, 5)
     assert len(db.list_ltf_observations(instrument_id=ins.id)) == 1
 
 

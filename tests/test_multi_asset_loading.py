@@ -163,3 +163,71 @@ async def test_calculating_new_asset_preserves_other_assets_projection_versions(
         assert all(structural_version(db, iid, DetectorConfig()) != after[iid-1] for iid in (1, 2))
     finally:
         await worker.data_sync.shutdown()
+
+
+async def test_hourly_boundary_ingests_candles_while_historical_restore_owns_instrument(db):
+    from tests.conftest import make_candle, H1_MS
+    from app.models import now_ms
+    worker, _ = _make_worker(db, FakeAdapter())
+    iid = db.upsert_instrument(Instrument(None, 'ETH', 'binance', 'spot', 'ETHUSDT', 'USDT'))
+    head = now_ms() // H1_MS * H1_MS
+    worker.adapters['binance'].candles = [make_candle(head-H1_MS, 100, 103, 99, 102, 'H1')]
+    worker._restoring_instruments.add(iid)
+    try:
+        async with worker.data_sync.instrument(iid):
+            await asyncio.wait_for(worker.data_sync.boundary_tick(), 2)
+            assert db.last_candle(iid, 'H1').close_time == head-1
+            assert db.get_meta(f'ltf:h1:last_close:{iid}') is None
+            assert db.get_meta(f'data_sync:instrument_success:{iid}') is None
+    finally:
+        worker._restoring_instruments.discard(iid)
+        await worker.data_sync.shutdown()
+
+
+async def test_stalled_history_requests_reserve_venue_capacity_for_quotes(db):
+    worker, _ = _make_worker(db, FakeAdapter())
+    worker.settings.rest_concurrency = 2
+    release = asyncio.Event()
+    active, peak = 0, 0
+    async def klines():
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        try:
+            await release.wait()
+            return []
+        finally:
+            active -= 1
+    async def last_price():
+        nonlocal peak
+        peak = max(peak, active+1)
+        return 100
+    tasks = [asyncio.create_task(worker.data_sync.request('binance', klines)) for _ in range(2)]
+    try:
+        await asyncio.sleep(.02)
+        assert await asyncio.wait_for(worker.data_sync.request('binance', last_price), 1) == 100
+        assert peak <= 2
+    finally:
+        release.set()
+        await asyncio.gather(*tasks)
+        await worker.data_sync.shutdown()
+
+
+def test_context_publications_do_not_flush_unchanged_ltf_entities(db, monkeypatch):
+    from app.services.htf_ideas import project_ideas
+    from tests.test_htf_ideas import seed
+    from app.services.htf_context import _commit
+    iid = db.upsert_instrument(Instrument(None, 'BTC', 'binance', 'spot', 'BTCUSDT', 'USDT'))
+    _, obs, _, zone = seed(db, iid)
+    db.get_ltf_observation(obs.id)
+    db.get_ltf_entry_zone(zone.id)
+    statements = []
+    native = db.conn.execute
+    def execute(sql, *args, **kwargs):
+        statements.append(sql)
+        return native(sql, *args, **kwargs)
+    monkeypatch.setattr(db.conn, 'execute', execute)
+    _commit(db)
+    db.get_ltf_observation(obs.id)
+    db.get_ltf_entry_zone(zone.id)
+    assert not any('FROM ltf_observation WHERE id=' in q or 'FROM ltf_entry_zone WHERE id=' in q for q in statements)

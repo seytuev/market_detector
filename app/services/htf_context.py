@@ -195,7 +195,10 @@ def _loads(raw: Optional[str]) -> dict[str, Any]:
 
 def _commit(db) -> None:
     db._commit()
-    db._bump_ltf_cache()
+    # These writes touch context/transition tables, not every observation,
+    # pivot and entry zone. A blanket flush here made each shared BOS reload
+    # thousands of unchanged LTF rows for every observing parent zone.
+    db._bump_ltf_cache('htf_context')
 
 
 def load_episode(db, episode_id: int) -> Optional[dict[str, Any]]:
