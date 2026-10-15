@@ -547,7 +547,8 @@ class LtfEngine:
                     for idx, c in remaining[offset:offset + chunk_size]:
                         from ...services.metrics import get_registry
                         sample = get_registry().profile(f'ltf_replay:{obs.instrument_id}',
-                            instrument_id=obs.instrument_id, close_time=c.close_time) if resume and (sampled in (0,9) or sampled % 1000 == 0) else nullcontext()
+                            instrument_id=obs.instrument_id, close_time=c.close_time,
+                            resume=resume, start_ms=start_ms) if (sampled in (0,9) or sampled % 1000 == 0) else nullcontext()
                         sampled += 1
                         with sample:
                             bar_checkpoint = getattr(self, '_bar_checkpoint', None)
