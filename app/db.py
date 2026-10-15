@@ -2490,6 +2490,25 @@ class Database:
         self._commit()
         self._bump_ltf_cache('htf_idea')
 
+    def save_htf_ideas(self, instrument_id: int, payloads: list[dict[str, Any]]) -> None:
+        originals = {r['scenario_id']: r['payload'] for r in self.conn.execute(
+            'SELECT scenario_id,payload FROM htf_idea WHERE instrument_id=?', (instrument_id,)).fetchall()}
+        changed = []
+        for payload in payloads:
+            if payload['instrument_id'] != instrument_id:
+                raise ValueError('Idea belongs to another instrument')
+            encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+            if originals.get(payload['scenario_id']) != encoded:
+                changed.append((instrument_id,payload['scenario_id'],payload['rule_version'],encoded))
+        if not changed:
+            return
+        self.conn.executemany(
+            '''INSERT INTO htf_idea(instrument_id,scenario_id,rule_version,payload)
+               VALUES(?,?,?,?) ON CONFLICT(scenario_id) DO UPDATE SET
+               rule_version=excluded.rule_version,payload=excluded.payload''', changed)
+        self._commit()
+        self._bump_ltf_cache('htf_idea')
+
     def insert_ltf_observation(self, o: LtfObservation) -> LtfObservation:
         """Идемпотентно по UNIQUE(zone_id, cycle_id): повторное HTF-событие
         достижения зоны не создаёт второе наблюдение — возвращается имеющееся."""

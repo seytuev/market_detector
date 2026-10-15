@@ -195,13 +195,36 @@ def test_reconcile_rolls_back_lifecycle_when_idea_publication_fails(db, instrume
         raise RuntimeError("publication failed")
 
     with monkeypatch.context() as patch:
-        patch.setattr(db, "save_htf_idea", fail_publication)
+        patch.setattr(db, "save_htf_ideas", fail_publication)
         with pytest.raises(RuntimeError, match="publication failed"):
             reconcile_ideas(db, instrument_id, cfg, touch.close_time)
     assert db.get_ltf_entry_zone(zone.id) == before
     assert db.list_htf_ideas(instrument_id) == []
     reconcile_ideas(db, instrument_id, cfg, touch.close_time)
     assert db.get_ltf_entry_zone(zone.id).max_test_depth == .5
+
+
+def test_bulk_publication_preserves_manual_close_and_avoids_point_reads(db, instrument_id, monkeypatch):
+    seed(db, instrument_id)
+    rows = bars(db, instrument_id, 5)
+    reconcile_ideas(db, instrument_id, DetectorConfig(), rows[-1].close_time)
+    idea = db.list_htf_ideas(instrument_id)[0]
+    db.close_htf_idea(idea['id'], rows[-1].close_time)
+    payload = {k:v for k,v in idea.items() if k not in ('id','manual_closed_at')}
+    statements = []
+    native = db.conn.execute
+    def execute(sql, *args, **kwargs):
+        statements.append(sql)
+        return native(sql, *args, **kwargs)
+    with monkeypatch.context() as patch:
+        patch.setattr(db.conn, 'execute', execute)
+        db.save_htf_ideas(instrument_id, [payload])
+        db.save_htf_ideas(instrument_id, [{**payload,'state':'closed','reason':'manual'}])
+    after = db.list_htf_ideas(instrument_id)[0]
+    assert after['id'] == idea['id']
+    assert after['state'] == 'closed' and after['reason'] == 'manual'
+    assert after['manual_closed_at'] == rows[-1].close_time
+    assert not any('SELECT payload FROM htf_idea WHERE scenario_id=' in q for q in statements)
 
 
 def test_parent_invalidated_closes_idea_but_not_its_past(db, instrument_id):

@@ -88,11 +88,14 @@ def test_ideas_reconciliation_bulk_snapshot_and_atomic_publication(pg, monkeypat
     from tests.test_htf_ideas import (
         test_reconcile_uses_bulk_originals_without_per_zone_reads,
         test_reconcile_rolls_back_lifecycle_when_idea_publication_fails,
+        test_bulk_publication_preserves_manual_close_and_avoids_point_reads,
     )
     iid = pg.upsert_instrument(Instrument(None, 'BTC', 'binance', 'spot', 'BTCUSDT', 'USDT'))
     test_reconcile_uses_bulk_originals_without_per_zone_reads(pg, iid, monkeypatch)
     other = pg.upsert_instrument(Instrument(None, 'ETH', 'binance', 'spot', 'ETHUSDT', 'USDT'))
     test_reconcile_rolls_back_lifecycle_when_idea_publication_fails(pg, other, monkeypatch)
+    third = pg.upsert_instrument(Instrument(None, 'SOL', 'binance', 'spot', 'SOLUSDT', 'USDT'))
+    test_bulk_publication_preserves_manual_close_and_avoids_point_reads(pg, third, monkeypatch)
 
 
 def test_bulk_market_history_matches_scalar_and_rolls_back(pg):

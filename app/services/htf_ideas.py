@@ -222,9 +222,8 @@ def reconcile_ideas(db, instrument_id, cfg, as_of):
                           test_extreme=z.test_extreme, validity=z.validity, evidence=z.evidence)
             if any(getattr(original, k) != v for k, v in fields.items()):
                 db.update_ltf_entry_zone(z.id, **fields)
+        db.save_htf_ideas(instrument_id, [{k: v for k, v in idea.items() if k != 'id'} for idea in ideas])
         for idea in ideas:
-            payload = {k: v for k, v in idea.items() if k != "id"}
-            db.save_htf_idea(payload)
             if idea["state"] == "active" and idea["data_quality"] == "complete":
                 obs = db.get_ltf_observation(idea["observation_id"])
                 if obs.state == "closed_stale":
