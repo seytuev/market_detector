@@ -129,6 +129,7 @@ class AltDispatcher:
             "SELECT * FROM alt_v3_event WHERE id=?", (m["event_id"],)).fetchone()) is not None]
 
     def _validate_v3(self, row, members):
+        from ..alt.engine_v3 import RULES_VERSION
         if self.settings is not None and self.settings.alt_config.engine_version != "v3":
             return "inactive W1 version"
         rows = self._v3_rows(members)
@@ -136,9 +137,12 @@ class AltDispatcher:
             return "missing W1 event"
         chat = self._chat_id(None)
         for e in rows:
+            structure = self.db.conn.execute(
+                "SELECT id FROM alt_structure WHERE source_id=? AND structure_key=? AND rules_version=?",
+                (e["source_id"], e["structure_key"], RULES_VERSION)).fetchone()
             asset = self.db.get_alt_asset(e["asset_id"])
             source = self.db.get_alt_instrument_source(e["asset_id"])
-            blocked = (e["delivered"] and row["status"] != "sent") or not asset or not asset.enabled or not source or source.id != e["source_id"] or (chat and bot_delivery_blocked(self.db, chat, grp=BOT_GRP_ALT, kind=e["event_type"]))
+            blocked = not structure or (e["delivered"] and row["status"] != "sent") or not asset or not asset.enabled or not source or source.id != e["source_id"] or (chat and bot_delivery_blocked(self.db, chat, grp=BOT_GRP_ALT, kind=e["event_type"]))
             if blocked:
                 self.db.conn.execute("UPDATE notification_member SET reason='muted or disabled' WHERE packet_id=? AND event_id=?",
                                      (row["id"], e["id"]))

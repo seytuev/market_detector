@@ -17,7 +17,7 @@ UTC-дня — настройки job_hour_msk/job_minute_msk):
    last_closed_ms. Только ЗАКРЫТЫЕ свечи (include_forming=False + фильтр
    close boundary <= now — формирующаяся D1 не хранится, §4). Пропуски дней
    не синтезируются — фиксируются gaps в meta (§4).
-4. Движок: по флагу AltConfig.engine_version (дефолт v3, W1 alt-0.5). v1 —
+4. Движок: по флагу AltConfig.engine_version (дефолт v3, W1 alt-0.6). v1 —
    AltEngine.process_asset_history; v2 — AltEngineV2, таблицы эпизодов
    рядом, freeze v1 не переписывается. Replay идемпотентен. Движок и БД
    синхронные — вызов в asyncio.to_thread. Уведомления v2 не эмитируются:
@@ -60,6 +60,7 @@ from ..models_alt import (
 )
 from .engine import AltEngine
 from .engine_v2 import AltEngineV2
+from .engine_v3 import RULES_VERSION
 from .store_v04 import persist_candles
 from .universe import is_excluded_asset, refresh_universe
 
@@ -173,6 +174,9 @@ class AltRunner:
         Любая попытка в текущем слоте (в т.ч. error) блокирует повтор до
         следующего слота — цикл опроса не превращается в спам ретраями.
         """
+        if (self.cfg.engine_version == "v3" and self.db.get_meta("alt:v3:rules_attempted") != RULES_VERSION
+                and self.db.meta_prefix("alt:engine:")):
+            return True
         if (self.cfg.engine_version == "v3" and self.db.get_meta("alt:v3:initialized") is None
                 and (self.db.get_meta("alt:v3:storage_upgrade_pending") == "1"
                      or any(v != "v3" for v in self.db.meta_prefix("alt:engine:").values()))):
@@ -242,6 +246,7 @@ class AltRunner:
             "backfill_event_ids": [],
         }
         if self.cfg.engine_version == "v3":
+            self.db.set_meta("alt:v3:rules_attempted", RULES_VERSION)
             self.db.set_meta("alt:v3:initialized", str(now))
             self.db.set_meta("alt:v3:storage_upgrade_pending", "0")
 
@@ -351,7 +356,7 @@ class AltRunner:
                 continue
             setups = self.db.list_alt_setups(asset.id)
             has_v3 = self.cfg.engine_version == "v3" and self.db.conn.execute(
-                "SELECT id FROM alt_structure WHERE asset_id=? AND rules_version='alt-0.5' LIMIT 1", (asset.id,)).fetchone() is not None
+                "SELECT id FROM alt_structure WHERE asset_id=? AND rules_version IN (?,?) LIMIT 1", (asset.id, RULES_VERSION, "alt-0.5")).fetchone() is not None
             if has_v3 or any(not _is_terminal_setup(s) for s in setups):
                 targets.append((asset, False))
         return targets
@@ -530,12 +535,12 @@ class AltRunner:
                     return
                 try:
                     coverage = json.loads(self.db.get_meta(f"alt:v3:coverage:{src.id}") or "{}")
-                    if (coverage.get("last_week_close_ms") or 0) < week_start(stamp):
+                    if coverage.get("rules_version") != RULES_VERSION or (coverage.get("last_week_close_ms") or 0) < week_start(stamp):
                         async with self._v3_lock:
                             loaded = await self._load_history(src)
                         await self._process_asset(asset, src, loaded.get("new_days", 0), now_ms())
                         coverage = json.loads(self.db.get_meta(f"alt:v3:coverage:{src.id}") or "{}")
-                    if coverage.get("status") != "ok" or (coverage.get("last_week_close_ms") or 0) < week_start(stamp):
+                    if coverage.get("rules_version") != RULES_VERSION or coverage.get("status") != "ok" or (coverage.get("last_week_close_ms") or 0) < week_start(stamp):
                         self._live_retry[src.id] = stamp + 60_000
                         self._live_sources.pop(src.id, None)
                         self._live_intervals.pop(src.id, None)
@@ -642,6 +647,9 @@ class AltRunner:
             seen_version is not None and seen_version != self.cfg.engine_version
         )
         backfill = self.db.get_meta(mode_key) is None or switched
+        rules_key = f"alt:rules:{asset.id}:{src.id}"
+        if self.cfg.engine_version == "v3" and self.db.get_meta(rules_key) != RULES_VERSION:
+            backfill = True
         mode = "backfill" if backfill else ("catchup" if new_days > 1 else "live")
 
         candles = self.db.get_alt_candles(src.id)
@@ -651,6 +659,7 @@ class AltRunner:
                 await asyncio.to_thread(persist_v3, self.db, asset.id, src.id, candles, now, backfill=backfill)
             self.db.set_meta(mode_key, json.dumps({"at_ms": now, "candles": len(candles)}))
             self.db.set_meta(version_key, "v3")
+            self.db.set_meta(rules_key, RULES_VERSION)
             return mode, []
         engine = self._engine()
         await asyncio.to_thread(

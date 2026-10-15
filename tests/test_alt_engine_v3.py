@@ -36,7 +36,8 @@ def test_near_base_geometry_and_independent_cycles(replay):
     assert b["geometry"]["upper"] == 3.383
     assert b["geometry"]["base_end_open_time"] == stamp("2026-09-20")
     assert b["revisions"][-1]["base_end_confirmed_at_ms"] == stamp("2026-09-21")
-    assert len(replay["structures"]) > 1
+    # Old rally/decline boxes are no longer admissible historical cycles.
+    assert all(b["revisions"][0]["upper"] <= b["revisions"][0]["quality_metrics"]["admission_ceiling"] for b in replay["structures"])
     # Completion freezes geometry even when subsequent weeks make new highs.
     complete = next(r for r in b["revisions"] if r["state"] == "completed")
     assert all((r["lower"], r["upper"]) == (1.55, 3.383) for r in b["revisions"] if r["available_at_ms"] >= complete["available_at_ms"])
@@ -44,6 +45,7 @@ def test_near_base_geometry_and_independent_cycles(replay):
 
 def test_age_not_reset_by_boundary_refinements(replay):
     b = near_base(replay)
+    assert b["revisions"][0]["available_at_ms"] == stamp("2025-07-21")
     assert b["revisions"][0]["available_at_ms"]-b["geometry"]["base_start_open_time"] >= 101*DAY
     assert b["revisions"][0]["lower"] == 1.793
     expanded = next(r for r in b["revisions"] if r["lower"] == 1.55)

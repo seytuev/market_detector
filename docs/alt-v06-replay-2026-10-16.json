@@ -1,0 +1,167 @@
+[
+  {
+    "asset": "NEAR",
+    "rules_version": "alt-0.6",
+    "as_of_ms": 1791331200000,
+    "status": "ok",
+    "bases": 1,
+    "replay_store_s": 0.025,
+    "repeat_store_s": 0.0,
+    "pending_events": 0,
+    "cycles": [
+      {
+        "lower": 1.55,
+        "upper": 3.383,
+        "start": 1743984000000,
+        "end": 1789862400000
+      }
+    ]
+  },
+  {
+    "asset": "LINK",
+    "rules_version": "alt-0.6",
+    "as_of_ms": 1791763200000,
+    "status": "ok",
+    "bases": 2,
+    "replay_store_s": 0.056,
+    "repeat_store_s": 0.001,
+    "pending_events": 0,
+    "cycles": [
+      {
+        "lower": 5.3,
+        "upper": 10.16,
+        "start": 1652054400000,
+        "end": 1697932800000
+      },
+      {
+        "lower": 6.996,
+        "upper": 13.685,
+        "start": 1769990400000,
+        "end": 1790467200000
+      }
+    ]
+  },
+  {
+    "asset": "HBAR",
+    "rules_version": "alt-0.6",
+    "as_of_ms": 1791331200000,
+    "status": "ok",
+    "bases": 1,
+    "replay_store_s": 0.343,
+    "repeat_store_s": 0.001,
+    "pending_events": 0,
+    "cycles": [
+      {
+        "lower": 0.055,
+        "upper": 0.0845,
+        "start": 1655078400000,
+        "end": 1676160000000
+      }
+    ]
+  },
+  {
+    "asset": "AAVE",
+    "rules_version": "alt-0.6",
+    "as_of_ms": 1791331200000,
+    "status": "ok",
+    "bases": 1,
+    "replay_store_s": 0.068,
+    "repeat_store_s": 0.001,
+    "pending_events": 0,
+    "cycles": [
+      {
+        "lower": 45.6,
+        "upper": 160.01,
+        "start": 1655078400000,
+        "end": 1726963200000
+      }
+    ]
+  },
+  {
+    "asset": "SUI",
+    "rules_version": "alt-0.6",
+    "as_of_ms": 1791331200000,
+    "status": "ok",
+    "bases": 1,
+    "replay_store_s": 0.01,
+    "repeat_store_s": 0.0,
+    "pending_events": 0,
+    "cycles": [
+      {
+        "lower": 0.6354,
+        "upper": 0.954,
+        "start": 1780272000000,
+        "end": 1790467200000
+      }
+    ]
+  },
+  {
+    "asset": "ENA",
+    "rules_version": "alt-0.6",
+    "as_of_ms": 1791331200000,
+    "status": "no_structure",
+    "bases": 0,
+    "replay_store_s": 0.006,
+    "repeat_store_s": 0.0,
+    "pending_events": 0,
+    "cycles": []
+  },
+  {
+    "asset": "PUMP",
+    "rules_version": "alt-0.6",
+    "as_of_ms": 1791331200000,
+    "status": "no_structure",
+    "bases": 0,
+    "replay_store_s": 0.003,
+    "repeat_store_s": 0.0,
+    "pending_events": 0,
+    "cycles": []
+  },
+  {
+    "asset": "TAO",
+    "rules_version": "alt-0.6",
+    "as_of_ms": 1791331200000,
+    "status": "ok",
+    "bases": 1,
+    "replay_store_s": 0.009,
+    "repeat_store_s": 0.001,
+    "pending_events": 0,
+    "cycles": [
+      {
+        "lower": 183.1,
+        "upper": 291.6,
+        "start": 1780272000000,
+        "end": 1790467200000
+      }
+    ]
+  },
+  {
+    "asset": "QNT",
+    "rules_version": "alt-0.6",
+    "as_of_ms": 1791763200000,
+    "status": "ok",
+    "bases": 1,
+    "replay_store_s": 0.018,
+    "repeat_store_s": 0.0,
+    "pending_events": 0,
+    "cycles": [
+      {
+        "lower": 50.0,
+        "upper": 110.5,
+        "start": 1758499200000,
+        "end": 1790467200000
+      }
+    ]
+  },
+  {
+    "asset": "ONDO",
+    "rules_version": "alt-0.6",
+    "as_of_ms": 1791331200000,
+    "status": "no_structure",
+    "bases": 0,
+    "replay_store_s": 0.005,
+    "repeat_store_s": 0.0,
+    "pending_events": 0,
+    "cycles": []
+  }
+]

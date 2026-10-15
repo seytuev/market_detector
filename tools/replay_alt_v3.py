@@ -1,4 +1,4 @@
-"""Offline alt-0.5 fixture replay; writes a reviewable report without live feeds."""
+"""Offline current W1 rules replay; writes a report without live feeds."""
 from pathlib import Path
 import argparse
 import json

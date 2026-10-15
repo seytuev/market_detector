@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from ..alt.engine_v3 import DAY, WEEK, aggregate_weeks
+from ..alt.engine_v3 import DAY, WEEK, RULES_VERSION, aggregate_weeks
 from ..alt.store_v3 import frame
 from .formatting import fmt_price_ru as price, fmt_time_msk as time
 
@@ -21,8 +21,8 @@ def load_context(db, rows):
     events = [json.loads(r["payload_json"]) for r in rows]
     events.sort(key=lambda e: (e["event_time_ms"], e["id"]))
     lead = max(events, key=lambda e: (_RANK.get(e["event_type"], 10), e["event_time_ms"]))
-    structure = db.conn.execute("SELECT id FROM alt_structure WHERE source_id=? AND structure_key=? AND rules_version='alt-0.5'",
-                                (rows[0]["source_id"], rows[0]["structure_key"])).fetchone()
+    structure = db.conn.execute("SELECT id FROM alt_structure WHERE source_id=? AND structure_key=? AND rules_version=?",
+                                (rows[0]["source_id"], rows[0]["structure_key"], RULES_VERSION)).fetchone()
     f = frame(db, structure[0], lead["event_time_ms"]) if structure else None
     source = db.conn.execute("SELECT id,asset_id,venue,symbol FROM alt_instrument_source WHERE id=?", (rows[0]["source_id"],)).fetchone()
     return SimpleNamespace(asset=db.get_alt_asset(rows[0]["asset_id"]),

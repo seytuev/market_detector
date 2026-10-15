@@ -13,7 +13,7 @@ def _json(value):
 
 def persist_result(db, asset_id: int, source_id: int, result: dict, *, backfill: bool = False) -> int:
     if result["status"] in ("data_pending", "insufficient_history"):
-        db.set_meta(f"alt:v3:coverage:{source_id}", _json({"status": result["status"], "computed_at_ms": result["computed_at_ms"], "last_week_close_ms": result.get("last_week_close_ms")}))
+        db.set_meta(f"alt:v3:coverage:{source_id}", _json({"rules_version": RULES_VERSION, "status": result["status"], "computed_at_ms": result["computed_at_ms"], "last_week_close_ms": result.get("last_week_close_ms")}))
         return 0
     with db.batch_writes():
         existing_revisions = {r[0] for r in db.conn.execute(
@@ -57,7 +57,7 @@ def persist_result(db, asset_id: int, source_id: int, result: dict, *, backfill:
                     insert_event(db, asset_id, source_id, structure["structure_key"], e, delivered=backfill)
         if backfill:
             db.conn.execute("UPDATE alt_v3_event SET delivered=1 WHERE source_id=? AND delivered=0", (source_id,))
-        db.set_meta(f"alt:v3:coverage:{source_id}", _json({"status": result["status"], "computed_at_ms": result["computed_at_ms"], "last_week_close_ms": result.get("last_week_close_ms")}))
+        db.set_meta(f"alt:v3:coverage:{source_id}", _json({"rules_version": RULES_VERSION, "status": result["status"], "computed_at_ms": result["computed_at_ms"], "last_week_close_ms": result.get("last_week_close_ms")}))
     return len(result["structures"])
 
 

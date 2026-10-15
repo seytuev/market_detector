@@ -15,7 +15,7 @@ def observe_quote(db, source_id, price, event_at, received_at, *, price_kind="tr
     if event_at > received_at + 5000 or received_at - event_at > 60_000:
         return 0
     coverage = json.loads(db.get_meta(f"alt:v3:coverage:{source_id}") or "{}")
-    if coverage.get("status") != "ok" or (coverage.get("last_week_close_ms") or 0) < week_start(event_at):
+    if coverage.get("rules_version") != RULES_VERSION or coverage.get("status") != "ok" or (coverage.get("last_week_close_ms") or 0) < week_start(event_at):
         return 0  # resolve the latest W1 invalidations before accepting touches
     cursor_key = f"alt:v3:quote:{source_id}"
     count = 0

@@ -401,7 +401,7 @@ class AltConfig:
     # Движок диапазонов v2 (ТЗ 07.10.2026, R-01..R-04; app/alt/engine_v2.py).
     # Значения проектные, калибруются на эталонах (этап 6); все переопределяются
     # через ENV HTF_ALT_<FIELD>.
-    engine_version: str = "v3"               # v3 = alt-0.5 W1; v1/v2 retained for explicit rollback
+    engine_version: str = "v3"               # v3 = alt-0.6 W1; v1/v2 retained for explicit rollback
     touch_poll_seconds: int = 10            # quote fallback; never waits for a W1 close
     v2_max_candidates: int = 8               # лимит незавершённых кандидатов (R-02).
                                              # Завершённый эпизод и эпизод с

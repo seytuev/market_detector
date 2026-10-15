@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app.alt.engine_v3 import DAY, analyze
+from app.alt.engine_v3 import DAY, RULES_VERSION, analyze
 from app.alt.monitor_v3 import observe_quote
 from app.alt.store_v3 import persist_result, select_frame
 from app.config import Settings
@@ -44,7 +44,7 @@ def test_api_v3_rows_and_as_of(market):
         assert row["range"]["lower"] == 1.55 and row["range"]["upper"] == 3.383
         url = f"/api/alt/structure/{f['structure_id']}"
         detail = client.get(url, headers=auth).json()
-        assert detail["versions"]["rule"] == "alt-0.5"
+        assert detail["versions"]["rule"] == RULES_VERSION
         assert detail["cancel"]["price"] == .841
         assert not detail["targets"]
         early = client.get(url+f"?as_of_ms={stamp('2026-05-24')}", headers=auth).json()
@@ -138,12 +138,12 @@ async def test_v3_backfill_suppresses_previously_queued_events(market):
     assert db.conn.execute("SELECT COUNT(*) FROM alt_v3_event WHERE delivered=0").fetchone()[0] == 0
 
 
-def test_sub_80_percent_drawdown_does_not_block_base():
+def test_partial_history_cannot_borrow_missing_ath_to_admit_base():
     rows = json.loads((Path(__file__).parent/"fixtures/alt_v2/ohlc/NEAR.json").read_text())
     rows = [r for r in rows if stamp("2025-02-01")<=r["open_time"]<stamp("2025-11-01")]
     assert 1-min(r["low"] for r in rows)/max(r["high"] for r in rows) < .80
     result = analyze(rows)
-    assert any(b["geometry"]["lower"] == 1.55 and b["geometry"]["upper"] == 3.383 for b in result["structures"])
+    assert not result["structures"]  # missing old ATH is not invented
 
 
 async def test_runner_migrates_to_v3_without_legacy_history_or_spam(market):
@@ -159,7 +159,7 @@ async def test_runner_migrates_to_v3_without_legacy_history_or_spam(market):
     assert db.get_meta(f"alt:engine:{asset.id}:{src.id}") == "v3"
     assert db.conn.execute("SELECT COUNT(*) FROM alt_event").fetchone()[0] == 0
     assert db.conn.execute("SELECT COUNT(*) FROM alt_v3_event WHERE delivered=0").fetchone()[0] == 0
-    assert db.conn.execute("SELECT DISTINCT rules_version FROM alt_structure").fetchall()[0][0] == "alt-0.5"
+    assert db.conn.execute("SELECT DISTINCT rules_version FROM alt_structure").fetchall()[0][0] == RULES_VERSION
     assert (await runner._process_asset(asset, src, 0, stamp("2026-08-18")))[0] == "live"
 
 

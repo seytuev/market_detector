@@ -542,6 +542,10 @@ function renderCard() {
   const frame = shownRange || range;
   const eff = detail.effective_range;
   if (detail.structure_note) why.push(detail.structure_note);
+  if (detail.kind === 'structure' && eff && eff.quality_metrics && eff.quality_metrics.prior_ath) {
+    const quality = eff.quality_metrics;
+    why.push(`ATH до начала базы ${fmtPrice(quality.prior_ath)}; зона поиска аккумуляции ≤ ${fmtPrice(quality.admission_ceiling)}. Рост и падение до начала баланса не входят в возраст базы.`);
+  }
   if (eff && eff.base_start_open_time) {
     const start = fmtDate(eff.base_start_open_time);
     const end = eff.base_end_open_time ? fmtDate(eff.base_end_open_time) : null;

@@ -1,4 +1,4 @@
-"""Causal W1 bases and depression/BOS scenarios (alt-0.5).
+"""Causal W1 accumulation after a 70% drawdown (alt-0.6).
 
 All decisions consume closed UTC weeks. D1 is the source of OHLC and
 historical touch observations, never a substitute for a W1 close. Live
@@ -17,22 +17,25 @@ from typing import Any, Sequence
 DAY = 86_400_000
 WEEK = 7 * DAY
 MONDAY = 4 * DAY  # 1970-01-05 UTC
-RULES_VERSION = "alt-0.5"
+RULES_VERSION = "alt-0.6"
 
 
 @dataclass(frozen=True)
 class RulesV3:
     min_base_days: int = 101
+    min_drawdown: float = 0.70
     min_rebound_fraction: float = 0.15
     min_containment: float = 0.80
     max_directional_efficiency: float = 0.35
     max_center_shift_atr: float = 1.0
     min_lower_reactions: int = 2
+    min_upper_reactions: int = 2
+    upper_reaction_tolerance_fraction: float = 0.20
     reaction_tolerance_fraction: float = 0.10
     midpoint_tolerance_fraction: float = 0.06
     max_candidates: int = 64
     # A closed week below L is already a depression candidate. There is
-    # deliberately no minimum duration, drawdown gate, or pre-BOS stop.
+    # deliberately no minimum depression duration or pre-BOS stop.
 
 
 @dataclass(frozen=True)
@@ -108,6 +111,7 @@ class Candidate:
     upper: float
     lower_day: int
     upper_day: int
+    prior_ath: float
 
 
 @dataclass
@@ -119,6 +123,7 @@ class Base:
     lower_day: int
     upper_day: int
     mature_at: int
+    prior_ath: float
     state: str = "mature"
     end: int | None = None
     end_confirmed: int | None = None
@@ -156,8 +161,9 @@ def _snapshot(base: Base, at: int, reason: str, cfg: RulesV3) -> None:
             "lower": {"price": base.lower, "supports": [{"price": base.lower, "formed_at": base.lower_day}], "method": "wick"},
             "upper": {"price": base.upper, "supports": [{"price": base.upper, "formed_at": base.upper_day}], "method": "wick"},
         },
-        "quality_metrics": {"midpoint_wick_reactions": base.midpoint_wicks, "midpoint_is_optional": True},
-        "selection_reason": "Closed W1 balance, independent cycle, age >= 101 calendar days",
+        "quality_metrics": {"midpoint_wick_reactions": base.midpoint_wicks, "midpoint_is_optional": True,
+                            "prior_ath": base.prior_ath, "admission_ceiling": base.prior_ath * (1 - cfg.min_drawdown)},
+        "selection_reason": "W1 accumulation after >=70% drawdown; two-sided reactions; age >=101 calendar days",
         "data_coverage": {"timeframe": "W1", "closed_only": True}, "params": asdict(cfg),
         # Per-revision state prevents future scenarios/zones leaking into as_of.
         "scenario_state": {"depression": deepcopy(base.depression), "scenarios": deepcopy(base.scenarios),
@@ -176,18 +182,27 @@ def _qualifies(c: Candidate, weeks: list[Week], i: int, cfg: RulesV3) -> bool:
     closes = [w.close for w in window]
     path = sum(abs(a - b) for a, b in zip(closes, closes[1:]))
     efficiency = abs(closes[-1] - closes[0]) / path if path else 0
-    containment = sum(c.lower <= v <= c.upper for v in closes) / len(closes)
+    seed = window[:max(3, len(window) // 3)]
+    balance_low, balance_high = min(w.low for w in seed), max(w.high for w in seed)
+    containment = sum(balance_low <= v <= balance_high for v in closes) / len(closes)
     tolerance = cfg.reaction_tolerance_fraction * width
     lows = [j for j in range(c.start_index, i) if
             weeks[j].low <= c.lower + tolerance and
             (j == 0 or weeks[j].low < weeks[j - 1].low) and weeks[j].low <= weeks[j + 1].low]
+    highs = [j for j in range(c.start_index, i) if
+             weeks[j].high >= c.upper - cfg.upper_reaction_tolerance_fraction * width and
+             weeks[j].close < c.upper - cfg.upper_reaction_tolerance_fraction * width]
     third = max(2, len(window) // 3)
     atr = median(p.high - p.low for p in window)
-    center_shift = abs(median(closes[:third]) - median(closes[-third:]))
+    # A rally followed by a decline can have identical endpoints. Require
+    # balance throughout the window, including its middle third.
+    centers = [median(closes[:third]), median(closes[third:-third] or closes), median(closes[-third:])]
+    center_shift = max(centers) - min(centers)
     recent_support = bool(lows) and lows[-1] >= c.start_index + len(window) // 2
     upper_confirmed = c.upper_day < weeks[i].t
     return (efficiency <= cfg.max_directional_efficiency and containment >= cfg.min_containment
-            and len(lows) >= cfg.min_lower_reactions and recent_support and upper_confirmed
+            and len(lows) >= cfg.min_lower_reactions and len(highs) >= cfg.min_upper_reactions
+            and recent_support and upper_confirmed
             and center_shift <= cfg.max_center_shift_atr * atr)
 
 
@@ -263,12 +278,12 @@ def _week_step(base: Base, weeks: list[Week], i: int, cfg: RulesV3) -> None:
                                    "leg_start_index": i, "state": "pending_bos"}
                 _event(base, "manipulation_started", at, w.low, candle=w.t, timeframe="W1")
                 changed = True
-            elif not base.scenarios and (w.low < base.lower or w.high > base.upper):
+            elif not base.scenarios and (w.low < base.lower or base.upper < w.high <= base.prior_ath * (1 - cfg.min_drawdown)):
                 # A wick followed by a W1 close inside the existing balance
                 # is a boundary refinement, not a depression.
                 if w.low < base.lower:
                     base.lower, base.lower_day = w.low, w.low_day
-                if w.high > base.upper:
+                if base.upper < w.high <= base.prior_ath * (1 - cfg.min_drawdown):
                     base.upper, base.upper_day = w.high, w.high_day
                 _event(base, "boundary_refined", at, w.low, candle=w.t, timeframe="W1")
                 changed = True
@@ -334,6 +349,14 @@ def analyze(rows: Sequence[Any], *, as_of_ms: int | None = None, computed_at_ms:
     candidates: list[Candidate] = []
     cycle_floor = -1
     by_close = {w.available_at: i for i, w in enumerate(weeks)}
+    # Include incomplete listing weeks in the known price record, but never
+    # use a future ATH to admit an earlier candidate retrospectively.
+    prior_ath = {}
+    running_ath = 0.0
+    for candle in candles:
+        if candle["open_time"] == week_start(candle["open_time"]):
+            prior_ath[candle["open_time"]] = running_ath
+        running_ath = max(running_ath, candle["high"])
     for row in candles:
         for base in bases:
             old_events = len(base.events)
@@ -351,6 +374,8 @@ def analyze(rows: Sequence[Any], *, as_of_ms: int | None = None, computed_at_ms:
         candidates = [c for c in candidates if c.start > cycle_floor]
         alive = []
         for c in candidates:
+            if w.high > c.prior_ath * (1 - cfg.min_drawdown) + c.prior_ath * 1e-12:
+                continue  # an upswing is not time spent accumulating below -70%
             if w.close < c.lower:
                 continue  # a new lower stabilization must establish its own start
             if w.low < c.lower:
@@ -361,8 +386,10 @@ def analyze(rows: Sequence[Any], *, as_of_ms: int | None = None, computed_at_ms:
         candidates = alive
         if i >= 2 and weeks[i - 1].t > cycle_floor and weeks[i - 1].low < weeks[i - 2].low and weeks[i - 1].low <= w.low:
             p = weeks[i - 1]
-            candidates.append(Candidate(p.t, i - 1, p.low, max(p.high, w.high), p.low_day,
-                                        p.high_day if p.high >= w.high else w.high_day))
+            ath = prior_ath.get(p.t, 0.0)
+            if ath > 0 and max(p.high, w.high) <= ath * (1 - cfg.min_drawdown) + ath * 1e-12:
+                candidates.append(Candidate(p.t, i - 1, p.low, max(p.high, w.high), p.low_day,
+                                            p.high_day if p.high >= w.high else w.high_day, ath))
         for c in list(candidates):
             if not _qualifies(c, weeks, i, cfg):
                 continue
@@ -370,7 +397,7 @@ def analyze(rows: Sequence[Any], *, as_of_ms: int | None = None, computed_at_ms:
             overlap = [b for b in bases if b.end is None and c.lower < b.upper and c.upper > b.lower]
             if overlap:
                 continue
-            base = Base(_id(RULES_VERSION, c.start), c.start, c.lower, c.upper, c.lower_day, c.upper_day, w.available_at)
+            base = Base(_id(RULES_VERSION, c.start), c.start, c.lower, c.upper, c.lower_day, c.upper_day, w.available_at, c.prior_ath)
             for older in bases:
                 if older.end is None and c.upper <= older.lower:
                     older.end = c.start - DAY

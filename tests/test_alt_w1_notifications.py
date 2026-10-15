@@ -29,11 +29,11 @@ def test_hbar_card_names_zone_cycle_and_separate_invalidation_rules(hbar):
     _, ctx, _ = hbar
     text, details = alt_w1.message(ctx, delivered_at=ctx.lead["event_time_ms"])
     assert text.startswith("HBAR · Касание FVG W1\nBinance Spot · HBARUSDT")
-    assert "FVG W1: 0,0576–0,08723" in text
-    assert "Цена касания: 0,08503" in text
-    assert "База 2024: 0,067–0,1817 · исторические уровни" in text
-    assert "Отмена FVG: закрытие W1 ниже 0,0576" in text
-    assert "Отмена сценария: закрытие W1 ниже 0,0416" in text
+    assert "FVG W1: 0,0423–0,0507" in text
+    assert "Цена касания: 0,045" in text
+    assert "База 2022–2023: 0,055–0,0845 · исторические уровни" in text
+    assert "Отмена FVG: закрытие W1 ниже 0,0423" in text
+    assert "Отмена сценария: закрытие W1 ниже 0,0356" in text
     assert "15.10.2026 23:53 МСК" in text
     assert len(text.encode("utf-16-le"))//2 < 1000
     assert len(details) > len(text) and "Тени W1 сценарий не отменяют" in details
@@ -59,9 +59,9 @@ def test_zone_invalidation_keeps_bounds_and_does_not_cancel_whole_scenario(hbar)
     zone = next(z for z in ctx.frame["scenario_state"]["pd_zones"] if z["id"] == ctx.lead["payload"]["zone_id"])
     zone["invalidated_at_ms"] = ctx.lead["event_time_ms"]
     text, _ = alt_w1.message(ctx, delivered_at=ctx.lead["event_time_ms"])
-    assert "Зона FVG отменена W1" in text and "FVG W1: 0,0576–0,08723" in text
+    assert "Зона FVG отменена W1" in text and "FVG W1: 0,0423–0,0507" in text
     assert "Закрытие W1: 0,05" in text
-    assert "Отмена сценария: закрытие W1 ниже 0,0416" in text
+    assert "Отмена сценария: закрытие W1 ниже 0,0356" in text
     scene = alt_w1.snapshot(db, ctx)
     changed = next(z for z in scene["overlays"] if z["label"] == "FVG W1 · отменена")
     assert changed["muted"]
@@ -72,9 +72,9 @@ def test_depression_notice_has_no_pre_bos_cancellation(hbar):
     ctx.lead["event_type"] = "manipulation_started"
     state = ctx.frame["scenario_state"]
     state["scenarios"] = []
-    state["depression"] = {"minimum": .0416, "bos_level": .0586}
+    state["depression"] = {"minimum": .0356, "bos_level": .0586}
     text, _ = alt_w1.message(ctx, delivered_at=ctx.lead["event_time_ms"])
-    assert "Минимум депрессии: 0,0416" in text
+    assert "Минимум депрессии: 0,0356" in text
     assert "Ожидается закрытие W1 выше 0,0586" in text
     assert "Отмена сценария:" not in text
 
@@ -99,11 +99,11 @@ def test_w1_chart_excludes_future_and_incomplete_weeks(hbar):
     db, ctx, rows = hbar
     before = alt_w1.snapshot(db, ctx)
     at = ctx.lead["event_time_ms"]
-    assert before["timeframe"] == "W1" and before["quote"]["price"] == .08503
+    assert before["timeframe"] == "W1" and before["quote"]["price"] == .045
     assert all(bar["time"]*1000+WEEK <= at for bar in before["candles"])
     assert 30 < len(before["candles"]) <= 52
     selected = next(z for z in before["overlays"] if z["label"] == "FVG W1 · тест")
-    assert (selected["lower"], selected["upper"]) == (.0576, .08723)
+    assert (selected["lower"], selected["upper"]) == (.0423, .0507)
     assert not any(z["type"] == "base" for z in before["overlays"])
     assert {l["label"] for l in before["levels"]} >= {"L", "M", "U"}
     future = (at//DAY+1)*DAY
@@ -140,7 +140,7 @@ async def test_image_failure_preserves_card_then_retry_caches_event_image(hbar, 
     monkeypatch.setattr(alt_w1, "render_chart", broken)
     fallback = await dispatcher._render_v3(row, members)
     assert fallback.chart_pending and not fallback.image_path
-    assert "Цена касания: 0,08503" in fallback.text and fallback.details
+    assert "Цена касания: 0,045" in fallback.text and fallback.details
 
     def render(_db, _ctx, path):
         calls.append("rendered")
@@ -248,5 +248,5 @@ def test_w1_png_uses_website_style_and_full_zone_bounds(hbar, tmp_path, monkeypa
         assert image.size == (1920, 960)
         assert image.getpixel((1910, 5))[:3] == (255, 255, 255)
     assert 'data-rendered="true"' in dom[0]
-    assert "FVG W1 · тест" in dom[0] and "0,0576–0,08723" in dom[0]
+    assert "FVG W1 · тест" in dom[0] and "0,0423–0,0507" in dom[0]
     assert "Цена касания" in dom[0]

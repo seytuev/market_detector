@@ -126,5 +126,5 @@ def detail(db, structure_id, settings, as_of_ms=None):
             "retest_zone": "W1 FVG/OB импульса BOS либо граница базы; событие при касании",
             "width_up": "(U/L − 1) × 100%", "width_down": "(1 − L/U) × 100%"},
         "candles": candles, "candle_history": history, "as_of_ms": at, "ath": stats,
-        "structure_note": "W1 · 100+ дней; депрессия не расширяет базу", "target_snapshot": None})
+        "structure_note": "Аккумуляция W1 после просадки ≥70% от известного ATH · 100+ дней; депрессия не расширяет базу", "target_snapshot": None})
     return result

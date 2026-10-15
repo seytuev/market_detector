@@ -550,7 +550,8 @@ def test_ranges_empty_v2_history(client, seeded):
     assert d["episodes_v2"] == []
     assert d["current"]["episode_id"] is None
     assert d["current"]["reason"] == "no_episodes"
-    assert d["rules_versions"] == {"v1": "alt-0.1", "v2": "alt-0.3", "v3": "alt-0.5"}
+    from app.alt.engine_v3 import RULES_VERSION
+    assert d["rules_versions"] == {"v1": "alt-0.1", "v2": "alt-0.3", "v3": RULES_VERSION}
     assert d["v1"]["rules_version"] == "alt-0.1"
     assert len(d["v1"]["ranges"]) == 1
     assert d["v1"]["ranges"][0]["rules_version"] == "alt-0.1"
