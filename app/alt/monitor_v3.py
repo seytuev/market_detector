@@ -6,6 +6,7 @@ import math
 
 from .engine_v3 import RULES_VERSION, _id, week_start
 from .store_v3 import frame, insert_event
+from .universe import is_excluded_asset
 
 
 def observe_quote(db, source_id, price, event_at, received_at, *, price_kind="trade", source_seq=None):
@@ -29,7 +30,7 @@ def observe_quote(db, source_id, price, event_at, received_at, *, price_kind="tr
                 continue
             source = db.get_alt_instrument_source(f["asset_id"])
             asset = db.get_alt_asset(f["asset_id"])
-            if source is None or source.id != source_id or asset is None or not asset.enabled:
+            if source is None or source.id != source_id or asset is None or not asset.enabled or is_excluded_asset(asset):
                 continue
             state = f["scenario_state"]
             scenarios = [s for s in state.get("scenarios", []) if s["bos_at_ms"] <= event_at and s["cancelled_at_ms"] is None]

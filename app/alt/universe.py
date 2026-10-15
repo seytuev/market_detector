@@ -72,6 +72,14 @@ EXC_DUPLICATE = "duplicate"
 MAPPING_PENDING_REASON = "same symbol, different CMC id"
 
 
+def is_excluded_asset(asset: AltAsset) -> bool:
+    """Apply persisted CMC exclusions also to old rows and read/monitor paths."""
+    canonical = CANONICAL_MAP.get(asset.cmc_id)
+    return bool(asset.exclusion_category or asset.symbol.upper() in STABLE_SYMBOLS
+                or asset.symbol.upper() in WRAPPED_SYMBOLS
+                or canonical and canonical["kind"] in ("wrapped", "duplicate"))
+
+
 def classify_exclusion(listing: CmcListing) -> Optional[str]:
     """Категория исключения по тегам/метаданным CMC или None (включаем).
 

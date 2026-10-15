@@ -45,6 +45,46 @@ def test_parameter_literals():
     assert translate("SELECT '?' AS x, ? AS y, 'user' AS z") == "SELECT '?' AS x, %s AS y, 'user' AS z"
 
 
+def test_v1_upgrade_creates_w1_event_journal_and_preserves_data(pg):
+    from app.alt.engine_v3 import analyze
+    from app.alt.store_v3 import persist_result, select_frame
+    from app.models_alt import AltAsset, AltInstrumentSource
+    pg.set_meta("upgrade:keep", "preserved")
+    pg.set_meta("alt:v3:initialized", "failed_previous_replay")
+    pg.conn.execute("DROP TABLE alt_v3_event")
+    pg.conn.execute("DELETE FROM postgres_schema_version WHERE version>1")
+    pg.conn.execute("INSERT INTO postgres_schema_version VALUES (1) ON CONFLICT DO NOTHING")
+    pg.conn.migrate()
+    pg.conn.migrate()  # restart is idempotent
+    assert pg.conn.execute("SELECT max(version) FROM postgres_schema_version").fetchone()[0] == 2
+    assert pg.get_meta("upgrade:keep") == "preserved"
+    assert pg.get_meta("alt:v3:initialized") is None
+    asset = pg.upsert_alt_asset(AltAsset(None, 6535, "NEAR"))
+    source = pg.upsert_alt_instrument_source(AltInstrumentSource(None, asset.id, "binance", "NEARUSDT"))
+    rows = json.loads((Path(__file__).parent / "fixtures/alt_v2/ohlc/NEAR.json").read_text())
+    result = analyze(rows)
+    persist_result(pg, asset.id, source.id, result, backfill=True)
+    persist_result(pg, asset.id, source.id, result)
+    frame = select_frame(pg, asset.id, source.id)
+    assert (frame["lower"], frame["upper"]) == (1.55, 3.383)
+    assert pg.conn.execute("SELECT count(*) FROM alt_v3_event").fetchone()[0] > 0
+    assert pg.conn.execute("SELECT count(*) FROM alt_v3_event WHERE delivered=0").fetchone()[0] == 0
+
+
+def test_failed_upgrade_rolls_back_ddl_and_schema_version(pg, monkeypatch):
+    from app.postgres import MIGRATIONS
+    pg.conn.execute("DROP TABLE alt_v3_event")
+    pg.conn.execute("DELETE FROM postgres_schema_version WHERE version>1")
+    pg.conn.execute("INSERT INTO postgres_schema_version VALUES (1) ON CONFLICT DO NOTHING")
+    pg.set_meta("alt:v3:initialized", "keep_if_upgrade_fails")
+    monkeypatch.setitem(MIGRATIONS, 2, MIGRATIONS[2] + "; SELECT 1/0")
+    with pytest.raises(psycopg.errors.DivisionByZero):
+        pg.conn.migrate()
+    assert pg.conn.execute("SELECT max(version) FROM postgres_schema_version").fetchone()[0] == 1
+    assert pg.conn.execute("SELECT to_regclass('alt_v3_event')").fetchone()[0] is None
+    assert pg.get_meta("alt:v3:initialized") == "keep_if_upgrade_fails"
+
+
 def test_pivot_selection_retains_history_but_hydrates_only_current(pg):
     from app.models_ltf import LtfPivot
     iid = pg.upsert_instrument(Instrument(None, 'BTC', 'binance', 'spot', 'BTCUSDT', 'USDT'))

@@ -25,6 +25,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 from ..alt.store_v04 import list_structures, select_frame
+from ..alt.universe import is_excluded_asset
 from ..config import Settings
 from ..db import Database
 from ..models import close_boundary_ms, now_ms
@@ -892,11 +893,23 @@ def _nodata_row(
         "last_event": None,
         "run_status": reason.get("status") if reason else None,
         "reason": (
-            (reason or {}).get("reason")
+            _source_reason_text((reason or {}).get("reason"))
             or ("история неполная (partial)" if source and source.history_scope == "partial"
                 else ("нет свечей D1" if source else "источник не выбран"))
         ),
     }
+
+
+def _source_reason_text(reason: Optional[str]) -> Optional[str]:
+    if reason == "no_spot_pair":
+        return "Нет поддерживаемой спотовой пары на выбранных биржах"
+    if reason == "mapping_pending":
+        return "Нужно уточнить соответствие актива и биржевого тикера"
+    if reason and reason.startswith("catalog_unavailable:"):
+        return "Не удалось проверить каталог спотовых пар: " + reason.split(":", 1)[1]
+    if reason and reason.startswith("venue_unavailable:"):
+        return "Источник недоступен: " + reason.split(":", 1)[1]
+    return reason
 
 
 # ---------------------------------------------------------------------------
@@ -983,9 +996,17 @@ def alt_setups_table(
     stats_cache: dict[int, Optional[dict[str, Any]]] = {}
     # Биржи — из источников, а не из уже отфильтрованных строк.
     venues: set[str] = set()
+    excluded_count = unsupported_count = 0
 
     for asset in db.list_alt_assets():
+        if not asset.enabled or is_excluded_asset(asset):
+            excluded_count += 1
+            continue
         source = db.get_alt_instrument_source(asset.id)
+        reason = reasons.get(asset.id)
+        if source is None and reason and reason.get("reason") == "no_spot_pair":
+            unsupported_count += 1
+            continue  # unsupported coverage is not a broken setup
         if source is not None and source.venue:
             venues.add(source.venue)
         stats: Optional[dict[str, Any]] = None
@@ -1001,7 +1022,7 @@ def alt_setups_table(
             for frame in frames:
                 target = history_rows if frame["base_end_open_time"] is not None else active_rows
                 target.append(v3_row(db, asset, source, stats, frame))
-            if not frames and (source is None or stats is None):
+            if not frames and (source is None or stats is None or reason is not None):
                 active_rows.append(_nodata_row(asset, source, stats, reasons.get(asset.id)))
             continue
 
@@ -1142,6 +1163,7 @@ def alt_setups_table(
         "buckets": counts,
         "venues": sorted(venues),
         "rows": rows,
+        "coverage": {"excluded": excluded_count, "unsupported_spot": unsupported_count},
     }
 
 
@@ -1573,7 +1595,7 @@ def _run_brief(run: Any) -> Optional[dict[str, Any]]:
     per_asset = summary.get("per_asset") or []
     skipped = [
         {"asset_id": e.get("asset_id"), "symbol": e.get("symbol"),
-         "reason": e.get("reason")}
+         "reason_code": e.get("reason"), "reason": _source_reason_text(e.get("reason"))}
         for e in per_asset if e.get("status") != "processed"
     ]
     return {

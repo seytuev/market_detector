@@ -61,7 +61,7 @@ from ..models_alt import (
 from .engine import AltEngine
 from .engine_v2 import AltEngineV2
 from .store_v04 import persist_candles
-from .universe import refresh_universe
+from .universe import is_excluded_asset, refresh_universe
 
 log = logging.getLogger(__name__)
 
@@ -174,7 +174,8 @@ class AltRunner:
         следующего слота — цикл опроса не превращается в спам ретраями.
         """
         if (self.cfg.engine_version == "v3" and self.db.get_meta("alt:v3:initialized") is None
-                and any(v != "v3" for v in self.db.meta_prefix("alt:engine:").values())):
+                and (self.db.get_meta("alt:v3:storage_upgrade_pending") == "1"
+                     or any(v != "v3" for v in self.db.meta_prefix("alt:engine:").values()))):
             return True
         slot_ms = int(self._last_due_slot(now).timestamp() * 1000)
         last_any = self.db.get_latest_alt_run()
@@ -242,6 +243,7 @@ class AltRunner:
         }
         if self.cfg.engine_version == "v3":
             self.db.set_meta("alt:v3:initialized", str(now))
+            self.db.set_meta("alt:v3:storage_upgrade_pending", "0")
 
         # --- (a) вселенная ---
         uni = await refresh_universe(self.db, self.cmc_adapter, self.cfg, now)
@@ -338,11 +340,13 @@ class AltRunner:
         seen: set[int] = set()
         for cmc_id in included_cmc_ids:
             asset = self.db.get_alt_asset_by_cmc_id(cmc_id)
-            if asset is None or not asset.enabled:
+            if asset is None or not asset.enabled or is_excluded_asset(asset):
                 continue
             targets.append((asset, True))
             seen.add(asset.id)
         for asset in self.db.list_alt_assets(enabled_only=True):
+            if is_excluded_asset(asset):
+                continue
             if asset.id in seen:
                 continue
             setups = self.db.list_alt_setups(asset.id)
@@ -373,7 +377,7 @@ class AltRunner:
             return None
         try:
             catalog = await adapter.catalog()
-            cache[venue] = {i.symbol for i in catalog}
+            cache[venue] = {i.symbol.upper() for i in catalog if i.market_type == "spot"}
         except AdapterError as exc:
             log.warning("alt: каталог %s недоступен: %s", venue, exc)
             venue_errors[venue] = str(exc)
@@ -390,6 +394,8 @@ class AltRunner:
         (история одного source_id не смешивает площадки, §4); новый —
         по venue_preference (binance → bybit), внутри площадки по
         quote_preference (USDT → USDC), source_version=1."""
+        if asset.mapping_status == "mapping_pending":
+            return None, "mapping_pending"
         existing = self.db.get_alt_instrument_source(asset.id)
         if existing is not None:
             if existing.venue not in self.adapters:
@@ -397,11 +403,14 @@ class AltRunner:
             return existing, None
         quotes = [q.upper() for q in _csv(self.cfg.quote_preference)]
         base = asset.symbol.upper()
+        unavailable = []
         for venue in _csv(self.cfg.venue_preference):
             if venue not in self.adapters:
+                unavailable.append(venue)
                 continue
             symbols = await self._catalog_symbols(venue, catalogs, venue_errors)
             if symbols is None:
+                unavailable.append(venue)
                 continue
             for quote in quotes:
                 symbol = f"{base}{quote}"
@@ -413,7 +422,7 @@ class AltRunner:
                         )
                     )
                     return src, None
-        return None, "no_spot_pair"
+        return None, "catalog_unavailable:" + ",".join(unavailable) if unavailable else "no_spot_pair"
 
     # ------------------------------------------------------------------
     # (c) загрузка истории D1
@@ -511,6 +520,8 @@ class AltRunner:
 
         async def inspect(asset):
             nonlocal total
+            if is_excluded_asset(asset):
+                return
             async with semaphore:
                 src = self.db.get_alt_instrument_source(asset.id)
                 if src is None or src.venue not in self.adapters or self._live_retry.get(src.id, 0) > stamp:
