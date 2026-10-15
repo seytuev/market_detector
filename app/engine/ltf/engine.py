@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+from bisect import bisect_right
 from dataclasses import dataclass, field, replace
 from typing import Any, Optional
 from functools import wraps
@@ -925,12 +926,29 @@ class LtfEngine:
             return candle.close > zone.lower
         return candle.close < zone.lower
 
+    def _history_bounds(self, up_to):
+        if len(up_to) <= 8:
+            return None
+        histories = getattr(self.db._local, 'activation_histories', None)
+        history = histories.get(up_to[-1].instrument_id) if histories else None
+        if history is None:
+            return None
+        index = history.get_index()
+        return index, bisect_right(index.opens, up_to[-1].open_time)
+
     def _level_passed_candle(
         self, zone_type: str, level: float, formed_at: int, up_to: list
     ):
         """§9 (Этап 5): первая закрытая свеча ПОСЛЕ рождения экстремума,
         закрепившаяся за уровнем без возврата (BSL: Close > K; SSL: Close < K).
         Рождение экстремума и свечи до него — не ретест (приёмка п.11)."""
+        bounds = self._history_bounds(up_to)
+        if bounds is not None and zone_type in ('BSL', 'SSL'):
+            index, end = bounds
+            start = bisect_right(index.opens, formed_at)
+            hit = index.first(start, lambda i: index.max_close[i] > level
+                              if zone_type == 'BSL' else index.min_close[i] < level, end)
+            return index.rows[hit] if hit is not None else None
         for c in up_to:
             if not c.closed or c.open_time <= formed_at:
                 continue
@@ -952,6 +970,17 @@ class LtfEngine:
         fvg_candles = zone.evidence.get("fvg_candles")
         if fvg_candles:
             after = fvg_candles[-1]
+        bounds = self._history_bounds(up_to)
+        if bounds is not None:
+            index, end = bounds
+            start = bisect_right(index.opens, after)
+            bull = zone.direction == Direction.BULL
+            hit = index.first(start, lambda i: reaches_depth(
+                zone, index.low[i] if bull else index.high[i], 1.0)
+                and (index.high[i] >= zone.lower if bull else index.low[i] <= zone.upper), end)
+            if hit is None:
+                return None
+            return index.tests(zone.lower, zone.upper, zone.direction, after, end=hit+1)
         first: Optional[int] = None
         extreme: Optional[float] = None
         for c in up_to:

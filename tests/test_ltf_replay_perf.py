@@ -286,6 +286,36 @@ def test_bulk_range_reclassification_matches_single_row_writes():
     assert states[0] == states[1]
 
 
+def test_indexed_range_lifecycle_checks_match_scalar_at_every_prefix(db, instrument_id):
+    import random
+    from dataclasses import replace
+    from app.models import Direction
+    from app.models_ltf import LtfEntryZone
+    from app.engine.ltf.relevance import activation_history, prime_activation_history
+    rng = random.Random(21)
+    bars = []
+    for i in range(80):
+        price = rng.uniform(80, 120)
+        bars.append((price, price+2, price-2, price+rng.uniform(-1, 1)))
+    candles = make_h1_candles(bars, T0, instrument_id)
+    candles = [replace(c, closed=i % 17 != 0) for i, c in enumerate(candles) if i != 23]
+    engine = LtfEngine(db, _CFG)
+    for direction in (Direction.BULL, Direction.BEAR):
+        for formed in (0, 12, 35):
+            zone = LtfEntryZone(None,instrument_id,'FVG',direction,95,105,
+                                T0+formed*H1_MS,T0+(formed+3)*H1_MS,
+                                evidence={'fvg_candles':[T0+(formed+j)*H1_MS for j in range(3)]})
+            expected = [engine._fvg_fill_scan(zone, candles[:n]) for n in range(1, len(candles)+1)]
+            levels = {kind:[engine._level_passed_candle(kind,100,zone.formed_at,candles[:n])
+                            for n in range(1,len(candles)+1)] for kind in ('BSL','SSL')}
+            with activation_history(db):
+                prime_activation_history(db, instrument_id, candles)
+                assert [engine._fvg_fill_scan(zone,candles[:n]) for n in range(1,len(candles)+1)] == expected
+                for kind in ('BSL','SSL'):
+                    assert [engine._level_passed_candle(kind,100,zone.formed_at,candles[:n])
+                            for n in range(1,len(candles)+1)] == levels[kind]
+
+
 def test_scenario_write_keeps_old_reference_and_rollback_discards_cached_update():
     db = _build_db(0, ltf_cache=True)
     scenario = db.list_ltf_scenarios_for_instrument(1)[0]

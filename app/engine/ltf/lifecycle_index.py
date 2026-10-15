@@ -41,17 +41,18 @@ class LifecycleIndex:
             self.min_high[i] = min(self.min_high[2*i], self.min_high[2*i+1])
             self.max_low[i] = max(self.max_low[2*i], self.max_low[2*i+1])
 
-    def tests(self, lower, upper, direction, after_open):
+    def tests(self, lower, upper, direction, after_open, end=None):
         """First interval touch and deepest touching wick; a gap is no touch."""
         from bisect import bisect_right
         start = bisect_right(self.opens, after_open)
+        end = len(self.rows) if end is None else min(end, len(self.rows))
         bull = direction == Direction.BULL
         first = extreme = None
         def visit(node, left, right):
             nonlocal first, extreme
-            if right <= start or left >= len(self.rows) or self.high[node] < lower or self.low[node] > upper:
+            if right <= start or left >= end or self.high[node] < lower or self.low[node] > upper:
                 return
-            if left >= start and right <= len(self.rows) and self.min_high[node] >= lower and self.max_low[node] <= upper:
+            if left >= start and right <= end and self.min_high[node] >= lower and self.max_low[node] <= upper:
                 if first is None:
                     first = self.opens[left]
                 value = self.low[node] if bull else self.high[node]
