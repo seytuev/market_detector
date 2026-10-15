@@ -158,6 +158,11 @@
       "reserved_usd": "0.5",
       "actual_usd": null
     },
-    "followup": "Parameterize PostgreSQL queue diagnostic LIKE; preserve source revision/as-of in historical matching and display archive provenance."
+    "followup": "Parameterize PostgreSQL queue diagnostic LIKE; preserve source revision/as-of in historical matching and display archive provenance.",
+    "followup_regression": {
+      "sqlite_research": 57,
+      "postgresql_research": 57,
+      "javascript_syntax": "passed"
+    }
   }
 }
