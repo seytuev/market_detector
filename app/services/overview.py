@@ -167,12 +167,18 @@ ATTENTION_REASON_RU = {
 }
 
 
-def _scenario_summary(sc, selected) -> dict[str, Any]:
+def _scenario_summary(sc, selected, asset=None) -> dict[str, Any]:
     """Display the structural scenario independently from delivery quality.
 
     Existence of the active scenario is the engine's confirmation fact;
     eligibility of an entry zone is a different condition.
     """
+    if asset and asset.get("governs") and (
+        asset["scenario_summary"]["confirmed"]
+        or (asset.get("structure") or {}).get("movement_id") is not None
+        or sc is None
+    ):
+        return asset["scenario_summary"]
     if sc is not None:
         return {"id": sc.id, "confirmed": True, "state": sc.state,
                 "label": "Сценарий подтверждён", "direction": sc.direction.value,
@@ -1256,7 +1262,7 @@ def instruments_overview(db: Database, settings) -> list[dict[str, Any]]:
             },
             "stage": stage,
             "market_stage": market_stage,
-            "scenario_summary": _scenario_summary(sc, selected),
+            "scenario_summary": _scenario_summary(sc, selected, asset),
             "presentation": presentation,
             "asset": asset,
             "direction": direction,
@@ -1417,7 +1423,7 @@ def instrument_current(
         "data_state": ds,
         "stage": stage,
         "market_stage": market_stage,
-        "scenario_summary": _scenario_summary(sc, selected),
+        "scenario_summary": _scenario_summary(sc, selected, asset),
         "presentation": presentation,
         "asset": asset,
         "direction": direction,

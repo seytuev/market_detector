@@ -1,6 +1,5 @@
-/* Экран «Сейчас» (LevelFrame, этап 3 ребрендинга; макет §6.A плана).
-   Обзор активов поверх read model /api/ltf/instruments + /current и очереди
-   /api/candidates. Подключается после app.js: интеграция — через
+/* Текущее состояние рынка и активов поверх /api/ltf/instruments + /current.
+   Подключается после app.js: интеграция — через
    window.LFNow.show() из showView(), мост window.LFDesk.openInstrument() и
    подписку registerWsHandler() (оба объявлены в app.js). */
 
@@ -13,11 +12,6 @@
   const fmtPrice = HTF.fmtPrice;
 
   const INSTRUMENT_KEY = 'htf:instrument';
-  // счётчик «На проверку» — та же выборка, что у очереди «Проверка» (app.js)
-  const HTF_TFS = new Set(['D1', 'W1']);
-
-  // Зеркалит серверный ATTENTION_ORDER (app/services/overview.py, L06)
-  const ATTENTION_ORDER = ['review', 'price_in_zone', 'eligible', 'awaiting', 'data_problem', 'none'];
   const DATA_STATE_REASON_RU = {
     no_quote: 'нет котировки',
     no_h1_candles: 'нет свечей H1',
@@ -29,22 +23,19 @@
     processing_lag: 'расчёт отстаёт',
     history_gap: 'разрыв истории',
   };
-  // Флага «наблюдение включено» в /api/ltf/instruments нет (список и так
-  // содержит только наблюдаемые активы), поэтому «Наблюдаю» — активы под
-  // наблюдением без требуемого действия, «Нужно внимание» — с действием или
-  // проблемой данных
+  // The overview lists enabled assets; filters describe their market state.
   const FILTERS = {
     all: () => true,
-    attention: (r) => !!r.review_state?.needed || r.attention === 'price_in_zone' ||
+    awaiting: (r) => !r.scenario_summary?.confirmed &&
+      ['awaiting', 'waiting_h1', 'structure_absent', 'context_missing', 'scenario_not_opened'].includes(r.scenario_summary?.state),
+    attention: (r) => r.attention === 'price_in_zone' ||
       !!(r.data_state?.state && r.data_state.state !== 'ok' && r.data_state.reason !== 'current_candle_pending'),
-    watch: () => true,
     zone: (r) => r.attention === 'price_in_zone' || r.stage === 'Цена в HTF-зоне' || r.stage === 'Цена в Entry Zone',
     eligible: (r) => !!r.scenario_summary?.confirmed,
   };
 
   const st = {
     rows: [],            // строки /api/ltf/instruments
-    candidates: 0,       // HTF-кандидаты на проверку
     currents: new Map(), // instrument_id -> снимок /current
     prices: new Map(),   // instrument_id -> {price, at} из WS (новее снимка)
     versions: new Map(), // доменные версии снимка (§13) — рефетч по их росту
@@ -63,8 +54,10 @@
   }
 
   function rank(r) {
-    const i = ATTENTION_ORDER.indexOf(r.attention || 'none');
-    return i === -1 ? ATTENTION_ORDER.length : i;
+    if (FILTERS.zone(r)) return 0;
+    if (FILTERS.eligible(r)) return 1;
+    if (FILTERS.awaiting(r)) return 2;
+    return FILTERS.attention(r) ? 3 : 4;
   }
 
   function ageText(ms) {
@@ -106,7 +99,7 @@
   }
 
   function renderStats() {
-    const attention = st.rows.filter(FILTERS.attention).length;
+    const attention = st.rows.filter(FILTERS.awaiting).length;
     const inZone = st.rows.filter(FILTERS.zone).length;
     const eligible = st.rows.filter(FILTERS.eligible).length;
     $('now-stat-review').textContent = attention;
@@ -119,11 +112,9 @@
   function scenarioHtml(r) {
     const titled = r.asset && r.asset.asset_state && r.asset.asset_state.title;
     const main = r.scenario_summary?.label || titled || r.market_stage || r.stage || 'Сценарий не определён';
-    const review = (r.review_state && r.review_state.needed)
-      ? `<div class="state-sub"><a href="#review" data-view="review">Нужна проверка · ${r.review_state.count}</a></div>`
-      : '';
     const direction = {bull:'Рост',bear:'Снижение'}[r.scenario_summary?.direction];
-    return esc(main) + (direction ? `<div class="state-sub">${direction}</div>` : '') + review;
+    return `<span class="now-scenario ${r.scenario_summary?.confirmed ? 'is-confirmed' : ''}">${esc(main)}</span>` +
+      (direction ? `<div class="state-sub">${direction}</div>` : '');
   }
 
   function zoneRelationHtml(r) {
@@ -164,8 +155,8 @@
       `<td data-label="Цена, USDT" class="num">` +
       `<span class="price-val">${p ? esc(fmtPrice(p.price)) : '—'}</span>` +
       `<div class="price-age" title="${p && p.at ? esc(new Date(p.at).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' })) : ''}">${esc(when)}</div></td>` +
-      `<td data-label="Наблюдение">` +
-      `<button type="button" class="btn small asset-off" aria-pressed="true" data-off="${ins.id}">Наблюдать</button></td></tr>`;
+      `<td data-label="Анализ">` +
+      `<button type="button" class="btn small asset-analyze" data-iid="${ins.id}">Открыть ↗</button></td></tr>`;
   }
 
   function visibleRows() {
@@ -344,6 +335,24 @@
     renderStats();
     renderTable();
     renderCard();
+    renderFocus();
+  }
+
+  function renderFocus() {
+    const box = $('now-focus');
+    if (!box) return;
+    box.innerHTML = '<div class="now-assets-head"><h2>На что смотреть</h2><span class="lf-caption">Текущая структура</span></div>' +
+      (st.rows.length ? st.rows.map(row => {
+        const asset = st.currents.get(row.instrument.id)?.asset || row.asset;
+        const summary = asset?.scenario_summary || row.scenario_summary || {};
+        const direction = summary.direction === 'bull' ? 'is-long' : summary.direction === 'bear' ? 'is-short' : '';
+        const alignment = asset?.trade_setup?.daily_alignment;
+        return `<button type="button" class="now-focus-asset ${direction}" data-focus-iid="${row.instrument.id}">` +
+          `<span class="now-focus-pair">${esc(baseQuote(row.instrument.symbol).join(' / '))}<span aria-hidden="true">↗</span></span>` +
+          `<strong>${esc(summary.market_state || summary.label || row.market_stage || 'Состояние не определено')}</strong>` +
+          `<span>${esc(asset?.next_action?.explanation || summary.detail || 'Откройте анализ для просмотра структуры.')}</span>` +
+          (alignment ? `<small>Приоритет D1 · ${esc(alignment.status)}</small>` : '') + '</button>';
+      }).join('') : '<p class="now-empty">Добавьте актив в настройках или скринере.</p>');
   }
 
   // Точечное обновление возраста котировок без перерисовки (фокус/скролл
@@ -382,10 +391,7 @@
     if (!isActive()) return;
     const seq = ++st.reqSeq;
     try {
-      const [ov, cands] = await Promise.all([
-        api('/api/ltf/instruments'),
-        api('/api/candidates'),
-      ]);
+      const ov = await api('/api/ltf/instruments');
       if (seq !== st.reqSeq) return;
       st.rows = (ov && ov.instruments) || [];
       // §13 (этап 6b): доменные версии снимка — точка отсчёта для WS-diff'ов
@@ -395,7 +401,6 @@
           if (cur == null || v > cur) st.versions.set(key, v);
         }
       }
-      st.candidates = ((cands || []).filter((z) => HTF_TFS.has(z.timeframe))).length;
       // Цена строки уже в обзоре. Полный снимок H1 нужен только карточке
       // выбранного актива, а не каждому инструменту списка.
       pickSelected();
@@ -498,10 +503,12 @@
     if (!box) return;
     try {
       const data = await api('/api/journal/page?kind=all&limit=30');
-      const items = LFUI.groupEvents(data.items).slice(0,5);
+      const meaningful = (data.items || []).filter(item => !/entry_zone|entry_added|entry_update|new_entry/i.test(item.kind || '')
+        && !/Entry Zones|новые зоны входа/i.test(item.title || ''));
+      const items = LFUI.groupEvents(meaningful).slice(0,4);
       if (seq !== st.reqSeq) return;
       if (!items || !items.length) {
-        box.innerHTML = '<li class="now-empty">Записей журнала пока нет.</li>';
+        box.innerHTML = '<li class="now-empty">Новых изменений структуры и рыночного фона пока нет.</li>';
         return;
       }
       st.recentItems = items.map(group => group.items[0]);
@@ -527,6 +534,8 @@
     if (e.target.id === 'now-recent-retry') loadRecent(st.reqSeq);
     const recent = e.target.closest('.now-recent-open');
     if (recent && window.LFJournal) LFJournal.details(st.recentItems[Number(recent.dataset.recent)]);
+    const focus = e.target.closest('[data-focus-iid]');
+    if (focus) openObserved(focus.dataset.focusIid);
   });
 
   async function loadCurrent(id, seq) {
@@ -550,6 +559,7 @@
     else st.currents.delete(id);
     st.cardLoading = false;
     renderCard();
+    renderFocus();
   }
 
   function selectRow(tr) {

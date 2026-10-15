@@ -646,6 +646,8 @@ def _zone_payload(
         "first_test_at": first_test_at,
         "max_test_depth": max_test_depth,
         "test_extreme": test_extreme,
+        "tested_slices": _tested_slices(index, type_, direction, lower, upper,
+                                        None if candidate else confirmed_at, formed_at),
         "validity": validity,
         "provenance": provenance,
         "source": source,
@@ -653,6 +655,44 @@ def _zone_payload(
         "candidate": candidate or confirmed_at is None,
         "recently_taken": recently,
     }
+
+
+def _tested_slices(index, type_, direction, lower, upper, confirmed_at, formed_at):
+    """Price bands stop at the candle that consumed them; no future tests.
+
+    Jump to successive record extremes using the shared candle index, rather
+    than scanning every candle once for each zone.
+    """
+    if type_ not in ("OB", "FVG") or upper <= lower or confirmed_at is None:
+        return []
+    bull = direction == Direction.BULL
+    boundary = upper if bull else lower
+    start = index.start(confirmed_at - 1)
+    n = len(index.open_time)
+    slices = []
+    while start < n:
+        hit = _first_index(index._min_low if bull else index._max_high,
+                           start, n, not bull, boundary, False)
+        if hit is None:
+            break
+        start = hit + 1
+        if index.high[hit] < lower or index.low[hit] > upper:
+            # A gap beyond the entire zone is not a test. Skip straight to
+            # the next candle that can overlap, including long gap periods.
+            back = _first_index(index._max_high if bull else index._min_low,
+                                start, n, bull, lower if bull else upper, True)
+            if back is None:
+                break
+            start = back
+            continue
+        extreme = max(lower, index.low[hit]) if bull else min(upper, index.high[hit])
+        slices.append({"lower": extreme if bull else boundary,
+                       "upper": boundary if bull else extreme,
+                       "tested_at": index.open_time[hit]})
+        boundary = extreme
+        if boundary == (lower if bull else upper):
+            break
+    return slices
 
 
 def _stored_zone_visible(zone: LtfEntryZone, as_of: int) -> bool:

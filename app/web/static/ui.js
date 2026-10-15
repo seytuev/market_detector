@@ -67,7 +67,8 @@ window.LFUI = (() => {
   function scenarioHtml(summary) {
     if (!summary) return '';
     const direction = {bull: 'Рост', bear: 'Снижение', long: 'Рост', short: 'Снижение'}[summary.direction];
-    return `<div class="lf-scenario-summary"><span class="lf-caption">Сценарий</span><h3>${esc(summary.label)}</h3>${direction ? `<p>${esc(direction)}</p>` : ''}${summary.confirmed_at ? `<small>Подтверждён ${esc(HTF.fmtTime(summary.confirmed_at))}</small>` : ''}</div>`;
+    const state = summary.confirmed && summary.market_state ? summary.market_state : direction;
+    return `<div class="lf-scenario-summary${summary.confirmed ? ' is-confirmed' : ''}"><span class="lf-caption">Текущий сценарий</span><h3>${esc(summary.label)}</h3>${state ? `<p class="scenario-state">${esc(state)}</p>` : ''}${summary.detail ? `<p class="scenario-reason">${esc(summary.detail)}</p>` : ''}${summary.confirmed_at ? `<small>Подтверждён ${esc(HTF.fmtTime(summary.confirmed_at))}</small>` : ''}</div>`;
   }
   function eventId(item) {
     if (item.uid) return item.uid;

@@ -3133,7 +3133,7 @@ function showView(name, navigation = 'push') {
     el.classList.toggle('active', el.dataset.view === name);
   });
   const moreBtn = document.getElementById('nav-more');
-  if (moreBtn) moreBtn.classList.toggle('active', name === 'journal' || name === 'settings' || name === 'help');
+  if (moreBtn) moreBtn.classList.toggle('active', name === 'journal' || name === 'settings' || name === 'help' || name === 'review');
   const morePanel = document.getElementById('nav-more-panel');
   if (morePanel) morePanel.classList.add('hidden');
   if (moreBtn) moreBtn.setAttribute('aria-expanded', 'false');

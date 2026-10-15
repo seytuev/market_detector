@@ -207,10 +207,23 @@
 
     const stale = data.market_stale
       ? '<p class="events-warn">Снимок устарел — показана последняя сохранённая оценка.</p>' : '';
-    box.innerHTML = `<div class="side-card-head"><strong>Рыночный фон</strong></div>
+    box.innerHTML = `<div class="side-card-head"><span class="market-orbit" aria-hidden="true">↗</span><strong>Рыночный фон</strong><span class="market-snapshot-age">${data.market_age_seconds != null ? esc(fmtAge(data.market_age_seconds)) : ''}</span></div>
       <p class="side-market-line">${stateChip(market)}</p>
       ${stale}
       <a class="btn small side-open" href="/events.html">Открыть рынок</a>`;
+    const overview = document.getElementById('now-market');
+    if (overview) {
+      const reasons = pickReasons(market);
+      overview.dataset.direction = market.direction || 'unknown';
+      overview.innerHTML = `<div class="market-hero-main"><div class="market-eyebrow">Рыночный фон · крипторынок</div>` +
+        `<h2>${stateChip(market)}</h2>` +
+        `<p class="market-hero-meta">${data.market_age_seconds != null ? 'Снимок ' + esc(fmtAge(data.market_age_seconds)) : 'Время снимка не получено'}` +
+        (market.coverage?.total != null ? ` · Данные ${esc(market.coverage.ok)} из ${esc(market.coverage.total)} монет` : '') + `</p>${stale}` +
+        `<a class="btn side-open" href="/events.html">Разобрать рынок <span aria-hidden="true">↗</span></a></div>` +
+        `<div class="market-hero-reasons"><div class="market-eyebrow">Что влияет сейчас</div>` +
+        (reasons.length ? reasons.map(reasonLine).join('') : '<p>Причин для направленной оценки пока недостаточно.</p>') +
+        (market.conflict_note ? `<p class="events-conflict">${copy(market.conflict_note)}</p>` : '') + '</div>';
+    }
   }
 
   // ---- полный раздел: «Сейчас» --------------------------------------------
@@ -606,9 +619,11 @@
       await HTF.ensureToken();
       renderSideMarket(await HTF.api('/api/events/overview'));
       const overview = document.getElementById('now-market');
-      if (overview) overview.innerHTML = box.innerHTML;
+      if (overview && !overview.querySelector('.market-hero-main')) overview.innerHTML = box.innerHTML;
     } catch (err) {
       box.innerHTML = '<p>Рыночный фон сейчас недоступен. <a href="/events.html">Открыть рынок</a></p>';
+      const overview = document.getElementById('now-market');
+      if (overview) overview.innerHTML = box.innerHTML;
     }
   }
 

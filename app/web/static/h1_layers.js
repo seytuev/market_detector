@@ -313,6 +313,30 @@
     return { top, height: Math.max(1, bottom - top) };
   }
 
+  function zoneFragments(zone) {
+    if (zonePlan(zone).shape === 'line' || zone.candidate) return [zone];
+    const parts = [];
+    let lower = zone.lower, upper = zone.upper;
+    let slices = zone.tested_slices;
+    // Compatibility with snapshots produced before the price-band history.
+    if (!Array.isArray(slices)) {
+      const depth = Math.max(0, Math.min(1, Number(zone.max_test_depth) || 0));
+      const size = (upper - lower) * depth;
+      slices = size > 0 && zone.first_test_at != null
+        ? [{ lower: zone.direction === 'bull' ? upper - size : lower,
+             upper: zone.direction === 'bull' ? upper : lower + size,
+             tested_at: zone.first_test_at }] : [];
+    }
+    slices.forEach(slice => {
+      const until = zone.display_until == null ? slice.tested_at : Math.min(zone.display_until, slice.tested_at);
+      parts.push({ ...zone, lower: slice.lower, upper: slice.upper, display_until: until, tested: true });
+      if (zone.direction === 'bull') upper = Math.min(upper, slice.lower);
+      else lower = Math.max(lower, slice.upper);
+    });
+    if (upper > lower) parts.push({ ...zone, lower, upper, tested: false });
+    return parts;
+  }
+
   function inViewport(zone, view) {
     if (!view) return true;
     const from = zone.display_from || zone.formed_at || 0;
@@ -591,63 +615,64 @@
           div.onclick = () => ctx.onZone && ctx.onZone(zone, adm);
           decorate(div, zone, adm, { left: x1, right: x2, top: y, bottom: y }, title, selected);
         } else {
-          const box = clipZoneBox(yOf(zone.upper), yOf(zone.lower), height);
-          if (!box) {
-            outside.push(zone);
-            return;
-          }
-          const top = box.top;
-          const bottom = top + box.height;
-          const div = add('h1-zone zone-rect z-' + String(zone.type).toLowerCase()
-            + ' dir-' + (zone.direction === 'bear' ? 'bear' : 'bull')
-            + ' tf-' + (['D1', 'W1'].includes(zone.timeframe) ? 'htf' : 'ltf')
-            + (zone.candidate ? ' status-candidate' : '')
-            + (zone.lifecycle === 'ended' ? ' status-completed' : '')
-            + (selected ? ' selected' : ''));
-          div.style.top = top + 'px';
-          div.style.height = box.height + 'px';
-          div.style.left = x1 + 'px';
-          div.style.width = Math.max(8, x2 - x1) + 'px';
-          div.title = title;
-          div.onclick = () => ctx.onZone && ctx.onZone(zone, adm);
-          // Заливку пишет один канвас на цвет: пересечения одного типа не
-          // темнят дважды. Div остаётся прозрачным и держит только рамку.
-          const rgb = (name, fallback) =>
-            (String(getComputedStyle(doc.documentElement).getPropertyValue(name).trim()) || fallback);
-          const bull = rgb('--zone-bull-rgb', '22, 146, 100');
-          const bear = rgb('--zone-bear-rgb', '214, 69, 77');
-          const alpha = String(zone.type || '').toLowerCase() === 'fvg' ? 0.22 : 0.28;
-          // BSL/SSL: цвет инвертирован относительно направления движения
-          const colorDir = (zone.type === 'BSL' || zone.type === 'SSL')
-            ? (zone.direction === 'bear' ? bull : bear)
-            : (zone.direction === 'bear' ? bear : bull);
-          const color = `rgba(${colorDir},${alpha})`;
-          const fillKey = zone.candidate || zone.lifecycle === 'ended' ? 'rgba(138,148,166,0.025)' : color;
-          // FVG: заливается только нетронутая часть (перекрытая движением —
-          // пусто, линии границ остаются на всю длину); depth от стороны входа
-          let fillTop = top;
-          let fillBottom = bottom;
-          if (zone.type === 'FVG' && fillKey === color) {
-            const depth = Math.max(0, Math.min(1, Number(zone.max_test_depth) || 0));
-            const h = bottom - top;
-            if (depth > 0 && h > 0) {
-              if (zone.direction === 'bull') fillTop = top + depth * h;
-              else fillBottom = bottom - depth * h;
+          const fragments = zoneFragments(zone);
+          let labelBox = null, labelDiv = null;
+          fragments.forEach(fragment => {
+            let right = x2;
+            if (fragment.display_until != null) {
+              const end = xOf(fragment.display_until);
+              // A consumed band whose end is left of the viewport is invisible.
+              if (end == null && ctx.view && fragment.display_until < ctx.view.timeFrom) return;
+              if (end != null) right = Math.min(right, end);
             }
-          }
-          if (!fills[fillKey]) fills[fillKey] = [];
-          fills[fillKey].push({
-            left: x1, top: fillTop, width: x2 - x1,
-            height: Math.max(0, fillBottom - fillTop),
+            if (right <= x1) return;
+            const box = clipZoneBox(yOf(fragment.upper), yOf(fragment.lower), height);
+            if (!box) {
+              return;
+            }
+            const top = box.top;
+            const bottom = top + box.height;
+            const div = add('h1-zone zone-rect z-' + String(zone.type).toLowerCase()
+              + ' dir-' + (zone.direction === 'bear' ? 'bear' : 'bull')
+              + ' tf-' + (['D1', 'W1'].includes(zone.timeframe) ? 'htf' : 'ltf')
+              + (zone.candidate ? ' status-candidate' : '')
+              + (zone.lifecycle === 'ended' ? ' status-completed' : '')
+              + (selected ? ' selected' : ''));
+            div.style.top = top + 'px';
+            div.style.height = box.height + 'px';
+            div.style.left = x1 + 'px';
+            div.style.width = (right - x1) + 'px';
+            div.dataset.tested = String(!!fragment.tested);
+            div.title = title;
+            div.onclick = () => ctx.onZone && ctx.onZone(zone, adm);
+            // Заливку пишет один канвас на цвет: пересечения одного типа не
+            // темнят дважды. Div остаётся прозрачным и держит только рамку.
+            const rgb = (name, fallback) =>
+              (String(getComputedStyle(doc.documentElement).getPropertyValue(name).trim()) || fallback);
+            const bull = rgb('--zone-bull-rgb', '22, 146, 100');
+            const bear = rgb('--zone-bear-rgb', '214, 69, 77');
+            const alpha = String(zone.type || '').toLowerCase() === 'fvg' ? 0.22 : 0.28;
+            // BSL/SSL: цвет инвертирован относительно направления движения
+            const colorDir = (zone.type === 'BSL' || zone.type === 'SSL')
+              ? (zone.direction === 'bear' ? bull : bear)
+              : (zone.direction === 'bear' ? bear : bull);
+            const color = `rgba(${colorDir},${alpha})`;
+            const fillKey = zone.candidate || zone.lifecycle === 'ended' ? 'rgba(138,148,166,0.025)' : color;
+            if (!fills[fillKey]) fills[fillKey] = [];
+            fills[fillKey].push({
+              left: x1, top, width: right - x1, height: bottom - top,
+            });
+            const mid = yOf(zone.mid != null ? zone.mid : (zone.lower + zone.upper) / 2);
+            if (mid != null && mid > top + 8 && mid < bottom - 8) {
+              const line = doc.createElement('span');
+              line.className = 'h1-zone-mid';
+              line.style.top = (mid - top) + 'px';
+              div.appendChild(line);
+            }
+            labelBox = { left: x1, right, top, bottom };
+            labelDiv = div;
           });
-          const mid = yOf(zone.mid != null ? zone.mid : (zone.lower + zone.upper) / 2);
-          if (mid != null && mid > top + 8 && mid < bottom - 8) {
-            const line = doc.createElement('span');
-            line.className = 'h1-zone-mid';
-            line.style.top = (mid - top) + 'px';
-            div.appendChild(line);
-          }
-          decorate(div, zone, adm, { left: x1, right: x2, top, bottom }, title, selected);
+          if (labelBox) decorate(labelDiv, zone, adm, labelBox, title, selected);
         }
       });
       // Fill each type once as a union: overlapping OBs never become opaque.
@@ -900,6 +925,7 @@
     zoneCard,
     pdCaption,
     selectedZones,
+    zoneFragments,
     currentEntryZones,
     currentFrame,
     ideaLabel,

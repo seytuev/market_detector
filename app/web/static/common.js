@@ -463,6 +463,22 @@ window.HTF = (() => {
     alt: '<path d="M5 4v16M12 4v16M19 4v16M2 8h6M9 15h6M16 10h6"/>',
     more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
   };
+  const review = [...document.querySelectorAll('.mobile-nav a')].find(item => (item.getAttribute('href') || '').endsWith('#review'));
+  if (review) {
+    const menu = document.getElementById('nav-more-panel');
+    menu?.querySelector('a[href="/events.html"]')?.remove();
+    if (menu && !menu.querySelector('a[href$="#review"]')) {
+      const link = document.createElement('a');
+      link.href = review.getAttribute('href'); link.textContent = 'Проверка зон';
+      link.setAttribute('role', 'menuitem');
+      if (review.dataset.view) link.dataset.view = 'review';
+      menu.appendChild(link);
+    }
+    review.href = '/events.html'; review.removeAttribute('data-view');
+    review.classList.toggle('active', location.pathname === '/events.html');
+    review.innerHTML = '<svg width="21" height="21" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m3 15 5-5 4 4 8-9M15 5h5v5M3 21h18"/></svg><span>Рынок</span>';
+  }
+  document.querySelectorAll('.mobile-nav a[href$="#now"] span').forEach(span => { span.textContent = 'Обзор'; });
   document.querySelectorAll('.mobile-nav > a, .mobile-nav > button').forEach(item => {
     if (item.querySelector('svg')) return;
     const href = item.getAttribute('href') || '';
@@ -677,6 +693,37 @@ window.HTF = (() => {
   } else {
     initLayoutSplitters();
   }
+})();
+
+// Shared sidebar: identical icons, accessible names and utility placement on
+// overview, analysis, market and screener pages.
+(() => {
+  const paths = {
+    now: 'M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z',
+    desk: 'M3 20h18M6 15V9m0 2h0M12 17V4m6 10V7M4 11h4m2-4h4m2 4h4',
+    review: 'm9 11 2 2 4-4M9 3H5v18h14V3h-4M9 2h6v4H9z',
+    alt: 'M3 5h18M6 12h12M10 19h4',
+    journal: 'M5 3h14v18H5zM9 7h6M9 11h6M9 15h4',
+    events: 'm3 15 5-5 4 4 8-9M15 5h5v5M3 21h18',
+    help: 'M9 9a3 3 0 1 1 5 2c-2 1-2 2-2 3M12 17h.01M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0',
+    settings: 'M4 7h16M4 17h16M9 4v6M15 14v6',
+  };
+  const sidebar = document.querySelector('.sidebar');
+  if (!sidebar) return;
+  sidebar.querySelectorAll('.app-tab').forEach(tab => {
+    const href = tab.getAttribute('href') || (tab.getAttribute('aria-current') ? location.pathname : '');
+    const key = Object.keys(paths).find(name => name === 'alt' || name === 'events'
+      ? href.includes('/' + name + '.html') : href.endsWith('#' + name));
+    if (!key) return;
+    const label = key === 'now' ? 'Обзор рынка' : (tab.querySelector('.nav-full')?.textContent || tab.textContent).trim();
+    if (key === 'now') tab.querySelector('.nav-full').textContent = label;
+    tab.title = label;
+    tab.setAttribute('aria-label', label);
+    tab.insertAdjacentHTML('afterbegin', `<svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="${paths[key]}" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`);
+    if (key === 'review') sidebar.querySelector('.sidebar-bottom')?.prepend(tab);
+  });
+  const label = sidebar.querySelector('.nav-label');
+  if (label) label.textContent = 'Рабочее пространство';
 })();
 
 /* Панель «Слои» не должна вылезать за низ окна и за нижнюю навигацию.

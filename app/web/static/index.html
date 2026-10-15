@@ -12,6 +12,7 @@
   <link rel="stylesheet" href="/redesign.css">
   <link rel="stylesheet" href="/mobile-analysis.css">
   <link rel="stylesheet" href="/mobile-pages.css">
+  <link rel="stylesheet" href="/workspace.css">
   <script src="/vendor/lightweight-charts.js"></script>
 </head>
 <body class="app-body">
@@ -63,14 +64,14 @@
   <section id="view-now" class="view active">
     <div class="now-page">
       <header class="now-head">
-        <div class="now-over">Среда рыночного анализа</div>
-        <h1 class="now-title">Наблюдение</h1>
+        <div class="now-over">Обзор рынка</div>
+        <h1 class="now-title">Рынок сейчас</h1>
         <p class="now-sub" id="now-subline">ваш список наблюдения</p>
       </header>
       <section id="now-market" class="now-market" aria-label="Рыночный фон"><span>Рыночный фон</span><a href="/events.html">Открыть рынок</a></section>
       <div class="now-stats" role="group" aria-label="Фильтры наблюдения">
-        <button type="button" class="metric-filter" data-metric="attention">
-          <span class="stat-label">Требуют внимания</span>
+        <button type="button" class="metric-filter" data-metric="awaiting">
+          <span class="stat-label">Ждут подтверждения</span>
           <span class="stat-value" id="now-stat-review">—</span>
           <span class="stat-note" id="now-stat-review-note">Фильтр списка</span>
         </button>
@@ -92,12 +93,12 @@
             <div class="now-filters" role="group" aria-label="Фильтр активов">
               <button type="button" class="now-filter active" data-filter="all">Все</button>
               <button type="button" class="now-filter" data-filter="attention">Нужно внимание</button>
-              <button type="button" class="now-filter" data-filter="watch">Наблюдаю</button>
+              <button type="button" class="now-filter" data-filter="eligible">Подтверждены</button>
             </div>
           </div>
           <table class="asset-table" id="now-table">
             <thead>
-              <tr><th>Актив / площадка</th><th>Сценарий</th><th>Цена и зона</th><th>Данные</th><th class="num">Цена, USDT</th><th>Наблюдение</th></tr>
+              <tr><th>Актив / площадка</th><th>Текущий сценарий</th><th>Положение цены</th><th>Данные</th><th class="num">Цена, USDT</th><th>Анализ</th></tr>
             </thead>
             <tbody id="now-tbody"></tbody>
           </table>
@@ -105,14 +106,16 @@
         </section>
         <aside class="now-card hidden" id="now-card" aria-label="Выбранный актив" hidden></aside>
       </div>
+      <div class="now-insights">
+        <section class="now-focus" id="now-focus" aria-label="Состояние активов"></section>
       <section class="now-recent" aria-labelledby="now-recent-title">
         <div class="now-assets-head">
-          <h2 id="now-recent-title">Последние изменения</h2>
+          <h2 id="now-recent-title">Значимые изменения</h2>
           <a href="#journal" data-view="journal">Все события</a>
         </div>
         <ul id="now-recent" class="now-recent-list"></ul>
       </section>
-      <p class="now-foot">Приоритет означает необходимость внимания. Свежесть котировки показана у цены и отдельно от рыночного состояния.</p>
+      </div>
     </div>
   </section>
 
@@ -125,6 +128,7 @@
           <span id="desk-venue" class="work-meta">—</span>
           <div id="desk-fresh" class="desk-fresh hidden"></div>
         </div>
+        <section id="h1-events-context" class="h1-events-context desk-market" aria-label="Рыночный фон"></section>
         <div class="desk-quote">
           <div class="desk-price-row">
             <span id="desk-price" class="desk-price">—</span>
@@ -135,7 +139,7 @@
       </div>
     </div>
     <div class="workbar">
-      <div class="lf-analysis-actions"><button type="button" id="desk-side-toggle" class="btn small" aria-pressed="true">Сценарий</button><button type="button" id="desk-expand" class="btn small" aria-pressed="false" aria-label="Развернуть график" title="Развернуть график">Развернуть</button></div>
+      <div class="lf-analysis-actions"><button type="button" id="desk-assets-toggle" class="btn small" aria-expanded="true" aria-controls="desk-assets">Активы</button><button type="button" id="desk-side-toggle" class="btn small" aria-pressed="true">Сценарий</button><button type="button" id="desk-expand" class="btn small" aria-pressed="false" aria-label="Развернуть график" title="Развернуть график">Развернуть</button></div>
       <select id="instrument-select" title="Инструмент" aria-label="Инструмент"></select>
       <span id="instrument-meta" class="work-meta">—</span>
       <span id="last-price" class="last-price">—</span>
@@ -208,7 +212,6 @@
               <button type="button" class="mode-tab active" id="mode-context" data-chart-mode="context" aria-current="page">HTF</button>
               <button type="button" class="mode-tab" id="lnk-ltf" data-chart-mode="h1">LTF</button>
             </div>
-            <button type="button" id="desk-assets-toggle" class="btn small" aria-expanded="true" aria-controls="desk-assets">Активы</button>
           </div>
           <div id="chart-container">
             <div id="chart"></div>
@@ -225,7 +228,6 @@
       </div>
 
       <div class="desk-side">
-        <section id="h1-events-context" class="h1-events-context" aria-label="События и время"></section>
         <aside class="desk-panel" id="desk-panel" data-tab="scenario">
           <div class="desk-panel-tabs" role="tablist" aria-label="Панель актива">
             <button type="button" class="panel-tab active" id="panel-tab-scenario" data-panel-tab="scenario" role="tab" aria-selected="true" aria-controls="desk-scenario" title="Сообщение по активу">

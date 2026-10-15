@@ -14,7 +14,7 @@ from .h1_setup import local_leg_at, revision_at
 from .d1_structure import project_daily, project_weekly
 from .structure_sync import synchronize_scenario
 
-RULE_VERSION = "asset-context-3"
+RULE_VERSION = "asset-context-4"
 H1_MS = 3_600_000
 _LOOKBACK_BARS = 20
 _ACTIVE_SCENARIO = ("range_pending", "monitoring_entries")
@@ -123,7 +123,12 @@ def project_asset(
         {"kind": "daily_structure", "k": "Структура D1", "v": daily["text"],
          "dir": "long" if daily["direction"] == "bull" else "short" if daily["direction"] else None},
     ] + sorted(lead_rows, key=lambda r: r["kind"] == "bos") + [
-        {"kind": "daily_alignment", "k": "Сценарий HTF", "v": alignment["status"]},
+        {"kind": "daily_alignment", "k": "Приоритет D1",
+         "v": "По направлению D1" if alignment["priority"] == "main"
+         else "Контртрендовый · против D1" if alignment["priority"] == "countertrend"
+         else "Направление D1 не определено",
+         "note": "H1 подтверждён из HTF-зоны" if alignment["confirmation_complete"]
+         else "Ждём подтверждение H1 из HTF-зоны"},
     ]
     if alignment["target_text"]:
         compact_rows.append({"kind": "target", "k": "Цель", "v": alignment["target_text"]})
@@ -136,8 +141,27 @@ def project_asset(
         code=state["code"],
     )
     other = _other_contexts(db, instrument_id, moment, leg, nav, sides)
+    # Navigation may point at a nearby, still waiting HTF zone. The header
+    # must describe the same instrument-wide scenario as the facts below it.
+    side = (leg or {}).get("direction") if proven else (
+        "bull" if state["trade_direction"] == "long" else
+        "bear" if state["trade_direction"] == "short" else None
+    )
+    candidates = ((sides["linked"] if leg else sides["active"]).get(side) or []) if side else []
+    current = max(candidates, key=lambda row: (row["created_at"], row["id"]), default=None)
+    scenario_summary = {
+        "id": current["id"] if current else None,
+        "confirmed": current is not None,
+        "state": state["setup_state"],
+        "label": "Сценарий подтверждён" if current else state["title"],
+        "direction": side,
+        "confirmed_at": current["created_at"] if current else None,
+        "detail": state["explanation"],
+        "market_state": state["title"],
+    }
     return {
         "governs": state["governs"],
+        "scenario_summary": scenario_summary,
         "asset_state": {
             "code": state["code"],
             "direction": state["trade_direction"],
@@ -353,6 +377,18 @@ def _quality(data_state: Optional[dict]) -> tuple[bool, str]:
 def _sides(db, instrument_id: int, as_of: int, leg) -> dict[str, Any]:
     """Обе стороны на одной отсечке. Близость зоны сюда не входит."""
     bos_at = int(leg["bos_at"]) if leg else None
+    direction_started_after = -1
+    if leg:
+        # A later same-direction BOS/SMS can start a new local PD without
+        # opening a second trade. Keep the active scenario from the current
+        # uninterrupted direction, but never resurrect one across a reversal.
+        row = db.conn.execute(
+            """SELECT MAX(bos_at) AS reversed_at FROM h1_local_leg
+               WHERE instrument_id=? AND direction<>? AND bos_at<=?""",
+            (instrument_id, leg["direction"], bos_at),
+        ).fetchone()
+        if row is not None and row["reversed_at"] is not None:
+            direction_started_after = int(row["reversed_at"])
     scenarios = [
         dict(row) for row in db.conn.execute(
             """SELECT s.id, s.state, s.direction, s.created_at, s.cancelled_at,
@@ -390,7 +426,7 @@ def _sides(db, instrument_id: int, as_of: int, leg) -> dict[str, Any]:
             continue
         if row.get("state") in _ACTIVE_SCENARIO:
             active[direction].append(row)
-            if bos_at is not None and int(row.get("created_at") or 0) >= bos_at:
+            if leg is not None and int(row.get("created_at") or 0) > direction_started_after:
                 linked[direction].append(row)
         elif row.get("state") == "cancelled":
             cancelled[direction].append(row)
