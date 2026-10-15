@@ -167,6 +167,7 @@
   function renderTable() {
     const rows = visibleRows();
     $('now-tbody').innerHTML = rows.map(rowHtml).join('');
+    document.dispatchEvent(new CustomEvent('research-overview'));
     const empty = $('now-empty');
     if (!st.rows.length) {
       empty.classList.remove('hidden');

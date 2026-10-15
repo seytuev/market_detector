@@ -67,7 +67,7 @@ def import_sqlite(source_path, db):
         if not source_path.is_file():
             raise RuntimeError("SQLite import source does not exist")
         raw = db.conn._conn.raw
-        tables = [r[0] for r in raw.execute("SELECT table_name FROM information_schema.tables WHERE table_schema=current_schema() AND table_type='BASE TABLE' AND table_name<>'postgres_schema_version' ORDER BY table_name")]
+        tables = [r[0] for r in raw.execute("SELECT table_name FROM information_schema.tables WHERE table_schema=current_schema() AND table_type='BASE TABLE' AND table_name NOT IN ('postgres_schema_version','research_schema_version') ORDER BY table_name")]
         for table in tables:
             if raw.execute(sql.SQL("SELECT 1 FROM {} LIMIT 1").format(sql.Identifier(table))).fetchone():
                 raise RuntimeError(f"PostgreSQL target is not empty: {table}; refusing partial import")
@@ -102,7 +102,7 @@ def import_sqlite(source_path, db):
             run(snapshot)
             source = sqlite3.connect(snapshot)
             try:
-                source_tables = {r[0] for r in source.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
+                source_tables = {r[0] for r in source.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name<>'research_schema_version'")}
                 extra = source_tables-set(tables)
                 unmapped = {table for table in extra if not is_archive(table)}
                 if unmapped:

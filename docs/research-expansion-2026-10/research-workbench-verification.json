@@ -1,0 +1,116 @@
+{
+  "backend": "SQLite",
+  "platform": "Windows-10-10.0.26200-SP0",
+  "scope": "Repository reads, no HTTP; isolated from production worker",
+  "counts": {
+    "ideas": 5000,
+    "reviews": 50000,
+    "examples": 10000,
+    "rules": 100,
+    "matches": 50000,
+    "baskets": 100,
+    "observations": 100000
+  },
+  "reads": {
+    "idea": {
+      "p50_ms": 33.86,
+      "p95_ms": 38.8,
+      "requests": 30
+    },
+    "example": {
+      "p50_ms": 68.36,
+      "p95_ms": 74.19,
+      "requests": 30
+    },
+    "rule": {
+      "p50_ms": 1.19,
+      "p95_ms": 1.34,
+      "requests": 30
+    },
+    "match": {
+      "p50_ms": 332.87,
+      "p95_ms": 368.93,
+      "requests": 30
+    },
+    "basket": {
+      "p50_ms": 1.25,
+      "p95_ms": 1.92,
+      "requests": 30
+    },
+    "reviews": {
+      "p50_ms": 0.07,
+      "p95_ms": 0.08,
+      "requests": 30
+    },
+    "basket_history": {
+      "p50_ms": 0.1,
+      "p95_ms": 0.1,
+      "requests": 30
+    }
+  },
+  "strength": {
+    "instruments": 200,
+    "stored_days": 1095,
+    "calculate_s": 0.422,
+    "read": {
+      "p50_ms": 16.96,
+      "p95_ms": 19.86,
+      "requests": 30
+    }
+  },
+  "real_history": {
+    "status": [
+      "succeeded",
+      "succeeded"
+    ],
+    "instrument_id": 1,
+    "from_at": 1789344000000,
+    "to_at": 1791936000000,
+    "rows": 1126,
+    "coverage": {
+      "1": {
+        "h1_bars": 736,
+        "d1_bars": 390,
+        "expected_h1": 720,
+        "invalid_h1": 0,
+        "missing_h1": 0,
+        "source": "binance"
+      }
+    },
+    "data_mode": "mixed_reconstruction",
+    "duration_s": [
+      0.323,
+      0.308
+    ],
+    "result_hashes": [
+      "3d138f25319cc26699653d25f548186d7b01e4fbd2235e9b02d5a9f4f1992702",
+      "3d138f25319cc26699653d25f548186d7b01e4fbd2235e9b02d5a9f4f1992702"
+    ],
+    "reproducible": true,
+    "metrics": {
+      "benchmark_cost_policy": "buy-and-hold, zero benchmark transaction costs, separate from strategy",
+      "benchmark_return_pct": 8.233764317200976,
+      "cagr": null,
+      "closed_trades": 1,
+      "costs": {
+        "fee_bps": 10,
+        "slippage_bps": 5
+      },
+      "execution_policy": "next_h1_open_stop_first_v1",
+      "expectancy_usdt": -194.53499935296895,
+      "fees_usdt": 9.805280270927952,
+      "final_equity": 9805.46500064703,
+      "flat_trades": 0,
+      "initial_capital": 10000.0,
+      "max_drawdown_pct": -2.5879826155794317,
+      "profit_factor": 0.0,
+      "profit_factor_reason": null,
+      "return_pct": -1.9453499935297103,
+      "rounding_policy": "idealized_size_rules",
+      "sharpe": null,
+      "unresolved_positions": [],
+      "win_rate": 0.0
+    },
+    "diagnostic": null
+  }
+}

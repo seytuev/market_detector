@@ -29,6 +29,10 @@ const HISTORY_TYPES = [
 ];
 
 const COLUMNS = [
+  {id:'rs_7',title:'К BTC · 7д, п.п.',num:true,render:r=>researchStrengthCell(r,'excess_7',' п.п.')},
+  {id:'rs_30',title:'К BTC · 30д, п.п.',num:true,render:r=>researchStrengthCell(r,'excess_30',' п.п.')},
+  {id:'rs_corr',title:'Корреляция · 60д',num:true,render:r=>researchStrengthCell(r,'correlation_60','')},
+  {id:'rs_vol',title:'Волатильность · 20д',num:true,render:r=>researchStrengthCell(r,'volatility_20','%')},
   { id: 'asset', title: 'Монета / источник', render: (r) => `${esc(r.asset.symbol)} <span class="alt-dim">${esc((r.source || {}).symbol || '')} ${esc((r.source || {}).venue || '')}</span>` },
   { id: 'stage', title: 'Стадия', render: (r) => esc(r.terminal ? r.state_ru : (r.stage_ru || r.state_ru || '—')) },
   { id: 'close', title: 'Закрытие D1', num: true, render: (r) => fmtPrice(r.last_close) },
@@ -58,6 +62,25 @@ const COLUMNS = [
   { id: 'reason', title: 'Причина пропуска', render: (r) => esc(r.reason || (r.run_status && r.run_status !== 'processed' ? r.run_status : '—')) },
 ];
 const DEFAULT_COLUMNS = ['asset', 'stage', 'close', 'distance', 'last', 'data'];
+let researchStrengthMap=new Map(),researchStrengthOrder=new Map(),researchStrengthAllowed=null,researchStrengthSeq=0;
+function researchStrengthCell(row,key,suffix){
+  const metric=researchStrengthMap.get('alt:'+row.source?.id)?.metrics[key];
+  return metric?.value==null?'<span class="alt-dim" title="'+esc(metric?.reason_codes?.join(', ')||'Нет сопоставимой истории')+'">—</span>':
+    '<span title="Закрытые дни UTC · '+esc(metric.sample_n)+' интервалов">'+Number(metric.value).toFixed(2)+suffix+'</span>';
+}
+async function loadResearchStrength(){
+  const seq=++researchStrengthSeq;const min=document.getElementById('alt-rs-min')?.value||'';
+  if(!state.columns.some(k=>k.startsWith('rs_'))&&state.sort!=='rs_30'&&!min){researchStrengthAllowed=null;return;}
+  const ids=[...new Set(state.rows.map(r=>r.source?.id).filter(Boolean))].slice(0,200).map(i=>'alt:'+i);
+  if(!ids.length)return;
+  try{
+    const response=await api('/api/research/v1/strength?limit=200&metric=excess_30&sort=desc&instrument_ids='+encodeURIComponent(ids.join(','))+(min!==''?'&window=30&excess_min='+encodeURIComponent(min):''));
+    if(seq!==researchStrengthSeq)return;
+    researchStrengthMap=new Map(response.data.items.map(r=>[String(r.instrument_id),r]));researchStrengthOrder=new Map(response.data.items.map((r,index)=>[String(r.instrument_id),index]));
+    researchStrengthAllowed=min!==''?new Set(response.data.items.map(r=>String(r.instrument_id))):null;
+    renderList();
+  }catch{if(seq===researchStrengthSeq){researchStrengthMap.clear();researchStrengthOrder.clear();researchStrengthAllowed=null;renderList();}}
+}
 
 const state = {
   rows: [], buckets: {}, venues: [], listPhase: 'loading', listError: '',
@@ -154,7 +177,8 @@ function matchSearch(row, query) {
   return blob.includes(query.trim().toLowerCase());
 }
 function viewRows() {
-  const rows = state.rows.filter((row) => matchSearch(row, state.search));
+  const rows = state.rows.filter((row) => matchSearch(row, state.search)&&(!researchStrengthAllowed||researchStrengthAllowed.has('alt:'+row.source?.id)));
+  if(state.sort==='rs_30')return rows.slice().sort((a,b)=>(researchStrengthOrder.get('alt:'+a.source?.id)??1e9)-(researchStrengthOrder.get('alt:'+b.source?.id)??1e9)||objectId(a)-objectId(b));
   if (state.sort === 'server') return rows;
   const copy = rows.slice();
   copy.sort((a, b) => {
@@ -810,6 +834,7 @@ async function loadTable() {
     const data = await api('/api/alt/setups?' + queryString());
     if (req !== state.listSeq) return;
     state.rows = data.rows || [];
+    loadResearchStrength();
     state.buckets = data.buckets || {};
     state.venues = data.venues || [];
     state.asOf = data.as_of_ms;
@@ -1847,10 +1872,12 @@ function bind() {
     clearTimeout(state.searchTimer); state.searchTimer = setTimeout(loadTable,250);
   };
   $('alt-sort').onchange = () => {
+    setTimeout(()=>loadResearchStrength(),0);
     state.sort = $('alt-sort').value;
     savePrefs();
     renderList();
   };
+  $('alt-rs-min').onchange=()=>loadResearchStrength();
   $('alt-list').onclick = (event) => {
     const button = event.target.closest('.alt-row');
     if (!button) return;
@@ -2043,6 +2070,7 @@ function bind() {
     }
   };
   $('alt-columns').onchange = (event) => {
+    setTimeout(()=>loadResearchStrength(),0);
     const input = event.target.closest('[data-col]');
     if (!input) return;
     const id = input.dataset.col;

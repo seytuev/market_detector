@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Исследования · STV Market Researcher</title>
+  <script>document.documentElement.dataset.theme=localStorage.getItem('lf:theme')==='dark'?'dark':'light';</script>
+  <link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/redesign.css"><link rel="stylesheet" href="/research.css">
+</head>
+<body>
+<main class="research-shell">
+  <header><div><a href="/#desk">← Market Researcher</a><h1>Исследования</h1>
+    <p class="research-muted">Источники, идеи, относительная сила, корзины, учебник и воспроизводимые исследования.</p></div><a href="/events.html?mode=catalysts">Открыть календарь →</a></header>
+  <nav class="research-toolbar" aria-label="Раздел исследований">
+    <button class="btn" type="button" data-research-tab="calendar">Катализаторы</button>
+    <button class="btn" type="button" data-research-tab="identity">Сопоставление активов</button>
+    <button class="btn" type="button" data-research-tab="sources">Данные и обновление</button>
+    <button class="btn" type="button" data-research-tab="ideas">Идеи</button>
+    <button class="btn" type="button" data-research-tab="strength">Относительная сила</button>
+    <button class="btn" type="button" data-research-tab="baskets">Корзины</button>
+    <button class="btn" type="button" data-research-tab="playbook">Учебник</button>
+    <button class="btn" type="button" data-research-tab="lab">Лаборатория</button>
+  </nav>
+  <div id="research-page" aria-live="polite"></div>
+</main>
+<script src="/common.js"></script><script src="/research_workbench.js"></script><script src="/research.js"></script>
+</body></html>

@@ -14,6 +14,11 @@ def card_keyboard(packet_id, targets=None):
             buttons.append(Button("График W1 ↗", url=targets[0]["url"]))
         buttons.append(Button("Подробнее", callback_data=f"nf:d:{packet_id}:0"))
         return Markup([buttons])
+    if targets and len(targets) == 1 and targets[0].get("kind") == "research_catalyst":
+        rows = [[Button("Подробнее", callback_data=f"nf:d:{packet_id}:0")]]
+        if targets[0].get("url", "").startswith("https://"):
+            rows.insert(0, [Button("Открыть катализатор ↗", url=targets[0]["url"])])
+        return Markup(rows)
     if targets and len(targets) == 1 and targets[0].get("kind") == "market_context":
         target = targets[0]
         rows = []

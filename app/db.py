@@ -173,6 +173,8 @@ class Database:
         self._epoch_checked_at = 0.0
         self._seen_epoch: Optional[int] = None
         self.migrate()
+        from .research.migrations import migrate as migrate_research
+        migrate_research(self)
         with self.batch_writes():
             self._migrate_stabilization()
         if path != ":memory:":

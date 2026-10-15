@@ -668,6 +668,11 @@
 
   // ---- загрузка режимов ------------------------------------------------------
   let currentMode = 'now';
+  function requestedMode() {
+    const params = new URLSearchParams(location.search);
+    const value = params.get('mode') || params.get('tab');
+    return ['now','calendar','catalysts','feed','rules'].includes(value) ? value : 'now';
+  }
   let requestVersion = 0;
   const pendingRequests = new Map();
   function requestData(endpoint) {
@@ -696,6 +701,15 @@
     const body = document.getElementById('events-body');
     if (!body) return;
     const version = ++requestVersion;
+    if (mode === 'catalysts' && window.ResearchUI) {
+      const status = document.getElementById('market-status');
+      if (status) status.textContent = 'Внешние события и катализаторы';
+      body.setAttribute('aria-busy','true');
+      try { await ResearchUI.mountCalendar(body); }
+      finally { if (version === requestVersion) body.setAttribute('aria-busy','false'); }
+      return;
+    }
+    window.ResearchUI?.leaveCalendar();
     const status = document.getElementById('market-status');
     body.setAttribute('aria-busy', 'true');
     if (status) status.textContent = 'Обновляем данные…';
@@ -776,7 +790,7 @@
   });
   window.addEventListener('popstate', () => {
     if (!document.getElementById('events-root')) return;
-    currentMode = new URLSearchParams(location.search).get('tab') === 'calendar' ? 'calendar' : 'now';
+    currentMode = requestedMode();
     document.querySelectorAll('[data-mode]').forEach(btn => { btn.classList.toggle('active',btn.dataset.mode === currentMode); btn.setAttribute('aria-pressed',String(btn.dataset.mode === currentMode)); });
     show(currentMode);
   });
@@ -817,7 +831,7 @@
         item.setAttribute('aria-pressed', on ? 'true' : 'false');
       });
       currentMode = button.getAttribute('data-mode') || 'now';
-      const url = new URL(location.href); url.searchParams.set('tab',currentMode); history.pushState(null,'',url.pathname+url.search);
+      const url = new URL(location.href); url.searchParams.set('tab',currentMode); url.searchParams.delete('mode'); history.pushState(null,'',url.pathname+url.search);
       show(currentMode).catch((err) => {
         const body = document.getElementById('events-body');
         if (body) body.textContent = err.message || 'Не удалось загрузить события';
@@ -826,7 +840,7 @@
   });
 
   if (document.getElementById('events-root')) {
-    currentMode = new URLSearchParams(location.search).get('tab') === 'calendar' ? 'calendar' : 'now';
+    currentMode = requestedMode();
     const initial = document.querySelector(`[data-mode="${currentMode}"]`);
     if (initial) {
       initial.classList.add('active');
@@ -841,6 +855,8 @@
       if (body) body.textContent = err.message || 'Не удалось загрузить события';
     });
     scheduleRefresh();
+    const catalystId = new URLSearchParams(location.search).get('catalyst');
+    if (catalystId && window.ResearchUI) ResearchUI.detail(catalystId).catch(() => {});
   } else if (document.getElementById('h1-events-context')) {
     loadSide();
     scheduleRefresh();

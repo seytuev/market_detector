@@ -3364,6 +3364,7 @@ function syncInstrumentContext() {
   // (history.replaceState, без перезагрузки; hash вкладки сохраняется)
   if (!state.instrumentId) return;
   localStorage.setItem(INSTRUMENT_KEY, String(state.instrumentId));
+  document.dispatchEvent(new CustomEvent('research-instrument', {detail:{instrument_id:state.instrumentId}}));
   const url = new URL(location.href);
   url.searchParams.set('instrument', String(state.instrumentId));
   history.replaceState(null, '', url.pathname + url.search + url.hash);

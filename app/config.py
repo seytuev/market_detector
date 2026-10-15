@@ -566,6 +566,22 @@ class Settings:
         default_factory=lambda: int(_env("EVENTS_DIGEST_GAP_SECONDS", "600")))
     events_price_max_age_seconds: int = field(
         default_factory=lambda: int(_env("EVENTS_PRICE_MAX_AGE_SECONDS", "7200")))
+    research_enabled: bool = field(default_factory=lambda: parse_bool(_env("RESEARCH_ENABLED", "0")))
+    research_context_ui_enabled: bool = field(default_factory=lambda: parse_bool(_env("RESEARCH_CONTEXT_UI_ENABLED", "1")))
+    research_terminal_url: str = field(default_factory=lambda: _env("RESEARCH_TERMINAL_URL", ""))
+    research_integration_token: str = field(default_factory=lambda: _env("RESEARCH_INTEGRATION_TOKEN", ""), repr=False)
+    research_sync_interval_seconds: int = field(default_factory=lambda: int(_env("RESEARCH_SYNC_INTERVAL_SECONDS", "300")))
+    research_sync_page_size: int = field(default_factory=lambda: int(_env("RESEARCH_SYNC_PAGE_SIZE", "100")))
+    research_http_timeout_seconds: int = field(default_factory=lambda: int(_env("RESEARCH_HTTP_TIMEOUT_SECONDS", "15")))
+    research_deribit_enabled: bool = field(default_factory=lambda: parse_bool(_env("RESEARCH_DERIBIT_ENABLED", "0")))
+    research_notifications_enabled: bool = field(default_factory=lambda: parse_bool(_env("RESEARCH_NOTIFICATIONS_ENABLED", "0")))
+    research_ideas_enabled: bool = field(default_factory=lambda: parse_bool(_env("RESEARCH_IDEAS_ENABLED", "0")))
+    research_strength_enabled: bool = field(default_factory=lambda: parse_bool(_env("RESEARCH_STRENGTH_ENABLED", "0")))
+    research_baskets_enabled: bool = field(default_factory=lambda: parse_bool(_env("RESEARCH_BASKETS_ENABLED", "0")))
+    research_playbook_enabled: bool = field(default_factory=lambda: parse_bool(_env("RESEARCH_PLAYBOOK_ENABLED", "0")))
+    research_playbook_matching_enabled: bool = field(default_factory=lambda: parse_bool(_env("RESEARCH_PLAYBOOK_MATCHING_ENABLED", "0")))
+    research_playbook_memory_enabled: bool = field(default_factory=lambda: parse_bool(_env("RESEARCH_PLAYBOOK_MEMORY_ENABLED", "0")))
+    research_lab_enabled: bool = field(default_factory=lambda: parse_bool(_env("RESEARCH_LAB_ENABLED", "0")))
 
     def __post_init__(self) -> None:
         for name in ("ws_idle_timeout", "ws_lifetime_s",
@@ -579,6 +595,11 @@ class Settings:
             raise ValueError(
                 f"Settings.binance_ws_url: нужна схема wss://, "
                 f"получено {self.binance_ws_url!r}")
+        for name,low,high in (("research_sync_interval_seconds",30,86400),
+                              ("research_sync_page_size",1,500),("research_http_timeout_seconds",1,60)):
+            value=getattr(self,name)
+            if not isinstance(value,int) or isinstance(value,bool) or not low<=value<=high:
+                raise ValueError(f"Settings.{name}: допустимый диапазон {low}–{high}")
 
     def effective_base_url(self) -> str:
         """URL для внешних ссылок. Без HTF_PUBLIC_BASE_URL — локальный;

@@ -1,0 +1,178 @@
+{
+  "repository": "https://github.com/seytuev/stvterminal",
+  "commit": "af1b0b3a74f28b61b8c44b423a895610af92c418",
+  "purpose": "Original algorithms integrated into Market Researcher; no running terminal required.",
+  "files": [
+    {
+      "source": "src/events/types.ts",
+      "sha256": "01dff6399e65abc6da16823578e0b1d03b1d7df9ddce7fe721ae6fdfe40ac598",
+      "mode": "unchanged"
+    },
+    {
+      "source": "src/events/time.ts",
+      "sha256": "62bbfb8cdc04f4b11ccd980e3064b918b6b8a019d503478c8ad0524022279255",
+      "mode": "unchanged"
+    },
+    {
+      "source": "src/events/merge.ts",
+      "sha256": "717ac5da0212e0d22d7446494bfb8173349b67eb3df7b72914c72d16f4be0702",
+      "mode": "unchanged"
+    },
+    {
+      "source": "src/events/importance.ts",
+      "sha256": "0e23633b381b567b6cb7f58e175c1ca1ba83713ea090f7be76e660afbce5377c",
+      "mode": "unchanged"
+    },
+    {
+      "source": "services/project-signals/model.ts",
+      "sha256": "f4af02fd0e17fabb0cec223412ccf4bd89845a95143d9294abfa0007ac5c6e12",
+      "mode": "unchanged"
+    },
+    {
+      "source": "services/ticker_recap/mention-identity.ts",
+      "sha256": "1964520e90d39f0c12a35d388db9aac0c64b3dceef7e9bb26cbb70870ee7106d",
+      "mode": "unchanged"
+    },
+    {
+      "source": "services/market/assetResolution.ts",
+      "sha256": "09d6f7b5f69f71dbe0da210dc2bdc71ab26cb0849f17a7de8c48b04ff41ad06f",
+      "mode": "unchanged"
+    },
+    {
+      "source": "src/telegram/stories.ts",
+      "sha256": "6b443d5ab46a91121e7e595d96f16bca6305e6474c083d72c2ac6d567cfdf7bf",
+      "mode": "unchanged"
+    },
+    {
+      "source": "src/telegram/noise.ts",
+      "sha256": "9e952838103841d1c478c1ccfe1e8c9101d32ede59606d5447bf87ae976a28ca",
+      "mode": "unchanged"
+    },
+    {
+      "source": "src/live/tmeReader.ts",
+      "sha256": "e99c11a6ce74a6e452f101ed18eb67a4cb6b9a530f6aa4d7d193f0bf00684205",
+      "mode": "unchanged"
+    },
+    {
+      "source": "services/investment-ideas/analytics.ts",
+      "sha256": "53d10666605ea5f5f87df44868f652a66d1ab0f745b85abe6413c2058e06f086",
+      "mode": "unchanged"
+    },
+    {
+      "source": "services/investment-ideas/validation.ts",
+      "sha256": "651f91411795461bdc6c1235c27455e686e865ba1a8693f1df746781e73545bc",
+      "mode": "unchanged"
+    },
+    {
+      "source": "services/baskets/index-model.ts",
+      "sha256": "f3491f84ebf5a710723490f1856a05c6c8b3b7983be3b9acba8695acbbbbc561",
+      "mode": "unchanged"
+    },
+    {
+      "source": "src/playbook/types.ts",
+      "sha256": "e54cdddb8db94230e19ae6f06e79787a9f174ef452091de6b500241b63815146",
+      "mode": "unchanged"
+    },
+    {
+      "source": "src/playbook/snapshot.ts",
+      "sha256": "164b58d3975960f7f387d2d971e326d70745e3d93f7aa0798d472c0845b7cdaf",
+      "mode": "unchanged"
+    },
+    {
+      "source": "src/playbook/similar.ts",
+      "sha256": "f29801c6ed4dcb53f668825b7bf1aa29f9b148cde33ce25988bb32164a213b79",
+      "mode": "unchanged"
+    },
+    {
+      "source": "src/playbook/conditions.ts",
+      "sha256": "e3f2bc86cc69acf32bfb144dba70755bf7596d9465853d89d68e4b7f998ab878",
+      "mode": "unchanged"
+    },
+    {
+      "source": "src/playbook/weights.ts",
+      "sha256": "8076679dafa5b4ea312ada5dd8e315bf5b600eda1f0ddffb2cb8cef084ac58ed",
+      "mode": "unchanged"
+    },
+    {
+      "source": "src/playbook/distill.ts",
+      "sha256": "4f0fb4930f9fa37d88bcc570a754d9bc28ed259c3a60f4fa1055462db616fee2",
+      "mode": "unchanged"
+    },
+    {
+      "source": "src/playbook/match.ts",
+      "sha256": "6c1b0e09c8085c060102dc8e3ece0a98ff634a5e2f69079078703e976a82cda9",
+      "mode": "unchanged"
+    },
+    {
+      "source": "services/backtest/types.ts",
+      "sha256": "b21db4da63dff8c6164b62d6132377aadbd7b6dbf8f8eb19750317c0ea6fc626",
+      "mode": "unchanged"
+    },
+    {
+      "source": "services/backtest/validation.ts",
+      "sha256": "2e1f9066d1a95ad885c494af011db4db4317aa78b876fe30ce6ebe75f108684c",
+      "mode": "unchanged"
+    },
+    {
+      "source": "services/backtest/rules/registry.ts",
+      "sha256": "337aa34e49cc511a7378e34922964c7af7c114d6fe13f7a29d57298c2a6d4fa8",
+      "mode": "unchanged"
+    },
+    {
+      "source": "services/backtest/rules/breakout.ts",
+      "sha256": "527612c5217bf96a190d2a491dfdb3f1560dc19e358eb311db61cfd8a8fce24d",
+      "mode": "unchanged"
+    },
+    {
+      "source": "services/backtest/rules/dip-buy.ts",
+      "sha256": "b85da0ce55c44ea31f8564ca4497ebe19e090a7ed570f58393077e9834563aff",
+      "mode": "unchanged"
+    },
+    {
+      "source": "services/backtest/rules/relative-strength.ts",
+      "sha256": "a7c051cff80cf3117d48997499cd770b50bbc41238a2eb7f35f9c628140eeb5d",
+      "mode": "unchanged"
+    },
+    {
+      "source": "services/backtest/rules/event-window.ts",
+      "sha256": "99a9c1bb4662ed95ff0735ec439c17f761fa8513c6fba8a77362870d13e26889",
+      "mode": "unchanged"
+    },
+    {
+      "source": "services/backtest/rules/narrative-momentum.ts",
+      "sha256": "be8c4d931fda8aba9e46c393c7e7a746a286e59462c0b64824e54aac92166260",
+      "mode": "unchanged"
+    },
+    {
+      "source": "services/backtest/rules/stop-loss.ts",
+      "sha256": "8bc0d5c8dabc6c97f118ce1a27d1a4e3b0038d0eb179afcc973bef35e388390e",
+      "mode": "unchanged"
+    },
+    {
+      "source": "services/backtest/rules/take-profit.ts",
+      "sha256": "90286f2669675950660cd54f3a0e0ea3fb14c894e2a4005bb95a51d1463a3ccd",
+      "mode": "unchanged"
+    },
+    {
+      "source": "services/backtest/rules/time-stop.ts",
+      "sha256": "ea232c49d4702d3907fb9d72616058388e5beb5f03700373b45e704a974a229e",
+      "mode": "unchanged"
+    },
+    {
+      "source": "services/backtest/rules/trailing.ts",
+      "sha256": "283f8afb9f39513ec5b367bc4493a995b6c48f33db38cb260a50bde05a64dcc6",
+      "mode": "unchanged"
+    },
+    {
+      "source": "services/backtest/rules/rs-fade.ts",
+      "sha256": "25be283c1bbbdd96c586a90c7d0969107624fb8b785e27991bc82dbd56ebd6ef",
+      "mode": "unchanged"
+    },
+    {
+      "source": "services/ticker_recap/hub.ts",
+      "target": "services/ticker_recap/hub-core.ts",
+      "sha256": "3aa22a558a70ee60e62951b54fbf3110880ea3aae8a87b977afe3d38494abb54",
+      "mode": "verbatim extraction: HubPost, mergeHubPosts, hubConsensus, digestSchema"
+    }
+  ]
+}

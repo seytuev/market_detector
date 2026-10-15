@@ -1,0 +1,14 @@
+{
+  "name": "stv-market-researcher-terminal-modules",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "build": "node build.cjs"
+  },
+  "dependencies": {
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12"
+  }
+}

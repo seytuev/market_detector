@@ -43,6 +43,7 @@
       <a href="/#review" class="app-tab"><span class="nav-full">Проверка зон</span><span class="nav-short">Проверка зон</span></a>
       <span class="app-tab current" aria-current="page"><span class="nav-full">Скринер ALTs</span><span class="nav-short">Скринер ALTs</span></span>
       <a href="/events.html" class="app-tab"><span class="nav-full">Контекст рынка</span><span class="nav-short">Контекст рынка</span></a>
+      <a href="/research.html?tab=ideas" class="app-tab"><span class="nav-full">Исследования</span><span class="nav-short">Исследования</span></a>
     </nav>
     <div class="sidebar-bottom">
       <a href="/#journal" class="app-tab"><span class="nav-full">Журнал</span><span class="nav-short">Журнал</span></a>
@@ -146,8 +147,11 @@
               <option value="distance">Ближе ко входу</option>
               <option value="rank">Ранг капитализации</option>
               <option value="age">Возраст диапазона</option>
+              <option value="rs_30">К BTC · 30 дней UTC</option>
             </select>
           </label>
+          <label>К BTC 30д от, п.п.<input id="alt-rs-min" type="number" step="any" style="width:90px"></label>
+          <a href="/research.html?tab=strength">Методика и метрики</a>
           <button type="button" id="alt-collapse-list" class="btn small alt-collapse">Свернуть список</button>
         </div>
         <p id="alt-shown" aria-live="polite">Показано 0</p>

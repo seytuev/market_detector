@@ -246,6 +246,7 @@ async def async_main() -> None:
     )
     app.state.data_sync = worker.data_sync
     app.state.worker = worker
+    app.state.research.bind_outbox(dispatcher.outbox)
     worker.instance_id = app.state.instance_id
     db.runtime_instance_id = app.state.instance_id
     db.runtime_stop = worker._stop
@@ -260,7 +261,8 @@ async def async_main() -> None:
              asyncio.create_task(shutdown_requested.wait(), name="shutdown"),
              asyncio.create_task(worker.run(), name="worker"),
              asyncio.create_task(dispatcher.outbox.run(worker._stop), name="outbox"),
-             asyncio.create_task(run_maintenance(db,settings,worker._stop), name="maintenance")]
+             asyncio.create_task(run_maintenance(db,settings,worker._stop), name="maintenance"),
+             asyncio.create_task(app.state.research.run(worker._stop), name="research")]
     if settings.telegram_token:
         tasks.append(asyncio.create_task(run_bot_polling(settings, db), name="telegram"))
     try:

@@ -770,6 +770,8 @@ def create_app(
     register_alt_routes(app, db, settings, require_auth, alt_runner)
     from .events_api import register_events_routes
     register_events_routes(app, db, settings, require_auth)
+    from .research_api import register_research_routes
+    register_research_routes(app, db, settings, require_auth)
     from .data_sync_api import register_data_sync_routes
     register_data_sync_routes(app, db, require_auth)
     register_metrics_routes(app, require_auth)

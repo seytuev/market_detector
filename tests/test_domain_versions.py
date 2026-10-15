@@ -335,6 +335,7 @@ def test_data_sync_status_versions_and_readiness(
     worker = SimpleNamespace(
         db=db, scan_tfs=("H1",), _stop=asyncio.Event(),
         settings=settings, cfg=settings.detector, readiness=Readiness(),
+        _restoring_instruments=set(),
     )
     sync = DataSync(worker)
     sync.ready = True
