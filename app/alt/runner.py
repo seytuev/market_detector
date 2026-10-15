@@ -17,7 +17,7 @@ UTC-дня — настройки job_hour_msk/job_minute_msk):
    last_closed_ms. Только ЗАКРЫТЫЕ свечи (include_forming=False + фильтр
    close boundary <= now — формирующаяся D1 не хранится, §4). Пропуски дней
    не синтезируются — фиксируются gaps в meta (§4).
-4. Движок: по флагу AltConfig.engine_version (дефолт v1). v1 —
+4. Движок: по флагу AltConfig.engine_version (дефолт v3, W1 alt-0.5). v1 —
    AltEngine.process_asset_history; v2 — AltEngineV2, таблицы эпизодов
    рядом, freeze v1 не переписывается. Replay идемпотентен. Движок и БД
    синхронные — вызов в asyncio.to_thread. Уведомления v2 не эмитируются:
@@ -127,6 +127,11 @@ class AltRunner:
         self.adapters = adapters
         self.cmc_adapter = cmc_adapter
         self.broadcast = broadcast
+        self._v3_lock = asyncio.Lock()
+        self._live_retry: dict[int, int] = {}
+        self._live_sources: dict[int, Any] = {}
+        self._live_intervals: dict[int, list[tuple[float, float]]] = {}
+        self._stream_prices: dict[int, float] = {}
 
     @property
     def cfg(self) -> AltConfig:
@@ -168,6 +173,9 @@ class AltRunner:
         Любая попытка в текущем слоте (в т.ч. error) блокирует повтор до
         следующего слота — цикл опроса не превращается в спам ретраями.
         """
+        if (self.cfg.engine_version == "v3" and self.db.get_meta("alt:v3:initialized") is None
+                and any(v != "v3" for v in self.db.meta_prefix("alt:engine:").values())):
+            return True
         slot_ms = int(self._last_due_slot(now).timestamp() * 1000)
         last_any = self.db.get_latest_alt_run()
         if last_any is not None and last_any.started_ms >= slot_ms:
@@ -232,6 +240,8 @@ class AltRunner:
             "per_asset": [],
             "backfill_event_ids": [],
         }
+        if self.cfg.engine_version == "v3":
+            self.db.set_meta("alt:v3:initialized", str(now))
 
         # --- (a) вселенная ---
         uni = await refresh_universe(self.db, self.cmc_adapter, self.cfg, now)
@@ -336,7 +346,9 @@ class AltRunner:
             if asset.id in seen:
                 continue
             setups = self.db.list_alt_setups(asset.id)
-            if any(not _is_terminal_setup(s) for s in setups):
+            has_v3 = self.cfg.engine_version == "v3" and self.db.conn.execute(
+                "SELECT id FROM alt_structure WHERE asset_id=? AND rules_version='alt-0.5' LIMIT 1", (asset.id,)).fetchone() is not None
+            if has_v3 or any(not _is_terminal_setup(s) for s in setups):
                 targets.append((asset, False))
         return targets
 
@@ -446,6 +458,10 @@ class AltRunner:
         now = now_ms()
         prev_last = src.last_closed_ms
         start = prev_last if prev_last else 0
+        if self.cfg.engine_version == "v3":
+            gaps = json.loads(self.db.get_meta(f"alt:gaps:{src.asset_id}:{src.id}") or "[]")
+            if gaps:
+                start = min(start, min(g["from_open_time"] + DAY_MS for g in gaps))
         closed = await self._fetch_d1_closed(adapter, src.symbol, start, now)
         added = self.db.insert_alt_candles([
             AltCandle(
@@ -482,8 +498,114 @@ class AltRunner:
     # (d–f) движок, антиспам, флаги вселенной
     # ------------------------------------------------------------------
 
+    async def poll_live(self) -> int:
+        """Resolve newly closed W1 before observing current trade prices."""
+        if self.cfg.engine_version != "v3":
+            return 0
+        from .engine_v3 import week_start
+        from .store_v3 import list_structures
+        from .monitor_v3 import observe_quote
+        stamp = now_ms()
+        semaphore = asyncio.Semaphore(4)
+        total = 0
+
+        async def inspect(asset):
+            nonlocal total
+            async with semaphore:
+                src = self.db.get_alt_instrument_source(asset.id)
+                if src is None or src.venue not in self.adapters or self._live_retry.get(src.id, 0) > stamp:
+                    return
+                if self.db.get_meta(f"alt:engine:{asset.id}:{src.id}") != "v3":
+                    return
+                try:
+                    coverage = json.loads(self.db.get_meta(f"alt:v3:coverage:{src.id}") or "{}")
+                    if (coverage.get("last_week_close_ms") or 0) < week_start(stamp):
+                        async with self._v3_lock:
+                            loaded = await self._load_history(src)
+                        await self._process_asset(asset, src, loaded.get("new_days", 0), now_ms())
+                        coverage = json.loads(self.db.get_meta(f"alt:v3:coverage:{src.id}") or "{}")
+                    if coverage.get("status") != "ok" or (coverage.get("last_week_close_ms") or 0) < week_start(stamp):
+                        self._live_retry[src.id] = stamp + 60_000
+                        self._live_sources.pop(src.id, None)
+                        self._live_intervals.pop(src.id, None)
+                        return
+                    frames = await asyncio.to_thread(list_structures, self.db, asset.id, src.id)
+                    intervals = []
+                    for f in frames:
+                        state = f["scenario_state"]
+                        scenarios = {s["id"] for s in state.get("scenarios", []) if s["cancelled_at_ms"] is None}
+                        intervals.extend((z["lower"], z["upper"]) for z in state.get("pd_zones", []) if z["invalidated_at_ms"] is None and z["scenario_id"] in scenarios)
+                        if scenarios or f["base_end_open_time"] is not None:
+                            intervals.extend([(f["lower"], f["lower"]), (f["upper"], f["upper"])])
+                    if not intervals:
+                        self._live_sources.pop(src.id, None)
+                        self._live_intervals.pop(src.id, None)
+                        return
+                    self._live_sources[src.id] = src
+                    self._live_intervals[src.id] = intervals
+                    tick = await self.adapters[src.venue].last_price(src.symbol)
+                    total += await asyncio.to_thread(observe_quote, self.db, src.id, tick.price, tick.event_at, tick.received_at,
+                                                     price_kind=tick.price_kind, source_seq=tick.source_seq)
+                except Exception:
+                    self._live_retry[src.id] = stamp + 60_000
+                    log.warning("ALT W1 live: %s временно недоступен", src.symbol, exc_info=True)
+
+        await asyncio.gather(*(inspect(a) for a in self.db.list_alt_assets(enabled_only=True)))
+        if total and self.broadcast:
+            self.broadcast({"type": "alt", "touches": total})
+        return total
+
+    async def live_stream(self, stop) -> None:
+        """Binance aggTrade; REST polling remains the recovery/Bybit path."""
+        from urllib.parse import urlsplit
+        from websockets.asyncio.client import connect
+        from .monitor_v3 import observe_quote
+        while not stop.is_set():
+            sources = {s.symbol.lower()+"@aggTrade": s for s in self._live_sources.values() if s.venue == "binance"}
+            if self.cfg.engine_version != "v3" or not self.cfg.job_enabled or not sources:
+                try:
+                    await asyncio.wait_for(stop.wait(), 5)
+                except asyncio.TimeoutError:
+                    pass
+                continue
+            base = urlsplit(self.settings.binance_ws_url)
+            url = f"{base.scheme}://{base.netloc}/stream?streams=" + "/".join(sorted(sources))
+            try:
+                async with connect(url, open_timeout=10, ping_interval=20, ping_timeout=20) as ws:
+                    while not stop.is_set():
+                        current = {s.symbol.lower()+"@aggTrade" for s in self._live_sources.values() if s.venue == "binance"}
+                        if current != set(sources) or self.cfg.engine_version != "v3" or not self.cfg.job_enabled:
+                            break
+                        try:
+                            raw = await asyncio.wait_for(ws.recv(), 5)
+                        except asyncio.TimeoutError:
+                            continue
+                        message = json.loads(raw)
+                        src = sources.get(message.get("stream"))
+                        trade = message.get("data") or {}
+                        if src is None or "p" not in trade or "T" not in trade:
+                            continue
+                        price = float(trade["p"])
+                        known_previous = self._stream_prices.get(src.id)
+                        previous = price if known_previous is None else known_previous
+                        self._stream_prices[src.id] = price
+                        intervals = self._live_intervals.get(src.id, [])
+                        if not any(min(previous, price) <= hi and max(previous, price) >= lo
+                                   and (known_previous is None or not (lo <= previous <= hi and lo <= price <= hi))
+                                   for lo, hi in intervals):
+                            continue
+                        added = await asyncio.to_thread(observe_quote, self.db, src.id, price, int(trade["T"]), now_ms(), source_seq=str(trade.get("a", "")))
+                        if added and self.broadcast:
+                            self.broadcast({"type": "alt", "touches": added})
+            except Exception:
+                log.warning("ALT W1 trade stream: REST fallback remains active", exc_info=True)
+                try:
+                    await asyncio.wait_for(stop.wait(), 10)
+                except asyncio.TimeoutError:
+                    pass
+
     def _engine(self) -> AltEngine | AltEngineV2:
-        """v1 по умолчанию. v2 — отдельный расчёт эпизодов, без рассылки."""
+        """Legacy engines for an explicit v1/v2 rollback; v3 uses its own store."""
         if self.cfg.engine_version == "v2":
             return AltEngineV2(self.db, self.cfg)
         return AltEngine(self.db, self.cfg)
@@ -512,6 +634,13 @@ class AltRunner:
         mode = "backfill" if backfill else ("catchup" if new_days > 1 else "live")
 
         candles = self.db.get_alt_candles(src.id)
+        if self.cfg.engine_version == "v3":
+            from .store_v3 import persist_candles as persist_v3
+            async with self._v3_lock:
+                await asyncio.to_thread(persist_v3, self.db, asset.id, src.id, candles, now, backfill=backfill)
+            self.db.set_meta(mode_key, json.dumps({"at_ms": now, "candles": len(candles)}))
+            self.db.set_meta(version_key, "v3")
+            return mode, []
         engine = self._engine()
         await asyncio.to_thread(
             engine.process_asset_history, asset.id, src.id, candles, now

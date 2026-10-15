@@ -13,11 +13,12 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_alt_chart_projection_matches_spec():
+@pytest.mark.parametrize("filename", ["alt_chart_check.js", "alt_v3_chart_check.cjs"])
+def test_alt_chart_projection_matches_spec(filename):
     node = shutil.which("node")
     if node is None:
         pytest.skip("node не установлен")
-    script = ROOT / "tests" / "alt_chart_check.js"
+    script = ROOT / "tests" / filename
     proc = subprocess.run(
         [node, str(script)],
         cwd=ROOT,

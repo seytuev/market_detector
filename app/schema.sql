@@ -837,6 +837,21 @@ CREATE TABLE IF NOT EXISTS alt_structure_revision (
 CREATE INDEX IF NOT EXISTS ix_alt_structure_revision_avail
     ON alt_structure_revision(structure_id, available_at_ms);
 
+-- Versioned W1 events; legacy journals and their deliveries remain intact.
+CREATE TABLE IF NOT EXISTS alt_v3_event (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_key TEXT NOT NULL UNIQUE,
+    asset_id INTEGER NOT NULL,
+    source_id INTEGER NOT NULL,
+    structure_key TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    event_time_ms INTEGER NOT NULL,
+    payload_json TEXT NOT NULL,
+    delivered INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS ix_alt_v3_event_pending ON alt_v3_event(delivered, event_time_ms);
+CREATE INDEX IF NOT EXISTS ix_alt_v3_event_source ON alt_v3_event(source_id, structure_key, event_time_ms);
+
 -- Presentation outbox: additive migration, never replays delivered history.
 CREATE TABLE IF NOT EXISTS notification_packet (
     id INTEGER PRIMARY KEY,

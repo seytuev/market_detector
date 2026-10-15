@@ -994,6 +994,17 @@ def alt_setups_table(
                 stats_cache[source.id] = _candle_stats(db, source.id)
             stats = stats_cache[source.id]
 
+        if settings.alt_config.engine_version == "v3":
+            from ..alt import store_v3
+            from .alt_v3 import row as v3_row
+            frames = store_v3.list_structures(db, asset.id, source.id) if source else []
+            for frame in frames:
+                target = history_rows if frame["base_end_open_time"] is not None else active_rows
+                target.append(v3_row(db, asset, source, stats, frame))
+            if not frames and (source is None or stats is None):
+                active_rows.append(_nodata_row(asset, source, stats, reasons.get(asset.id)))
+            continue
+
         setups = db.list_alt_setups(asset.id)
         active = [s for s in setups if not _is_terminal(s)]
         terminal = [s for s in setups if _is_terminal(s)]
@@ -1118,7 +1129,7 @@ def alt_setups_table(
             counts[name] = counts.get(name, 0) + 1
     counts["eligible"] = sum(1 for r in active_rows if r["stage"] != STAGE_REVIEW and visible(r))
     # §17: активные ранжируются; история — по завершению (свежие первыми)
-    if bucket == "history":
+    if bucket == "history" or settings.alt_config.engine_version == "v3" and bucket == "all":
         rows.sort(key=lambda r: (r["terminated_ms"] or 0, r["asset"]["id"]),
                   reverse=True)
     else:
@@ -1835,6 +1846,9 @@ def alt_asset_ranges_history(db: Database, asset_id: int) -> Optional[dict[str, 
     ]
 
     source = db.get_alt_instrument_source(asset_id)
+    from ..alt import store_v3
+    from ..alt.engine_v3 import RULES_VERSION as RULES_VERSION_V3
+    structures_v3 = store_v3.list_structures(db, asset_id, source.id) if source else []
     last_close: Optional[float] = None
     as_of_ms: Optional[int] = None
     if source is not None and source.last_closed_ms:
@@ -1899,7 +1913,10 @@ def alt_asset_ranges_history(db: Database, asset_id: int) -> Optional[dict[str, 
             "name": asset.name, "cmc_rank": asset.cmc_rank,
         },
         "source": _source_brief(source),
-        "rules_versions": {"v1": ALT_RULE_VERSION, "v2": ALT_RULE_VERSION_V2},
+        "rules_versions": {"v1": ALT_RULE_VERSION, "v2": ALT_RULE_VERSION_V2, "v3": RULES_VERSION_V3},
+        "structures_v3": structures_v3,
+        "current_v3": {"structure_id": structures_v3[-1]["structure_id"] if structures_v3 else None,
+                       "rules_version": RULES_VERSION_V3, "reason": "latest_independent_cycle"},
         "current": current,
         "episodes_v2": episode_blocks,
         "v1": {

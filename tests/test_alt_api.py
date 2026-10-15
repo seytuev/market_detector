@@ -43,6 +43,7 @@ def db() -> Database:
 @pytest.fixture()
 def settings(tmp_path) -> Settings:
     s = Settings()
+    s.alt_config.engine_version = "v1"  # these fixtures exercise the legacy API
     s.auth_token = TOKEN
     s.db_path = str(tmp_path / "htf_zones.db")
     return s
@@ -549,7 +550,7 @@ def test_ranges_empty_v2_history(client, seeded):
     assert d["episodes_v2"] == []
     assert d["current"]["episode_id"] is None
     assert d["current"]["reason"] == "no_episodes"
-    assert d["rules_versions"] == {"v1": "alt-0.1", "v2": "alt-0.3"}
+    assert d["rules_versions"] == {"v1": "alt-0.1", "v2": "alt-0.3", "v3": "alt-0.5"}
     assert d["v1"]["rules_version"] == "alt-0.1"
     assert len(d["v1"]["ranges"]) == 1
     assert d["v1"]["ranges"][0]["rules_version"] == "alt-0.1"

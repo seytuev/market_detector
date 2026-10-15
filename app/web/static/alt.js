@@ -23,6 +23,9 @@ const HISTORY_TYPES = [
   ['breakout', 'Выход'], ['retest', 'Ретест'], ['target_hit', 'Цели'],
   ['cancelled', 'Отмена'], ['expired_no_retest', 'Срок'],
   ['targets_completed', 'Цели выполнены'],
+  ['mature_frozen', 'База подтверждена'], ['boundary_refined', 'Уточнение границы'],
+  ['manipulation_started', 'Депрессия'], ['zone_invalidated', 'Отмена PD-зоны'],
+  ['cycle_superseded', 'Следующий цикл'],
 ];
 
 const COLUMNS = [
@@ -104,9 +107,16 @@ function mskDay(ms) {
 }
 function objectId(row) {
   if (!row) return 0;
+  if (row.structure_id != null) return row.structure_id;
   if (row.setup_id != null) return row.setup_id;
   if (row.candidate_id != null) return row.candidate_id;
   return row.asset ? row.asset.id : 0;
+}
+function objectKind(row) {
+  return row.structure_id != null ? 'structure' : row.setup_id != null ? 'setup' : row.candidate_id != null ? 'candidate' : 'nodata';
+}
+function detailPath(kind, id) {
+  return `/api/alt/${kind === 'structure' ? 'structure' : kind === 'setup' ? 'setup' : 'candidate'}/${id}`;
 }
 function flagsText(row) {
   const flags = row.flags || {};
@@ -121,6 +131,7 @@ function flagsText(row) {
 function sameSelection(row) {
   const sel = state.selected;
   if (!sel || !row) return false;
+  if (sel.kind === 'structure') return row.structure_id === sel.id;
   if (sel.kind === 'setup') return row.setup_id === sel.id;
   return sel.kind === 'candidate' && row.candidate_id === sel.id;
 }
@@ -200,7 +211,7 @@ function loadPrefs() {
   if (prefs.selected && prefs.selected.kind && prefs.selected.id != null) state.savedSelected = prefs.selected;
   const query = new URLSearchParams(location.search);
   ['bucket','venue','search','sort','rankMin','rankMax','ageMin','ageMax','ddMin','ddMax','structure','stage'].forEach(key => { if (query.has(key)) state[key] = query.get(key); });
-  state.screen = query.get('view') === 'analysis' || query.has('setup') || query.has('candidate') ? 'analysis' : 'list';
+  state.screen = query.get('view') === 'analysis' || query.has('setup') || query.has('candidate') || query.has('base') ? 'analysis' : 'list';
   if (query.get('tf') === 'W1' || query.get('tf') === 'D1') state.timeframe = query.get('tf');
   state.tableMode = state.screen === 'list';
 }
@@ -348,8 +359,8 @@ function renderList() {
   const keepFocus = document.activeElement && list.contains(document.activeElement);
   list.innerHTML = rows.map((row) => {
     const selected = sameSelection(row) || (state.nodata && state.nodata === row);
-    const kind = row.setup_id != null ? 'setup' : (row.candidate_id != null ? 'candidate' : 'nodata');
-    const id = kind === 'setup' ? row.setup_id : (kind === 'candidate' ? row.candidate_id : row.asset.cmc_id);
+    const kind = objectKind(row);
+    const id = kind === 'nodata' ? row.asset.cmc_id : objectId(row);
     const stage = row.terminal ? row.state_ru : (row.stage_ru || row.state_ru || '—');
     const dist = row.distance_pct == null ? '' : `До входа ${fmtPct(row.distance_pct)}`;
     const last = row.last_event
@@ -420,6 +431,7 @@ function targetState(target) {
   return 'ожидается';
 }
 function remainText(detail) {
+  if (detail.kind === 'structure') return 'Тесты учитываются без срока; завершённые уровни базы сохраняются.';
   if (detail.terminal) {
     return `Завершён ${fmtTime(detail.terminated_ms)}. Причина: ${detail.state_ru}. Обратный отсчёт не показывается.`;
   }
@@ -475,17 +487,23 @@ function renderCard() {
 
   parts.push('<h3>Основание</h3>');
   if (!detail.confirmation) {
-    parts.push('<p>Диапазон формируется / подтверждения ещё нет.</p>');
+    parts.push(detail.kind === 'structure' ? '<p>База зрелая. Подтверждённой манипуляции с BOS W1 пока нет.</p>' : '<p>Диапазон формируется / подтверждения ещё нет.</p>');
   } else {
     const link = detail.confirmation.structure_link || {};
     const candle = detail.confirmation.candle_open_time;
-    parts.push(`<p>${esc(detail.confirmation.event_type)} · ${fmtTime(detail.confirmation.event_time_ms)}</p>`);
+    parts.push(`<p>${esc(detail.confirmation.label_ru || detail.confirmation.event_type)} · ${fmtTime(detail.confirmation.event_time_ms)}</p>`);
     if (link.status === 'unknown') parts.push('<p>Связь со структурной записью не определена.</p>');
     if (candle) parts.push(`<p><button type="button" class="btn small" data-jump="${candle}">К свече основания</button></p>`);
   }
 
-  parts.push('<h3>Входы</h3>');
-  if (!detail.entries || !detail.entries.length) parts.push('<p>Зафиксированных входов A/B нет.</p>');
+  parts.push(detail.kind === 'structure' ? '<h3>Тесты и PD-зоны W1</h3>' : '<h3>Входы</h3>');
+  if (detail.kind === 'structure') {
+    const zones = detail.pd_zones || [];
+    if (!zones.length) parts.push('<p>Подтверждённых зон движения BOS пока нет.</p>');
+    zones.forEach(zone => parts.push(`<p>${esc(zone.kind)} W1 ${fmtPrice(zone.lower)}–${fmtPrice(zone.upper)} · ${zone.invalidated_at_ms ? 'отменена ' + fmtTime(zone.invalidated_at_ms) : 'повторные тесты разрешены'}</p>`));
+    parts.push('<p>Тест границы базы учитывается и без совпадения с FVG/OB. Касания отмечаются до закрытия недели.</p>');
+  }
+  else if (!detail.entries || !detail.entries.length) parts.push('<p>Зафиксированных входов A/B нет.</p>');
   else detail.entries.forEach((entry) => parts.push(`<p>${esc(entryText(entry))}</p>`));
   const row = currentRow();
   if (row && row.distance_pct != null) {
@@ -493,7 +511,7 @@ function renderCard() {
   }
 
   parts.push('<h3>Цели</h3>');
-  if (!detail.targets || !detail.targets.length) parts.push('<p>Цели появятся после подтверждения.</p>');
+  if (!detail.targets || !detail.targets.length) parts.push(detail.kind === 'structure' ? '<p>Ориентиры: границы базы и W1 FVG/OB движения BOS.</p>' : '<p>Цели появятся после подтверждения.</p>');
   else {
     parts.push('<dl class="alt-kv">' + detail.targets.map((target) =>
       `<dt>TP${target.tp}</dt><dd>${fmtPrice(target.price)} · ${targetState(target)}</dd>`
@@ -502,6 +520,7 @@ function renderCard() {
 
   parts.push('<h3>Отмена</h3>');
   if (!detail.cancel) parts.push('<p>Уровень отмены ещё не рассчитан.</p>');
+  else if (detail.kind === 'structure' && detail.cancel.price == null) parts.push('<p>До подтверждённого BOS отмена по минимуму манипуляции не применяется.</p>');
   else if (!(detail.cancel.price > 0)) {
     parts.push(`<p>Расчётный уровень отмены ≤ 0; на графике не отображается. ${esc(detail.cancel.mode_ru || '')}</p>`);
   } else {
@@ -514,7 +533,7 @@ function renderCard() {
   const anchors = detail.anchors;
   const range = detail.frozen_range || detail.range;
   const revision = detail.range_revision;
-  parts.push(`<p><button type="button" class="btn small" id="alt-edit-range">Редактировать диапазон</button> ${revision ? `<span class="alt-dim">${revision.source_kind === 'manual' ? 'Ручной' : 'Авто'} · ревизия ${revision.revision}</span>` : '<span class="alt-dim">Автоматический диапазон</span>'}</p>`);
+  if (detail.kind !== 'structure') parts.push(`<p><button type="button" class="btn small" id="alt-edit-range">Редактировать диапазон</button> ${revision ? `<span class="alt-dim">${revision.source_kind === 'manual' ? 'Ручной' : 'Авто'} · ревизия ${revision.revision}</span>` : '<span class="alt-dim">Автоматический диапазон</span>'}</p>`);
   parts.push('<h3>Почему найдено</h3>');
   const why = [];
   if (anchors && anchors.start) why.push(`Старт ${fmtDate(anchors.start.open_time)}, доступен ${fmtTime(anchors.start.available_at_ms)}.`);
@@ -540,8 +559,15 @@ function renderCard() {
     const rev = frame.revision_id != null ? `, ревизия ${frame.revision_id}` : '';
     why.push(`Рамка${id}${rev}: L ${fmtPrice(frame.lower)}, U ${fmtPrice(frame.upper)}, M ${fmtPrice(frame.mid)}.`);
   }
-  if (detail.confirmation) why.push(`Подтверждение: ${detail.confirmation.event_type}.`);
+  if (detail.confirmation) why.push(`Подтверждение: ${detail.confirmation.label_ru || detail.confirmation.event_type}.`);
   parts.push(`<p>${esc(why.join(' ') || 'Кратких опор в снимке нет.')}</p>`);
+  if (detail.kind === 'structure' && eff && eff.boundary_evidence) {
+    [['lower', 'Нижняя'], ['upper', 'Верхняя']].forEach(([side, label]) => {
+      const evidence = eff.boundary_evidence[side];
+      const support = evidence && evidence.supports && evidence.supports[0];
+      if (support && support.formed_at != null) parts.push(`<p>${label} граница: ${fmtPrice(evidence.price)} · тень D1 ${fmtDate(support.formed_at)} <button type="button" data-jump="${support.formed_at}">Показать свечу</button></p>`);
+    });
+  }
 
   const formulas = detail.formulas || {};
   parts.push(`<details class="alt-fold"><summary>Формулы</summary><p>Отмена: ${esc(formulas.cancel || '—')}</p><p>Цели: ${esc(formulas.targets || '—')}</p><p>Ширина: ${esc(formulas.width_up || '')} / ${esc(formulas.width_down || '')}</p><p>Ретест: ${esc(formulas.retest_zone || '—')}</p></details>`);
@@ -556,7 +582,7 @@ function renderCard() {
   body.querySelectorAll('[data-jump]').forEach((button) => {
     button.onclick = () => jumpTo(Number(button.dataset.jump));
   });
-  $('alt-edit-range').onclick = openRangeEditor;
+  if ($('alt-edit-range')) $('alt-edit-range').onclick = openRangeEditor;
 }
 
 function rangeEditPayload() {
@@ -747,6 +773,7 @@ function writeUrl() {
   const url = new URL(location.href);
   url.searchParams.delete('setup');
   url.searchParams.delete('candidate');
+  url.searchParams.delete('base');
   url.searchParams.delete('asset');
   const row = currentRow();
   const asset = (state.detail && state.detail.asset) || (row && row.asset) || (state.nodata && state.nodata.asset);
@@ -756,6 +783,7 @@ function writeUrl() {
     url.searchParams.set('tf',state.timeframe);
     if (state.selected && state.selected.kind === 'setup') url.searchParams.set('setup', String(state.selected.id));
     if (state.selected && state.selected.kind === 'candidate') url.searchParams.set('candidate', String(state.selected.id));
+    if (state.selected && state.selected.kind === 'structure') url.searchParams.set('base', String(state.selected.id));
     if (asset && asset.cmc_id != null) url.searchParams.set('asset', String(asset.cmc_id));
   }
   else { url.searchParams.delete('tf'); url.searchParams.delete('event'); url.searchParams.delete('at'); }
@@ -834,7 +862,7 @@ async function selectRow(kind, id, options) {
   if (!opts.preserve) clearSeries();
   let detail;
   try {
-    detail = await api(kind === 'setup' ? `/api/alt/setup/${id}` : `/api/alt/candidate/${id}`);
+    detail = await api(detailPath(kind, id));
   } catch (e) {
     if (req !== state.reqSeq) return false;
     const missing = /не найден/i.test(String(e.message || ''));
@@ -902,7 +930,7 @@ async function openExact(kind, id) {
   renderCard();
   let detail;
   try {
-    detail = await api(kind === 'setup' ? `/api/alt/setup/${id}` : `/api/alt/candidate/${id}`);
+    detail = await api(detailPath(kind, id));
   } catch (e) {
     if (req !== state.reqSeq) return;
     state.cardPhase = 'missing';
@@ -931,7 +959,7 @@ async function openExact(kind, id) {
 }
 
 async function selectByAsset(cmcId) {
-  const usable = (row) => row && row.asset && row.asset.cmc_id === cmcId && (row.setup_id != null || row.candidate_id != null);
+  const usable = (row) => row && row.asset && row.asset.cmc_id === cmcId && objectKind(row) !== 'nodata';
   let row = state.rows.find(usable);
   if (!row) {
     const all = await api('/api/alt/setups?bucket=all');
@@ -950,8 +978,7 @@ async function selectByAsset(cmcId) {
     await loadTable();
     row = state.rows.find(usable) || row;
   }
-  if (row.setup_id != null) await selectRow('setup', row.setup_id);
-  else await selectRow('candidate', row.candidate_id);
+  await selectRow(objectKind(row), objectId(row));
 }
 
 async function showInList() {
@@ -1208,6 +1235,10 @@ function paintBox(overlay, startMs, endMs, upper, lower, cls, title) {
   overlay.appendChild(box);
 }
 function boxTitles(box) {
+  if (box.kind === 'pd_fvg' || box.kind === 'pd_ob') return {
+    cls: box.kind === 'pd_fvg' ? 'alt-shelf-box' : 'alt-retest-box',
+    title: `${box.kind === 'pd_fvg' ? 'FVG' : 'OB'} W1 ${fmtPrice(box.lower)}–${fmtPrice(box.upper)}`,
+  };
   if (box.kind === 'shelf') {
     const parent = box.parent_range_id != null ? ` · база #${box.parent_range_id}` : '';
     return {
@@ -1416,6 +1447,7 @@ function switchTimeframe(tf) {
   state.timeframe = tf;
   savePrefs();
   syncControls();
+  renderHeadline();
   if (!state.detail || !state.chart) {
     renderChart();
     return;
@@ -1531,7 +1563,7 @@ async function exportPng(zoom) {
   ctx.rect(0, 0, chartWidth, chartHeight);
   ctx.clip();
   scene.rects.forEach((rect) => {
-    const style = colors[rect.kind] || colors.range;
+    const style = colors[rect.kind] || (rect.kind === 'pd_fvg' ? colors.shelf : rect.kind === 'pd_ob' ? colors.retest : colors.range);
     ctx.fillStyle = style.fill;
     ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
     ctx.strokeStyle = style.border;
@@ -1634,8 +1666,8 @@ function renderTable() {
   const rows = state.view || viewRows();
   $('alt-tbody').innerHTML = rows.map((row) => {
     const selected = sameSelection(row);
-    const kind = row.setup_id != null ? 'setup' : (row.candidate_id != null ? 'candidate' : 'nodata');
-    const id = kind === 'setup' ? row.setup_id : (kind === 'candidate' ? row.candidate_id : '');
+    const kind = objectKind(row);
+    const id = kind === 'nodata' ? '' : objectId(row);
     const cmc = row.asset && row.asset.cmc_id != null ? row.asset.cmc_id : '';
     return `<tr tabindex="0" aria-selected="${selected ? 'true' : 'false'}" data-kind="${kind}" data-id="${id}" data-cmc="${cmc}">` +
       columns.map((col) => `<td${col.num ? ' class="num"' : ''}>${col.render(row)}</td>`).join('') + '</tr>';
@@ -1821,6 +1853,7 @@ function bind() {
     const row = (state.view || []).find((item) => {
       if (button.dataset.kind === 'setup') return String(item.setup_id) === button.dataset.id;
       if (button.dataset.kind === 'candidate') return String(item.candidate_id) === button.dataset.id;
+      if (button.dataset.kind === 'structure') return String(item.structure_id) === button.dataset.id;
       return item.kind === 'nodata' && String(item.asset.cmc_id) === button.dataset.id;
     });
     if (!row) return;
@@ -2022,6 +2055,7 @@ function bind() {
     const row = (state.view || []).find((item) => {
       if (rowEl.dataset.kind === 'setup') return String(item.setup_id) === rowEl.dataset.id;
       if (rowEl.dataset.kind === 'candidate') return String(item.candidate_id) === rowEl.dataset.id;
+      if (rowEl.dataset.kind === 'structure') return String(item.structure_id) === rowEl.dataset.id;
       return item.kind === 'nodata' && String(item.asset.cmc_id) === rowEl.dataset.cmc;
     });
     openAnalysisScreen();
@@ -2078,14 +2112,15 @@ async function init() {
   }
   const params = new URL(location.href).searchParams;
   if (params.get('setup')) await openExact('setup', Number(params.get('setup')));
+  else if (params.get('base')) await openExact('structure', Number(params.get('base')));
   else if (params.get('candidate')) await openExact('candidate', Number(params.get('candidate')));
   else if (params.get('asset')) await selectByAsset(Number(params.get('asset')));
-  else if (state.screen === 'analysis' && state.savedSelected && (state.savedSelected.kind === 'setup' || state.savedSelected.kind === 'candidate')) {
+  else if (state.screen === 'analysis' && state.savedSelected && ['setup','candidate','structure'].includes(state.savedSelected.kind)) {
     await selectRow(state.savedSelected.kind, Number(state.savedSelected.id), { optional: true });
   }
   if (state.screen === 'analysis' && !state.selected && !state.nodata && state.cardPhase !== 'missing') {
-    const first = viewRows().find((row) => row.setup_id != null || row.candidate_id != null);
-    if (first) await selectRow(first.setup_id != null ? 'setup' : 'candidate', first.setup_id != null ? first.setup_id : first.candidate_id);
+    const first = viewRows().find((row) => objectKind(row) !== 'nodata');
+    if (first) await selectRow(objectKind(first), objectId(first));
   }
   const eventAt = Number(params.get('at'));
   if (eventAt && state.detail) jumpTo(eventAt);

@@ -60,7 +60,7 @@
     <header class="alt-fresh">
       <div class="alt-fresh-main">
         <h1>Скринер ALTs</h1>
-        <p class="alt-dim">Альткоины · дневной диапазон</p>
+        <p class="alt-dim">Альткоины · базы и сценарии W1</p>
         <p id="alt-asof">Данные на …</p>
         <p id="alt-run-state" class="alt-dim"></p>
         <div id="h1-events-context" class="h1-events-context" aria-label="События и время · Крипторынок"></div>
@@ -177,7 +177,7 @@
           </div>
           <div class="alt-tf" role="group" aria-label="Таймфрейм графика">
             <button type="button" data-tf="D1" aria-pressed="true">D1</button>
-            <button type="button" data-tf="W1" aria-pressed="false" title="Недельные свечи собираются из тех же D1, сигналы считаются на D1">W1</button>
+            <button type="button" data-tf="W1" aria-pressed="false" title="Недельные свечи из D1 одного источника. В версии alt-0.5 BOS и отмены подтверждаются закрытием W1">W1</button>
           </div>
           <button type="button" id="alt-layers-toggle" class="btn small" aria-expanded="false" aria-controls="alt-layers">Слои</button>
           <button type="button" id="alt-180" class="btn small">180D</button>
@@ -189,7 +189,7 @@
         <div id="alt-layers" class="alt-layers hidden">
           <label><input type="checkbox" id="layer-range" checked> Диапазон L/U/M</label>
           <label><input type="checkbox" id="layer-shelf"> Внутренняя полка</label>
-          <label><input type="checkbox" id="layer-entries" checked> Входы и ретест</label>
+          <label><input type="checkbox" id="layer-entries" checked> FVG / OB и ретесты</label>
           <label><input type="checkbox" id="layer-manip" checked> Последняя манипуляция</label>
           <label>Цели
             <select id="layer-targets">

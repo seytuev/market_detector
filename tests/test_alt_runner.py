@@ -95,7 +95,7 @@ def _to_candles(alt_candles):
 
 def make_runner(db, venues, cmc, cfg=None):
     settings = Settings()
-    settings.alt_config = cfg or AltConfig()
+    settings.alt_config = cfg or AltConfig(engine_version="v1")  # legacy runner contract
     return AltRunner(db, settings, {v.venue: v for v in venues}, cmc)
 
 
@@ -459,7 +459,7 @@ async def test_switch_v2_to_v1_keeps_episodes_and_does_not_spam(db):
     ]
     assert before
 
-    r1 = make_runner(db, [venue], FakeCmc(listings), AltConfig())
+    r1 = make_runner(db, [venue], FakeCmc(listings), AltConfig(engine_version="v1"))
     res = await r1.run_daily("test")
     assert res["summary"]["per_asset"][0]["mode"] == "backfill"
     after = [

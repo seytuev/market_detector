@@ -78,6 +78,15 @@ def register_alt_routes(app, db: Database, settings, require_auth,
 
     # ------------------------- деталь / «Почему найдено» (§16) -------------------------
 
+    @app.get("/api/alt/structure/{structure_id}", dependencies=[Depends(require_auth)])
+    def alt_structure(structure_id: int, as_of_ms: Optional[int] = None) -> dict[str, Any]:
+        from ..services.alt_v3 import detail
+        with db.read_tx():
+            data = detail(db, structure_id, settings, as_of_ms)
+        if data is None:
+            raise HTTPException(status_code=404, detail="База не найдена на выбранную дату")
+        return data
+
     @app.get("/api/alt/setup/{setup_id}", dependencies=[Depends(require_auth)])
     def alt_setup(setup_id: int) -> dict[str, Any]:
         with db.read_tx():

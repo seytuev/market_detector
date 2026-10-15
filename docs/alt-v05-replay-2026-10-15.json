@@ -1,0 +1,289 @@
+[
+  {
+    "asset": "NEAR",
+    "rules_version": "alt-0.5",
+    "as_of_ms": 1791331200000,
+    "status": "ok",
+    "bases": 5,
+    "replay_store_s": 2.136,
+    "repeat_store_s": 0.016,
+    "pending_events": 0,
+    "cycles": [
+      {
+        "lower": 0.9054,
+        "upper": 7.58,
+        "start": 1608508800000,
+        "end": 1631404800000
+      },
+      {
+        "lower": 6.123,
+        "upper": 17.95,
+        "start": 1632096000000,
+        "end": 1642291200000
+      },
+      {
+        "lower": 2.726,
+        "upper": 6.111,
+        "start": 1655078400000,
+        "end": 1710633600000
+      },
+      {
+        "lower": 3.423,
+        "upper": 8.244,
+        "start": 1725235200000,
+        "end": 1743897600000
+      },
+      {
+        "lower": 1.55,
+        "upper": 3.383,
+        "start": 1743984000000,
+        "end": 1789862400000
+      }
+    ]
+  },
+  {
+    "asset": "LINK",
+    "rules_version": "alt-0.5",
+    "as_of_ms": 1791763200000,
+    "status": "ok",
+    "bases": 7,
+    "replay_store_s": 3.229,
+    "repeat_store_s": 0.008,
+    "pending_events": 0,
+    "cycles": [
+      {
+        "lower": 1.4612,
+        "upper": 3.16,
+        "start": 1567987200000,
+        "end": 1581206400000
+      },
+      {
+        "lower": 6.5101,
+        "upper": 20.1111,
+        "start": 1595808000000,
+        "end": 1610841600000
+      },
+      {
+        "lower": 11.4,
+        "upper": 44.69,
+        "start": 1621209600000,
+        "end": 1651968000000
+      },
+      {
+        "lower": 5.3,
+        "upper": 10.16,
+        "start": 1652054400000,
+        "end": 1697932800000
+      },
+      {
+        "lower": 11.053,
+        "upper": 22.868,
+        "start": 1704067200000,
+        "end": 1733616000000
+      },
+      {
+        "lower": 10.1,
+        "upper": 20.28,
+        "start": 1743984000000,
+        "end": 1754784000000
+      },
+      {
+        "lower": 6.996,
+        "upper": 10.87,
+        "start": 1769990400000,
+        "end": 1787443200000
+      }
+    ]
+  },
+  {
+    "asset": "HBAR",
+    "rules_version": "alt-0.5",
+    "as_of_ms": 1791331200000,
+    "status": "ok",
+    "bases": 5,
+    "replay_store_s": 2.194,
+    "repeat_store_s": 0.005,
+    "pending_events": 0,
+    "cycles": [
+      {
+        "lower": 0.02769,
+        "upper": 0.06817,
+        "start": 1587340800000,
+        "end": 1611446400000
+      },
+      {
+        "lower": 0.13821,
+        "upper": 0.40949,
+        "start": 1618790400000,
+        "end": 1631404800000
+      },
+      {
+        "lower": 0.055,
+        "upper": 0.0845,
+        "start": 1655078400000,
+        "end": 1676160000000
+      },
+      {
+        "lower": 0.045,
+        "upper": 0.0776,
+        "start": 1688342400000,
+        "end": 1702771200000
+      },
+      {
+        "lower": 0.067,
+        "upper": 0.1817,
+        "start": 1707091200000,
+        "end": 1733011200000
+      }
+    ]
+  },
+  {
+    "asset": "AAVE",
+    "rules_version": "alt-0.5",
+    "as_of_ms": 1791331200000,
+    "status": "ok",
+    "bases": 3,
+    "replay_store_s": 0.388,
+    "repeat_store_s": 0.01,
+    "pending_events": 0,
+    "cycles": [
+      {
+        "lower": 112.4,
+        "upper": 459.0,
+        "start": 1624233600000,
+        "end": 1668902400000
+      },
+      {
+        "lower": 47.3,
+        "upper": 160.01,
+        "start": 1668988800000,
+        "end": 1726963200000
+      },
+      {
+        "lower": 78.09,
+        "upper": 399.85,
+        "start": 1727654400000,
+        "end": null
+      }
+    ]
+  },
+  {
+    "asset": "SUI",
+    "rules_version": "alt-0.5",
+    "as_of_ms": 1791331200000,
+    "status": "ok",
+    "bases": 2,
+    "replay_store_s": 0.129,
+    "repeat_store_s": 0.003,
+    "pending_events": 0,
+    "cycles": [
+      {
+        "lower": 0.4625,
+        "upper": 2.1829,
+        "start": 1700438400000,
+        "end": 1728777600000
+      },
+      {
+        "lower": 0.5597,
+        "upper": 5.3687,
+        "start": 1730073600000,
+        "end": null
+      }
+    ]
+  },
+  {
+    "asset": "ENA",
+    "rules_version": "alt-0.5",
+    "as_of_ms": 1791331200000,
+    "status": "ok",
+    "bases": 2,
+    "replay_store_s": 0.158,
+    "repeat_store_s": 0.002,
+    "pending_events": 0,
+    "cycles": [
+      {
+        "lower": 0.2499,
+        "upper": 1.33,
+        "start": 1728259200000,
+        "end": 1774742400000
+      },
+      {
+        "lower": 0.0699,
+        "upper": 0.1899,
+        "start": 1774828800000,
+        "end": 1789862400000
+      }
+    ]
+  },
+  {
+    "asset": "PUMP",
+    "rules_version": "alt-0.5",
+    "as_of_ms": 1791331200000,
+    "status": "ok",
+    "bases": 1,
+    "replay_store_s": 0.011,
+    "repeat_store_s": 0.001,
+    "pending_events": 0,
+    "cycles": [
+      {
+        "lower": 0.001567,
+        "upper": 0.002648,
+        "start": 1769990400000,
+        "end": 1786233600000
+      }
+    ]
+  },
+  {
+    "asset": "TAO",
+    "rules_version": "alt-0.5",
+    "as_of_ms": 1791331200000,
+    "status": "ok",
+    "bases": 1,
+    "replay_store_s": 0.137,
+    "repeat_store_s": 0.006,
+    "pending_events": 0,
+    "cycles": [
+      {
+        "lower": 212.4,
+        "upper": 748.3,
+        "start": 1725235200000,
+        "end": null
+      }
+    ]
+  },
+  {
+    "asset": "QNT",
+    "rules_version": "alt-0.5",
+    "as_of_ms": 1791763200000,
+    "status": "ok",
+    "bases": 2,
+    "replay_store_s": 0.526,
+    "repeat_store_s": 0.025,
+    "pending_events": 0,
+    "cycles": [
+      {
+        "lower": 142.4,
+        "upper": 430.0,
+        "start": 1628467200000,
+        "end": 1749945600000
+      },
+      {
+        "lower": 50.0,
+        "upper": 135.58,
+        "start": 1750032000000,
+        "end": 1790467200000
+      }
+    ]
+  },
+  {
+    "asset": "ONDO",
+    "rules_version": "alt-0.5",
+    "as_of_ms": 1791331200000,
+    "status": "no_structure",
+    "bases": 0,
+    "replay_store_s": 0.042,
+    "repeat_store_s": 0.0,
+    "pending_events": 0,
+    "cycles": []
+  }
+]

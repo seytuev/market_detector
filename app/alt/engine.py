@@ -426,7 +426,7 @@ class StructureTracker:
             confirmed_at=pivot.confirmed_at, left=3, right=3)
         self.pending.append(candidate)
 
-    def on_close(self, open_time, close):
+    def on_close(self, open_time, close, high=None, low=None):
         boundary = close_boundary_ms(open_time, "D1")
         ready = sorted((p for p in self.pending if p.confirmed_at <= boundary),
                        key=lambda p: (p.confirmed_at, p.pivot_at, p.kind))
@@ -434,7 +434,8 @@ class StructureTracker:
         for pivot in ready:
             self.machine.absorb(pivot)
         candle = SimpleNamespace(open_time=open_time, close_time=boundary,
-                                 close=close, closed=True)
+                                 close=close, high=close if high is None else high,
+                                 low=close if low is None else low, closed=True)
         facts = self.machine.on_candle(candle, boundary)
         self.roles = {at: role for (_, at), role in self.machine.roles.items()}
         return [StructureEvent(
@@ -620,7 +621,7 @@ class AltEngine:
             # Факты структуры/SSL до maturity — буфер «только исторически»
             if cand is not None and t >= cand.start_idx:
                 cand.pre_facts.extend(self._ssl_check(cand, c))
-                cand.pre_facts.extend(structure.on_close(c.open_time, c.close))
+                cand.pre_facts.extend(structure.on_close(c.open_time, c.close, c.high, c.low))
 
             if terminal_setup is not None or not ep.deep_drop_achieved:
                 continue
@@ -1118,7 +1119,7 @@ class AltEngine:
         # параметром (повторный on_close недопустим — уровни сгорают)
         if facts is None:
             facts = self._ssl_check(cand, c)
-            facts.extend(structure.on_close(c.open_time, c.close))
+            facts.extend(structure.on_close(c.open_time, c.close, c.high, c.low))
         bullish = [e for e in facts if e.kind in ("BOS", "SMS")]
 
         # --- пересечения этой свечи (для флага неизвестной последовательности)

@@ -78,6 +78,11 @@
     if (type === 'cancelled') return 'отмена';
     if (type === 'expired_no_retest') return 'срок';
     if (type === 'targets_completed') return 'цели';
+    if (type === 'mature_frozen') return 'База подтверждена';
+    if (type === 'boundary_refined') return 'Уточнение границы';
+    if (type === 'manipulation_started') return 'Депрессия';
+    if (type === 'zone_invalidated') return 'Отмена PD-зоны';
+    if (type === 'cycle_superseded') return 'Следующий цикл';
     return type;
   }
 
@@ -983,7 +988,16 @@
           });
         });
     }
-    if (view.entries) {
+    if (view.entries && detail.kind === 'structure') {
+      (detail.pd_zones || []).forEach((zone) => {
+        const end = zone.invalidated_at_ms != null ? zone.invalidated_at_ms : (last != null ? last + DAY_MS : detail.as_of_ms);
+        if (end > zone.available_at_ms) result.boxes.push({
+          kind: zone.kind === 'FVG' ? 'pd_fvg' : 'pd_ob',
+          startMs: zone.available_at_ms, endMs: end, upper: zone.upper, lower: zone.lower,
+          zone_id: zone.id, timeframe: 'W1',
+        });
+      });
+    } else if (view.entries) {
       const span = retestSpan(detail, last);
       if (span && span.missing) result.retestNote = span.reason;
       else if (span) {
@@ -1009,7 +1023,7 @@
         if (price != null) result.levels.push({ name, price, cls: 'range' });
       });
     }
-    if (view.targets === 'nearest') {
+    if (view.targets === 'nearest' && !(detail && detail.kind === 'structure')) {
       const found = nearestTarget(detail && detail.targets, lastClosePrice);
       result.targetNote = found.target ? '' : (found.reason || '');
       if (found.target) result.levels.push({ name: 'TP' + found.target.tp, price: found.target.price, cls: 'tp' });
@@ -1020,6 +1034,11 @@
     }
     if (view.cancel && detail && detail.cancel && detail.cancel.price > 0) {
       result.levels.push({ name: 'K', price: detail.cancel.price, cls: 'k' });
+    }
+    if (view.range && detail && detail.kind === 'structure') {
+      const scenarios = detail.scenarios || [];
+      const scenario = scenarios.length ? scenarios[scenarios.length - 1] : null;
+      if (scenario && scenario.bos_level != null) result.levels.push({ name: 'BOS W1', price: scenario.bos_level, cls: 'range' });
     }
     return result;
   }

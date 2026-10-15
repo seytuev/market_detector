@@ -71,6 +71,7 @@ class FakeSender:
 
 def _settings(public: bool = True, chat_id: str = "") -> Settings:
     s = Settings()
+    s.alt_config.engine_version = "v1"  # legacy notification fixtures
     if public:
         s.public_base_url = BASE
     s.telegram_chat_id = chat_id

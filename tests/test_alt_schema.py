@@ -42,7 +42,7 @@ def test_alt_config_env_override(monkeypatch) -> None:
     assert cfg.job_enabled is True
     assert cfg.cmc_rank_min == 11 and cfg.cmc_rank_max == 300
     # v2 (ТЗ 07.10.2026): значения по умолчанию и ENV-переопределение
-    assert cfg.engine_version == "v1"
+    assert cfg.engine_version == "v3"
     assert cfg.v2_max_candidates == 8
     assert cfg.v2_admission_window_days == 1095
     assert cfg.v2_min_reactions == 2

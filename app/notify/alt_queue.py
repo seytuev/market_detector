@@ -19,6 +19,8 @@ AltDispatcher получает события, УЖЕ записанные дв�
 from __future__ import annotations
 
 import asyncio
+import json
+from html import escape
 
 import logging
 from typing import Any, Optional
@@ -50,6 +52,7 @@ class AltDispatcher:
         cfg = settings.detector if settings is not None else DetectorConfig()
         self.outbox = get_outbox(db, sender, cfg)
         self.outbox.register("alt", self._validate_packet, self._finish_packet, self._render_packet)
+        self.outbox.register("alt_v3", self._validate_v3, self._finish_v3, self._render_v3)
         from .service import ServiceNotifications
         self.services = ServiceNotifications(self.outbox, self._chat_id(None))
         self.sender = sender
@@ -95,6 +98,8 @@ class AltDispatcher:
         return [e for m in members if not m["reason"] and (e := self.db.get_alt_event(m["event_id"])) is not None]
 
     def _validate_packet(self, row, members):
+        if self.settings is not None and self.settings.alt_config.engine_version == "v3":
+            return "superseded by W1 engine"
         events = self._events(members)
         if not events or all(self._bot_blocked(e, self._chat_id(None)) for e in events):
             return "muted or missing"
@@ -119,6 +124,68 @@ class AltDispatcher:
                         (row["id"], event.id))
             self.db.conn.commit()
         return None
+
+    def _v3_rows(self, members):
+        return [r for m in members if not m["reason"] and (r := self.db.conn.execute(
+            "SELECT * FROM alt_v3_event WHERE id=?", (m["event_id"],)).fetchone()) is not None]
+
+    def _validate_v3(self, row, members):
+        if self.settings is not None and self.settings.alt_config.engine_version != "v3":
+            return "inactive W1 version"
+        rows = self._v3_rows(members)
+        if not rows:
+            return "missing W1 event"
+        chat = self._chat_id(None)
+        for e in rows:
+            asset = self.db.get_alt_asset(e["asset_id"])
+            source = self.db.get_alt_instrument_source(e["asset_id"])
+            blocked = (e["delivered"] and row["status"] != "sent") or not asset or not asset.enabled or not source or source.id != e["source_id"] or (chat and bot_delivery_blocked(self.db, chat, grp=BOT_GRP_ALT, kind=e["event_type"]))
+            if blocked:
+                self.db.conn.execute("UPDATE notification_member SET reason='muted or disabled' WHERE packet_id=? AND event_id=?",
+                                     (row["id"], e["id"]))
+        self.db.conn.commit()
+        return None if self._v3_rows(self.outbox.members(row["id"])) else "muted or disabled"
+
+    def _finish_v3(self, event_id, status):
+        self.db.conn.execute("UPDATE alt_v3_event SET delivered=1 WHERE id=?", (event_id,))
+        self.db.conn.commit()
+
+    async def _render_v3(self, row, members):
+        from .outbox import Card
+        from ..services.alt_v3 import LABELS
+        from .formatting import fmt_time_msk
+        rows = self._v3_rows(members)
+        if not rows:
+            return Card("")
+        asset = self.db.get_alt_asset(rows[0]["asset_id"])
+        lines = [f"<b>{escape(asset.symbol if asset else 'ALTs')} · Скринер W1</b>"]
+        for r in rows:
+            e = json.loads(r["payload_json"])
+            p = e.get("payload", {})
+            label = LABELS.get(r["event_type"], r["event_type"])
+            kind = str(p.get("kind") or "")
+            lines.append(escape(f"{label}{' · '+kind if kind else ''}: {e['price']:.8g}"))
+        lines.append(escape(f"Событие: {fmt_time_msk(rows[0]['event_time_ms'])}"))
+        targets = []
+        base_url = ((self.settings.effective_base_url() if self.settings else "") or "").rstrip("/")
+        if base_url:
+            structure = self.db.conn.execute("SELECT id FROM alt_structure WHERE source_id=? AND structure_key=? AND rules_version='alt-0.5'",
+                                             (rows[0]["source_id"], rows[0]["structure_key"])).fetchone()
+            if structure:
+                targets = [{"label": "Открыть базу W1", "url": f"{base_url}/alt.html?base={structure[0]}&tf=W1"}]
+        return Card("\n".join(lines), targets=targets)
+
+    async def dispatch_v3(self):
+        from .outbox import Card
+        rows = self.db.conn.execute("SELECT * FROM alt_v3_event WHERE delivered=0 ORDER BY event_time_ms,id LIMIT 200").fetchall()
+        groups = {}
+        for e in rows:
+            key = f"{e['source_id']}:{e['structure_key']}:{e['event_time_ms']//60000}"
+            groups.setdefault(key, []).append(e["id"])
+        for key, ids in groups.items():
+            await asyncio.to_thread(self.outbox.put, "alt_v3", key, Card(""), ids)
+        await self.outbox.flush_inline()
+        return len(rows)
 
     def _finish_packet(self, event_id, status):
         self.db.mark_alt_event_delivered(event_id)

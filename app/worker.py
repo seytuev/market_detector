@@ -1819,7 +1819,10 @@ class Worker:
                             if self.alt_dispatcher is not None:
                                 # §18: live/catchup события прогона — в Telegram;
                                 # первичная загрузка — одна сводка, не спам
-                                await self.alt_dispatcher.dispatch_pending()
+                                if cfg.engine_version == "v3":
+                                    await self.alt_dispatcher.dispatch_v3()
+                                else:
+                                    await self.alt_dispatcher.dispatch_pending()
                                 summary = result.get("summary") or {}
                                 if summary.get("backfill_event_ids"):
                                     await (
@@ -1839,6 +1842,20 @@ class Worker:
                 await asyncio.wait_for(
                     self._stop.wait(), cfg.poll_interval_seconds
                 )
+            except asyncio.TimeoutError:
+                pass
+
+    async def alt_live_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                if self.alt_runner is not None and self.settings.alt_config.job_enabled:
+                    await self.alt_runner.poll_live()
+                    if self.alt_dispatcher is not None and self.settings.alt_config.engine_version == "v3":
+                        await self.alt_dispatcher.dispatch_v3()
+            except Exception:
+                log.exception("ALT W1: live observation failed")
+            try:
+                await asyncio.wait_for(self._stop.wait(), max(1, self.settings.alt_config.touch_poll_seconds))
             except asyncio.TimeoutError:
                 pass
 
@@ -1979,6 +1996,8 @@ class Worker:
         if self.alt_runner is not None:
             # дневной job «Altcoins D1 accumulation» — независимый цикл (§4)
             loops.append(self.alt_loop())
+            loops.append(self.alt_live_loop())
+            loops.append(self.alt_runner.live_stream(self._stop))
         loops.append(self.events_loop())
         if quote_task is not None:
             loops.append(quote_task)
