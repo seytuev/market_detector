@@ -352,13 +352,15 @@ def _prices_cycle(db, settings, fetcher: dict, basket: Basket,
     for member in basket.members:
         bars = bars_by_pair.get(member.pair) or []
         bars_by_symbol[member.symbol] = bars
-        for bar in bars:
-            upsert_bucket(
-                db, scope_id=scope_id("binance", "klines", member.pair, "1h"),
-                series="price", interval="1h", bucket_start=bar["start"],
-                payload={"open": bar["open"], "close": bar["close"]},
-                quality=bar.get("quality", "ok"), available_at=now,
-            )
+        # A 20-member basket has ~17,000 historical H1 rows. Individual
+        # autocommit round trips made a nominal 60-second cycle take minutes.
+        store.upsert_buckets(
+            db, scope_id=scope_id("binance", "klines", member.pair, "1h"),
+            series="price", interval="1h", available_at=now,
+            buckets=({"start": bar["start"],
+                      "payload": {"open": bar["open"], "close": bar["close"]},
+                      "quality": bar.get("quality", "ok")} for bar in bars),
+        )
     db._commit()
     if failed and len(failed) == len(pairs):
         quality = "unavailable"

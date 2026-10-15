@@ -4,6 +4,7 @@ from __future__ import annotations
 from app.db import Database
 from app.events import store
 from app.events.store import _delivery_status
+import pytest
 
 T0 = 1_800_000_000_000
 HOUR_MS = 3_600_000
@@ -11,6 +12,30 @@ HOUR_MS = 3_600_000
 
 def _db() -> Database:
     return Database(":memory:")
+
+
+def test_bulk_buckets_match_scalar_updates_and_rollback(db):
+    from decimal import Decimal
+    rows = [{"start": T0 + i * HOUR_MS,
+             "payload": {"open": Decimal("100.10"), "close": i + 101},
+             "quality": "ok"} for i in range(50)]
+    rows.append({**rows[3], "payload": {"open": 110, "close": 111}, "quality": "partial"})
+    for row in rows:
+        store.upsert_bucket(db, scope_id="scalar", series="price", interval="1h",
+                            bucket_start=row["start"], payload=row["payload"],
+                            quality=row["quality"], available_at=T0 + HOUR_MS)
+    db._commit()
+    store.upsert_buckets(db, scope_id="bulk", series="price", interval="1h",
+                         buckets=iter(rows), available_at=T0 + HOUR_MS)
+    expected = store.load_buckets(db, "scalar", "price", "1h")
+    assert store.load_buckets(db, "bulk", "price", "1h") == expected
+    with pytest.raises(RuntimeError, match="cancel sample"):
+        with db.batch_writes():
+            store.upsert_buckets(db, scope_id="bulk", series="price", interval="1h",
+                                 buckets=[{**rows[0], "payload": {"close": 999}}],
+                                 available_at=T0 + 2 * HOUR_MS)
+            raise RuntimeError("cancel sample")
+    assert store.load_buckets(db, "bulk", "price", "1h") == expected
 
 
 def _fact(key: str = "k1", **overrides) -> dict:

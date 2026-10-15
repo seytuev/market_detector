@@ -129,6 +129,25 @@ CONTRACT_KEYS = {
 }
 
 
+def test_price_history_uses_bulk_writes_and_retains_partial_source_quality(db, monkeypatch):
+    from app.events import runner
+    from app.events.basket import basket_from_static
+
+    def scalar_write(*args, **kwargs):
+        raise AssertionError("price history must not write one request per candle")
+
+    monkeypatch.setattr(runner, "upsert_bucket", scalar_write)
+    basket = basket_from_static(["BTC", "ETH"], day_start_ms=NOW // DAY * DAY)
+    source = _hour_bars("BTCUSDT", NOW)
+    prices = lambda *args: ({"BTCUSDT": source}, ["ETHUSDT"])
+    rows, metrics = runner._prices_cycle(db, _settings(), {"prices": prices}, basket, NOW)
+    saved = store.load_buckets(db, runner.scope_id("binance", "klines", "BTCUSDT", "1h"), "price", "1h")
+    assert len(saved) == len(source) == len(rows["BTC"])
+    assert saved[-1]["close"] == source[-1]["close"]
+    assert saved[-1]["available_at"] == NOW
+    assert store.get_source_states(db)["price"]["quality"] == "partial"
+
+
 def test_full_cycle_happy_path():
     db, settings = _db(), _settings()
     result = run_cycle(db, settings, fetcher=make_fetcher(), now_ms=NOW)

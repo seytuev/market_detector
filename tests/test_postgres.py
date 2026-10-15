@@ -77,6 +77,11 @@ def test_ideas_reconciliation_bulk_snapshot_and_atomic_publication(pg, monkeypat
     test_reconcile_rolls_back_lifecycle_when_idea_publication_fails(pg, other, monkeypatch)
 
 
+def test_bulk_market_history_matches_scalar_and_rolls_back(pg):
+    from tests.test_events_store_v2 import test_bulk_buckets_match_scalar_updates_and_rollback
+    test_bulk_buckets_match_scalar_updates_and_rollback(pg)
+
+
 def test_deferred_publication_flags_do_not_open_nested_postgres_units(pg, monkeypatch):
     from app.postgres import Session
     statements=[]

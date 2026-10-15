@@ -25,6 +25,14 @@ def _key(*parts: str) -> str:
 
 _INTERVAL_MS = {"1d": DAY_MS, "4h": 14_400_000, "1h": 3_600_000}
 
+_BUCKET_UPSERT = """INSERT INTO events_bucket (
+    scope_id, series, interval, bucket_start, bucket_end,
+    payload_json, quality, available_at
+) VALUES (?,?,?,?,?,?,?,?)
+ON CONFLICT (scope_id, series, interval, bucket_start) DO UPDATE SET
+    payload_json=excluded.payload_json, quality=excluded.quality,
+    available_at=excluded.available_at, bucket_end=excluded.bucket_end"""
+
 
 def upsert_bucket(db, *, scope_id: str, series: str, interval: str,
                   bucket_start: int, payload: dict, quality: str,
@@ -33,21 +41,26 @@ def upsert_bucket(db, *, scope_id: str, series: str, interval: str,
     if interval_ms is None:
         raise ValueError("поддерживаются интервалы 1d, 4h, 1h")
     db.conn.execute(
-        """INSERT INTO events_bucket (
-               scope_id, series, interval, bucket_start, bucket_end,
-               payload_json, quality, available_at
-           ) VALUES (?,?,?,?,?,?,?,?)
-           ON CONFLICT (scope_id, series, interval, bucket_start) DO UPDATE SET
-               payload_json=excluded.payload_json,
-               quality=excluded.quality,
-               available_at=excluded.available_at,
-               bucket_end=excluded.bucket_end
-        """,
+        _BUCKET_UPSERT,
         (
             scope_id, series, interval, bucket_start, bucket_start + interval_ms,
             _dump(payload), quality, available_at,
         ),
     )
+
+
+def upsert_buckets(db, *, scope_id: str, series: str, interval: str,
+                   buckets, available_at: int) -> None:
+    """Persist one source sample atomically with pipelined PostgreSQL writes."""
+    interval_ms = _INTERVAL_MS.get(interval)
+    if interval_ms is None:
+        raise ValueError("поддерживаются интервалы 1d, 4h, 1h")
+    rows = [(scope_id, series, interval, bar["start"],
+             bar["start"] + interval_ms, _dump(bar["payload"]),
+             bar["quality"], available_at) for bar in buckets]
+    if rows:
+        with db.batch_writes():
+            db.conn.executemany(_BUCKET_UPSERT, rows)
 
 
 def load_buckets(db, scope_id: str, series: str, interval: str = "1d") -> list[dict]:
