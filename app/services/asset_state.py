@@ -241,6 +241,10 @@ def project_asset(
 
 def _main_structure(db, instrument_id, as_of):
     snapshot = _loads(db.get_meta(f"h1:main_structure:{instrument_id}"))
+    if snapshot and db.get_meta(f"replaying:{instrument_id}") == "1":
+        head = db.last_candle(instrument_id, 'H1')
+        if head is not None and int(snapshot.get('as_of') or 0) < head.close_time:
+            return None  # A legacy partial replay checkpoint is not a current PD.
     if snapshot and int(snapshot.get("as_of") or 0) <= as_of:
         return snapshot
     return None

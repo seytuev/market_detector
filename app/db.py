@@ -2642,8 +2642,9 @@ class Database:
              s.created_at, s.updated_at),
         )
         self._commit()
-        self._bump_ltf_cache('ltf_scenario')
         s.id = int(cur.lastrowid)
+        self._ltf_sc_obs[s.id] = s.observation_id
+        self._bump_ltf_cache('ltf_scenario', s.id)
         iid = self._ltf_observation_iid(s.observation_id)
         if iid is not None:
             self.bump_domain(f"seq:scenario:{iid}")
@@ -3428,15 +3429,26 @@ class Database:
         """Bulk snapshots replace cold per-zone/per-scenario point reads."""
         if not self.ltf_cache_enabled:
             return
-        self.prime_ltf_context_reads(self.list_ltf_observations(instrument_id=instrument_id))
-        for zone in self.list_ltf_entry_zones(instrument_id=instrument_id):
-            self._ltf_cached(('ltf_ez', zone.id), lambda zone=zone: zone)
-        scenarios = self.list_ltf_scenarios_for_instrument(instrument_id)
+        observations = self.list_ltf_observations(instrument_id=instrument_id)
+        self.prime_ltf_context_reads(observations)
+        # A chunk needs the working scenarios, not every entry/event ever
+        # recorded for this asset. Cold historical objects retain point reads.
+        scenarios = [sc for o in observations if (sc := self.get_active_ltf_scenario(o.id)) is not None]
+        zone_ids = sorted({e.entry_zone_id for sc in scenarios
+                           for e in self.list_ltf_scenario_entries(sc.id)})
+        for offset in range(0, len(zone_ids), 400):
+            ids = zone_ids[offset:offset + 400]
+            marks = ','.join('?' for _ in ids)
+            for row in self.conn.execute(
+                    f'SELECT * FROM ltf_entry_zone WHERE id IN ({marks})', ids).fetchall():
+                zone = self._to_ltf_entry_zone(row)
+                self._ltf_cached(('ltf_ez', zone.id), lambda zone=zone: zone)
         events = self._bundle_by_scenario(instrument_id,
             '''SELECT e.* FROM ltf_structure_event e
                JOIN ltf_scenario s ON s.id=e.scenario_id
                JOIN ltf_observation o ON o.id=s.observation_id
-               WHERE o.instrument_id=? ORDER BY e.occurred_at,e.id''',
+               WHERE o.instrument_id=? AND s.state IN ('range_pending','monitoring_entries')
+               ORDER BY e.occurred_at,e.id''',
             self._to_ltf_structure_event)
         for scenario in scenarios:
             rows = events.get(scenario.id, [])

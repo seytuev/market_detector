@@ -3493,7 +3493,7 @@ const DESK_DATA_REASON_RU = {
   quote_stale: 'котировка устарела',
   h1_stale: 'свечи H1 устарели',
   source_stale: 'источник недоступен',
-  replay_in_progress: 'идёт догрузка и пересчёт',
+  replay_in_progress: 'идёт исторический расчёт LTF',
   processing_lag: 'расчёт отстаёт',
   history_gap: 'разрыв истории',
 };

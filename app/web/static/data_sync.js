@@ -71,7 +71,8 @@ window.LFDataSync = (() => {
     const instrument = (statusData.instruments || []).find((i) => i.instrument_id === iid);
     if (!running && iid && instrument) {
       const lag = channels.filter((c) => c.status !== 'ok');
-      message += lag.length ? ' · есть задержка данных' : ' · выбранный актив актуален';
+      message += recovery.length ? ' · сценарии пересчитываются' :
+        lag.length ? ' · есть задержка данных' : ' · выбранный актив актуален';
       if (instrument.last_full_success_at) message += ` · синхронизация ${format(instrument.last_full_success_at)}`;
     }
     if (recovery.length) {
@@ -216,7 +217,8 @@ window.LFDataSync = (() => {
     }
     const backfill = payload && payload.backfill;
     const progress = backfill && backfill.total ? ` · история ${backfill.completed}/${backfill.total}` : '';
-    const text = `Прогрев данных: ${WARMUP_PHASE_RU[payload && payload.phase] || 'запуск'}${progress}`;
+    const phase = phases.history && !phases.calc ? 'calc' : payload && payload.phase;
+    const text = `Прогрев данных: ${WARMUP_PHASE_RU[phase] || 'запуск'}${progress}`;
     el.textContent = text;
     el.classList.remove('hidden');
     document.dispatchEvent(new CustomEvent('lf-warmup', { detail: { done: false, text } }));

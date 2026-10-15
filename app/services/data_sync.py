@@ -351,7 +351,8 @@ class DataSync:
                 "job": read_json(self.db, JOB_KEY), "channels": channels,
                 "instruments": [{"instrument_id": ins.id,
                     "last_full_success_at": int(self.db.get_meta(f"data_sync:instrument_success:{ins.id}") or 0) or None,
-                    "ready": all(c["status"] == "ok" for c in channels if c["instrument_id"] == ins.id)}
+                    "ready": ins.id not in self.worker._restoring_instruments and
+                        all(c["status"] == "ok" for c in channels if c["instrument_id"] == ins.id)}
                     for ins in self.db.get_instruments(enabled_only=True)],
                 "state_version": self.db.get_state_seq(),
                 # §13 (этап 6a): вектор доменных версий отображаемых каналов

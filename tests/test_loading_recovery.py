@@ -67,3 +67,14 @@ def test_historical_leg_replay_keeps_published_head(db, instrument_id):
         db, [], candles[:3], candles[2].close_time, DetectorConfig())
     assert db.get_meta(f'h1:leg:scanned:{instrument_id}') == str(head)
     assert json.loads(db.get_meta(f'h1:main_structure:{instrument_id}')) == {'head': True}
+
+async def test_partial_historical_pd_is_not_presented_as_current(market):
+    from app.services.asset_state import _main_structure
+    db, worker, _, _, instruments, _ = market
+    ins = instruments[0]
+    head = db.last_candle(ins.id, 'H1').close_time
+    db.set_meta(f'h1:main_structure:{ins.id}', json.dumps(dict(as_of=head-3600000, lower=90, upper=110)))
+    worker._set_replaying(ins.id, True)
+    assert _main_structure(db, ins.id, head) is None
+    db.set_meta(f'h1:main_structure:{ins.id}', json.dumps(dict(as_of=head, lower=90, upper=110)))
+    assert _main_structure(db, ins.id, head)['upper'] == 110
