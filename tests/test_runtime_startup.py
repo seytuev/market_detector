@@ -11,6 +11,49 @@ from app.services import runtime
 from .test_worker import FakeAdapter, _make_worker
 
 
+async def test_sigterm_requests_shutdown_before_http_connections_finish():
+    import signal
+    import uvicorn
+    from app.main import ShutdownAwareServer
+    requested = asyncio.Event()
+    server = ShutdownAwareServer(uvicorn.Config(app=lambda *args: None), requested)
+    server.handle_exit(signal.SIGTERM, None)
+    assert requested.is_set()
+    assert server.should_exit
+
+
+async def test_calculation_role_released_after_writer_before_unrelated_cleanup(db):
+    from types import SimpleNamespace
+    from app.main import finish_calculation_shutdown
+    claim = runtime.claim_owner(db, runtime.CALC_OWNER, {'instance_id': 'old', 'pid': 1})['owner']
+    writer_entered, finish_writer, finish_other = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    async def writer():
+        writer_entered.set()
+        await finish_writer.wait()
+        db.set_meta('shutdown:last_committed', '1')
+    writing = asyncio.create_task(writer(), name='worker')
+    other = asyncio.create_task(finish_other.wait(), name='slow-telegram-cleanup')
+    await writer_entered.wait()
+    worker = SimpleNamespace(_calc_claim=claim)
+    closing = asyncio.create_task(finish_calculation_shutdown(db, worker, [writing]))
+    try:
+        await asyncio.sleep(0)
+        assert not closing.done()
+        runtime.assert_owner(db, runtime.CALC_OWNER, claim)
+        finish_writer.set()
+        await asyncio.wait_for(closing, 2)
+        assert db.get_meta('shutdown:last_committed') == '1'
+        assert not other.done()
+        next_claim = runtime.claim_owner(db, runtime.CALC_OWNER, {'instance_id': 'new', 'pid': 1})
+        assert next_claim['owned']
+        assert next_claim['owner']['owner_generation'] == claim['owner_generation'] + 1
+        with pytest.raises(RuntimeError, match='owner_lease_lost'):
+            runtime.assert_owner(db, runtime.CALC_OWNER, claim)
+    finally:
+        finish_writer.set(); finish_other.set()
+        await asyncio.gather(writing, other, closing, return_exceptions=True)
+
+
 @pytest.mark.parametrize("handoff", ["expiry", "release"])
 async def test_wait_for_owner_preserves_active_lease_then_takes_over(db, monkeypatch, handoff):
     stamp = 1_000_000

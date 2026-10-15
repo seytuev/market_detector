@@ -31,6 +31,29 @@ from .worker import Worker
 log = logging.getLogger(__name__)
 
 
+class ShutdownAwareServer(uvicorn.Server):
+    """Begin worker shutdown as soon as SIGTERM arrives, before HTTP drains."""
+    def __init__(self, config, shutdown_requested):
+        super().__init__(config)
+        self.shutdown_requested = shutdown_requested
+
+    def handle_exit(self, sig, frame):
+        self.shutdown_requested.set()
+        super().handle_exit(sig, frame)
+
+
+async def finish_calculation_shutdown(db, worker, worker_tasks):
+    """Release the role after its writers stop, before unrelated cleanup."""
+    await asyncio.gather(*worker_tasks, return_exceptions=True)
+    lease_task = getattr(worker, '_lease_task', None)
+    if lease_task is not None:
+        await asyncio.gather(lease_task, return_exceptions=True)
+    from .services.runtime import CALC_OWNER, release_owner
+    claim = getattr(worker, '_calc_claim', None)
+    if claim:
+        await asyncio.to_thread(release_owner, db, CALC_OWNER, claim)
+
+
 def load_dotenv(path: Path | None = None) -> None:
     """Подхватывает KEY=VALUE из .env в корне проекта. Переменные, уже
     заданные в окружении процесса, не переопределяются (реальный ENV важнее).
@@ -219,12 +242,14 @@ async def async_main() -> None:
     db.runtime_instance_id = app.state.instance_id
     db.runtime_stop = worker._stop
 
-    server = uvicorn.Server(
+    shutdown_requested = asyncio.Event()
+    server = ShutdownAwareServer(
         uvicorn.Config(app=app, host=settings.host, port=settings.port,
-                       log_level="info")
+                       log_level="info"), shutdown_requested,
     )
     from .services.maintenance import run as run_maintenance
     tasks = [asyncio.create_task(server.serve(), name="http"),
+             asyncio.create_task(shutdown_requested.wait(), name="shutdown"),
              asyncio.create_task(worker.run(), name="worker"),
              asyncio.create_task(dispatcher.outbox.run(worker._stop), name="outbox"),
              asyncio.create_task(run_maintenance(db,settings,worker._stop), name="maintenance")]
@@ -250,14 +275,10 @@ async def async_main() -> None:
         await worker.market_queue.stop()
         await worker.calc_queue.stop()
         await worker.data_sync.shutdown()
+        await finish_calculation_shutdown(
+            db, worker, [task for task in tasks if task.get_name() == 'worker'])
+        shutdown_requested.set()
         await asyncio.gather(*tasks, return_exceptions=True)
-        lease_task = getattr(worker,"_lease_task",None)
-        if lease_task is not None:
-            await asyncio.gather(lease_task,return_exceptions=True)
-        from .services.runtime import CALC_OWNER, release_owner
-        claim = getattr(worker, "_calc_claim", None)
-        if claim:
-            await asyncio.to_thread(release_owner, db, CALC_OWNER, claim)
         for adapter in [*adapters.values(), cmc_adapter]:
             client = getattr(adapter, "client", None) or getattr(adapter, "_client", None)
             if client is not None and hasattr(client, "aclose"):

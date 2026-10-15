@@ -109,6 +109,14 @@ def test_ltf_context_batch_and_live_projection_cache(pg, monkeypatch):
     test_live_bundle_reuses_ltf_rows_across_parent_quotes_but_not_ltf_changes(pg, other, monkeypatch)
 
 
+def test_graceful_calculation_role_handoff(pg):
+    import asyncio
+    from tests.test_runtime_startup import (
+        test_calculation_role_released_after_writer_before_unrelated_cleanup,
+    )
+    asyncio.run(test_calculation_role_released_after_writer_before_unrelated_cleanup(pg))
+
+
 def test_bulk_market_history_matches_scalar_and_rolls_back(pg):
     from tests.test_events_store_v2 import test_bulk_buckets_match_scalar_updates_and_rollback
     test_bulk_buckets_match_scalar_updates_and_rollback(pg)
