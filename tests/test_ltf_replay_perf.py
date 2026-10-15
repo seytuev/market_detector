@@ -268,6 +268,24 @@ def test_chunked_replay_matches_bar_commits_and_recovers_after_rollback():
     assert snapshots[0] == snapshots[1]
 
 
+def test_bulk_range_reclassification_matches_single_row_writes():
+    states = []
+    for bulk in (False, True):
+        db = Database(':memory:')
+        if not bulk:
+            db.upsert_ltf_scenario_entries = lambda entries: [db.upsert_ltf_scenario_entry(e) for e in entries]
+        iid = _instrument(db)
+        engine = LtfEngine(db, _CFG)
+        candles = _series_h(iid)
+        zid = _setup(db, iid)
+        obs = engine.on_htf_zone_touched(iid, db.get_zone(zid), T0)
+        _feed(db, engine, iid, candles, len(candles)-1)
+        engine.replay_observation(obs.id)
+        states.append(_dump_state(db))
+        db.close()
+    assert states[0] == states[1]
+
+
 def test_scenario_write_keeps_old_reference_and_rollback_discards_cached_update():
     db = _build_db(0, ltf_cache=True)
     scenario = db.list_ltf_scenarios_for_instrument(1)[0]

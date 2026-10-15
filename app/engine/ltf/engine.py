@@ -542,7 +542,7 @@ class LtfEngine:
             for offset in range(0, len(remaining), chunk_size):
                 self.db._note_external_epoch()
                 with self.db.batch_writes(join_repository_writes=True):
-                    self.db._prime_ltf_entry_zone_cache(obs.instrument_id)
+                    self.db._prime_ltf_replay_cache(obs.instrument_id)
                     for idx, c in remaining[offset:offset + chunk_size]:
                         from ...services.metrics import get_registry
                         sample = get_registry().profile(f'ltf_replay:{obs.instrument_id}',
@@ -1639,6 +1639,7 @@ class LtfEngine:
             zone_ids.add(anchor_zone_id)
         if obs is None:
             obs = self.db.get_ltf_observation(sc.observation_id)
+        reclassified = []
         for zid in zone_ids:
             zone = self.db.get_ltf_entry_zone(zid)
             if zone is None:
@@ -1676,12 +1677,13 @@ class LtfEngine:
                     zone.max_test_depth = 1.0
                     zone.test_extreme = extreme
             ev = self._evaluate_zone(obs, sc, zone, draft, movements, tests)
-            self.db.upsert_ltf_scenario_entry(LtfScenarioEntry(
+            reclassified.append(LtfScenarioEntry(
                 id=None, scenario_id=sc.id, entry_zone_id=zid,
                 range_version=(prev.version + 1) if prev else 1,
                 eligible=ev.eligible, overlap=ev.overlap, state=ev.state,
                 reason=ev.reason, added_at=now, updated_at=now,
             ))
+        self.db.upsert_ltf_scenario_entries(reclassified)
         return self.db.get_current_ltf_range(sc.id)
 
     @staticmethod

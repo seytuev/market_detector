@@ -66,6 +66,24 @@ def test_scenario_entry_returning_and_version_selection(pg):
     test_scenario_entry_upsert(pg,sc,iid)
 
 
+def test_bulk_scenario_entry_updates_are_atomic_and_preserve_original_admission(pg):
+    from dataclasses import replace
+    from tests.test_htf_ideas import seed
+    from app.models_ltf import LtfScenarioEntry
+    iid=pg.upsert_instrument(Instrument(None,'BTC','binance','spot','BTCUSDT','USDT'))
+    _, _, scenario, zone = seed(pg, iid)
+    entry = LtfScenarioEntry(None,scenario.id,zone.id,2,True,1.0,'fresh','ok',100,100)
+    pg.upsert_ltf_scenario_entries([entry])
+    pg.upsert_ltf_scenario_entries([replace(entry,eligible=False,state='tested',added_at=999,updated_at=200)])
+    row=next(e for e in pg.list_ltf_scenario_entries(scenario.id) if e.range_version==2)
+    assert (row.added_at,row.updated_at,row.eligible,row.state)==(100,200,False,'tested')
+    import pytest
+    with pytest.raises(Exception):
+        pg.upsert_ltf_scenario_entries([replace(entry,updated_at=300),replace(entry,entry_zone_id=-100)])
+    row=next(e for e in pg.list_ltf_scenario_entries(scenario.id) if e.range_version==2)
+    assert row.updated_at==200
+
+
 def test_ideas_reconciliation_bulk_snapshot_and_atomic_publication(pg, monkeypatch):
     from tests.test_htf_ideas import (
         test_reconcile_uses_bulk_originals_without_per_zone_reads,

@@ -3341,12 +3341,24 @@ class Database:
             return self._to_ltf_entry_zone(r) if r else None
         return self._ltf_cached(("ltf_ez", entry_zone_id), load)
 
-    def _prime_ltf_entry_zone_cache(self, instrument_id: int) -> None:
-        """One snapshot read replaces hundreds of point reads after restart."""
+    def _prime_ltf_replay_cache(self, instrument_id: int) -> None:
+        """Bulk snapshots replace cold per-zone/per-scenario point reads."""
         if not self.ltf_cache_enabled:
             return
         for zone in self.list_ltf_entry_zones(instrument_id=instrument_id):
             self._ltf_cached(('ltf_ez', zone.id), lambda zone=zone: zone)
+        scenarios = self.list_ltf_scenarios_for_instrument(instrument_id)
+        events = self._bundle_by_scenario(instrument_id,
+            '''SELECT e.* FROM ltf_structure_event e
+               JOIN ltf_scenario s ON s.id=e.scenario_id
+               JOIN ltf_observation o ON o.id=s.observation_id
+               WHERE o.instrument_id=? ORDER BY e.occurred_at,e.id''',
+            self._to_ltf_structure_event)
+        for scenario in scenarios:
+            rows = events.get(scenario.id, [])
+            self._ltf_cached(('ltf_se_list', scenario.id), lambda rows=rows: rows)
+            self._ltf_cached(('ltf_se_keys', scenario.id),
+                             lambda rows=rows: frozenset((e.level_key, e.stage) for e in rows))
 
     def update_ltf_entry_zone(self, entry_zone_id: int, **fields: Any) -> None:
         self._update_ltf_row("ltf_entry_zone", entry_zone_id, fields)
@@ -3412,6 +3424,23 @@ class Database:
         self._commit()
         self._bump_ltf_cache('ltf_scenario_entry', se.scenario_id)
         return self._to_ltf_scenario_entry(r)
+
+    def upsert_ltf_scenario_entries(self, entries: list[LtfScenarioEntry]) -> None:
+        """Ordered, atomic range reclassification without per-row round trips."""
+        if not entries:
+            return
+        self.conn.executemany(
+            '''INSERT INTO ltf_scenario_entry
+               (scenario_id,entry_zone_id,range_version,eligible,overlap,state,reason,added_at,updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?)
+               ON CONFLICT (scenario_id,entry_zone_id,range_version) DO UPDATE SET
+               eligible=excluded.eligible,overlap=excluded.overlap,state=excluded.state,
+               reason=excluded.reason,updated_at=excluded.updated_at''',
+            [(e.scenario_id,e.entry_zone_id,e.range_version,int(e.eligible),e.overlap,
+              e.state,e.reason,e.added_at,e.updated_at) for e in entries])
+        self._commit()
+        for scenario_id in sorted({e.scenario_id for e in entries}):
+            self._bump_ltf_cache('ltf_scenario_entry', scenario_id)
 
     def set_ltf_scenario_entry_reason(self, entry_id: int, reason: str) -> None:
         """Записать reason привязки. Используется ремонтом терминальных
