@@ -1,6 +1,7 @@
 """Immutable labelled examples, native lexical retrieval and isolated model matching."""
 from urllib.parse import urlsplit,urlunsplit
 import math
+from itertools import zip_longest
 from .contracts import ResearchError,choice,text,timestamp,uid,encode,decode,digest
 from .records import Records
 from .terminal_bridge import execute as terminal
@@ -15,7 +16,14 @@ def retrieval_snapshot(value):
     return {**{key:value.get(key) for key in ("kind","ref","author","at","url","symbol")},
             "text":str(value.get("text") or "")[:4000],"title":str(value.get("title") or "")[:140],
             "summary":str(value.get("summary") or "")[:1500],"tickers":value.get("tickers",[])[:30],
-            "images":[],"imageNotes":value.get("imageNotes",[])[:4]}
+            "images":[],"imageNotes":[str(v)[:400] for v in value.get("imageNotes",[])[:4]]}
+
+
+def model_example(value):
+    source=retrieval_snapshot(value["source_snapshot"])
+    source.update(text=source["text"][:700],summary=source["summary"][:600])
+    return {"revision_id":value["revision_id"],"label":value["label"],"information_direction":value["information_direction"],
+            "explanation":value["explanation"][:600],"focus":value["focus"],"source":source}
 
 
 def strings(values,name,limit=20):
@@ -123,14 +131,24 @@ class Playbook:
         if data["section_id"]!=section_id:raise ResearchError("dataset_mismatch","Другая рубрика")
         train=[e for e in data["examples"] if e["revision_id"] in data["partitions"]["train"]]
         if not train:raise ResearchError("insufficient_train","Нет отдельной обучающей выборки")
-        response=self.model.call("distill",{"section":self.r.get("section",section_id),"examples":train},strong=True);out=response["output"]
+        # Same positive/negative bounds as the original distillMessage; retain
+        # exact selected revision IDs instead of claiming all train was read.
+        section=self.r.get("section",section_id)
+        candidates=[e for pair in zip_longest([e for e in train if e["label"]=="positive"][-25:][::-1],[e for e in train if e["label"]=="negative"][-10:][::-1]) for e in pair if e]
+        message={"section":{k:section[k] for k in ("title","purpose","track")},"examples":[]};selected=[]
+        for example in candidates:
+            compact=model_example(example)
+            if len(encode({**message,"examples":[*message["examples"],compact]}))>45000:continue
+            message["examples"].append(compact);selected.append(example)
+        if not selected:raise ResearchError("insufficient_train","Нет размеченных примеров/антипримеров train")
+        response=self.model.call("distill",message,strong=True);out=response["output"]
         validated=terminal("rule_validate",value=out,examples=[{"direction":"not_signal" if e["label"]=="negative" else "long" if e["information_direction"]=="positive" else "short" if e["information_direction"]=="negative" else "watch"} for e in train])
         if not validated.get("ok"):raise ResearchError("invalid_model_rule","Модельное правило не прошло исходную проверку STVTerminal",502)
         out=validated["value"]
         old=self.s.one("SELECT payload FROM research_object WHERE kind='rule' AND json_extract(payload,'$.section_id')=? ORDER BY updated_at DESC,id DESC LIMIT 1",(section_id,))
         manual=[c for c in decode(old["payload"]).get("code_conditions",[]) if c["origin"]=="manual"] if old else []
         return self.rule({"section_id":section_id,"text":out.get("summary_ru"),"positive_signs":out.get("signs_ru",[]),"negative_signs":out.get("anti_signs_ru",[]),
-            "evidence_example_revision_ids":[e["revision_id"] for e in train],"dataset_id":dataset_id,"provenance":"model","model_metadata":response["usage"],"retrieval_method":"model","code_conditions":manual})
+            "evidence_example_revision_ids":[e["revision_id"] for e in selected],"dataset_id":dataset_id,"provenance":"model","model_metadata":{**response["usage"],"train_examples":len(train),"selected_examples":len(selected)},"retrieval_method":"model","code_conditions":manual})
 
     def gate(self,rule,snapshot,now):
         results=[];unknown=False;failed=False
@@ -164,8 +182,9 @@ class Playbook:
         score=ranked[0]["score"] if ranked else 0
         if score<rule["retrieval_threshold"]:return {**result,"decision":"no_match","rationale":"Не прошёл текстовый отбор","retrieval_score":score,"retrieval_miss":True}
         if rule["retrieval_method"]=="lexical":return {**result,"decision":"match","rationale":"Текстовое сходство с размеченными примерами; смысловое соответствие требует проверки.","retrieval_score":score}
-        response=self.model.call("match",{"post":snapshot,"patterns":[{"id":rule["id"],"rule":{"summary_ru":rule["text"],"signs_ru":rule["positive_signs"],"anti_signs_ru":rule["negative_signs"]},
-            "positive_examples":[e for e in positives if e["revision_id"] in {r["item"] for r in ranked[:2]}],"negative_examples":negatives[:1]}]})
+        post=retrieval_snapshot(snapshot);post.update(text=post["text"][:1500],summary=post["summary"][:800])
+        response=self.model.call("match",{"post":post,"patterns":[{"id":rule["id"],"rule":{"summary_ru":rule["text"],"signs_ru":rule["positive_signs"],"anti_signs_ru":rule["negative_signs"]},
+            "positive_examples":[model_example(e) for e in positives if e["revision_id"] in {r["item"] for r in ranked[:2]}],"negative_examples":[model_example(e) for e in negatives[:1]]}]})
         matches=response["output"].get("matches")
         if not isinstance(matches,list) or len(matches)!=1 or matches[0].get("pattern_id")!=rule["id"] or not isinstance(matches[0].get("match"),bool):
             raise ResearchError("invalid_model_json","Ответ модели не соответствует проверяемому правилу",502)

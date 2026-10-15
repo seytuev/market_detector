@@ -419,3 +419,21 @@ def test_playbook_explicit_retry_preserves_failures_and_successes(work,monkeypat
     book.evaluate(rule["id"],data["id"],retry_key="explicit-retry");assert len(calls)==count+1
     other=book.section({"title":"Different research topic"})
     with pytest.raises(ResearchError,match="Другая рубрика"):book.rule({"section_id":other["id"],"text":"Rule must not borrow another section data.","dataset_id":data["id"]})
+
+
+def test_distillation_sends_bounded_train_evidence_with_exact_lineage(work):
+    s,r,m,ids,assets=work;captured=[]
+    class Provider:
+        def call(self,operation,payload,strong=False):
+            captured.append(payload)
+            assert operation=="distill" and strong and len(encode(payload))<=45000
+            assert 'raw_snapshot' not in encode(payload)
+            assert {e["label"] for e in payload["examples"]}=={"positive","negative"}
+            return {"output":{"summary_ru":"Оригинальные подтверждённые запуски с проверяемым механизмом.","signs_ru":["Есть первичный анонс","Есть описание применения"],"anti_signs_ru":["Нет источника"],"direction":"watch","horizon":"1-2w","check_ru":[],"flags":{"author":False,"known_ticker":False,"image":False}},"usage":{"model":"controlled-fixture"}}
+    book=Playbook(s,Provider());section=book.section({"title":"Bounded original examples"})
+    for k in range(60):
+        m[0]=NOW+k*1000;book.example({"section_id":section["id"],"source_ref":source(s,assets[1],k,m[0]),"label":"positive" if k%2==0 else "negative","explanation":"Check the original announcement and product usage. "*60})
+    data=book.dataset(section["id"]);rule=book.distill(section["id"],data["id"])
+    assert set(rule["evidence_example_revision_ids"])=={e["revision_id"] for e in captured[0]["examples"]}
+    assert set(rule["evidence_example_revision_ids"])<=set(data["partitions"]["train"])
+    assert rule["status"]=="draft" and rule["provenance"]=="model"

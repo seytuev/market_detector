@@ -39,9 +39,13 @@ class Model:
         c=self.config
         rows=self.s.rows("SELECT reserved_usd,actual_usd FROM research_model_usage WHERE at_ms>=?",(self.s.clock()-86400000,))
         accounted=sum((Decimal(row["actual_usd"] if row["actual_usd"] is not None else row["reserved_usd"]) for row in rows),Decimal(0))
+        latest=self.s.one("SELECT at_ms,operation,status,payload FROM research_model_usage ORDER BY at_ms DESC,id DESC LIMIT 1")
+        if latest:
+            details=decode(latest.pop("payload"));latest.update({k:details[k] for k in ("model","error_code","http_status","tokens_in","tokens_out","request_id","possible_charge") if k in details})
         return {"provider":c["provider"],"model":c.get("cheap"),"strong_model":c.get("strong"),"configured":bool(c.get("key") and c.get("cheap")),
                 "daily_budget_usd":c.get("daily_usd","0"),"max_call_usd":c.get("reserve_usd","0"),"automatic_spending_enabled":self.budget()[0]>0 and self.budget()[1]>0,
                 "accounted_usd":str(accounted),"remaining_usd":str(max(Decimal(0),self.budget()[0]-accounted)),"calls_24h":len(rows),"accounting":"actual cost when configured; full reservation otherwise",
+                "last_request":latest,
                 "credential_source":"server environment or local STVTerminal settings","budget_window":"rolling_24_hours","max_calls_per_hour":60,"max_parallel_calls":1}
 
     def budget(self):
