@@ -8,6 +8,7 @@ FVG и снятый уровень контекст не стирают. PD сч
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Optional
 
@@ -202,10 +203,20 @@ def _commit(db) -> None:
 
 
 def load_episode(db, episode_id: int) -> Optional[dict[str, Any]]:
-    row = db.conn.execute(
-        "SELECT * FROM htf_context_episode WHERE id=?", (episode_id,)
-    ).fetchone()
-    return _row(row) if row else None
+    def load():
+        row = db.conn.execute(
+            "SELECT * FROM htf_context_episode WHERE id=?", (episode_id,)
+        ).fetchone()
+        return _row(row) if row else None
+    return deepcopy(_replay_cached(db, ('context_episode', episode_id), load))
+
+
+def _replay_cached(db, key, load):
+    # Direct SQL repairs and live projections must always see committed rows.
+    # Only the owned historical replay uses these hot, versioned snapshots.
+    if not getattr(db._local, 'ltf_replay', False) or not db._batch_depth:
+        return load()
+    return db._ltf_cached(key, load)
 
 
 def open_episode(db, instrument_id: int) -> Optional[dict[str, Any]]:
@@ -219,13 +230,12 @@ def open_episode(db, instrument_id: int) -> Optional[dict[str, Any]]:
 
 
 def episode_sources(db, episode_id: int, as_of: Optional[int] = None) -> list[dict[str, Any]]:
-    q = "SELECT * FROM htf_context_source WHERE episode_id=?"
-    args: list[Any] = [episode_id]
-    if as_of is not None:
-        q += " AND interaction_at<=?"
-        args.append(as_of)
-    q += " ORDER BY interaction_at, id"
-    return [_row(r) for r in db.conn.execute(q, args).fetchall()]
+    def load():
+        return [_row(r) for r in db.conn.execute(
+            "SELECT * FROM htf_context_source WHERE episode_id=? ORDER BY interaction_at,id",
+            (episode_id,)).fetchall()]
+    rows = _replay_cached(db, ('context_sources', episode_id), load)
+    return deepcopy([r for r in rows if as_of is None or r['interaction_at'] <= as_of])
 
 
 def leg_at(db, episode_id: int, as_of: int) -> Optional[dict[str, Any]]:
@@ -239,12 +249,14 @@ def leg_at(db, episode_id: int, as_of: int) -> Optional[dict[str, Any]]:
 
 
 def latest_leg(db, episode_id: int) -> Optional[dict[str, Any]]:
-    row = db.conn.execute(
-        """SELECT * FROM htf_context_leg
-           WHERE episode_id=? ORDER BY version DESC LIMIT 1""",
-        (episode_id,),
-    ).fetchone()
-    return _row(row) if row else None
+    def load():
+        row = db.conn.execute(
+            """SELECT * FROM htf_context_leg
+               WHERE episode_id=? ORDER BY version DESC LIMIT 1""",
+            (episode_id,),
+        ).fetchone()
+        return _row(row) if row else None
+    return deepcopy(_replay_cached(db, ('context_latest_leg', episode_id), load))
 
 
 # --------------------------------------------------------------------- #
@@ -870,7 +882,7 @@ def _check_horizon(db, cfg, instrument_id: int, candle) -> None:
     пометкой качества (data_quality_note). Закрытие — только переходами
     §4/§5, календарная дата сама по себе не отменяет (R24)."""
     rows = db.conn.execute(
-        """SELECT id FROM htf_context_episode
+        """SELECT * FROM htf_context_episode
            WHERE instrument_id=? AND state_v2 IN
              ('context_active','opposing_confirmed',
               'opposing_source_breached_waiting_return')
@@ -878,7 +890,7 @@ def _check_horizon(db, cfg, instrument_id: int, candle) -> None:
         (instrument_id,),
     ).fetchall()
     for r in rows:
-        ep = load_episode(db, int(r["id"]))
+        ep = _row(r)
         if ep is None or int(ep["expires_at"]) >= int(candle.close_time):
             continue
         if ep["leg_anchor_at"] is None:

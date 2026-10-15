@@ -132,6 +132,25 @@ class MarketQueue:
             return True
         except asyncio.TimeoutError: return False
 
+    def checkpoint(self, iid):
+        row = self.db.conn.execute(
+            'SELECT MAX(id) AS id FROM quote_spool WHERE instrument_id=?', (iid,)).fetchone()
+        return int(row['id'] or 0)
+
+    async def wait_through(self, iid, checkpoint, timeout):
+        """Wait for the accepted prefix, without waiting for future live ticks."""
+        deadline = time.monotonic() + timeout
+        while True:
+            row = self.db.conn.execute(
+                "SELECT 1 FROM quote_spool WHERE instrument_id=? AND id<=? "
+                "AND status NOT IN ('processed','cancelled') LIMIT 1", (iid, checkpoint)).fetchone()
+            if row is None:
+                return True
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return False
+            await asyncio.sleep(min(.05, left))
+
     def _ensure_consumer(self,st):
         st.has_items.set()
         if not self._stopping and (st.consumer is None or st.consumer.done()):

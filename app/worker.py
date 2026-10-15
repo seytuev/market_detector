@@ -667,6 +667,8 @@ class Worker:
 
             await asyncio.gather(*(_one(i) for i in instruments))
             self.readiness.reach("history")
+            if self._restore_task is not None:
+                await asyncio.shield(self._restore_task)
             await self._wait_calc_idle()
             self.readiness.reach("calc")
         except asyncio.CancelledError:

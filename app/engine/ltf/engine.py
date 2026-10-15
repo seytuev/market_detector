@@ -521,6 +521,20 @@ class LtfEngine:
                 checkpoint = max((c.close_time for c in closed if c.close_time < min(starts)), default=0)
         self._batch = StructureBatch() if self.scan_cursors else None
         sampled = 0
+        progress_key = f"runtime:recovery:{obs.instrument_id}"
+        started_at = _real_now_ms()
+        def publish_progress(processed, status="running"):
+            self.db.set_meta(progress_key, json.dumps({
+                "phase": "calculation", "status": status,
+                "processed": processed, "total": len(closed),
+                "through": closed[processed - 1].close_time if processed else None,
+                "target": closed[-1].close_time if closed else None,
+                "started_at": started_at, "updated_at": _real_now_ms(),
+            }))
+        completed_prefix = sum(c.close_time <= checkpoint for c in closed)
+        publish_progress(completed_prefix)
+        previous_replay = getattr(self.db._local, 'ltf_replay', False)
+        self.db._local.ltf_replay = True
         try:
             if checkpoint:
                 # Restore pure machines from immutable inputs, without replaying
@@ -566,7 +580,9 @@ class LtfEngine:
                             )
                             if resume:
                                 self.db.set_meta(checkpoint_key, str(c.close_time))
+                    publish_progress(min(len(closed), completed_prefix + offset + chunk_size))
         finally:
+            self.db._local.ltf_replay = previous_replay
             self._batch = None
         if closed:
             self.db.set_meta(
@@ -577,6 +593,7 @@ class LtfEngine:
             refresh_liquidity_anchors(self.db, obs.instrument_id)
             reconcile_ideas(self.db, obs.instrument_id, self.cfg, closed[-1].close_time)
             mark_ideas_checkpoint(self.db, obs.instrument_id)
+        publish_progress(len(closed), "completed")
         return result
 
     def _process_candle(

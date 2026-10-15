@@ -569,12 +569,14 @@ class H1LegCursor:
                 while len(self._checkpoints) > 8:
                     self._checkpoints.pop(next(iter(self._checkpoints)))
         if closed and persist:
-            db.set_meta(f"h1:main_structure:{self.instrument_id}",
-                        json.dumps(self.bear.machine.main_structure(), ensure_ascii=False))
-            db.set_meta(
-                f"h1:leg:scanned:{self.instrument_id}",
-                str(int(closed[-1].close_time)),
-            )
+            key = f"h1:leg:scanned:{self.instrument_id}"
+            published = int(db.get_meta(key) or 0)
+            # Historical replay warms the machine from the past. Do not
+            # replace the already published head with an intermediate bar.
+            if int(closed[-1].close_time) >= published:
+                db.set_meta(f"h1:main_structure:{self.instrument_id}",
+                            json.dumps(self.bear.machine.main_structure(), ensure_ascii=False))
+                db.set_meta(key, str(int(closed[-1].close_time)))
         if persist:
             db._commit()
 

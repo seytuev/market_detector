@@ -66,6 +66,22 @@ class Readiness:
         }
 
 
+def recovery_progress(db, instrument_id=None) -> list[dict[str, Any]]:
+    """Committed LTF calculation progress, separate from source backfill."""
+    instruments = ([db.get_instrument(instrument_id)] if instrument_id is not None
+                   else db.get_instruments(enabled_only=True))
+    result = []
+    for ins in instruments:
+        if ins is None or db.get_meta(f"replaying:{ins.id}") != "1":
+            continue
+        try:
+            progress = json.loads(db.get_meta(f"runtime:recovery:{ins.id}") or "{}")
+        except (TypeError, ValueError):
+            progress = {}
+        result.append({**progress, "instrument_id": ins.id, "symbol": ins.symbol})
+    return result
+
+
 def backfill_progress(db, scan_tfs) -> dict[str, Any]:
     """Прогресс фоновой догрузки истории (этап 5, §11) по чекпоинтам
     backfill:checkpoint:{iid}:{tf}: на канал — pending (чекпоинта нет),

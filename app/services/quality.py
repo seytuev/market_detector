@@ -153,7 +153,10 @@ def _processing_channel(db: Database, instrument_id: int) -> dict[str, Any]:
 
 def _replay_channel(db: Database, instrument_id: int) -> dict[str, Any]:
     if db.get_meta(f"replaying:{instrument_id}") == "1":
-        return _channel("stale", reason="replay_in_progress")
+        from .runtime import recovery_progress
+        progress = recovery_progress(db, instrument_id)
+        return _channel("stale", reason="replay_in_progress",
+                        progress=progress[0] if progress else None)
     return _channel("ok")
 
 

@@ -75,6 +75,7 @@ class DataSync:
         self._task = None
         self.job_timeout_seconds = 600
         self.request_timeout_seconds = 90
+        self.quote_processing_timeout_seconds = 10
         self.cooldown_ms = 15_000
         self._boundary_due = {}
         self._request_limits = {}
@@ -344,7 +345,9 @@ class DataSync:
         channels = [self.channel_status(ins, tf) for ins in self.db.get_instruments(enabled_only=True)
                     for tf in (*dict.fromkeys(("H1", *self.worker.scan_tfs)), "quote")]
         readiness = getattr(self.worker, "readiness", None)
+        from .runtime import recovery_progress
         return {"available": self.ready and not self.worker._stop.is_set(),
+                "recovery": recovery_progress(self.db),
                 "job": read_json(self.db, JOB_KEY), "channels": channels,
                 "instruments": [{"instrument_id": ins.id,
                     "last_full_success_at": int(self.db.get_meta(f"data_sync:instrument_success:{ins.id}") or 0) or None,
@@ -468,12 +471,14 @@ class DataSync:
                         # (замок ждать нельзя: потребителю нужен он же)
                         await asyncio.wait_for(
                             self.worker._poll_quote(ins), self.request_timeout_seconds)
+                    result['source_status'] = 'ok'
                     result['wait_state'] = 'waiting_calculation'
                     stage['status'] = 'waiting_calculation'
                     self._save_job(job)
-                    left = max(0.1, deadline - time.monotonic())
-                    if not await self.worker.market_queue.wait_idle(ins.id, left):
-                        raise TimeoutError("market_queue_drain_timeout")
+                    checkpoint = self.worker.market_queue.checkpoint(ins.id)
+                    left = min(self.quote_processing_timeout_seconds, max(0.1, deadline - time.monotonic()))
+                    if not await self.worker.market_queue.wait_through(ins.id, checkpoint, left):
+                        raise TimeoutError("quote_processing_lag")
                     result.update(self.channel_status(ins, "quote"))
                     if result["status"] != "ok":
                         result["error"] = result.get("reason") or "channel_not_ready"
@@ -525,6 +530,21 @@ class DataSync:
                 _channel_done(result, ins, tf)
 
             async def _instrument_candles(ins):
+                # Restore owns the asset until its historical calculation is
+                # consistent. Refresh source candles now; do not queue another
+                # replay behind it or hold this manual job for many minutes.
+                if ins.id in self.worker._restoring_instruments:
+                    for tf in tfs:
+                        result = results[ins.id, tf]
+                        try:
+                            await self._prime_restoring_source(ins, tf, force=True)
+                            result['source_status'] = 'ok'
+                            result.update(self.channel_status(ins, tf))
+                            result.update(status="lagging", error="processing_lag")
+                        except Exception as exc:
+                            result.update(status="failed", error=str(exc)[:300] or type(exc).__name__)
+                        _channel_done(result, ins, tf)
+                    return
                 async with self.instrument(ins.id):
                     for tf in tfs:
                         await _candle_channel(ins, tf)
@@ -547,6 +567,8 @@ class DataSync:
                         raise TimeoutError("deadline_exceeded")
                     if not self.worker._needs_history_recovery(ins):
                         continue
+                    if ins.id in self.worker._restoring_instruments:
+                        raise RuntimeError("processing_lag")
                     await self.worker.backfill(ins)
                     recovered.append(ins.symbol)
                 except Exception as exc:
@@ -571,7 +593,8 @@ class DataSync:
             watcher.cancel()
             await asyncio.gather(watcher, return_exceptions=True)
             good = sum(r.get("status") == "ok" for r in job["results"])
-            job.update(status="succeeded" if not job["errors"] else "partial" if good else "failed",
+            received = any(r.get('source_status') == 'ok' for r in job['results'])
+            job.update(status="succeeded" if not job["errors"] else "partial" if good or received else "failed",
                        finished_at=now_ms(), processing_continues=False)
             await self._save_job_final(job)
 
@@ -780,7 +803,7 @@ class DataSync:
                 if not was_replaying:
                     await self._write(self.worker._set_replaying, ins.id, False)
 
-    async def _prime_restoring_source(self, ins, tf):
+    async def _prime_restoring_source(self, ins, tf, *, force=False):
         """Keep real candles visible while old calculations own the asset mutex.
 
         This only ingests source data. Processing cursors and successful-job
@@ -788,7 +811,7 @@ class DataSync:
         """
         step = TIMEFRAME_MS[tf]
         head = self.db.last_candle(ins.id, tf)
-        if head is not None and head.close_time >= period_open(tf, now_ms(), head.open_time)-1:
+        if not force and head is not None and head.close_time >= period_open(tf, now_ms(), head.open_time)-1:
             return
         start = head.open_time-step if head else now_ms()-256*step
         incoming = await self.request(ins.venue, self.worker.adapters[ins.venue].klines,

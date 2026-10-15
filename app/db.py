@@ -1558,6 +1558,8 @@ class Database:
                 'ltf_ez': 'ltf_entry_zone', 'ltf_sce': 'ltf_scenario_entry',
                 'ltf_sce_zones': 'ltf_scenario_entry',
                 'ltf_lt': 'ltf_liquidity_test', 'ltf_ev': 'ltf_event',
+                'context_episode': 'htf_context', 'context_sources': 'htf_context',
+                'context_latest_leg': 'htf_context',
             }.get(key[0])
             def token():
                 if key[0] == 'ltf_ev' and (key[1] is not None or key[2] is not None):
@@ -3339,11 +3341,10 @@ class Database:
         return {
             int(r["instrument_id"]): int(r["t"])
             for r in self.conn.execute(
-                "SELECT o.instrument_id AS instrument_id, "
-                "MAX(e.occurred_at) AS t "
-                "FROM ltf_event e "
-                "JOIN ltf_observation o ON o.id = e.observation_id "
-                "GROUP BY o.instrument_id"
+                "SELECT instrument_id, MAX(t) AS t FROM ("
+                "SELECT o.instrument_id, (SELECT e.occurred_at FROM ltf_event e "
+                "WHERE e.observation_id=o.id ORDER BY e.occurred_at DESC LIMIT 1) AS t "
+                "FROM ltf_observation o) latest WHERE t IS NOT NULL GROUP BY instrument_id"
             ).fetchall()
         }
 
@@ -3427,6 +3428,7 @@ class Database:
         """Bulk snapshots replace cold per-zone/per-scenario point reads."""
         if not self.ltf_cache_enabled:
             return
+        self.prime_ltf_context_reads(self.list_ltf_observations(instrument_id=instrument_id))
         for zone in self.list_ltf_entry_zones(instrument_id=instrument_id):
             self._ltf_cached(('ltf_ez', zone.id), lambda zone=zone: zone)
         scenarios = self.list_ltf_scenarios_for_instrument(instrument_id)

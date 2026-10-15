@@ -20,6 +20,7 @@ window.LFDataSync = (() => {
     history_gap: 'пропуски истории', processing_lag: 'обработка не завершена',
     source_error: 'источник недоступен', sync_stale: 'давно не было синхронизации',
     quote_stale: 'котировка устарела', no_quote: 'нет котировки',
+    quote_processing_lag: 'цена получена; обработка котировок ещё идёт',
     h1_processor_unavailable: 'обработчик H1 недоступен', deadline_exceeded: 'превышено время ожидания',
     interrupted_by_restart: 'обновление прервано перезапуском',
     deadline_exceeded_processing_continues: 'превышено время ожидания; обработка продолжается',
@@ -44,6 +45,7 @@ window.LFDataSync = (() => {
     const detail = document.getElementById('data-sync-details');
     if (!button || !label || !statusData) return;
     const job = statusData.job;
+    const recovery = (statusData.recovery || []).filter((r) => r.instrument_id === selected());
     const running = busy(job);
     button.disabled = running || !statusData.available || Date.now() < nextAllowed;
     button.textContent = running ? 'Обновление…' : 'Обновить данные';
@@ -59,7 +61,9 @@ window.LFDataSync = (() => {
     }
     else if (job) {
       if (job.status === 'succeeded') message = `Данные обновлены в ${format(job.finished_at)}`;
-      else if (job.status === 'partial') message = `Обновлено частично: ${job.results.filter((r) => r.status === 'ok').length} из ${job.channels_total}`;
+      else if (job.status === 'partial') message = recovery.length && job.results.some((r) => r.source_status === 'ok') ?
+        'Свечи и цены получены; расчёт LTF продолжается' :
+        `Обновлено частично: ${job.results.filter((r) => r.status === 'ok').length} из ${job.channels_total}`;
       else if (job.status === 'failed') message = 'Не удалось обновить данные';
     }
     const iid = selected();
@@ -70,10 +74,22 @@ window.LFDataSync = (() => {
       message += lag.length ? ' · есть задержка данных' : ' · выбранный актив актуален';
       if (instrument.last_full_success_at) message += ` · синхронизация ${format(instrument.last_full_success_at)}`;
     }
+    if (recovery.length) {
+      const r = recovery[0];
+      message += ` · Исторический расчёт LTF` + (r.total ?
+        `: ${Math.floor(100 * r.processed / r.total)}% (${r.processed.toLocaleString('ru-RU')} из ${r.total.toLocaleString('ru-RU')} H1)` : ' выполняется');
+    }
     label.textContent = message;
     label.dataset.state = running ? 'running' : job && job.status || 'idle';
     if (detail) {
       detail.replaceChildren();
+      for (const r of recovery) {
+        const row = document.createElement('div');
+        row.textContent = 'Свечи загружены. Пересчитываем структуру и сценарии LTF по истории.' +
+          (r.through ? ` Обработано по ${new Date(r.through).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' })} МСК.` : '') +
+          ' Новые условия входа появятся после завершения расчёта.';
+        detail.append(row);
+      }
       // §15: этапы задания (котировки → свежие свечи → восстановление истории)
       // с различением waiting_source / waiting_calculation
       for (const s of (job && job.stages) || []) {

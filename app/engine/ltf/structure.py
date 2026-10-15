@@ -257,6 +257,9 @@ class StructureBatch:
     def existing_for(self, db: Database, instrument_id: int) -> dict:
         """(kind, pivot_at) → строка ltf_pivot; перечитывается только при
         изменении числа pivots в БД (append-only внутри пакета)."""
+        version = (db._ltf_full_version, db._ltf_table_versions.get('ltf_pivot', 0))
+        if getattr(self, '_existing_version', None) == version:
+            return self.existing
         count = db.conn.execute(
             "SELECT COUNT(*) FROM ltf_pivot WHERE instrument_id=?",
             (instrument_id,),
@@ -265,6 +268,7 @@ class StructureBatch:
             rows = db.list_ltf_pivots(instrument_id)
             self.existing = {(p.kind, p.pivot_at): p for p in rows}
             self._existing_fp = count
+        self._existing_version = version
         return self.existing
 
     # ---- курсоры сканирования сломов ----
@@ -466,7 +470,11 @@ def _sync_structure_batch(
     # в пакете проверяются только новые кандидаты этой свечи: прежние уже
     # материализованы (existing внутри пакета растёт только добавлением)
     existing = batch.existing_for(db, instrument_id)
-    cv_id = _structure_calc_version_id(db, cfg, now_ms)
+    cv_params = (cfg.ltf_structure_left, cfg.ltf_structure_right, RULE_VERSION_LTF)
+    if getattr(batch, '_cv_params', None) != cv_params:
+        batch._cv_id = _structure_calc_version_id(db, cfg, now_ms)
+        batch._cv_params = cv_params
+    cv_id = batch._cv_id
     new_count = 0
     for c in batch.new_cands:
         row = existing.get((c.kind, c.pivot_at))

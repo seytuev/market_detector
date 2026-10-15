@@ -31,7 +31,7 @@ _QUALITY_RU = {
     "source_stale": "источник данных устарел",
     "processing_lag": "обработка H1 отстаёт",
     "history_gap": "в истории H1 есть разрыв",
-    "replay_in_progress": "идёт восстановление истории",
+    "replay_in_progress": "идёт исторический расчёт LTF",
 }
 
 _BASIS_RU = {
@@ -371,6 +371,10 @@ def _quality(data_state: Optional[dict]) -> tuple[bool, str]:
     if reason == "no_h1_candles":
         return True, "Не хватает свечей H1"
     text = _QUALITY_RU.get(reason) or "данные H1 неполные"
+    if reason == "replay_in_progress":
+        progress = data_state.get("channels", {}).get("replay", {}).get("progress") or {}
+        if progress.get("total"):
+            text += f" · {progress['processed']:,} из {progress['total']:,} свечей H1".replace(",", " ")
     return True, text
 
 
@@ -759,11 +763,7 @@ def _pause_entries(packed: dict, quality_text: str) -> dict:
 def _state(leg, proven, quality_bad, sides, zones, price, pd, data_state) -> dict[str, Any]:
     quality_text = ""
     if quality_bad and data_state:
-        reason = data_state.get("reason")
-        quality_text = (
-            "Не хватает свечей H1" if reason == "no_h1_candles"
-            else (_QUALITY_RU.get(reason) or "данные H1 неполные")
-        )
+        _, quality_text = _quality(data_state)
     if leg and not proven:
         blockers = ["provenance_incomplete"]
         explanation = "Происхождение перехода неполное: нет опоры, свечи или времени."
