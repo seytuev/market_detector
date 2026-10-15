@@ -214,7 +214,7 @@ class Database:
                 if outer and self._state_seq_dirty:
                     self._write_state_seq()
                 if outer and self._domain_seq_dirty:
-                    for _key in self._domain_seq_dirty:
+                    for _key in sorted(self._domain_seq_dirty):
                         self._write_domain_seq(_key)
                 raw.execute("COMMIT" if outer else f"RELEASE SAVEPOINT {name}")
                 committed = True

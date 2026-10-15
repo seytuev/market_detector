@@ -82,6 +82,16 @@ def test_bulk_market_history_matches_scalar_and_rolls_back(pg):
     test_bulk_buckets_match_scalar_updates_and_rollback(pg)
 
 
+def test_multi_asset_calculation_ownership_and_engine_isolation(pg, monkeypatch):
+    import asyncio
+    from tests.test_multi_asset_loading import (
+        test_engine_batches_are_isolated_and_slow_asset_does_not_block_another,
+        test_cancelled_calculation_retains_its_instrument_without_blocking_other_assets,
+    )
+    asyncio.run(test_engine_batches_are_isolated_and_slow_asset_does_not_block_another(pg, monkeypatch))
+    asyncio.run(test_cancelled_calculation_retains_its_instrument_without_blocking_other_assets(pg))
+
+
 def test_deferred_publication_flags_do_not_open_nested_postgres_units(pg, monkeypatch):
     from app.postgres import Session
     statements=[]

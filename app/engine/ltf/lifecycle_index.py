@@ -75,9 +75,10 @@ class LifecycleIndex:
             left //= 2; right //= 2
         return result
 
-    def first(self, start, possible):
+    def first(self, start, possible, end=None):
+        end = len(self.rows) if end is None else end
         def visit(node, left, right):
-            if right <= start or left >= len(self.rows) or not possible(node):
+            if right <= start or left >= end or not possible(node):
                 return None
             if right - left == 1:
                 return left

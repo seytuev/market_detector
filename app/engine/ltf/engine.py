@@ -345,6 +345,9 @@ class LtfEngine:
                 lag = max(0, now - c.close_time)
                 self.db._note_external_epoch()
                 with self.db.batch_writes(join_repository_writes=True):
+                    checkpoint = getattr(self, '_bar_checkpoint', None)
+                    if checkpoint is not None:
+                        checkpoint()
                     self._process_candle(
                         instrument_id, closed, idx,
                         detected_at=now,
@@ -542,6 +545,9 @@ class LtfEngine:
                     instrument_id=obs.instrument_id, close_time=c.close_time) if resume and sampled in (0,9) else nullcontext()
                 sampled += 1
                 with sample, self.db.batch_writes(join_repository_writes=True):
+                    bar_checkpoint = getattr(self, '_bar_checkpoint', None)
+                    if bar_checkpoint is not None:
+                        bar_checkpoint()
                     self._process_candle(
                         obs.instrument_id, closed, idx,
                         detected_at=c.close_time, processing_mode="replay",
@@ -1543,7 +1549,7 @@ class LtfEngine:
             == (RANGE_PIVOT_LEFT, RANGE_PIVOT_RIGHT)
         ):
             memo_key = (
-                sc.id, len(pivots), origin_ref,
+                sc.direction, policy, len(pivots), origin_ref,
                 None if prev_draft is None else (
                     prev_draft.lower, prev_draft.upper,
                     prev_draft.anchor_low_ref, prev_draft.anchor_high_ref,

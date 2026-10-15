@@ -114,6 +114,7 @@ class Worker:
         self.dispatcher = dispatcher
         self.broadcast = broadcast
         self.ltf_engine = ltf_engine
+        self._ltf_engines = {}
         self.ltf_dispatcher = ltf_dispatcher
         self.alt_runner = alt_runner
         self.alt_dispatcher = alt_dispatcher
@@ -175,6 +176,33 @@ class Worker:
         self.seed_catalog_max_attempts = 5
 
     async def _calculate(self, fn, *args, **kwargs):
+        calculation_instrument = None
+        if self.ltf_engine is not None and getattr(fn, '__self__', None) is self.ltf_engine:
+            name = fn.__name__
+            if name in ('process_h1_close', 'on_htf_zone_touched') and args:
+                calculation_instrument = args[0]
+            elif name == 'replay_observation' and args:
+                obs = self.db.get_ltf_observation(args[0])
+                calculation_instrument = obs.instrument_id if obs else None
+            elif name == 'check_parent_validity' and args:
+                calculation_instrument = args[0].instrument_id
+            if calculation_instrument is not None:
+                from .engine.ltf.engine import LtfEngine
+                engine = self._ltf_engines.get(calculation_instrument)
+                if engine is None:
+                    engine = self.ltf_engine if not self._ltf_engines else LtfEngine(
+                        self.db, self.cfg, scan_cursors=self.ltf_engine.scan_cursors)
+                    self._ltf_engines[calculation_instrument] = engine
+                engine.cfg = self.cfg
+                def checkpoint():
+                    if self._stop.is_set():
+                        raise InterruptedError('worker_stopping')
+                    claim = getattr(self, '_calc_claim', None)
+                    if claim:
+                        from .services.runtime import CALC_OWNER, assert_owner
+                        assert_owner(self.db, CALC_OWNER, claim)
+                engine._bar_checkpoint = checkpoint
+                fn = getattr(engine, name)
         from functools import wraps
         @wraps(fn)
         def atomic_calculation():
@@ -205,7 +233,7 @@ class Worker:
             result = fn(*args, **kwargs)
             if claim: assert_owner(self.db, CALC_OWNER, claim, check_expiry=False)
             return result
-        return await self.data_sync.calculate(atomic_calculation)
+        return await self.data_sync.calculate(atomic_calculation, instrument_id=calculation_instrument)
 
 
     # ---------- подготовка ----------
@@ -1010,7 +1038,8 @@ class Worker:
     async def _ltf_open_observation(
         self, ins: Instrument, zone, occurred_at: int, *,
         interaction: Optional[str] = None, evidence: Optional[dict] = None,
-    ) -> None:
+        seed: bool = True,
+    ):
         """Открыть наблюдение за зоной и подгрузить H1-контекст (§4).
 
         Идемпотентно по UNIQUE(zone_id, cycle_id) (§4, приёмка п.20);
@@ -1029,15 +1058,28 @@ class Worker:
                 "наблюдение не открывается", zone.id,
             )
             return
-        if not self.db.get_meta(f"ltf:h1:seeded:{obs.id}"):
-            # §4: подгрузить историю H1 до касания — предшествующая
-            # структура как контекст; события replay помечаются delayed
-            await self._ltf_load_h1_history(ins, occurred_at)
-            await self._calculate(self.ltf_engine.replay_observation, obs.id,
-                                  start_ms=obs.activated_at)
-            self.db.set_meta(f"ltf:h1:seeded:{obs.id}", "1")
-            log.info("LTF: наблюдение %s открыто по %s %s (зона %s)",
-                     obs.id, ins.symbol, zone.timeframe, zone.id)
+        if seed:
+            await self._ltf_seed_observations(ins, [obs])
+        return obs
+
+    async def _ltf_seed_observations(self, ins, observations):
+        pending = [o for o in observations if not self.db.get_meta(f"ltf:h1:seeded:{o.id}")]
+        if not pending:
+            return
+        first = min(pending, key=lambda o: o.activated_at)
+        # One instrument replay sees every causally available observation.
+        # Enabling 30 parent zones must not replay that history 30 times.
+        await self._ltf_load_h1_history(ins, first.activated_at)
+        await self._calculate(self.ltf_engine.replay_observation, first.id,
+                              start_ms=first.activated_at)
+        await self._ltf_mark_seeded(pending)
+
+    async def _ltf_mark_seeded(self, observations):
+        def publish():
+            with self.db.batch_writes(join_repository_writes=True):
+                for obs in observations:
+                    self.db.set_meta(f"ltf:h1:seeded:{obs.id}", "1")
+        await self.data_sync._write(publish)
 
     async def _ltf_open_marked_zones(self, ins: Instrument) -> None:
         """Галочка «Анализировать»: наблюдения на все подтверждённые HTF-зоны
@@ -1048,7 +1090,7 @@ class Worker:
             statuses=list(LTF_PARENT_VALID_STATUSES),
             timeframes=set(LTF_PARENT_TIMEFRAMES),
         )
-        opened = False
+        opened = []
         for zone in zones:
             # F01: единый допуск. Закрытое пользователем наблюдение уже
             # есть в БД и здесь не воскрешается.
@@ -1059,13 +1101,15 @@ class Worker:
             )
             if existing is not None:
                 continue
-            await self._ltf_open_observation(
+            obs = await self._ltf_open_observation(
                 ins, zone, self._first_htf_reach_ms(zone),
                 # §2: включение «Анализировать» — не рыночный контакт;
                 # источник эпизода помечается служебным основанием
-                evidence={"contact_basis": "manual_watch"},
+                evidence={"contact_basis": "manual_watch"}, seed=False,
             )
-            opened = True
+            if obs is not None:
+                opened.append(obs)
+        await self._ltf_seed_observations(ins, opened)
         if opened and self.broadcast:
             self.broadcast({
                 "type": "ltf", "instrument_id": ins.id,
@@ -1089,6 +1133,7 @@ class Worker:
             statuses=list(LTF_PARENT_VALID_STATUSES),
             timeframes=set(LTF_PARENT_TIMEFRAMES),
         )
+        opened = []
         for zone in zones:
             if not eligible_htf_parent(zone, self.cfg, as_of=now_ms()):
                 continue
@@ -1110,7 +1155,10 @@ class Worker:
                     occurred = min(e.occurred_at for e in start_events)
                 else:
                     occurred = self._first_htf_reach_ms(zone)
-                await self._ltf_open_observation(ins, zone, occurred)
+                obs = await self._ltf_open_observation(ins, zone, occurred, seed=False)
+                if obs is not None:
+                    opened.append(obs)
+        await self._ltf_seed_observations(ins, opened)
 
     def _first_htf_reach_ms(self, zone) -> int:
         """Время первого касания диапазона HTF-зоны по закрытым свечам.
@@ -1139,6 +1187,7 @@ class Worker:
     async def _realign_waiting_observations(self, ins: Instrument) -> None:
         """Если наблюдение открыли слишком поздно — вернуть activated_at
         к фактическому входу в зону и переиграть H1."""
+        realigned = []
         for obs in self.db.list_ltf_observations(instrument_id=ins.id):
             if obs.state not in LTF_OPEN_STATES:
                 continue
@@ -1155,8 +1204,10 @@ class Worker:
                 "LTF: наблюдение %s сдвинуто к фактическому входу %s",
                 obs.id, reach,
             )
-            await self._calculate(self.ltf_engine.replay_observation, obs.id,
-                                  start_ms=reach)
+            realigned.append((reach, obs.id))
+        if realigned:
+            reach, oid = min(realigned)
+            await self._calculate(self.ltf_engine.replay_observation, oid, start_ms=reach)
 
     @instrument_owned
     async def _ltf_on_poll(self, ins: Instrument, events: list[Event]) -> None:
@@ -1612,86 +1663,92 @@ class Worker:
         наблюдений; массовые исторические события не доставляются (delayed)."""
         if not self._ltf_active:
             return
-        for ins in self.db.get_instruments(enabled_only=True):
-            observations = [
-                o for o in self.db.list_ltf_observations(instrument_id=ins.id)
-                if o.state in LTF_OPEN_STATES
-            ]
-            if not observations:
-                # H1-окно и структура нужны графику и без наблюдения (F11).
-                # Сбой одного инструмента (сеть, транзитный конфликт записи)
-                # не должен обрывать запуск воркера (§11).
-                try:
-                    if self.db.last_candle(ins.id, "H1") is None:
-                        try:
-                            await self._ltf_load_h1_history(ins, now_ms())
-                        except AdapterError as exc:
-                            log.warning(
-                                "LTF %s: догрузка H1 пропущена: %s", ins.symbol, exc)
-                    if self.db.last_candle(ins.id, "H1") is not None:
-                        await self._calculate(
-                            self.ltf_engine.process_h1_close, ins.id
-                        )
-                except Exception:
-                    log.exception("LTF %s: стартовая обработка H1 не удалась", ins.symbol)
-                continue
-            await self.data_sync._write(self._set_replaying, ins.id, True)
+        async def restore(ins):
+            async with self.data_sync.instrument(ins.id):
+                await self._ltf_restore_instrument(ins)
+        await asyncio.gather(*(restore(ins) for ins in self.db.get_instruments(enabled_only=True)))
+
+    async def _ltf_restore_instrument(self, ins):
+        observations = [
+            o for o in self.db.list_ltf_observations(instrument_id=ins.id)
+            if o.state in LTF_OPEN_STATES
+        ]
+        if not observations:
+            # H1-окно и структура нужны графику и без наблюдения (F11).
+            # Сбой одного инструмента (сеть, транзитный конфликт записи)
+            # не должен обрывать запуск воркера (§11).
             try:
-                cursor_raw = self.db.get_meta(f"ltf:h1:last_close:{ins.id}")
-                last = self.db.last_candle(ins.id, "H1")
-                # Курсор уже на последней закрытой H1 — полный прогон
-                # десятков тысяч свечей не нужен. Сравнение до вставки хвоста.
-                has_checkpoint = cursor_raw is not None and int(cursor_raw) > 0
-                start = (
-                    min(o.activated_at for o in observations)
-                    - self.cfg.ltf_history_days * 86_400_000
-                )
-                if last is not None:
-                    start = max(start, last.open_time + TIMEFRAME_MS["H1"])
-                if start < now_ms() - TIMEFRAME_MS["H1"]:
-                    # §10: вся сеть — через DataSync.request (семафор venue,
-                    # Retry-After, таймаут), restore не обходит общий лимит
-                    candles = await self.data_sync.request(
-                        ins.venue, self.adapters[ins.venue].klines,
-                        ins.symbol, "H1", start, now_ms(),
-                    )
-                    for c in candles:
-                        c.instrument_id = ins.id
-                    if candles:
-                        await self.data_sync._write(self.db.insert_candles, candles)
-                if has_checkpoint:
-                    # Хвост, если он вставился, проходит инкрементально.
-                    # Из restore не доставляем: retry заберёт только
-                    # не-delayed события внутри grace.
+                if self.db.last_candle(ins.id, "H1") is None:
+                    try:
+                        await self._ltf_load_h1_history(ins, now_ms())
+                    except AdapterError as exc:
+                        log.warning(
+                            "LTF %s: догрузка H1 пропущена: %s", ins.symbol, exc)
+                if self.db.last_candle(ins.id, "H1") is not None:
                     await self._calculate(
                         self.ltf_engine.process_h1_close, ins.id
                     )
-                    log.info(
-                        "LTF %s: H1 восстановлен от сохранённого курсора, полный replay пропущен (%d)",
-                        ins.symbol, len(observations),
-                    )
-                else:
-                    # Один replay на инструмент, а не на каждое наблюдение.
-                    # Без сохранённого курсора историю восстанавливаем delayed.
-                    await self._calculate(
-                        self.ltf_engine.replay_observation, observations[0].id
-                    )
-                    log.info("LTF %s: восстановлено наблюдений: %d",
-                             ins.symbol, len(observations))
-                # Restore processes all open observations. Publish the same
-                # scenario checkpoint as normal channel processing only after success.
-                cursor_raw = self.db.get_meta(f"ltf:h1:last_close:{ins.id}")
-                if cursor_raw:
-                    await self.data_sync._write(
-                        self.db.set_meta,
-                        f"ltf:h1:scenario_last_close:{ins.id}", cursor_raw,
-                    )
-            except AdapterError as exc:
-                log.warning("LTF %s: восстановление пропущено: %s", ins.symbol, exc)
             except Exception:
-                log.exception("LTF: ошибка восстановления %s", ins.symbol)
-            finally:
-                await self.data_sync._write(self._set_replaying, ins.id, False)
+                log.exception("LTF %s: стартовая обработка H1 не удалась", ins.symbol)
+            return
+        await self.data_sync._write(self._set_replaying, ins.id, True)
+        try:
+            cursor_raw = self.db.get_meta(f"ltf:h1:last_close:{ins.id}")
+            last = self.db.last_candle(ins.id, "H1")
+            # Курсор уже на последней закрытой H1 — полный прогон
+            # десятков тысяч свечей не нужен. Сравнение до вставки хвоста.
+            has_checkpoint = cursor_raw is not None and int(cursor_raw) > 0
+            start = (
+                min(o.activated_at for o in observations)
+                - self.cfg.ltf_history_days * 86_400_000
+            )
+            if last is not None:
+                start = max(start, last.open_time + TIMEFRAME_MS["H1"])
+            if start < now_ms() - TIMEFRAME_MS["H1"]:
+                # §10: вся сеть — через DataSync.request (семафор venue,
+                # Retry-After, таймаут), restore не обходит общий лимит
+                candles = await self.data_sync.request(
+                    ins.venue, self.adapters[ins.venue].klines,
+                    ins.symbol, "H1", start, now_ms(),
+                )
+                for c in candles:
+                    c.instrument_id = ins.id
+                if candles:
+                    await self.data_sync._write(self.db.insert_candles, candles)
+            if has_checkpoint:
+                # Хвост, если он вставился, проходит инкрементально.
+                # Из restore не доставляем: retry заберёт только
+                # не-delayed события внутри grace.
+                await self._calculate(
+                    self.ltf_engine.process_h1_close, ins.id
+                )
+                log.info(
+                    "LTF %s: H1 восстановлен от сохранённого курсора, полный replay пропущен (%d)",
+                    ins.symbol, len(observations),
+                )
+            else:
+                # Один replay на инструмент, а не на каждое наблюдение.
+                # Без сохранённого курсора историю восстанавливаем delayed.
+                await self._calculate(
+                    self.ltf_engine.replay_observation, observations[0].id
+                )
+                log.info("LTF %s: восстановлено наблюдений: %d",
+                         ins.symbol, len(observations))
+            # Restore processes all open observations. Publish the same
+            # scenario checkpoint as normal channel processing only after success.
+            cursor_raw = self.db.get_meta(f"ltf:h1:last_close:{ins.id}")
+            if cursor_raw:
+                await self.data_sync._write(
+                    self.db.set_meta,
+                    f"ltf:h1:scenario_last_close:{ins.id}", cursor_raw,
+                )
+                await self._ltf_mark_seeded(observations)
+        except AdapterError as exc:
+            log.warning("LTF %s: восстановление пропущено: %s", ins.symbol, exc)
+        except Exception:
+            log.exception("LTF: ошибка восстановления %s", ins.symbol)
+        finally:
+            await self.data_sync._write(self._set_replaying, ins.id, False)
 
     # ---------- Altcoins D1 accumulation (ТЗ 07.10.2026 §4, §18) ----------
 
@@ -1855,17 +1912,16 @@ class Worker:
             # F02: котировки — отдельным быстрым циклом, до истории
             quote_task = asyncio.create_task(self.quote_loop())
         self.readiness.reach("realtime")
-        # §13 LTF: восстановление наблюдений ДО первой обработки H1-закрытий:
-        # producers H1-заданий ещё не работают (boundary/ltf/main-циклы ниже,
-        # WS подписан только на scan_tfs, котировки H1-закрытий не создают),
-        # а потребители calc_queue стартуют после restore — восстановленные
-        # durable-задания H1 тоже не могут обогнать его.
-        await self._ltf_restore_all()
+        # Start intake/coordination immediately. Restore owns each instrument's
+        # mutex; independent engines allow other instruments to stay live.
         if self.calc_queue_enabled:
             # этап 4: durable-очередь расчётов — строки calc_task, пережившие
             # рестарт (pending/running/failed), поднимаются в обработку после
             # LTF-restore (порядок H1 выше) и до фонового backfill
+            self.calc_queue.concurrency = max(self.calc_queue.concurrency,
+                min(4, len(self.db.get_instruments(enabled_only=True))))
             self.calc_queue.start()
+        self._restore_task = asyncio.create_task(self._ltf_restore_all())
         # История — фоном (§11): свежий хвост раньше полной истории,
         # чекпоинты per (instrument, tf), replay — через calc_queue
         # (kind="backfill", приоритет ниже live).
@@ -1882,6 +1938,8 @@ class Worker:
             await asyncio.gather(*loops)
         finally:
             self.data_sync.ready = False
+            self._restore_task.cancel()
+            await asyncio.gather(self._restore_task, return_exceptions=True)
             if self._backfill_task is not None:
                 # остановка: недогруженные чекпоинты остаются incomplete —
                 # следующий старт продолжит с них, перекрытие сверится

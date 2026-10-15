@@ -39,6 +39,16 @@ class ActivationHistory:
         self.candles = candles
         self.index = None
         self.cuts = OrderedDict()
+        self.context_memo = {}
+        self.context_head = None
+        self.context_pivots = None
+
+    def get_index(self):
+        from .lifecycle_index import LifecycleIndex
+        if self.index is None:
+            self.index = LifecycleIndex(self.candles, max(
+                (c.close_time for c in self.candles if c.closed), default=0))
+        return self.index
 
     def cut(self, zone, as_of, cfg):
         key = (zone.id, zone.type, zone.direction, zone.lower, zone.upper,
@@ -47,11 +57,7 @@ class ActivationHistory:
         if key in self.cuts:
             self.cuts.move_to_end(key)
             return self.cuts[key]
-        from .lifecycle_index import LifecycleIndex
-        if self.index is None:
-            self.index = LifecycleIndex(self.candles, max(
-                (c.close_time for c in self.candles if c.closed), default=0))
-        index = self.index
+        index = self.get_index()
         # All activation dates share one tree. Every query is bounded by its
         # own closed-bar cutoff; later bars cannot affect past freshness.
         if zone.confirmed_at is None or zone.confirmed_at > as_of:

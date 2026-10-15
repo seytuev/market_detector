@@ -863,7 +863,8 @@ function scheduleH1HistoryReload() {
 
 function h1QueryExtra() {
   const extra = {};
-  const ctx = deskData.current && deskData.current.selected_context_id;
+  const ctx = deskData.current?.instrument_id === state.instrumentId
+    ? deskData.current.selected_context_id : null;
   if (ctx) extra.context_id = ctx;
   const settings = window.H1Layers.loadSettings();
   if (settings.points === 'history' && state.chart) {
@@ -1021,7 +1022,7 @@ function drawH1Breaks(overlay, ts, paneRight, height) {
     return;
   }
   const layers = state.h1Layers;
-  if (!layers) {
+  if (!layers || (layers.snapshot?.instrument_id != null && layers.snapshot.instrument_id !== state.instrumentId)) {
     hideH1Chrome();
     return;
   }
@@ -3338,6 +3339,44 @@ function syncInstrumentContext() {
   updateLtfLinks();
 }
 
+function selectAnalysisInstrument(id) {
+  if (state.instrumentId === id) return;
+  state.instrumentId = id;
+  // A selection changes every visible domain together. Pending responses have
+  // their own identity guards, but the already painted snapshot also belongs
+  // to the old instrument and must not frame or annotate the new candles.
+  for (const key of ['candleReq', 'zoneReq', 'eventReq', 'candidateReq', 'h1Req']) state[key]++;
+  state.lastPrice = null;
+  state.candles = [];
+  state.zones = [];
+  state.groups = [];
+  state.dailyStructure = null;
+  state.h1Layers = null;
+  state.h1Pending = null;
+  state.h1LoadError = false;
+  state.loadedCandleInstrument = null;
+  state.loadedCandleTf = null;
+  state.candleVersion = 0;
+  state.h1FrameInstrument = null;
+  state.h1FrameKey = null;
+  state.h1UserPanned = false;
+  state.h1SelectedEventId = null;
+  state.h1SelectedZoneId = null;
+  state.h1PriceFocus = null;
+  state.innerLevels = [];
+  state.innerLevelsZoneId = null;
+  deskData.reqSeq++;
+  deskData.pending = null;
+  deskData.current = null;
+  deskData.entryZones = new Map();
+  deskData.readError = false;
+  state.candleSeries?.setMarkers([]);
+  state.candleSeries?.setData([]);
+  hideH1Chrome();
+  drawZones();
+  renderDeskExtras();
+}
+
 // Мост для экрана «Сейчас» (now.js): открыть рабочее место выбранного актива.
 // Тот же механизм выбора, что у селекта в workbar: localStorage htf:instrument
 // + ?instrument= (syncInstrumentContext), затем перезагрузка данных desk.
@@ -3354,7 +3393,7 @@ window.LFDesk = {
         if (options.zoneId) url.searchParams.set('zone',String(options.zoneId)); else url.searchParams.delete('zone');
         history.pushState(null,'',url.pathname+url.search+url.hash);
       }
-      state.instrumentId = numId;
+      selectAnalysisInstrument(numId);
       if (options.mode) setChartMode(options.mode);
       const sel = $('instrument-select');
       if (sel) sel.value = String(numId);
@@ -4067,6 +4106,8 @@ async function fetchH1Markers(id, mode, q) {
   try {
     layers = await api(`/api/ltf/instruments/${id}/structure?${q}`);
     if (token !== state.h1Req || id !== state.instrumentId || state.chartMode !== mode) return;
+    if (layers.snapshot?.instrument_id != null && layers.snapshot.instrument_id !== id)
+      throw new Error('Structure response belongs to another instrument');
     state.h1LoadError = false;
     state.h1Layers = layers;
     renderDeskEntries();
@@ -4091,6 +4132,7 @@ async function fetchH1Markers(id, mode, q) {
 }
 
 function applyH1LegFrame(layers) {
+  if (layers?.snapshot?.instrument_id != null && layers.snapshot.instrument_id !== state.instrumentId) return;
   const setup = layers && layers.setup;
   if (!state.chart || !state.candles.length || !window.H1Layers) return;
   if (state.h1FrameInstrument !== state.instrumentId) {
@@ -4239,7 +4281,7 @@ async function main() {
     };
   }
   $('instrument-select').onchange = (e) => {
-    state.instrumentId = Number(e.target.value);
+    selectAnalysisInstrument(Number(e.target.value));
     renderAssetActiveButton();
     state.h1SelectedEventId = null;
     state.h1SelectedZoneId = null;

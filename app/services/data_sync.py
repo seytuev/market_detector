@@ -71,6 +71,7 @@ class DataSync:
         self._locks = {}
         self._owners = {}
         self._calculation_lock = asyncio.Lock()
+        self._instrument_calculations = {}
         self._task = None
         self.job_timeout_seconds = 600
         self.request_timeout_seconds = 90
@@ -146,13 +147,15 @@ class DataSync:
             finally:
                 self._owners.pop(iid, None)
 
-    async def calculate(self, fn, *args, **kwargs):
-        # LtfEngine has a shared batch, including across instruments.
-        # Cancellation of an await does not terminate a Python thread.
+    async def calculate(self, fn, *args, instrument_id=None, **kwargs):
+        # Worker supplies an isolated engine for a keyed calculation. Work on
+        # one instrument remains serialized; cancellation retains ownership
+        # until the actual thread finishes. Unkeyed legacy work keeps its lock.
         metrics = get_registry()
         task_name = _calc_task(fn)
         wait_started = time.monotonic()
-        async with self._calculation_lock:
+        lock = self._calculation_lock if instrument_id is None else self._instrument_calculations.setdefault(instrument_id, asyncio.Lock())
+        async with lock:
             metrics.histogram("calc_lock_wait", time.monotonic() - wait_started, {"task": task_name})
             metrics.gauge("calc_lock_held", 1.0)
             task = asyncio.create_task(asyncio.to_thread(fn, *args, **kwargs))

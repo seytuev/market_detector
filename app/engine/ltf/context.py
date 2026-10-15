@@ -59,6 +59,7 @@ def detect_counter_sweeps(
     *,
     only_after: Optional[int] = None,
     ordered: bool = False,
+    index=None,
 ) -> list[dict[str, Any]]:
     """Снятия уровней противоположной стороны с момента триггера сценария.
 
@@ -91,10 +92,25 @@ def detect_counter_sweeps(
         key=lambda c: c.open_time,
     )
     out: list[dict[str, Any]] = []
+    use_index = index is not None and len(ordered) > 8
+    if use_index:
+        end = bisect_right(index.rows, ordered[-1].close_time, key=lambda c: c.close_time)
+        start = bisect_left(index.rows, ordered[0].close_time, key=lambda c: c.close_time)
     for p in pivots:
         if p.kind != kind or p.state != "confirmed":
             continue
         if p.confirmed_at is None or p.confirmed_at > since_at:
+            continue
+        if use_index:
+            first = max(start, bisect_right(index.opens, p.pivot_at))
+            at = index.first(first, lambda node: (
+                index.low[node] < p.price and index.max_close[node] > p.price
+                if bear else index.high[node] > p.price and index.min_close[node] < p.price
+            ), end=end)
+            if at is not None:
+                out.append({"level": p.price, "level_type": zone_type,
+                            "pivot_ref": _ref(p), "pivot_at": p.pivot_at,
+                            "swept_at": index.rows[at].close_time})
             continue
         for c in ordered:
             if c.open_time <= p.pivot_at:
@@ -184,16 +200,43 @@ def scenario_context(
     detect_counter_sweeps); на экстремум/тест FVG не влияет — хвост
     считается полностью от триггера."""
     bear = direction == Direction.BEAR
-    swept = detect_counter_sweeps(direction, pivots, candles, since_at,
-                                  only_after=sweep_only_after, ordered=ordered)
+    histories = getattr(db._local, 'activation_histories', None)
+    history = histories.get(instrument_id) if histories is not None else None
+    index = history.get_index() if history is not None else None
+    head = candles[-1].close_time if candles else None
+    memo = None
+    if history is not None:
+        if history.context_head != head or history.context_pivots is not pivots:
+            history.context_head = head
+            history.context_pivots = pivots
+            history.context_memo.clear()
+        memo = history.context_memo
+    key = (direction, since_at, sweep_only_after, len(pivots),
+           _ref(pivots[-1]) if pivots else None)
+    if memo is not None and key in memo:
+        swept = memo[key]
+    else:
+        swept = detect_counter_sweeps(direction, pivots, candles, since_at,
+                                      only_after=sweep_only_after, ordered=ordered, index=index)
+        if memo is not None:
+            memo[key] = swept
     sample = candles[bisect_left(candles, since_at, key=lambda c: c.close_time):] if ordered else candles
-    tail = [c for c in sample if c.closed and c.close_time >= since_at]
+    tail = [c for c in sample if c.closed and c.close_time >= since_at] if index is None else []
     fvg50 = None
-    if tail:
+    bar = None
+    if index is not None and head is not None:
+        left = bisect_left(index.rows, since_at, key=lambda c: c.close_time)
+        right = bisect_right(index.rows, head, key=lambda c: c.close_time)
+        if left < right:
+            extreme = index.extreme(left, bear, right)
+            at = index.first(left, lambda n: index.low[n] <= extreme if bear else index.high[n] >= extreme, end=right)
+            bar = index.rows[at]
+    elif tail:
         bar = (
             min(tail, key=lambda c: c.low)
             if bear else max(tail, key=lambda c: c.high)
         )
+    if bar is not None:
         extreme = bar.low if bear else bar.high
         fvg50 = find_htf_fvg50_test(
             db, instrument_id, extreme, direction,
