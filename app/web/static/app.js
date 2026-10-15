@@ -4180,7 +4180,12 @@ function applyH1LegFrame(layers) {
 async function reloadAll() {
   // Each loader validates its instrument/request generation before painting.
   // Candles and structure can arrive in either order; both redraw the frame.
-  await Promise.all([loadCandles(), loadZones(), loadEvents(), loadCandidates(), loadH1Markers()]);
+  try {
+    await Promise.all([loadCandles(), loadZones(), loadEvents(), loadCandidates(), loadH1Markers()]);
+  } catch (error) {
+    // An obsolete initial load must still let main() connect the live feed.
+    if (error.name !== 'AbortError') throw error;
+  }
 }
 
 function initSettingsSections() {
