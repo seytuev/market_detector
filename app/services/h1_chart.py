@@ -367,7 +367,7 @@ def _project_for_chart(db, instrument_id, cfg, moment, zones, candles, *, live: 
     last = db.last_candle(instrument_id, "H1")
     cacheable = live and last is not None and moment >= last.close_time
     def load():
-        return project_ideas(db, instrument_id, cfg, moment, zones=zones, candles=candles)
+        return project_ideas(db, instrument_id, cfg, moment, zones=zones, candles=candles, live=live)
     return (_LIVE_PROJECTION.get(db, instrument_id,
                                 (structural_version(db, instrument_id, cfg), VERSION,
                                  (moment + 1) // H1_MS), load)

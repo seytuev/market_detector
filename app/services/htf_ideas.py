@@ -68,7 +68,7 @@ def mark_ideas_checkpoint(db, instrument_id) -> None:
     db.set_meta(f"htf_ideas:inputs:{instrument_id}", _input_version(db, instrument_id))
 
 
-def project_ideas(db, instrument_id, cfg, as_of, *, zones=None, candles=None):
+def project_ideas(db, instrument_id, cfg, as_of, *, zones=None, candles=None, live=False):
     zones = zones if zones is not None else db.list_ltf_entry_zones(instrument_id=instrument_id)
     facts = {}
     pending = []
@@ -88,7 +88,7 @@ def project_ideas(db, instrument_id, cfg, as_of, *, zones=None, candles=None):
         for z in pending:
             facts[z.id] = lifecycle.project(z, cfg)
     saved = {i["scenario_id"]: i for i in db.list_htf_ideas(instrument_id)}
-    bundle = db.ltf_projection_bundle(instrument_id, as_of)
+    bundle = db.ltf_projection_bundle(instrument_id, as_of, live=live)
     ideas = []
     links = {}
     for obs in db.list_ltf_observations(instrument_id=instrument_id):

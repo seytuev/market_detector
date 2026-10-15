@@ -98,6 +98,17 @@ def test_ideas_reconciliation_bulk_snapshot_and_atomic_publication(pg, monkeypat
     test_bulk_publication_preserves_manual_close_and_avoids_point_reads(pg, third, monkeypatch)
 
 
+def test_ltf_context_batch_and_live_projection_cache(pg, monkeypatch):
+    from tests.test_ltf_context_read_cache import (
+        test_context_batch_preserves_latest_active_and_independent_parent_models,
+        test_live_bundle_reuses_ltf_rows_across_parent_quotes_but_not_ltf_changes,
+    )
+    iid = pg.upsert_instrument(Instrument(None, 'BTC', 'binance', 'spot', 'BTCUSDT', 'USDT'))
+    test_context_batch_preserves_latest_active_and_independent_parent_models(pg, iid, monkeypatch)
+    other = pg.upsert_instrument(Instrument(None, 'SOL', 'binance', 'spot', 'SOLUSDT', 'USDT'))
+    test_live_bundle_reuses_ltf_rows_across_parent_quotes_but_not_ltf_changes(pg, other, monkeypatch)
+
+
 def test_bulk_market_history_matches_scalar_and_rolls_back(pg):
     from tests.test_events_store_v2 import test_bulk_buckets_match_scalar_updates_and_rollback
     test_bulk_buckets_match_scalar_updates_and_rollback(pg)

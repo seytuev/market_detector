@@ -1187,6 +1187,7 @@ def instruments_overview(db: Database, settings) -> list[dict[str, Any]]:
         # «Анализировать» без наблюдений — тоже строка («Ждём HTF-зону»)
         if ins.ltf_analyze:
             by_instrument.setdefault(ins.id, [])
+    db.prime_ltf_context_reads([o for rows in by_instrument.values() for o in rows])
     quotes = db.get_all_quotes()
     last_event = db.get_ltf_last_event_at()
     # L06: зоны-кандидаты на проверку — одним агрегатным запросом (без N+1)
@@ -1314,6 +1315,7 @@ def instrument_current(
     fresh = ds["state"] == "ok"
     locate = _location_fresh(ds, fresh)
     observations = db.list_ltf_observations(instrument_id=instrument_id)
+    db.prime_ltf_context_reads(observations)
     policy = settings.detector
     selected, basis = _select_context_with_basis(
         db, instrument_id, observations, price, locate, policy, now,
@@ -1883,6 +1885,7 @@ def service_status(db: Database, settings) -> dict[str, Any]:
     now = now_ms()
     instruments = {i.id: i for i in db.get_instruments(enabled_only=True)}
 
+    db.prime_ltf_context_reads([o for rows in by_instrument.values() for o in rows])
     quotes = db.get_all_quotes()
     horizon = quote_stale_limit_ms(settings)
     stale_symbols: list[str] = []

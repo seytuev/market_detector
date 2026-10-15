@@ -62,6 +62,9 @@ from .models_alt import (
     AltStructureEvent,
     AltSweepEpisode,
 )
+from .services.projection_cache import ProjectionCache
+
+_IDEA_BUNDLES = ProjectionCache(capacity=12)
 
 SCHEMA_VERSION = 2
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
@@ -2680,6 +2683,39 @@ class Database:
             return self._to_ltf_scenario(r) if r else None
         return self._ltf_cached(("ltf_sc_active", observation_id), load)
 
+    def prime_ltf_context_reads(self, observations) -> None:
+        """Read parent zones and current scenarios in batches for a view.
+
+        A four-asset sidebar must not issue one network round trip for every
+        observed parent. Populate the same versioned caches as point reads;
+        callers still receive independent mutable parent models.
+        """
+        if not self.ltf_cache_enabled or not observations:
+            return
+        self._note_external_epoch()
+        for offset in range(0, len(observations), 400):
+            chunk = observations[offset:offset + 400]
+            zone_ids = sorted({o.zone_id for o in chunk})
+            version = self._zone_cache_version
+            marks = ','.join('?' for _ in zone_ids)
+            zones = {r['id']: self._to_zone(r) for r in self.conn.execute(
+                f'SELECT * FROM zone WHERE id IN ({marks})', zone_ids).fetchall()}
+            with self._zone_cache_lock:
+                if version == self._zone_cache_version:
+                    for zid in zone_ids:
+                        self._zone_cache[('id', zid)] = (version, [zones[zid]] if zid in zones else [])
+            ids = [o.id for o in chunk]
+            marks = ','.join('?' for _ in ids)
+            scenarios = {r['observation_id']: self._to_ltf_scenario(r)
+                         for r in self.conn.execute(
+                f'''SELECT s.* FROM ltf_scenario s JOIN (
+                       SELECT MAX(id) AS id FROM ltf_scenario
+                       WHERE observation_id IN ({marks})
+                         AND state IN ('range_pending','monitoring_entries')
+                       GROUP BY observation_id) newest ON newest.id=s.id''', ids).fetchall()}
+            for oid in ids:
+                self._ltf_cached(('ltf_sc_active', oid), lambda oid=oid: scenarios.get(oid))
+
     def list_ltf_scenarios_for_instrument(self, instrument_id: int) -> list[LtfScenario]:
         """Сценарии инструмента в порядке наблюдений, затем id сценария."""
         def load() -> list[LtfScenario]:
@@ -2693,7 +2729,7 @@ class Database:
             return [self._to_ltf_scenario(r) for r in rows]
         return self._ltf_cached(("ltf_sc_ins", instrument_id), load)
 
-    def ltf_projection_bundle(self, instrument_id: int, as_of: Optional[int] = None) -> dict[str, Any]:
+    def ltf_projection_bundle(self, instrument_id: int, as_of: Optional[int] = None, *, live: bool = False) -> dict[str, Any]:
         """Дети сценариев инструмента одним проходом на таблицу.
 
         Порядок внутри списков совпадает с list_ltf_*: события структуры
@@ -2811,6 +2847,15 @@ class Database:
                 "ltf_events": ltf_events,
                 "discovered": discovered,
             }
+        if live and self.ltf_cache_enabled and self._read_depth and not self._batch_depth:
+            # Only LTF repository writes change these rows. A live HTF quote
+            # can change parent depth and invalidate idea eligibility without
+            # requiring these large joins to run again. Historical cutoffs
+            # and write transactions always take their exact uncached path.
+            moment = as_of if as_of is not None else now_ms()
+            version = (self.instrument_domain('seq:ltf', instrument_id),
+                       moment // 3_600_000)
+            return deepcopy(_IDEA_BUNDLES.get(self, instrument_id, version, load))
         return self._ltf_cached(("ltf_proj", instrument_id, as_of), load)
 
     def _bundle_by_scenario(self, instrument_id: int, sql: str, convert, *, parameters=None) -> dict[int, list]:
