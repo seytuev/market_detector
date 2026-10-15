@@ -120,6 +120,26 @@ def test_graceful_calculation_role_handoff(pg):
     asyncio.run(test_calculation_role_released_after_writer_before_unrelated_cleanup(pg))
 
 
+def test_committed_materialized_ideas_projection(pg, monkeypatch):
+    from tests.test_materialized_ideas import (
+        test_committed_projection_is_exact_after_memory_cache_loss,
+        test_uncommitted_or_changed_inputs_are_never_materialized,
+        test_corrupt_snapshot_falls_back_and_new_facts_invalidate,
+        test_parent_quote_depth_keeps_snapshot_but_invalidation_does_not,
+    )
+    for index, mode in enumerate(('exact', 'depth', 'nested_rollback', 'historical', 'parent_edit', 'future_fact', 'corrupt')):
+        iid = pg.upsert_instrument(Instrument(None, f'TEST{index}', 'binance', 'spot', f'TEST{index}USDT', 'USDT'))
+        with monkeypatch.context() as scoped:
+            if mode == 'exact':
+                test_committed_projection_is_exact_after_memory_cache_loss(pg, iid, scoped)
+            elif mode == 'depth':
+                test_parent_quote_depth_keeps_snapshot_but_invalidation_does_not(pg, iid, scoped)
+            elif mode == 'corrupt':
+                test_corrupt_snapshot_falls_back_and_new_facts_invalidate(pg, iid, scoped)
+            else:
+                test_uncommitted_or_changed_inputs_are_never_materialized(pg, iid, scoped, mode)
+
+
 def test_bulk_market_history_matches_scalar_and_rolls_back(pg):
     from tests.test_events_store_v2 import test_bulk_buckets_match_scalar_updates_and_rollback
     test_bulk_buckets_match_scalar_updates_and_rollback(pg)

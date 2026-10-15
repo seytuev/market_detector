@@ -34,11 +34,13 @@ def test_delivery_and_chart_retries_do_not_invalidate_market_projections(db, ins
     from app.models_ltf import LtfEvent
     from app.services.htf_ideas import mark_ideas_checkpoint, ideas_checkpoint_fresh
     from app.services.projection_cache import structural_version
-    _, obs, sc, _ = seed(db, instrument_id)
+    parent, obs, sc, _ = seed(db, instrument_id)
     event, _ = db.insert_ltf_event(LtfEvent(id=None, observation_id=obs.id, scenario_id=sc.id,
         kind='context_update', payload={'fact': 'counter_sweep'}, occurred_at=T,
         detected_at=T, dedupe_key='delivery-projection'))
     mark_ideas_checkpoint(db, instrument_id)
+    db.update_zone(parent, max_test_depth=.4, test_extreme=110)
+    assert ideas_checkpoint_fresh(db, instrument_id)
     before = structural_version(db, instrument_id, DetectorConfig())
     seq = db.get_state_seq(); journal = db.get_domain('seq:ltf')
     db.mark_ltf_event_delivered(event.id)

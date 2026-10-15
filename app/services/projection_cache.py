@@ -10,6 +10,23 @@ class ProjectionCache:
         self._stores = WeakKeyDictionary()
         self._lock = Lock()
 
+    def peek(self, db, key, version):
+        with self._lock:
+            store, _ = self._stores.get(db, ({}, {}))
+            hit = store.get(key)
+            if hit is not None and hit[0] == version:
+                store.move_to_end(key)
+                return hit[1]
+        return None
+
+    def put(self, db, key, version, value):
+        with self._lock:
+            store, _ = self._stores.setdefault(db, (OrderedDict(), {}))
+            store[key] = (version, value)
+            store.move_to_end(key)
+            while len(store) > self.capacity:
+                store.popitem(last=False)
+
     def get(self, db, key, version, loader):
         with self._lock:
             store, locks = self._stores.setdefault(db, (OrderedDict(), {}))

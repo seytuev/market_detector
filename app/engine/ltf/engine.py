@@ -281,7 +281,7 @@ class LtfEngine:
         if last is None:
             return LtfTickResult()
         from ...services.htf_ideas import (
-            ideas_checkpoint_fresh, mark_ideas_checkpoint, reconcile_ideas,
+            ideas_checkpoint_fresh, mark_ideas_checkpoint, reconcile_ideas, projection_checkpoint_needed,
         )
         if last.close_time <= last_done:
             # §10.3: новых закрытий нет, но есть необработанная ревизия уже
@@ -295,10 +295,11 @@ class LtfEngine:
                 self._recover_context_zones_once(instrument_id)
                 # Идеи пересчитываем только если снимок устарел; серию H1
                 # заново не читаем.
-                if not ideas_checkpoint_fresh(self.db, instrument_id):
-                    reconcile_ideas(self.db, instrument_id, self.cfg, now)
+                if (not ideas_checkpoint_fresh(self.db, instrument_id)
+                        or projection_checkpoint_needed(self.db, instrument_id, self.cfg, now)):
                     from ...services.liquidity_anchors import refresh_liquidity_anchors
                     refresh_liquidity_anchors(self.db, instrument_id)
+                    reconcile_ideas(self.db, instrument_id, self.cfg, now)
                     mark_ideas_checkpoint(self.db, instrument_id)
                 return LtfTickResult()
         closed = self.db.get_candles(instrument_id, "H1")
@@ -372,9 +373,9 @@ class LtfEngine:
                 str(self.db.latest_candle_revision_at(instrument_id, "H1")),
             )
         self._recover_context_zones_once(instrument_id)
-        reconcile_ideas(self.db, instrument_id, self.cfg, now)
         from ...services.liquidity_anchors import refresh_liquidity_anchors
         refresh_liquidity_anchors(self.db, instrument_id)
+        reconcile_ideas(self.db, instrument_id, self.cfg, now)
         mark_ideas_checkpoint(self.db, instrument_id)
         return result
 
@@ -572,9 +573,9 @@ class LtfEngine:
                 f"ltf:h1:last_close:{obs.instrument_id}", str(closed[-1].close_time)
             )
             from ...services.htf_ideas import mark_ideas_checkpoint, reconcile_ideas
-            reconcile_ideas(self.db, obs.instrument_id, self.cfg, closed[-1].close_time)
             from ...services.liquidity_anchors import refresh_liquidity_anchors
             refresh_liquidity_anchors(self.db, obs.instrument_id)
+            reconcile_ideas(self.db, obs.instrument_id, self.cfg, closed[-1].close_time)
             mark_ideas_checkpoint(self.db, obs.instrument_id)
         return result
 
@@ -2380,6 +2381,7 @@ class LtfEngine:
             "entry_zone_id": zone.id, "type": zone.type, "lower": zone.lower,
             "upper": zone.upper, "mid": zone.mid, "overlap": entry.overlap,
             "confirmed_at": zone.confirmed_at,
+            "formed_at": zone.formed_at,
             # §6.3: половина диапазона зоны — описательная характеристика
             "half": zone_half(zone.lower, zone.upper, zone.is_level,
                               rng, sc.direction.value),

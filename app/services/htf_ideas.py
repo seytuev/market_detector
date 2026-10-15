@@ -6,14 +6,101 @@ attempt history, so legacy ideas can be recovered without rewriting that history
 """
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import asdict, replace
+import base64
 import json
+import pickle
+import zlib
 
 from ..engine.ltf.relevance import VERSION, zone_at
 from ..engine.ltf.eligibility import evaluate_entry, evaluate_final
 from ..engine.ltf.ranges import RangeDraft
 from ..engine.ltf.context import context_complete, context_flags
-from ..models import ZoneStatus
+from ..models import Direction, ZoneStatus, now_ms
+from ..models_ltf import LtfEntryZone
+from .build_info import source_revision
+from .projection_cache import ProjectionCache, structural_version
+from .metrics import get_registry
+
+_PUBLISHED_PROJECTIONS = ProjectionCache(capacity=8)
+
+
+def _projection_read(source):
+    metrics = get_registry()
+    metrics.register('ideas_projection_reads', 'counter', ('source',))
+    metrics.counter('ideas_projection_reads', source=source)
+
+
+def _parent_inputs(db, instrument_id):
+    # HTF test depth/label anchors change on quotes but do not change an
+    # idea. Keep every parent field actually used by project_ideas instead.
+    return tuple(tuple(row) for row in db.conn.execute(
+        """SELECT DISTINCT z.id,z.type,z.timeframe,z.status,z.market_validity,
+                  z.needs_replay,z.display_until,
+                  json_extract(z.evidence,'$.invalidated_at') AS invalidated_at
+           FROM zone z JOIN ltf_observation o ON o.zone_id=z.id
+           WHERE o.instrument_id=? ORDER BY z.id""", (instrument_id,)).fetchall())
+
+
+def _projection_version(db, instrument_id, cfg, as_of):
+    inputs = structural_version(db, instrument_id, cfg)
+    inputs = (inputs[0], _parent_inputs(db, instrument_id), *inputs[2:])
+    return (inputs, VERSION,
+            (as_of + 1) // 3_600_000, source_revision())
+
+
+def _version_text(version):
+    return json.dumps(version, separators=(',', ':'))
+
+
+def _saved_projection(db, instrument_id, version):
+    raw = db.get_meta(f'htf_ideas:projection:{instrument_id}')
+    try:
+        saved = json.loads(raw) if raw else None
+        if isinstance(saved, dict) and saved.get('schema') == 1 and saved.get('version') == _version_text(version):
+            return saved
+    except (ValueError, TypeError):
+        pass
+    return None
+
+
+def projection_checkpoint_fresh(db, instrument_id, cfg, as_of):
+    return _published_projection(db, instrument_id, cfg, as_of) is not None
+
+
+def _live_publication_scope(db, instrument_id, as_of):
+    return (getattr(db._local, 'calculation_instrument', None) == instrument_id
+            and as_of // 3_600_000 == now_ms() // 3_600_000)
+
+
+def projection_checkpoint_needed(db, instrument_id, cfg, as_of):
+    return (_live_publication_scope(db, instrument_id, as_of)
+            and not projection_checkpoint_fresh(db, instrument_id, cfg, as_of))
+
+
+def _decode_projection(saved):
+    # Durable snapshots are compressed JSON, never executable pickle from a DB.
+    data = json.loads(zlib.decompress(base64.b64decode(saved['payload'], validate=True)))
+    facts = {int(zid): (LtfEntryZone(**{**zone, 'direction': Direction(zone['direction'])}), fact)
+             for zid, (zone, fact) in data['facts'].items()}
+    return data['ideas'], {int(zid): rows for zid, rows in data['links'].items()}, facts
+
+
+def _published_projection(db, instrument_id, cfg, as_of):
+    version = _projection_version(db, instrument_id, cfg, as_of)
+    cached = _PUBLISHED_PROJECTIONS.peek(db, instrument_id, version)
+    if cached is not None:
+        _projection_read('memory')
+    if cached is None:
+        saved = _saved_projection(db, instrument_id, version)
+        if saved is not None:
+            try:
+                cached = pickle.dumps(_decode_projection(saved), protocol=5)
+                _PUBLISHED_PROJECTIONS.put(db, instrument_id, version, cached)
+                _projection_read('durable')
+            except (ValueError, TypeError, KeyError, zlib.error):
+                pass
+    return cached
 
 # Терминальная причина не откатывается. Пропуск zone_at допустим только когда
 # исключение уже наступило к as_of. Пустой excluded_at историю не доказывает.
@@ -44,7 +131,7 @@ def _stored_terminal(zone, as_of):
 
 def _input_version(db, instrument_id):
     last = db.last_candle(instrument_id, 'H1')
-    return json.dumps([db.instrument_domain('seq:ltf', instrument_id), db.instrument_domain('seq:zones', instrument_id),
+    return json.dumps([db.instrument_domain('seq:ltf', instrument_id), _parent_inputs(db, instrument_id),
                        db.get_domain('seq:config'),
                        last.close_time if last else None,
                        db.latest_candle_revision_at(instrument_id, 'H1')])
@@ -68,7 +155,13 @@ def mark_ideas_checkpoint(db, instrument_id) -> None:
     db.set_meta(f"htf_ideas:inputs:{instrument_id}", _input_version(db, instrument_id))
 
 
-def project_ideas(db, instrument_id, cfg, as_of, *, zones=None, candles=None, live=False):
+def project_ideas(db, instrument_id, cfg, as_of, *, zones=None, candles=None, live=False,
+                  projection_inputs=None):
+    if live:
+        cached = _published_projection(db, instrument_id, cfg, as_of)
+        if cached is not None:
+            return pickle.loads(cached)
+        _projection_read('full')
     zones = zones if zones is not None else db.list_ltf_entry_zones(instrument_id=instrument_id)
     facts = {}
     pending = []
@@ -89,14 +182,35 @@ def project_ideas(db, instrument_id, cfg, as_of, *, zones=None, candles=None, li
             facts[z.id] = lifecycle.project(z, cfg)
     saved = {i["scenario_id"]: i for i in db.list_htf_ideas(instrument_id)}
     bundle = db.ltf_projection_bundle(instrument_id, as_of, live=live)
+    observations = db.list_ltf_observations(instrument_id=instrument_id)
+    if projection_inputs is not None:
+        times = [0]
+        times.extend(t for z in zones for t in (z.formed_at, z.confirmed_at,
+                     z.evidence.get('excluded_at')) if t is not None)
+        times.extend(o.activated_at for o in observations)
+        times.extend(o.updated_at for o in observations if o.state == 'closed_by_user')
+        times.extend(i['manual_closed_at'] for i in saved.values() if i.get('manual_closed_at') is not None)
+        for table, fields in (('scenarios_by_obs', ('created_at', 'cancelled_at')),
+                ('structure_events', ('occurred_at',)), ('movements', ('confirmed_at', 'end_at')),
+                ('entries', ('added_at',)), ('ranges', ('available_at',)),
+                ('tests', ('resolved_at',)), ('ltf_events', ('occurred_at',))):
+            times.extend(getattr(row, field) for rows in bundle[table].values()
+                         for row in rows for field in fields if getattr(row, field) is not None)
+        try:
+            projection_inputs['through'] = max(int(value) for value in times)
+        except (TypeError, ValueError):
+            projection_inputs['through'] = float('inf')
     ideas = []
     links = {}
-    for obs in db.list_ltf_observations(instrument_id=instrument_id):
+    for obs in observations:
         if obs.activated_at > as_of:
             continue
         parent = db.get_zone(obs.zone_id)
         if parent is None:
             continue
+        if projection_inputs is not None:
+            projection_inputs['through'] = max(projection_inputs['through'],
+                parent.display_until or 0, parent.evidence.get('invalidated_at') or 0)
         for sc in bundle["scenarios_by_obs"].get(obs.id, []):
             events = {e.id: e for e in bundle["structure_events"].get(sc.id, [])
                       if e.occurred_at <= as_of}
@@ -207,13 +321,19 @@ def project_ideas(db, instrument_id, cfg, as_of, *, zones=None, candles=None, li
 
 
 def reconcile_ideas(db, instrument_id, cfg, as_of):
+    # The worker has already calculated this exact projection. Publish it
+    # after commit so the first chart read does not repeat the historical joins.
+    scoped = _live_publication_scope(db, instrument_id, as_of)
+    before = _projection_version(db, instrument_id, cfg, as_of) if scoped else None
     with db.batch_writes(join_repository_writes=True):
         # Project detached lifecycle values from one snapshot. Re-reading every
         # original zone separately turns each H1 close into thousands of network
         # round trips on PostgreSQL, even when no lifecycle field has changed.
         zones = db.list_ltf_entry_zones(instrument_id=instrument_id)
         originals = {z.id: z for z in zones}
-        ideas, _, facts = project_ideas(db, instrument_id, cfg, as_of, zones=zones)
+        inputs = {}
+        ideas, links, facts = project_ideas(db, instrument_id, cfg, as_of, zones=zones,
+                                          projection_inputs=inputs)
         for z, fact in facts.values():
             original = originals[z.id]
             if fact["data_quality"] != "complete":
@@ -230,4 +350,36 @@ def reconcile_ideas(db, instrument_id, cfg, as_of):
                     # Resume observation, not the cancelled entry attempt.
                     db.update_ltf_observation(obs.id, state="waiting_structure", updated_at=as_of)
         db.set_meta(f"htf_ideas:version:{instrument_id}", VERSION)
+    published_snapshot = None
+    if scoped and inputs['through'] <= as_of and not db._batch_depth and not db._read_depth:
+        with db.read_tx():
+            after = _projection_version(db, instrument_id, cfg, as_of)
+            old_inputs, new_inputs = before[0], after[0]
+            # Only this instrument's LTF generation may change in this unit
+            # of work. A concurrent parent/config/source edit invalidates it.
+            if (old_inputs[0][1] == new_inputs[0][1]
+                    and old_inputs[1:] == new_inputs[1:]):
+                ids = {r['scenario_id']: r['id'] for r in db.conn.execute(
+                    'SELECT scenario_id,id FROM htf_idea WHERE instrument_id=?',
+                    (instrument_id,)).fetchall()}
+                published = [{**idea, 'id': ids.get(idea['scenario_id'], idea['id'])}
+                             for idea in ideas]
+                published_links = {zid: [{**row, 'idea_id': ids.get(row['scenario_id'], row['idea_id'])}
+                                         for row in rows] for zid, rows in links.items()}
+                encoded = pickle.dumps((published, published_links, facts), protocol=5)
+                payload = json.dumps(dict(ideas=published, links=published_links,
+                    facts={zid: (asdict(zone), fact) for zid, (zone, fact) in facts.items()}),
+                    separators=(',', ':'), ensure_ascii=False).encode()
+                published_snapshot = (after, encoded, json.dumps(dict(schema=1,
+                    version=_version_text(after), payload=base64.b64encode(
+                        zlib.compress(payload, level=3)).decode('ascii')), separators=(',', ':')))
+    if published_snapshot is not None:
+        version, encoded, durable = published_snapshot
+        committed = False
+        with db.batch_writes(join_repository_writes=True):
+            if _projection_version(db, instrument_id, cfg, as_of) == version:
+                db.set_meta(f'htf_ideas:projection:{instrument_id}', durable)
+                committed = True
+        if committed:
+            _PUBLISHED_PROJECTIONS.put(db, instrument_id, version, encoded)
     return ideas
