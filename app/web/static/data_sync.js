@@ -47,6 +47,9 @@ window.LFDataSync = (() => {
     const job = statusData.job;
     const recovery = (statusData.recovery || []).filter((r) => r.instrument_id === selected());
     const running = busy(job);
+    const currentChannels = statusData.channels || [];
+    const currentReady = currentChannels.filter((c) => c.status === 'ok').length;
+    const allReady = currentChannels.length > 0 && currentReady === currentChannels.length && !(statusData.recovery || []).length;
     button.disabled = running || !statusData.available || Date.now() < nextAllowed;
     button.textContent = running ? 'Обновление…' : 'Обновить данные';
     button.setAttribute('aria-busy', String(!!running));
@@ -61,10 +64,13 @@ window.LFDataSync = (() => {
     }
     else if (job) {
       if (job.status === 'succeeded') message = `Данные обновлены в ${format(job.finished_at)}`;
-      else if (job.status === 'partial') message = recovery.length && job.results.some((r) => r.source_status === 'ok') ?
-        'Свечи и цены получены; расчёт LTF продолжается' :
-        `Обновлено частично: ${job.results.filter((r) => r.status === 'ok').length} из ${job.channels_total}`;
+      else if (job.status === 'partial') message = (statusData.recovery || []).length && job.results.some((r) => r.source_status === 'ok') ?
+        `Свечи и цены получены; расчёт LTF продолжается · сейчас готовы ${currentReady} из ${currentChannels.length}` :
+        `Последняя попытка в ${format(job.finished_at)}: готовы ${job.results.filter((r) => r.status === 'ok').length} из ${job.channels_total}`;
       else if (job.status === 'failed') message = 'Не удалось обновить данные';
+      // Job results are a historical receipt. Background recovery may have
+      // completed since then; the current channels determine live freshness.
+      if (allReady && job.status !== 'succeeded') message = `Данные актуальны: ${currentReady} из ${currentChannels.length} каналов`;
     }
     const iid = selected();
     const channels = (statusData.channels || []).filter((c) => c.instrument_id === iid);
@@ -81,7 +87,7 @@ window.LFDataSync = (() => {
         `: ${Math.floor(100 * r.processed / r.total)}% (${r.processed.toLocaleString('ru-RU')} из ${r.total.toLocaleString('ru-RU')} H1)` : ' выполняется');
     }
     label.textContent = message;
-    label.dataset.state = running ? 'running' : job && job.status || 'idle';
+    label.dataset.state = running ? 'running' : allReady ? 'succeeded' : job && job.status || 'idle';
     if (detail) {
       detail.replaceChildren();
       for (const r of recovery) {
@@ -93,6 +99,11 @@ window.LFDataSync = (() => {
       }
       // §15: этапы задания (котировки → свежие свечи → восстановление истории)
       // с различением waiting_source / waiting_calculation
+      if (job && job.finished_at && !running) {
+        const row = document.createElement('div');
+        row.textContent = `Результат последней попытки: ${format(job.finished_at)}`;
+        detail.append(row);
+      }
       for (const s of (job && job.stages) || []) {
         const row = document.createElement('div');
         row.dataset.stage = s.name;

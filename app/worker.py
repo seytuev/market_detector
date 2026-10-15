@@ -691,6 +691,8 @@ class Worker:
 
     async def poll_once(self) -> None:
         for ins in self.db.get_instruments(enabled_only=True):
+            if ins.id in self._restoring_instruments:
+                continue
             try:
                 await self._poll_instrument(ins)
             except AdapterError as exc:
@@ -1314,6 +1316,8 @@ class Worker:
         if not self._ltf_active:
             return
         for ins in self.db.get_instruments(enabled_only=True):
+            if ins.id in self._restoring_instruments:
+                continue
             try:
                 await self._poll_ltf_instrument(ins)
             except Exception:

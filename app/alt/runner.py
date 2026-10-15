@@ -133,6 +133,8 @@ class AltRunner:
         self._live_sources: dict[int, Any] = {}
         self._live_intervals: dict[int, list[tuple[float, float]]] = {}
         self._stream_prices: dict[int, float] = {}
+        self._stream_received: dict[int, int] = {}
+        self._rest_quote_at: dict[int, int] = {}
 
     @property
     def cfg(self) -> AltConfig:
@@ -559,6 +561,15 @@ class AltRunner:
                         return
                     self._live_sources[src.id] = src
                     self._live_intervals[src.id] = intervals
+                    # The stream is the live source. REST only bootstraps or
+                    # recovers it; polling every asset every five seconds can
+                    # exhaust Binance's IP budget and stop the main screener.
+                    if src.venue == "binance":
+                        if stamp - self._stream_received.get(src.id, 0) < 30_000:
+                            return
+                        if stamp - self._rest_quote_at.get(src.id, 0) < 60_000:
+                            return
+                        self._rest_quote_at[src.id] = stamp
                     tick = await self.adapters[src.venue].last_price(src.symbol)
                     total += await asyncio.to_thread(observe_quote, self.db, src.id, tick.price, tick.event_at, tick.received_at,
                                                      price_kind=tick.price_kind, source_seq=tick.source_seq)
@@ -601,6 +612,7 @@ class AltRunner:
                         trade = message.get("data") or {}
                         if src is None or "p" not in trade or "T" not in trade:
                             continue
+                        self._stream_received[src.id] = now_ms()
                         price = float(trade["p"])
                         known_previous = self._stream_prices.get(src.id)
                         previous = price if known_previous is None else known_previous

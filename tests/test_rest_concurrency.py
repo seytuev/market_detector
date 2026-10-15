@@ -308,6 +308,10 @@ async def test_binance_adapter_captures_weight_and_marks_invalid_symbol():
         assert throttled.value.retry_after == 2
         assert adapter.last_weight == 6100
 
+        # A separate adapter isolates symbol validation from the active
+        # venue-wide cooldown; the throttled adapter must make no more calls.
+        await adapter.aclose()
+        adapter = BinanceSpotAdapter("https://test.binance")
         respx.get("https://test.binance/api/v3/klines").respond(
             400, json={"code": -1121, "msg": "Invalid symbol."})
         with pytest.raises(AdapterError) as invalid:

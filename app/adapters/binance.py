@@ -13,6 +13,8 @@
 """
 from __future__ import annotations
 
+import asyncio
+import re
 import time
 from typing import Optional
 
@@ -38,9 +40,34 @@ class BinanceSpotAdapter:
         self._client = client or httpx.AsyncClient(base_url=self._base, timeout=30.0, trust_env=trust_env)
         self._own_client = client is None
         # Этап 5 (§10): последний известный вес X-MBX-USED-WEIGHT-1M от
-        # источника (учёт лимитов; только наблюдение, троттлинг не меняется).
+        # источника; общий бюджет ниже действует и на прямые вызовы ALTs.
         # asyncio-атомарно: одно событие-циклическое присваивание.
         self.last_weight: Optional[int] = None
+        # All callers (including ALTs and paginated history) share the budget.
+        self._request_lock = asyncio.Lock()
+        self._weight_minute = -1
+        self._weight_used = 0
+        self._cooldown_until = 0.0
+        self._weight_budget = 4800
+
+    async def _reserve_request(self, path: str) -> None:
+        weight = {"/api/v3/trades": 25, "/api/v3/klines": 2,
+                  "/api/v3/exchangeInfo": 20}.get(path, 1)
+        async with self._request_lock:
+            stamp = time.time()
+            remaining = self._cooldown_until - time.monotonic()
+            if remaining > 0:
+                raise AdapterError("binance: rate_limited; ожидаем разрешения источника",
+                                   retry_after=remaining)
+            minute = int(stamp // 60)
+            if minute != self._weight_minute:
+                self._weight_minute, self._weight_used = minute, 0
+            if self._weight_used + weight > self._weight_budget:
+                remaining = (minute + 1) * 60 - stamp + 1
+                self._cooldown_until = time.monotonic() + remaining
+                raise AdapterError("binance: исчерпан безопасный бюджет REST",
+                                   retry_after=remaining)
+            self._weight_used += weight
 
     async def aclose(self) -> None:
         if self._own_client:
@@ -50,7 +77,7 @@ class BinanceSpotAdapter:
         """Binance Spot имеет публичные маркет-стримы (этап 3, спека §7)."""
         return True
 
-    def _capture_weight(self, resp: httpx.Response) -> None:
+    def _capture_weight(self, resp: httpx.Response) -> Optional[int]:
         """Запомнить использованный вес минуты (заголовок есть и у 200,
         и у 429); регистр имени заголовка не фиксирован."""
         for name in ("x-mbx-used-weight-1m", "X-MBX-USED-WEIGHT-1M"):
@@ -58,16 +85,21 @@ class BinanceSpotAdapter:
             if raw:
                 try:
                     self.last_weight = int(raw)
+                    return self.last_weight
                 except ValueError:
                     pass
                 return
 
     async def _get(self, path: str, params: dict) -> httpx.Response:
+        await self._reserve_request(path)
+        request_minute = self._weight_minute
         try:
             resp = await self._client.get(path, params=params)
         except httpx.HTTPError as e:
             raise AdapterError(f"binance: сеть/таймаут при {path}: {e}") from e
-        self._capture_weight(resp)
+        reported_weight = self._capture_weight(resp)
+        if request_minute == self._weight_minute and reported_weight is not None:
+            self._weight_used = max(self._weight_used, reported_weight)
         if resp.status_code != 200:
             # Явная ошибка без фолбэка: -1121 = несуществующий спотовый символ
             try:
@@ -81,9 +113,16 @@ class BinanceSpotAdapter:
                     f"{params.get('symbol')} (код -1121)",
                     invalid_symbol=True,
                 )
+            retry = retry_after_seconds(resp)
+            if resp.status_code in (418, 429):
+                banned = re.search(r"banned until (\d+)", msg)
+                if banned:
+                    retry = max(retry or 0, int(banned.group(1)) / 1000 - time.time() + 1)
+                self._cooldown_until = max(self._cooldown_until,
+                    time.monotonic() + max(1, retry or 15))
             raise AdapterError(
                 f"binance: HTTP {resp.status_code} при {path}: код={code} {msg}",
-                retry_after=retry_after_seconds(resp),
+                retry_after=retry,
             )
         return resp
 
