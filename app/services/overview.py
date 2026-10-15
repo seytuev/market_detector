@@ -1885,7 +1885,6 @@ def service_status(db: Database, settings) -> dict[str, Any]:
     now = now_ms()
     instruments = {i.id: i for i in db.get_instruments(enabled_only=True)}
 
-    db.prime_ltf_context_reads([o for rows in by_instrument.values() for o in rows])
     quotes = db.get_all_quotes()
     horizon = quote_stale_limit_ms(settings)
     stale_symbols: list[str] = []
