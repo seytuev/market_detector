@@ -1410,7 +1410,7 @@ class Database:
             (key,),
         )
 
-    def bump_domain(self, key: str) -> None:
+    def bump_domain(self, key: str, *, structural: bool = True) -> None:
         """Монотонный счётчик домена состояния (seq:quote:{iid},
         seq:candles:{iid}:{tf}, seq:zones, seq:scenario:{iid},
         seq:history:{iid}, seq:config). Дополняет state_seq: снимки отдают
@@ -1419,7 +1419,7 @@ class Database:
         В batch-режиме откладывается до конца unit of work — один инкремент
         на ключ за батч (тот же механизм, что у state_seq)."""
         keys = [key]
-        if key in ('seq:ltf', 'seq:zones'):
+        if structural and key in ('seq:ltf', 'seq:zones'):
             iid = getattr(self._local, 'calculation_instrument', None)
             keys.append(f'{key}:instrument:{iid}' if iid is not None else f'{key}:external')
         if self._batch_depth > 0:
@@ -1512,7 +1512,7 @@ class Database:
 
     # ---------- кэш горячих LTF-чтений (replay: per-candle N+1) ----------
 
-    def _bump_ltf_cache(self, table: Optional[str] = None, row_id: Optional[int] = None) -> None:
+    def _bump_ltf_cache(self, table: Optional[str] = None, row_id: Optional[int] = None, *, structural: bool = True) -> None:
         """Инвалидация кэша LTF-чтений — вызывается из каждого метода записи
         в ltf_* таблицы (insert/update/upsert/delete)."""
         with self._ltf_cache_lock:
@@ -1533,7 +1533,7 @@ class Database:
                             key = ('scenario_observation', obs_id)
                             self._ltf_row_versions[key] = self._ltf_row_versions.get(key, 0) + 1
         self.bump_state_seq()
-        self.bump_domain('seq:ltf')
+        self.bump_domain('seq:ltf', structural=structural)
 
     def _ltf_cached(self, key: tuple, loader) -> Any:
         """Выборка через кэш версии _ltf_cache_version. Списки отдаются
@@ -3736,7 +3736,7 @@ class Database:
             "UPDATE ltf_event SET delivered=1 WHERE id=?", (event_id,)
         )
         self._commit()
-        self._bump_ltf_cache('ltf_event')
+        self._bump_ltf_cache('ltf_event', structural=False)
 
     def update_ltf_event_chart(self, event_id: int, state: str,
                                bump_attempts: bool = False) -> None:
@@ -3754,7 +3754,7 @@ class Database:
                 (state, event_id),
             )
         self._commit()
-        self._bump_ltf_cache('ltf_event')
+        self._bump_ltf_cache('ltf_event', structural=False)
 
     def pending_ltf_charts(self, limit: int = 50) -> list[LtfEvent]:
         """События с доставленным текстом, но недоставленным графиком —

@@ -30,6 +30,32 @@ def test_quote_ticks_do_not_invalidate_closed_bar_ideas_checkpoint(db, instrumen
     assert not ideas_checkpoint_fresh(db, instrument_id)
 
 
+def test_delivery_and_chart_retries_do_not_invalidate_market_projections(db, instrument_id):
+    from app.models_ltf import LtfEvent
+    from app.services.htf_ideas import mark_ideas_checkpoint, ideas_checkpoint_fresh
+    from app.services.projection_cache import structural_version
+    _, obs, sc, _ = seed(db, instrument_id)
+    event, _ = db.insert_ltf_event(LtfEvent(id=None, observation_id=obs.id, scenario_id=sc.id,
+        kind='context_update', payload={'fact': 'counter_sweep'}, occurred_at=T,
+        detected_at=T, dedupe_key='delivery-projection'))
+    mark_ideas_checkpoint(db, instrument_id)
+    before = structural_version(db, instrument_id, DetectorConfig())
+    seq = db.get_state_seq(); journal = db.get_domain('seq:ltf')
+    db.mark_ltf_event_delivered(event.id)
+    db.update_ltf_event_chart(event.id, 'failed', bump_attempts=True)
+    assert db.get_state_seq() > seq and db.get_domain('seq:ltf') > journal
+    assert db.get_ltf_event(event.id).delivered
+    assert db.get_ltf_event(event.id).chart_state == 'failed'
+    assert db.get_ltf_event(event.id).chart_attempts == 1
+    assert ideas_checkpoint_fresh(db, instrument_id)
+    assert structural_version(db, instrument_id, DetectorConfig()) == before
+    db.insert_ltf_event(LtfEvent(id=None, observation_id=obs.id, scenario_id=sc.id,
+        kind='context_update', payload={'fact': 'htf_fvg50'}, occurred_at=T+1,
+        detected_at=T+1, dedupe_key='actual-market-fact'))
+    assert not ideas_checkpoint_fresh(db, instrument_id)
+    assert structural_version(db, instrument_id, DetectorConfig()) != before
+
+
 def test_projection_context_witnesses_preserve_the_original_journal_window(db, instrument_id):
     from app.models_ltf import LtfEvent
     from app.engine.ltf.context import context_flags, context_complete

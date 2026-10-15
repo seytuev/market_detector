@@ -89,6 +89,7 @@ def test_ideas_reconciliation_bulk_snapshot_and_atomic_publication(pg, monkeypat
         test_reconcile_uses_bulk_originals_without_per_zone_reads,
         test_reconcile_rolls_back_lifecycle_when_idea_publication_fails,
         test_bulk_publication_preserves_manual_close_and_avoids_point_reads,
+        test_delivery_and_chart_retries_do_not_invalidate_market_projections,
     )
     iid = pg.upsert_instrument(Instrument(None, 'BTC', 'binance', 'spot', 'BTCUSDT', 'USDT'))
     test_reconcile_uses_bulk_originals_without_per_zone_reads(pg, iid, monkeypatch)
@@ -96,6 +97,8 @@ def test_ideas_reconciliation_bulk_snapshot_and_atomic_publication(pg, monkeypat
     test_reconcile_rolls_back_lifecycle_when_idea_publication_fails(pg, other, monkeypatch)
     third = pg.upsert_instrument(Instrument(None, 'SOL', 'binance', 'spot', 'SOLUSDT', 'USDT'))
     test_bulk_publication_preserves_manual_close_and_avoids_point_reads(pg, third, monkeypatch)
+    fourth = pg.upsert_instrument(Instrument(None, 'LINK', 'binance', 'spot', 'LINKUSDT', 'USDT'))
+    test_delivery_and_chart_retries_do_not_invalidate_market_projections(pg, fourth)
 
 
 def test_ltf_context_batch_and_live_projection_cache(pg, monkeypatch):
