@@ -8,10 +8,14 @@ Coinglass — синхронный клиент. Ошибки поднимают
 from __future__ import annotations
 
 import asyncio
+from functools import lru_cache
+from threading import RLock
 
 from ..adapters.base import TIMEFRAME_MS
 from ..adapters.binance import BinanceSpotAdapter
 from ..adapters.coinglass import CoinglassClient
+
+_COINGLASS_CLIENT_LOCK = RLock()
 
 
 def fetch_binance_pairs(settings) -> set[str]:
@@ -65,7 +69,15 @@ def fetch_prices(settings, pairs: list[str], *, start_ms: int,
 
 def make_coinglass(settings) -> CoinglassClient:
     """Клиент Coinglass; без ключа — AuthError (честная недоступность)."""
-    return CoinglassClient(settings.coinglass_api_key, settings.coinglass_base_url)
+    with _COINGLASS_CLIENT_LOCK:
+        return _coinglass_client(settings.coinglass_api_key, settings.coinglass_base_url)
+
+
+@lru_cache(maxsize=4)
+def _coinglass_client(api_key: str, base_url: str) -> CoinglassClient:
+    # The engine runs every minute; identical 4h/daily history can be reused
+    # briefly instead of exhausting the provider quota on unchanged windows.
+    return CoinglassClient(api_key, base_url, cache_seconds=300)
 
 
 def fetch_liq(client: CoinglassClient, symbol: str, *, interval: str = "4h",

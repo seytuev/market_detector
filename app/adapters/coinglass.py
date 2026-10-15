@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 import json
+import time
+from collections import OrderedDict
+from copy import deepcopy
+from threading import RLock
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -50,18 +54,45 @@ def as_decimal(value) -> Decimal:
 
 class CoinglassClient:
     def __init__(self, api_key: str, base_url: str = "https://open-api-v4.coinglass.com",
-                 timeout: float = 20.0):
+                 timeout: float = 20.0, *, cache_seconds: float = 0):
         if not api_key:
             raise AuthError("ключ Coinglass не задан")
         self._key = api_key
         self._base = base_url.rstrip("/")
         self._timeout = timeout
         self.last_limits: dict[str, str] = {}
+        self._cache_seconds = max(0, cache_seconds)
+        self._cache = OrderedDict()
+        self._cache_lock = RLock()
 
     def __repr__(self) -> str:
         return "CoinglassClient(key=set)"
 
     def get(self, path: str, params: dict | None = None) -> dict:
+        if not self._cache_seconds:
+            return self._get(path, params)
+        key = (path, urllib.parse.urlencode(sorted((params or {}).items())))
+        # One account client is shared across cycles and manual refreshes.
+        # Serialize misses so concurrent callers cannot multiply source traffic.
+        with self._cache_lock:
+            now = time.monotonic()
+            cached = self._cache.get(key)
+            if cached is not None and cached[0] > now:
+                self._cache.move_to_end(key)
+                return deepcopy(cached[1])
+            body = self._get(path, params)
+            # Closed 4h/daily windows must be fetched again at their boundary,
+            # even if the short reuse period has not elapsed. Failures are never
+            # cached and an expired successful response never hides a failure.
+            until_boundary = 14_400 - time.time() % 14_400
+            expires = time.monotonic() + min(self._cache_seconds, until_boundary)
+            self._cache[key] = (expires, deepcopy(body))
+            self._cache.move_to_end(key)
+            while len(self._cache) > 128:
+                self._cache.popitem(last=False)
+            return body
+
+    def _get(self, path: str, params: dict | None = None) -> dict:
         query = urllib.parse.urlencode(params or {})
         url = self._base + path + (("?" + query) if query else "")
         req = urllib.request.Request(
