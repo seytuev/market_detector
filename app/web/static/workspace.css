@@ -14,9 +14,7 @@
 .sidebar .sidebar-bottom { gap: 5px; padding-top: 16px; border-top: 1px solid var(--lf-border); }
 .sidebar .conn-status { margin-top: 10px; gap: 8px; font-size: 10px; flex-wrap: wrap; }
 .sidebar #warmup-indicator { flex-basis: 100%; max-width: 100%; font-size: 9px; white-space: normal; overflow-wrap: anywhere; }
-.sidebar-toggle { border-radius: 9px; background: var(--lf-raised); border: 0; }
 .sidebar-head { gap: 0; }
-.sidebar-head .sidebar-toggle { align-self: flex-end; }
 @media (min-width: 768px) {
   html[data-sidebar="collapsed"] .sidebar .app-tab { min-height: 46px; padding: 12px; justify-content: center; }
   html[data-sidebar="collapsed"] .sidebar .nav-full { display: none; }

@@ -543,23 +543,27 @@ window.HTF = (() => {
 (() => {
   const btn = document.getElementById('sidebar-toggle');
   if (!btn) return;
+  const compact = window.matchMedia('(max-width: 1023px)');
+  const isCollapsed = () => document.documentElement.dataset.sidebar
+    ? document.documentElement.dataset.sidebar === 'collapsed'
+    : compact.matches;
+  const syncButton = () => {
+    const collapsed = isCollapsed();
+    btn.setAttribute('aria-expanded', String(!collapsed));
+    btn.title = collapsed ? 'Развернуть меню' : 'Свернуть меню';
+    btn.setAttribute('aria-label', btn.title);
+  };
   const apply = (state) => {
     if (state === 'collapsed') document.documentElement.dataset.sidebar = 'collapsed';
     else document.documentElement.dataset.sidebar = 'expanded';
     localStorage.setItem('lf:sidebar', state);
-    const collapsed = state === 'collapsed';
-    btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-    btn.title = collapsed ? 'Развернуть меню' : 'Свернуть меню';
-    btn.setAttribute('aria-label', btn.title);
+    syncButton();
   };
   btn.addEventListener('click', () => {
-    apply(document.documentElement.dataset.sidebar === 'collapsed' ? 'expanded' : 'collapsed');
+    apply(isCollapsed() ? 'expanded' : 'collapsed');
   });
-  if (document.documentElement.dataset.sidebar === 'collapsed') {
-    btn.setAttribute('aria-expanded', 'false');
-    btn.title = 'Развернуть меню';
-    btn.setAttribute('aria-label', btn.title);
-  }
+  compact.addEventListener('change', syncButton);
+  syncButton();
 })();
 
 /* Лента «События актива» сворачивается, освобождая место графику и «Зонам H1».

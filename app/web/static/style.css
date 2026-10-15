@@ -2759,14 +2759,19 @@ body.app-body {
    сайдбар скрыт целиком, состояния не действуют. */
 .sidebar-toggle {
   display: inline-flex; align-items: center; justify-content: center;
+  position: absolute; top: 30px; right: -16px; z-index: 1;
   width: 32px; height: 32px; flex: none;
-  border: 1px solid var(--lf-border); border-radius: var(--lf-radius-ctrl);
+  padding: 0;
+  border: 1px solid var(--lf-border); border-radius: 10px;
   background: var(--lf-surface); color: var(--lf-text2); cursor: pointer;
+  box-shadow: 0 2px 6px #0000000a;
+  transition: color .15s, background .15s, border-color .15s;
 }
-.sidebar-toggle:hover { color: var(--lf-text); background: var(--lf-raised); }
+.sidebar-toggle:hover { color: var(--lf-brand); background: var(--lf-raised); border-color: var(--lf-brand); }
+.sidebar-toggle:focus-visible { outline: 2px solid var(--lf-brand); outline-offset: 3px; }
 .sidebar-toggle .ico-expand { display: none; }
-html[data-sidebar="collapsed"] .sidebar-toggle .ico-collapse { display: none; }
-html[data-sidebar="collapsed"] .sidebar-toggle .ico-expand { display: block; }
+.sidebar-toggle[aria-expanded="false"] .ico-collapse { display: none; }
+.sidebar-toggle[aria-expanded="false"] .ico-expand { display: block; }
 @media (min-width: 768px) {
   html[data-sidebar="collapsed"] .sidebar { width: 64px; padding: 16px 6px; }
   html[data-sidebar="collapsed"] .shell { margin-left: 64px; }
@@ -3013,17 +3018,21 @@ html[data-sidebar="collapsed"] .sidebar-toggle .ico-expand { display: block; }
   }
 }
 
-/* Аудит оболочки. Кнопка меню под маркой, чтобы не резать подпись.
+/* Кнопка закреплена на границе панели и не занимает строку под маркой.
    Пустая верхняя полоса скрыта. На странице H1 полоса остаётся:
    в ней кнопка LTF. */
 .sidebar-head {
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
-  gap: 6px;
+  align-items: center;
+  gap: 0;
 }
 .sidebar-head .brand { align-self: stretch; min-width: 0; }
 .sidebar-head .sidebar-toggle { margin-top: 0; }
+@media (min-width: 768px) and (max-width: 1023px) {
+  html:not([data-sidebar="expanded"]) .sidebar-head .brand { justify-content: center; padding-inline: 0; }
+}
+html[data-sidebar="collapsed"] .sidebar-head .brand { justify-content: center; }
 .topbar:not(.ltf-topbar) { display: none; }
 .topbar.ltf-topbar .top-right { margin-left: auto; }
 @media (min-width: 768px) and (max-width: 1023px) {
