@@ -1967,6 +1967,9 @@ def service_status(db: Database, settings) -> dict[str, Any]:
 
 def _published_profile(method):
     import functools
+    import contextlib
+    samples = [0]
+    sampled_instruments = set()
     @functools.wraps(method)
     def snapshot(db, settings, *args, **kwargs):
         import copy
@@ -1975,7 +1978,16 @@ def _published_profile(method):
             view_settings = copy.copy(settings)
             raw = db.get_meta("settings:active_profile")
             view_settings.detector = DetectorConfig(**json.loads(raw)) if raw else copy.copy(settings.detector)
-            result = method(db, view_settings, *args, **kwargs)
+            samples[0] += 1
+            from .metrics import get_registry
+            iid = args[0] if args else None
+            take_sample = iid not in sampled_instruments or samples[0] % 32 == 0
+            if len(sampled_instruments) < 64:
+                sampled_instruments.add(iid)
+            sample = (get_registry().profile(f'view:{method.__name__}', instrument_id=iid)
+                      if take_sample else contextlib.nullcontext())
+            with sample:
+                result = method(db, view_settings, *args, **kwargs)
             if isinstance(result, dict):
                 result["config_version"] = int(db.get_meta("settings:config_version") or 0)
             return result

@@ -99,7 +99,7 @@ class MetricsRegistry:
                          for (file,line,fn),values in sorted(
                              pstats.Stats(profiler).stats.items(), key=lambda item: -item[1][3])[:25]]
             with self._lock:
-                if name in self._profiles or len(self._profiles) < 4:
+                if name in self._profiles or len(self._profiles) < 8:
                     self._profiles[name] = dict(details=details, functions=functions)
 
     def query(self, sql: str, seconds: float) -> None:
