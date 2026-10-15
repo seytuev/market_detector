@@ -7,6 +7,7 @@ let calls = 0, resolve, reject, painted = [];
 const state = {instrumentId: 1, chartMode: 'h1', candleVersion: 1,
   h1Req: 0, candleSeries: {setMarkers: markers => {painted = markers;}}};
 const context = {state, deskData: {current: {state_version: 1}},
+  analysisApi: (...args) => context.api(...args),
   window: {H1Layers: {queryString: () => 'points=recent', seriesMarkers: layers => layers.markers}},
   h1QueryExtra: () => ({}), api: () => {calls++; return new Promise((ok, fail) => {resolve = ok; reject = fail;});},
   structurePointColor: () => '', renderDeskEntries() {}, applyH1LegFrame() {}, drawZones() {}, hideH1Chrome() {}};

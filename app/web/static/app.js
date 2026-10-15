@@ -209,6 +209,11 @@ async function api(path, options = {}) {
   return result;
 }
 
+function analysisApi(path, options = {}) {
+  state.analysisAbort ||= new AbortController();
+  return api(path, {...options, signal: state.analysisAbort.signal});
+}
+
 // ---------------------------------------------------------------------------
 // Утилиты
 // ---------------------------------------------------------------------------
@@ -349,7 +354,7 @@ async function loadCandles() {
     && state.candles && state.candles.length
     ? HTF.captureChartRange(state.chart, state.candles)
     : null;
-  const response = await api(
+  const response = await analysisApi(
     `/api/candles?instrument_id=${id}&timeframe=${tf}&limit=${limit}&with_version=true`);
   if (req !== state.candleReq || id !== state.instrumentId || tf !== state.timeframe) return;
   // Новый ответ — {candles, state_version}. Старый процесс отдаёт сам список:
@@ -417,8 +422,8 @@ async function loadZones() {
   // §13 (этап 6b): opt-in конверт {zones, versions}; сгруппированный ответ
   // несёт ту же версию домена зон
   const [zonesRes, grouped] = await Promise.all([
-    api(`/api/zones?instrument_id=${id}&with_version=true`),
-    api(`/api/zones/grouped?instrument_id=${id}`),
+    analysisApi(`/api/zones?instrument_id=${id}&with_version=true`),
+    analysisApi(`/api/zones/grouped?instrument_id=${id}`),
   ]);
   if (id !== state.instrumentId || req !== state.zoneReq) return;
   const zones = Array.isArray(zonesRes) ? zonesRes : (zonesRes && zonesRes.zones) || [];
@@ -1648,8 +1653,8 @@ async function loadEvents() {
     ? `/api/events?limit=50&instrument_id=${state.instrumentId}&with_version=true`
     : '/api/events?limit=50&with_version=true';
   const [assetRes, allRes] = await Promise.all([
-    api(assetQ),
-    api('/api/events?limit=50&with_version=true'),
+    analysisApi(assetQ),
+    analysisApi('/api/events?limit=50&with_version=true'),
   ]);
   if (id !== state.instrumentId || req !== state.eventReq) return;
   const unwrap = (r) => (Array.isArray(r) ? r : (r && r.events) || []);
@@ -1739,7 +1744,7 @@ function displayPair(symbol) {
 async function loadCandidates() {
   const id = state.instrumentId;
   const req = ++state.candidateReq;
-  const list = (await api('/api/candidates')).filter(isHtf); // только HTF
+  const list = (await analysisApi('/api/candidates')).filter(isHtf); // только HTF
   if (id !== state.instrumentId || req !== state.candidateReq) return;
   reviewState.all = list;
   const mine = state.instrumentId
@@ -3346,6 +3351,8 @@ function syncInstrumentContext() {
 
 function selectAnalysisInstrument(id) {
   if (state.instrumentId === id) return;
+  state.analysisAbort?.abort();
+  state.analysisAbort = new AbortController();
   state.instrumentId = id;
   // A selection changes every visible domain together. Pending responses have
   // their own identity guards, but the already painted snapshot also belongs
@@ -3411,7 +3418,7 @@ window.LFDesk = {
         if (state.instrumentId !== numId) return;
         if (options.zoneId) await loadZoneDetail(Number(options.zoneId),false);
         if (options.at) focusAnalysisTime(Number(options.at));
-      } catch (err) { LFUI.error(err,'Анализ не загрузился',() => LFDesk.openInstrument(numId,{...options,history:false})); }
+      } catch (err) { if (err.name !== 'AbortError' && state.instrumentId === numId) LFUI.error(err,'Анализ не загрузился',() => LFDesk.openInstrument(numId,{...options,history:false})); }
     } else {
       showView('desk');
     }
@@ -3891,10 +3898,10 @@ async function fetchDeskExtras() {
   let failed = false;
   try {
     if (id) {
-      const bundle = await api(`/api/ltf/instruments/${id}/workspace?include_chart=false`);
+      const bundle = await analysisApi(`/api/ltf/instruments/${id}/workspace?include_chart=false`);
       assetsRes = bundle.assets;
       cur = bundle.view;
-    } else assetsRes = await api('/api/ltf/instruments');
+    } else assetsRes = await analysisApi('/api/ltf/instruments');
   } catch (e) {
     failed = true;
   }
@@ -4109,7 +4116,7 @@ async function fetchH1Markers(id, mode, q) {
   const token = ++state.h1Req;
   let layers = null;
   try {
-    layers = await api(`/api/ltf/instruments/${id}/structure?${q}`);
+    layers = await analysisApi(`/api/ltf/instruments/${id}/structure?${q}`);
     if (token !== state.h1Req || id !== state.instrumentId || state.chartMode !== mode) return;
     if (layers.snapshot?.instrument_id != null && layers.snapshot.instrument_id !== id)
       throw new Error('Structure response belongs to another instrument');
