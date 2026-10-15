@@ -8,6 +8,7 @@ from copy import deepcopy
 import functools
 import json
 import math
+import pickle
 import sqlite3
 import threading
 import time
@@ -2855,7 +2856,12 @@ class Database:
             moment = as_of if as_of is not None else now_ms()
             version = (self.instrument_domain('seq:ltf', instrument_id),
                        moment // 3_600_000)
-            return deepcopy(_IDEA_BUNDLES.get(self, instrument_id, version, load))
+            # Store an immutable snapshot once. deepcopy recursively walks
+            # hundreds of thousands of models on every read; deserializing
+            # our own in-process bytes keeps independent values much faster.
+            encoded = _IDEA_BUNDLES.get(self, instrument_id, version,
+                                       lambda: pickle.dumps(load(), protocol=5))
+            return pickle.loads(encoded)
         return self._ltf_cached(("ltf_proj", instrument_id, as_of), load)
 
     def _bundle_by_scenario(self, instrument_id: int, sql: str, convert, *, parameters=None) -> dict[int, list]:

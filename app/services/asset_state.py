@@ -506,12 +506,15 @@ def _zones(db, instrument_id: int, leg, pd, setup) -> list[dict]:
     half_low, half_high = (pd["lower"], pd["eq"]) if bull else (pd["eq"], pd["upper"])
     origin = leg.get("origin_at")
     window = None if origin is None else int(origin) - _LOOKBACK_BARS * H1_MS
-    rows = db.conn.execute(
-        """SELECT type, lower, upper, formed_at, confirmed_at, validity
+    query = """SELECT type, lower, upper, formed_at, confirmed_at, validity
            FROM ltf_entry_zone
-           WHERE instrument_id=? AND direction=? AND confirmed_at IS NOT NULL""",
-        (instrument_id, direction),
-    ).fetchall()
+           WHERE instrument_id=? AND direction=? AND confirmed_at IS NOT NULL
+             AND lower<=? AND upper>=?"""
+    params = [instrument_id, direction, half_high, half_low]
+    if window is not None:
+        query += ' AND (formed_at IS NULL OR formed_at>=?)'
+        params.append(window)
+    rows = db.conn.execute(query, params).fetchall()
     found = []
     seen = set()
     for row in rows:
