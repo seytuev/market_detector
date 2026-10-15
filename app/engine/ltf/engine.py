@@ -1959,7 +1959,7 @@ class LtfEngine:
 
     def _scan_context_zones(
         self, obs, sc, avail, up_to, candle, now, result: LtfTickResult,
-        *, recover: bool = False,
+        *, recover: bool = False, history=None,
     ) -> None:
         """OB/FVG действующего контекста по свечам, уже закрытым к ``candle``.
 
@@ -1981,7 +1981,7 @@ class LtfEngine:
                  and previous[0] == signature and previous[1] <= candle.close_time + 1
                  else None)
         det = detect_entry_zones(up_to, movement, avail, sc.direction, self.cfg,
-                                 confirmed_after=since,
+                                 confirmed_after=since, history=history,
                                  base_index=self._batch.base_index if self._batch is not None else None)
         linked: dict[tuple, int] = {}
         for zid in self._scenario_zone_ids(sc.id):
@@ -1995,7 +1995,12 @@ class LtfEngine:
         movements = self.db.list_ltf_movements(sc.id)
         tests = self.db.list_ltf_liquidity_tests(scenario_id=sc.id)
         historical: list[int] = []
-        for z in det.zones:
+        bindings = []
+        for idx, z in enumerate(det.zones):
+            if recover and idx % 128 == 0:
+                checkpoint = getattr(self, '_bar_checkpoint', None)
+                if checkpoint is not None:
+                    checkpoint()
             if z.type not in ("OB", "FVG"):
                 continue
             # Подтверждение — граница закрытия третьей свечи (close_time + 1).
@@ -2034,7 +2039,7 @@ class LtfEngine:
             added_at = z.confirmed_at if (
                 recover or z.confirmed_at <= candle.close_time
             ) else candle.close_time
-            self.db.upsert_ltf_scenario_entry(LtfScenarioEntry(
+            bindings.append(LtfScenarioEntry(
                 id=None, scenario_id=sc.id, entry_zone_id=ez.id,
                 range_version=ver, eligible=ev.eligible, overlap=ev.overlap,
                 state=ev.state, reason=ev.reason,
@@ -2042,10 +2047,12 @@ class LtfEngine:
             ))
             if recover or z.confirmed_at <= candle.close_time:
                 historical.append(ez.id)
+        self.db.upsert_ltf_scenario_entries(bindings)
         if historical:
             self._mark_announced(sc.id, historical)
         self._context_zone_scans[sc.id] = (signature, candle.close_time + 1)
 
+    @_activation_session
     def rescan_active_context_zones(
         self, instrument_id: Optional[int] = None,
     ) -> dict[str, Any]:
@@ -2055,6 +2062,7 @@ class LtfEngine:
         первое подтверждение не сдвигается, ручные поля существующих строк
         не переписываются. Новые строки не создают текущих уведомлений.
         """
+        samples = {}
         added: list[dict[str, Any]] = []
         scenarios = 0
         for obs in self.db.list_ltf_observations(instrument_id=instrument_id):
@@ -2063,37 +2071,44 @@ class LtfEngine:
             sc = self.db.get_active_ltf_scenario(obs.id)
             if sc is None or sc.state in ("cancelled", "closed"):
                 continue
-            candles = [
-                c for c in self.db.get_candles(obs.instrument_id, "H1")
-                if c.closed
-            ]
-            if not candles:
-                continue
-            scenarios += 1
-            before = set(self._scenario_zone_ids(sc.id))
-            candle = candles[-1]
-            self._scan_context_zones(
-                obs, sc, [], candles, candle, candle.close_time,
-                LtfTickResult(), recover=True,
-            )
-            for zid in self._scenario_zone_ids(sc.id) - before:
-                zone = self.db.get_ltf_entry_zone(zid)
-                if zone is None or zone.type not in ("OB", "FVG"):
+            if obs.instrument_id not in samples:
+                candles = self.db.get_candles(obs.instrument_id, 'H1')
+                if not candles:
                     continue
-                added.append({
-                    "id": zone.id,
-                    "scenario_id": sc.id,
-                    "type": zone.type,
-                    "direction": zone.direction.value,
-                    "lower": zone.lower,
-                    "upper": zone.upper,
-                    "formed_at": zone.formed_at,
-                    "confirmed_at": zone.confirmed_at,
-                    "validity": zone.validity,
-                    "relation": (zone.evidence or {}).get("relation"),
-                    "break_at": (zone.evidence or {}).get("break_at"),
-                    "base_at": (zone.evidence or {}).get("base_at"),
-                })
+                from .entries import EntryHistory
+                prime_activation_history(self.db, obs.instrument_id, candles)
+                samples[obs.instrument_id] = candles, EntryHistory(candles)
+            candles, history = samples[obs.instrument_id]
+            with self.db.batch_writes(join_repository_writes=True):
+                checkpoint = getattr(self, '_bar_checkpoint', None)
+                if checkpoint is not None:
+                    checkpoint()
+                self.db._prime_ltf_replay_cache(obs.instrument_id)
+                scenarios += 1
+                before = set(self._scenario_zone_ids(sc.id))
+                candle = candles[-1]
+                self._scan_context_zones(
+                    obs, sc, [], candles, candle, candle.close_time,
+                    LtfTickResult(), recover=True, history=history,
+                )
+                for zid in self._scenario_zone_ids(sc.id) - before:
+                    zone = self.db.get_ltf_entry_zone(zid)
+                    if zone is None or zone.type not in ("OB", "FVG"):
+                        continue
+                    added.append({
+                        "id": zone.id,
+                        "scenario_id": sc.id,
+                        "type": zone.type,
+                        "direction": zone.direction.value,
+                        "lower": zone.lower,
+                        "upper": zone.upper,
+                        "formed_at": zone.formed_at,
+                        "confirmed_at": zone.confirmed_at,
+                        "validity": zone.validity,
+                        "relation": (zone.evidence or {}).get("relation"),
+                        "break_at": (zone.evidence or {}).get("break_at"),
+                        "base_at": (zone.evidence or {}).get("base_at"),
+                    })
         return {"scenarios": scenarios, "zones_added": len(added), "added": added}
 
     def _recover_context_zones_once(self, instrument_id: int) -> None:
