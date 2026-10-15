@@ -25,8 +25,7 @@
       handleScroll: false, handleScale: false,
     });
     const series = chart.addCandlestickSeries({
-      upColor: theme.up, downColor: theme.down, wickUpColor: theme.up,
-      wickDownColor: theme.down, borderVisible: false,
+      ...HTF.candleOptions(theme),
       priceFormat: { type: 'price', precision, minMove: 10 ** -precision },
     });
     series.setData(bars);

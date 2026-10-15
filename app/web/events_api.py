@@ -42,9 +42,9 @@ def register_events_routes(app: FastAPI, db, settings, require_auth) -> None:
         age, stale = _market_timing(market, health)
         if snap is None:
             return {
-                "ready": False,
-                "empty_reason": "Оценка ещё не выполнялась",
-                "market_line": "Оценка ещё не выполнялась",
+                "ready": market is not None,
+                "empty_reason": None if market else "Оценка ещё не выполнялась",
+                "market_line": market["market_line"] if market else "Оценка ещё не выполнялась",
                 "service_line": _service_from_health(health),
                 "direction_note": market_direction(None),
                 "strategy_gates": [],
@@ -226,9 +226,10 @@ def _market_timing(market: dict | None, health: dict) -> tuple[int | None, bool 
     """Возраст последней оценки; устаревший снимок не представлять актуальным (§11.4)."""
     if market is None:
         return None, None
-    age = (now_ms() - int(market["evaluated_at"])) // 1000
+    elapsed = (now_ms() - int(market["evaluated_at"])) // 1000
+    age = max(0, elapsed)
     cycle = health.get("cycle_seconds") or _DEFAULT_CYCLE_SECONDS
-    return age, age > 2 * int(cycle)
+    return age, age > 2 * int(cycle) or elapsed < -int(cycle)
 
 
 def _bundles(db, limit: int = 50) -> list[dict]:
@@ -276,6 +277,10 @@ def _market_calendar(market: dict | None) -> dict | None:
         return None
     time_ctx = market.get("time_context") or {}
     upcoming = []
+    for key, kind in (("next_h1_close_ms", "h1_close"),
+                      ("next_liquidation_close_ms", "liquidation_window_close")):
+        if time_ctx.get(key) is not None:
+            upcoming.append({"kind": kind, "at": time_ctx[key]})
     next_day = time_ctx.get("next_day_start_ms")
     if next_day is not None:
         upcoming.append({

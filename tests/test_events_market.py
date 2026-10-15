@@ -329,6 +329,7 @@ def test_contract_keys_exact():
         "coverage", "market_line", "subtitle", "conflict_note", "arrow",
         "reasons", "unknown_dependencies", "active_facts", "time_context",
         "statistics", "btc_background", "factor_agreement", "next_review_at",
+        "liquidations", "memory_policy", "methodology", "time_rules_active",
     }
     assert out["scope"] == "crypto_market"
     assert out["timezone"] == "Europe/Moscow"

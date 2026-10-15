@@ -63,13 +63,15 @@ def upsert_buckets(db, *, scope_id: str, series: str, interval: str,
             db.conn.executemany(_BUCKET_UPSERT, rows)
 
 
-def load_buckets(db, scope_id: str, series: str, interval: str = "1d") -> list[dict]:
+def load_buckets(db, scope_id: str, series: str, interval: str = "1d", *,
+                 since_ms: int | None = None) -> list[dict]:
+    extra = " AND bucket_start>=?" if since_ms is not None else ""
+    params = (scope_id, series, interval) + ((since_ms,) if since_ms is not None else ())
     rows = db.conn.execute(
         """SELECT bucket_start, bucket_end, payload_json, quality, available_at
            FROM events_bucket
-           WHERE scope_id=? AND series=? AND interval=?
-           ORDER BY bucket_start""",
-        (scope_id, series, interval),
+           WHERE scope_id=? AND series=? AND interval=?""" + extra + " ORDER BY bucket_start",
+        params,
     ).fetchall()
     out = []
     for row in rows:
@@ -331,8 +333,8 @@ def query_facts(db, *, state: str | None = None,
     sql = "SELECT * FROM events_fact"
     params: list = []
     if active_now_ms is not None:
-        sql += " WHERE state IN ('provisional','confirmed') AND valid_until > ?"
-        params.append(active_now_ms)
+        sql += " WHERE state IN ('provisional','confirmed') AND valid_until > ? AND occurred_at<=? AND available_at<=?"
+        params.extend((active_now_ms, active_now_ms, active_now_ms))
     elif state is not None:
         sql += " WHERE state=?"
         params.append(state)
@@ -451,15 +453,21 @@ def put_basket(db, *, version: str, day_start_ms: int, payload: dict) -> None:
 
 
 def latest_basket(db) -> dict | None:
-    row = db.conn.execute(
-        "SELECT * FROM events_basket ORDER BY day_start_ms DESC LIMIT 1",
-    ).fetchone()
-    if row is None:
+    return basket_at(db, 9_223_372_036_854_775_807)
+
+
+def basket_at(db, at_ms: int) -> dict | None:
+    rows = db.conn.execute(
+        """SELECT * FROM events_basket WHERE day_start_ms=(
+               SELECT MAX(day_start_ms) FROM events_basket WHERE day_start_ms<=?
+           ) ORDER BY version""",
+        (at_ms,),
+    ).fetchall()
+    if not rows:
         return None
-    payload = json.loads(row["payload_json"])
-    payload["version"] = row["version"]
-    payload["day_start_ms"] = row["day_start_ms"]
-    return payload
+    # A failed empty bootstrap must not hide the recovered basket for that day.
+    row = max(rows, key=lambda r: bool(json.loads(r["payload_json"]).get("members")))
+    return {**json.loads(row["payload_json"]), "version": row["version"], "day_start_ms": row["day_start_ms"]}
 
 
 def set_source_state(db, *, source: str, quality: str, detail: str | None,

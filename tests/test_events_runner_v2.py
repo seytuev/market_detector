@@ -64,7 +64,7 @@ def _liq_rows(now: int, *, count: int = 180, long_usd: float = 100.0,
     return rows
 
 
-def _legacy_day(now: int, back: int = 2) -> int:
+def _legacy_day(now: int, back: int = 1) -> int:
     return (now - back * DAY) // DAY * DAY
 
 

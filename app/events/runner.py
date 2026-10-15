@@ -11,8 +11,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import uuid
+import threading
 from dataclasses import asdict
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from ..adapters.coinglass import (
     AuthError,
@@ -32,6 +34,8 @@ from .basket import (
     msk_day_return,
 )
 from .evaluate import EvaluationInput, FundingBar, LiqBar, OiBar, PriceBar, evaluate, market_direction
+from .episodes import liquidation_history
+from .btc_context import btc_liquidation_oi
 from .market import MarketInput, evaluate_market
 from .mathutil import DAY_MS, median
 from .rules import ENGINE_RULE_VERSION, get_rule, registry_for_eval
@@ -45,6 +49,8 @@ from .timeutil import (
     msk_hour,
     msk_weekday,
 )
+from .validation import complete_window, finite_number, hourly_bars
+from .revalidation import MODEL_VERSION, basis_for_window, broken_since, merge_basis, phase_order, price_check
 
 log = logging.getLogger(__name__)
 
@@ -73,12 +79,101 @@ FUND_SCOPE = scope_id("coinglass", "funding-ohlc-v4", "Binance", "BTCUSDT", "ind
 
 HOUR_MS = 3_600_000
 _PRICE_DAYS = 35          # окно часовых баров корзины (покрывает baseline 30 дней)
-_LIQ_FRESH_MS = 8 * HOUR_MS  # свежесть оконных данных ликвидаций (§4)
 
 _CG_ERRORS = (AuthError, CapabilityError, CoinglassError)
+_DATA_ERRORS = (ValueError, TypeError, KeyError, InvalidOperation, OverflowError)
+
+
+def _ingest_buckets(db, *, scope: str, series: str, interval: str, rows,
+                    parse, now: int, errors: list) -> int:
+    """Validate one response, quarantine bad timestamps and pipeline history writes."""
+    buckets = {}
+    accepted = 0
+    width = {"1d": DAY_MS, "4h": 4 * HOUR_MS}[interval]
+    if not isinstance(rows, (list, tuple)):
+        errors.append(CoinglassError("источник не вернул список наблюдений"))
+        return 0
+    for row in rows:
+        try:
+            bucket = parse(row, now)
+            buckets[bucket["start"]] = bucket
+            accepted += 1
+        except _DATA_ERRORS:
+            errors.append(CoinglassError("непригодная строка источника"))
+            try:
+                start = _source_time(row, width, now)
+                buckets[start] = {"start": start, "quality": "integrity_error", "payload": {"invalid": True}}
+            except _DATA_ERRORS:
+                pass
+    store.upsert_buckets(db, scope_id=scope, series=series, interval=interval,
+                         buckets=buckets.values(), available_at=now)
+    return accepted
+
+
+def _liquidation_bucket(row, now: int, *, interval_ms: int = DAY_MS) -> dict:
+    start = _source_time(row, interval_ms, now)
+    long_usd, short_usd = (as_decimal(row[k]) for k in
+                          ("aggregated_long_liquidation_usd", "aggregated_short_liquidation_usd"))
+    if not finite_number(long_usd) or not finite_number(short_usd):
+        raise ValueError("invalid liquidation volume")
+    return {"start": start, "quality": "ok", "payload": {"long_usd": long_usd, "short_usd": short_usd}}
+
+
+def _oi_bucket(row, now: int) -> dict:
+    start = _source_time(row, DAY_MS, now)
+    open_, high, low, close = (as_decimal(row[k]) for k in ("open", "high", "low", "close"))
+    if (not all(finite_number(v) for v in (open_, high, low, close))
+            or min(open_, close) < low or max(open_, close) > high):
+        raise ValueError("invalid OI OHLC")
+    return {"start": start, "quality": "ok", "payload": {"open": open_, "high": high, "low": low, "close": close}}
+
+
+def _funding_bucket(row, now: int) -> dict:
+    start = _source_time(row, DAY_MS, now)
+    close = as_decimal(row["close"])
+    if not close.is_finite():
+        raise ValueError("invalid funding")
+    return {"start": start, "quality": "ok", "payload": {
+        "close_percent": close, "rate_kind": "indicative", "unit": "percent"}}
+
+
+def _source_time(row, interval_ms: int, now: int) -> int:
+    start = int(row["time"])
+    if start < 0 or start % interval_ms or start > now:
+        raise ValueError("invalid bucket time")
+    return start
 
 
 def run_cycle(db, settings, *, fetcher=None, now_ms: int | None = None) -> dict:
+    # A manual refresh and the background worker may run in different processes.
+    from ..services.runtime import assert_owner, claim_owner, release_owner, renew_owner
+    key = "events:cycle_lease"
+    claim = claim_owner(db, key, {"instance_id": uuid.uuid4().hex, "role": "events"}, lease_ms=120_000)
+    if not claim["owned"]:
+        saved = store.latest_assessment(db) or {}
+        return {"in_progress": True, "assessment_id": saved.get("assessment_id"),
+                "direction": saved.get("direction", "unknown"), "market_line": saved.get("market_line"),
+                "quality": "in_progress"}
+    stopped = threading.Event()
+    def heartbeat():
+        while not stopped.wait(20):
+            try:
+                renew_owner(db, key, claim["owner"], lease_ms=120_000)
+            except Exception:
+                log.exception("events: не удалось продлить владение циклом")
+                return
+    keeper = threading.Thread(target=heartbeat, name="events-lease", daemon=True)
+    keeper.start()
+    try:
+        return _run_cycle(db, settings, fetcher=fetcher, now_ms=now_ms,
+                          ownership_check=lambda: assert_owner(db, key, claim["owner"]))
+    finally:
+        stopped.set()
+        keeper.join(timeout=1)
+        release_owner(db, key, claim["owner"])
+
+
+def _run_cycle(db, settings, *, fetcher=None, now_ms: int | None = None, ownership_check=None) -> dict:
     from ..models import now_ms as clock
 
     now = now_ms if now_ms is not None else clock()
@@ -93,7 +188,8 @@ def run_cycle(db, settings, *, fetcher=None, now_ms: int | None = None) -> dict:
 
     # Календарь не зависит от внешних источников; сначала гасим просроченное
     _set_source(db, "calendar", "ok", None, now)
-    transitions_marker = _transitions_marker(db)
+    # Retry transitions left by an interrupted calculation; publication keys deduplicate them.
+    transitions_marker = int(db.get_meta("events:transitions_processed") or 0)
     memory.expire_due(db, now)
 
     # --- Корзина дня МСК и пары Binance ---
@@ -125,11 +221,15 @@ def run_cycle(db, settings, *, fetcher=None, now_ms: int | None = None) -> dict:
         _funding_cycle(db, cg, fetcher, now, legacy)
 
     # --- Факты памяти из состояния ликвидаций (§5, §6) ---
+    if ownership_check:
+        ownership_check()
+    observed_keys = None
     if liq is not None and liq.get("available"):
-        _facts_cycle(db, settings, liq, metrics, bars_by_symbol, basket, now)
+        observed_keys = _facts_cycle(db, settings, liq, metrics, bars_by_symbol, basket, now)
+    _revalidate_facts(db, settings, bars_by_symbol, basket, now, observed_keys=observed_keys)
 
     # --- Временной контекст МСК и статистика корзины ---
-    time_ctx = _time_ctx(basket, bars_by_symbol, now)
+    time_ctx = _time_ctx(basket, bars_by_symbol, now, min_coverage=float(settings.events_basket_min_coverage))
     stats = _stats(db, settings)
 
     # --- Оценка рынка ---
@@ -145,6 +245,7 @@ def run_cycle(db, settings, *, fetcher=None, now_ms: int | None = None) -> dict:
         source_states=store.get_source_states(db),
         registry=registry_for_eval(),
         coverage_threshold=float(getattr(settings, "events_basket_min_coverage", 0.8)),
+        memory_hours=int(settings.events_memory_hours),
     ))
 
     # --- Legacy BTC-путь: прежний расчёт, помеченный как фон BTC ---
@@ -159,39 +260,52 @@ def run_cycle(db, settings, *, fetcher=None, now_ms: int | None = None) -> dict:
         assessment["btc_background"] = {
             "direction_note": market_direction(snapshot),
             "label": "Фон BTC",
+            "evaluated_at": snapshot.get("evaluated_at"),
+            "stale": now - int(snapshot.get("evaluated_at") or 0) > 2 * int(settings.events_poll_seconds) * 1000,
         }
+    evidence = btc_liquidation_oi(_load(db, LIQ_SCOPE, "liq"), _load(db, OI_COIN_SCOPE, "oi_coin"), now=now)
+    if snapshot or evidence["current"] or evidence["recent_events"]:
+        assessment["btc_background"] = {**(assessment["btc_background"] or {}), "evidence": evidence,
+                                        "data_stale": evidence["state"] == "unknown"}
 
-    prev = store.latest_assessment(db)
-    assessment["assessment_id"] = _assessment_id(assessment, now)
-    if store.get_assessment(db, assessment["assessment_id"]) is None:
-        store.insert_assessment(db, assessment)
+    # Assessment, publications and their checkpoint become visible together.
+    with db.batch_writes():
+        if ownership_check:
+            ownership_check()
+        assessment["available_at"] = now if now_ms is not None else clock()
+        prev = store.latest_assessment(db)
+        assessment["assessment_id"] = _assessment_id(assessment, now)
+        if store.get_assessment(db, assessment["assessment_id"]) is None:
+            store.insert_assessment(db, assessment)
 
-    # --- Публикации: переходы цикла + существенные изменения (§9) ---
-    transitions = [
-        t for t in store.fact_transitions_since(db, 0) if t["id"] > transitions_marker
-    ]
-    publish.process_cycle(
-        db, settings, prev=prev, curr=assessment, transitions=transitions, now_ms=now,
-    )
+        # --- Публикации: переходы цикла + существенные изменения (§9) ---
+        transitions = [
+            t for t in store.fact_transitions_since(db, 0) if t["id"] > transitions_marker
+        ]
+        publish.process_cycle(
+            db, settings, prev=prev, curr=assessment, transitions=transitions, now_ms=now,
+        )
+        db.set_meta("events:transitions_processed", str(_transitions_marker(db)))
+
+        sources_state = store.get_source_states(db)
+        limits = dict(getattr(cg, "last_limits", {}) or limits) if cg is not None else limits
+        bad = [f"{s}: {v['quality']}" for s, v in sources_state.items()
+               if v["quality"] not in ("ok", "partial")]
+        health = {
+            "quality": assessment["quality"],
+            "detail": "; ".join(bad) if bad else None,
+            "plan": plan,
+            "capability": CAPABILITY,
+            "limits": limits,
+            "evaluated_at": now,
+            "sources": sources_state,
+            "cycle_seconds": getattr(settings, "events_poll_seconds", 60),
+            "basket_version": assessment["basket_version"],
+        }
+        if not legacy["loaded"]:
+            health["legacy_stale"] = True
+        db.set_meta("events:health", _tiny(health))
     publish.flush_due(db, settings, now)
-
-    sources_state = store.get_source_states(db)
-    bad = [f"{s}: {v['quality']}" for s, v in sources_state.items()
-           if v["quality"] not in ("ok", "partial")]
-    health = {
-        "quality": assessment["quality"],
-        "detail": "; ".join(bad) if bad else None,
-        "plan": plan,
-        "capability": CAPABILITY,
-        "limits": limits,
-        "evaluated_at": now,
-        "sources": sources_state,
-        "cycle_seconds": getattr(settings, "events_poll_seconds", 60),
-        "basket_version": assessment["basket_version"],
-    }
-    if not legacy["loaded"]:
-        health["legacy_stale"] = True
-    db.set_meta("events:health", _tiny(health))
     return {
         "health": health,
         "market_line": assessment["market_line"],
@@ -273,9 +387,13 @@ def _basket_of_day(db, settings, fetcher: dict, day_start: int,
                    pairs: set, pairs_state: str) -> Basket:
     """Состав фиксирован на начало дня МСК: корзина дня переиспользуется (§3)."""
     latest = store.latest_basket(db)
-    if latest and latest.get("day_start_ms") == day_start:
+    if latest and latest.get("day_start_ms") == day_start and latest.get("members"):
         return _basket_from_payload(latest)
-    listings = _cmc_listings(db, fetcher)
+    try:
+        listings = _cmc_listings(db, fetcher)
+    except Exception:
+        log.warning("events: состав CMC недоступен")
+        listings = None
     if listings:
         basket = build_basket(
             listings, pairs, size=int(settings.events_basket_size),
@@ -350,7 +468,8 @@ def _prices_cycle(db, settings, fetcher: dict, basket: Basket,
         _set_source(db, "price", "unavailable", str(exc), now)
         return bars_by_symbol, None
     for member in basket.members:
-        bars = bars_by_pair.get(member.pair) or []
+        raw_bars = bars_by_pair.get(member.pair) or []
+        bars = sorted(hourly_bars(raw_bars).values(), key=lambda b: b["start"])
         bars_by_symbol[member.symbol] = bars
         # A 20-member basket has ~17,000 historical H1 rows. Individual
         # autocommit round trips made a nominal 60-second cycle take minutes.
@@ -362,20 +481,21 @@ def _prices_cycle(db, settings, fetcher: dict, basket: Basket,
                       "quality": bar.get("quality", "ok")} for bar in bars),
         )
     db._commit()
-    if failed and len(failed) == len(pairs):
+    metrics = basket_metrics(
+        basket, bars_by_symbol, now_ms=now,
+        max_age_ms=int(settings.events_price_max_age_seconds) * 1000,
+    )
+    if not metrics["coverage"]["ok"]:
         quality = "unavailable"
-    elif failed:
+    elif failed or metrics["coverage"]["ratio"] < 1:
         quality = "partial"
     else:
         quality = "ok"
     _set_source(
         db, "price", quality,
-        f"нет данных: {', '.join(failed)}" if failed else None, now,
+        f"нет данных: {', '.join(failed)}" if failed else
+        "неполные, непригодные или устаревшие ценовые окна" if quality != "ok" else None, now,
         payload={"failed": list(failed)},
-    )
-    metrics = basket_metrics(
-        basket, bars_by_symbol, now_ms=now,
-        max_age_ms=int(settings.events_price_max_age_seconds) * 1000,
     )
     return bars_by_symbol, metrics
 
@@ -384,13 +504,27 @@ def _store_day_metrics(db, basket: Basket, bars_by_symbol: dict, now: int) -> No
     """Медианная доходность корзины за последние 10 завершённых дней МСК."""
     if not basket.members:
         return
+    existing = {m["bucket_start"]: m for m in store.metric_series(db, "basket_day_return")}
     for day_start, day_end in completed_msk_days(now, 10):
+        # A new day's constituents must not rewrite a previously completed day.
+        previous = existing.get(day_start) or {}
+        if previous.get("complete") and previous.get("method_version") == MODEL_VERSION:
+            continue
+        historical = store.basket_at(db, day_start)
+        if (historical and historical["day_start_ms"] != day_start
+                and historical.get("source") != "static"):
+            historical = None
+        day_basket = _basket_from_payload(historical) if historical else basket
         ret = msk_day_return(
-            basket, bars_by_symbol, day_start_ms=day_start, day_end_ms=day_end,
+            day_basket, bars_by_symbol, day_start_ms=day_start, day_end_ms=day_end,
         )
+        known = bool(historical) or basket.source == "static"
+        if previous.get("complete") and (not ret["complete"] or not known):
+            continue  # preserve legacy evidence, exclude it from the new statistics
         store.upsert_metric(
             db, series="basket_day_return", bucket_start=day_start,
-            payload={**ret, "basket_version": basket.version},
+            payload={**ret, "basket_version": day_basket.version,
+                     "historical_composition_known": known, "method_version": MODEL_VERSION},
         )
 
 
@@ -440,6 +574,8 @@ def _liq_rotation(db, members: list, budget: int) -> list[str]:
     """BTC всегда + участники с самым старым available_at бакетов 4h."""
     candidates = []
     for member in members:
+        if member.symbol == "BTC":
+            continue
         rows = load_buckets(
             db, scope_id("coinglass", "liq-4h", member.symbol), "liq", interval="4h",
         )
@@ -462,13 +598,17 @@ def _liq_cycle(db, settings, cg, fetcher: dict, basket: Basket, now: int,
         except _CG_ERRORS as exc:
             errors.append(exc)
             continue
-        for row in rows:
-            _put_liq_window(db, symbol, row, now)
-        fetched.append(symbol)
+        if _ingest_buckets(db, scope=scope_id("coinglass", "liq-4h", symbol), series="liq",
+                           interval="4h", rows=rows,
+                           parse=lambda row, stamp: _liquidation_bucket(row, stamp, interval_ms=4 * HOUR_MS),
+                           now=now, errors=errors):
+            fetched.append(symbol)
+        else:
+            errors.append(CoinglassError("источник не вернул пригодных окон ликвидаций"))
     try:
-        for row in fn(cg, "BTC", "1d", 150):
-            _put_liq(db, row, now)
-        legacy["loaded"] = True
+        count = _ingest_buckets(db, scope=LIQ_SCOPE, series="liq", interval="1d",
+            rows=fn(cg, "BTC", "1d", 150), parse=_liquidation_bucket, now=now, errors=errors)
+        legacy["loaded"] = bool(count)
     except _CG_ERRORS as exc:
         errors.append(exc)
         log.warning("events: legacy liq 1d недоступен: %s", exc)
@@ -477,23 +617,33 @@ def _liq_cycle(db, settings, cg, fetcher: dict, basket: Basket, now: int,
         _set_source(db, "liquidations", _cg_error_quality(errors[0]),
                     str(errors[0]), now)
         return None, symbols
-    _set_source(
-        db, "liquidations",
-        "partial" if errors else "ok",
-        "; ".join(str(e) for e in errors) if errors else None,
-        now, payload={"symbols": fetched},
-    )
     thresholds = get_rule("LIQ_PRESSURE").thresholds
-    liq = _market_liq(db, fetched, now, int(settings.events_liq_baseline_days),
-                      thresholds)
+    # Rotation limits network requests, not the scope of the market aggregate.
+    all_symbols = [m.symbol for m in basket.members]
+    liq = _market_liq(
+        db, all_symbols, now, int(settings.events_liq_baseline_days), thresholds,
+        memory_hours=int(settings.events_memory_hours),
+        min_coverage=float(settings.events_basket_min_coverage),
+    )
+    coverage = liq["coverage"]
+    partial = bool(errors) or coverage["ok"] < coverage["total"] or not liq["baseline_ok"]
+    detail = "; ".join(str(e) for e in errors) if errors else None
+    if partial and detail is None:
+        detail = f"Ликвидации: {coverage['ok']} из {coverage['total']} монет; baseline: {'достаточен' if liq['baseline_ok'] else 'недостаточен'}"
+    quality = ("unavailable" if errors else "stale") if coverage["ok"] == 0 else "partial" if partial else "ok"
+    _set_source(db, "liquidations", quality, detail, now,
+                payload={"symbols": all_symbols, "fetched_symbols": fetched,
+                         "coverage": coverage, "baseline_ok": liq["baseline_ok"]})
     return liq, symbols
 
 
 def _put_liq_window(db, symbol: str, row: dict, now: int) -> None:
-    start = int(row["time"])
+    start = _source_time(row, 4 * HOUR_MS, now)
     long_usd = as_decimal(row["aggregated_long_liquidation_usd"])
     short_usd = as_decimal(row["aggregated_short_liquidation_usd"])
-    quality = "integrity_error" if long_usd < 0 or short_usd < 0 else "ok"
+    if not finite_number(long_usd) or not finite_number(short_usd):
+        raise ValueError("invalid liquidation volume")
+    quality = "ok"
     upsert_bucket(
         db, scope_id=scope_id("coinglass", "liq-4h", symbol), series="liq",
         interval="4h", bucket_start=start,
@@ -503,107 +653,35 @@ def _put_liq_window(db, symbol: str, row: dict, now: int) -> None:
 
 
 def _market_liq(db, symbols: list[str], now: int, baseline_days: int,
-                thresholds: dict) -> dict:
-    """Рыночные метрики ликвидаций из сохранённых бакетов 4h (§4).
-
-    Отсутствующий участник окна не считается нулём: окно помечается
-    неполным через coverage, сумма — только по реальным данным.
-    baseline участника — медиана long_usd окон того же часа UTC за
-    baseline_days; без совместимого baseline относительный вывод unknown.
-    """
+                thresholds: dict, *, memory_hours: int = 240,
+                min_coverage: float = 0.8) -> dict:
+    """Aggregate the entire basket and retain the aftermath of closed cascades."""
     window_ms = int(thresholds["window_ms"])
     per_symbol = {}
     for symbol in symbols:
-        rows = load_buckets(
-            db, scope_id("coinglass", "liq-4h", symbol), "liq", interval="4h",
-        )
-        per_symbol[symbol] = {
-            r["t"]: r for r in rows if r.get("quality") == "ok"
-        }
-
-    def window_sum(start: int):
-        ok = [s for s in symbols if start in per_symbol[s]]
-        long_sum = sum(float(per_symbol[s][start]["long_usd"]) for s in ok)
-        short_sum = sum(float(per_symbol[s][start]["short_usd"]) for s in ok)
-        return ok, long_sum, short_sum
-
-    def baseline(symbol: str, start: int) -> float | None:
-        values = []
-        for k in range(1, baseline_days + 1):
-            row = per_symbol[symbol].get(start - k * DAY_MS)
-            if row is not None:
-                values.append(float(row["long_usd"]))
-        med = median([Decimal(str(v)) for v in values])
-        return float(med) if med is not None else None
-
-    current_start = now - (now % window_ms)
+        rows = load_buckets(db, scope_id("coinglass", "liq-4h", symbol), "liq", interval="4h",
+                            since_ms=now - memory_hours * HOUR_MS - (baseline_days + 1) * DAY_MS)
+        per_symbol[symbol] = {r["t"]: r for r in rows if r.get("quality") == "ok"}
+    history = liquidation_history(
+        per_symbol, now=now, baseline_days=baseline_days, thresholds=thresholds,
+        memory_ms=memory_hours * HOUR_MS, min_coverage=min_coverage,
+    )
+    current_start = now // window_ms * window_ms
     last_start = current_start - window_ms
-    ok_syms, sum_long, sum_short = window_sum(last_start)
-    fresh = bool(ok_syms) and (last_start + window_ms) >= now - _LIQ_FRESH_MS
-
-    long_share = (
-        sum_long / (sum_long + sum_short) if sum_long + sum_short > 0 else None
-    )
-    baselines = {s: baseline(s, last_start) for s in ok_syms}
-    baseline_total = sum(b for b in baselines.values() if b is not None)
-    baseline_ok = (
-        bool(ok_syms)
-        and all(b is not None for b in baselines.values())
-        and baseline_total > 0
-    )
-    multiple = sum_long / baseline_total if baseline_ok else None
-
-    # Эпизод: непрерывные завершённые окна с кратностью и долей выше порогов
-    episode_windows = []
-    cursor = last_start
-    while True:
-        ok, long_k, short_k = window_sum(cursor)
-        if not ok:
-            break
-        base = {s: baseline(s, cursor) for s in ok}
-        base_total = sum(b for b in base.values() if b is not None)
-        if not base_total or any(b is None for b in base.values()):
-            break
-        share = long_k / (long_k + short_k) if long_k + short_k > 0 else None
-        if (
-            long_k / base_total >= float(thresholds["episode_multiple"])
-            and share is not None
-            and share >= float(thresholds["long_share"])
-        ):
-            episode_windows.append((cursor, long_k))
-            cursor -= window_ms
-        else:
-            break
-    active = bool(episode_windows) and episode_windows[0][0] == last_start
-    started_at = episode_windows[-1][0] if episode_windows else None
-    phase = None
-    if active:
-        peak = max(long_k for _, long_k in episode_windows)
-        phase = (
-            "fading" if episode_windows[0][1] < float(thresholds["fade_ratio"]) * peak
-            else "intensifying"
-        )
-
-    ok_prov, prov_long, _prov_short = window_sum(current_start)
-    return {
-        "available": fresh,
-        "baseline_ok": baseline_ok,
-        "window": (
-            {"start": last_start, "end": last_start + window_ms, "closed": True}
-            if ok_syms else None
-        ),
-        "sum_long_usd": sum_long,
-        "sum_short_usd": sum_short,
-        "long_share": long_share,
-        "multiple": multiple,
-        "coverage": {"ok": len(ok_syms), "total": len(symbols)},
-        "episode": {"active": active, "phase": phase, "started_at": started_at},
-        # формирующееся окно: только сумма, относительного вывода нет (§4/AC10)
-        "provisional": (
-            {"sum_long_usd": prov_long, "window_start": current_start}
-            if ok_prov else None
-        ),
-    }
+    latest = next((w for w in reversed(history) if w["window"]["start"] == last_start), None)
+    if latest is None:
+        latest = {
+            "available": False, "baseline_ok": False, "baseline_samples": 0,
+            "window": None, "sum_long_usd": 0, "sum_short_usd": 0,
+            "long_share": None, "multiple": None,
+            "coverage": {"ok": 0, "total": len(symbols), "ratio": 0.0},
+            "episode": {"active": False, "phase": None, "started_at": None},
+        }
+    forming = [rows[current_start] for rows in per_symbol.values() if current_start in rows]
+    return {**latest, "history": history, "provisional": (
+        {"sum_long_usd": sum(float(r["long_usd"]) for r in forming),
+         "window_start": current_start} if forming else None
+    )}
 
 
 def _oi_cycle(db, settings, cg, fetcher: dict, symbols: list[str], now: int,
@@ -612,173 +690,246 @@ def _oi_cycle(db, settings, cg, fetcher: dict, symbols: list[str], now: int,
     fn = _oi_fn(fetcher)
     errors = []
     try:
-        for row in fn(cg, "BTC", "coin", "1d", 150):
-            _put_oi(db, OI_COIN_SCOPE, "oi_coin", row, now)
-        for row in fn(cg, "BTC", "usd", "1d", 150):
-            _put_oi(db, OI_USD_SCOPE, "oi_usd", row, now)
-        legacy["loaded"] = True
+        count = _ingest_buckets(db, scope=OI_COIN_SCOPE, series="oi_coin", interval="1d",
+            rows=fn(cg, "BTC", "coin", "1d", 150), parse=_oi_bucket, now=now, errors=errors)
+        count += _ingest_buckets(db, scope=OI_USD_SCOPE, series="oi_usd", interval="1d",
+            rows=fn(cg, "BTC", "usd", "1d", 150), parse=_oi_bucket, now=now, errors=errors)
+        legacy["loaded"] = legacy["loaded"] or bool(count)
     except _CG_ERRORS as exc:
         errors.append(exc)
         log.warning("events: legacy OI недоступен: %s", exc)
-    market_total, covered = 0.0, 0
     for symbol in symbols:
         try:
             rows = fn(cg, symbol, "usd", "1d", 40)
         except _CG_ERRORS as exc:
             errors.append(exc)
             continue
-        latest = None
-        for row in rows:
-            _put_oi(db, scope_id("coinglass", "oi-usd-1d", symbol), "oi_usd",
-                    row, now)
-            if latest is None or int(row["time"]) > int(latest["time"]):
-                latest = row
-        if latest is not None:
-            market_total += float(as_decimal(latest["close"]))
-            covered += 1
+        _ingest_buckets(db, scope=scope_id("coinglass", "oi-usd-1d", symbol), series="oi_usd",
+            interval="1d", rows=rows, parse=_oi_bucket, now=now, errors=errors)
     db._commit()
-    if errors and not covered and not legacy["loaded"]:
-        _set_source(db, "oi", _cg_error_quality(errors[0]), str(errors[0]), now)
-        return
+    all_symbols = [m["symbol"] for m in (store.latest_basket(db) or {}).get("members", [])]
+    expected = now // DAY_MS * DAY_MS - DAY_MS
+    matched = []
+    for symbol in all_symbols:
+        rows = load_buckets(db, scope_id("coinglass", "oi-usd-1d", symbol), "oi_usd",
+                            since_ms=expected)
+        matched.extend(r for r in rows if r["t"] == expected and r["quality"] == "ok")
+    market_total = sum(float(r["close"]) for r in matched)
+    covered = len(matched)
+    quality = "stale" if not covered else "partial" if errors or covered < len(all_symbols) else "ok"
+    if errors and not covered:
+        quality = _cg_error_quality(errors[0])
     _set_source(
-        db, "oi", "partial" if errors else "ok",
+        db, "oi", quality,
         "; ".join(str(e) for e in errors) if errors else None, now,
         payload={
             "market_oi_usd": market_total if covered else None,
-            "coverage": {"ok": covered, "total": len(symbols)},
+            "coverage": {"ok": covered, "total": len(all_symbols)},
+            "window": {"start": expected, "end": expected + DAY_MS, "closed": True},
         },
     )
 
 
 def _funding_cycle(db, cg, fetcher: dict, now: int, legacy: dict) -> None:
     fn = _funding_fn(fetcher)
+    errors = []
     try:
-        for row in fn(cg, "Binance", "BTCUSDT", "1d", 150):
-            _put_funding(db, row, now)
-        legacy["loaded"] = True
+        count = _ingest_buckets(db, scope=FUND_SCOPE, series="funding", interval="1d",
+            rows=fn(cg, "Binance", "BTCUSDT", "1d", 150), parse=_funding_bucket, now=now, errors=errors)
+        legacy["loaded"] = legacy["loaded"] or bool(count)
     except _CG_ERRORS as exc:
         _set_source(db, "funding", _cg_error_quality(exc), str(exc), now)
         return
     db._commit()
-    _set_source(db, "funding", "ok", None, now)
+    _set_source(db, "funding", "partial" if errors or not count else "ok",
+                "неполные или непригодные данные funding" if errors or not count else None, now)
 
 
 # --- Факты памяти из состояния ликвидаций ---------------------------------
 
 
 def _facts_cycle(db, settings, liq: dict, metrics: dict | None,
-                 bars_by_symbol: dict, basket: Basket, now: int) -> None:
-    """Фазы эпизода → факты: давление SHORT, затухание+восстановление LONG,
-    только объём — факт без направления (§6). Недоступные ликвидации не
-    создают и не отменяют фактов (вызывающий это гарантирует)."""
+                 bars_by_symbol: dict, basket: Basket, now: int) -> set[str]:
+    """Replay closed windows with prices known at their close, including after downtime.
+
+    Detection stays at now; neither occurrence nor the original expiry is moved.
+    History is reconstructed from today's basket, explicitly labelled in the output.
+    """
+    history = liq.get("history")
+    if history is None:  # compatibility for callers supplying a single observation
+        key = _facts_at_window(db, settings, liq, metrics, bars_by_symbol, basket, now)
+        return {key} if key else set()
+    threshold = float(settings.events_basket_min_coverage)
+    observed = set()
+    for observation in history:
+        if not observation["available"]:
+            continue
+        end = observation["window"]["end"]
+        cohort = observation["episode"].get("symbols") or list(bars_by_symbol)
+        observed_bars = {s: bars_by_symbol[s] for s in cohort if s in bars_by_symbol}
+        prices = _closed_window_prices(basket, observed_bars, end,
+                                       int(get_rule("LIQ_PRESSURE").thresholds["window_ms"]), threshold)
+        key = _facts_at_window(db, settings, observation, prices, observed_bars, basket, now,
+                         record_volume=observation["window"] == liq.get("window"))
+        if key:
+            observed.add(key)
+    return observed
+
+
+def _facts_at_window(db, settings, liq: dict, metrics: dict | None,
+                     bars_by_symbol: dict, basket: Basket, now: int, *,
+                     record_volume: bool = True) -> str | None:
     window = liq.get("window")
     if window is None:
         return
-    rule = get_rule("LIQ_PRESSURE")
-    th = rule.thresholds
+    th = get_rule("LIQ_PRESSURE").thresholds
     episode = liq["episode"]
     memory_hours = int(getattr(settings, "events_memory_hours", 240))
+    if record_volume:
+        _volume_fact(db, liq, now, memory_hours)
     price_known = metrics is not None and metrics.get("median_return") is not None
-    falling = (
-        price_known
-        and metrics["median_return"] < 0
-        and (metrics.get("breadth_up") or 0) < 0.5
-    )
-    episode_id = f"liq-{episode['started_at']}"
-    if episode.get("active") and episode.get("phase") == "intensifying" and falling:
-        occurred = episode["started_at"] + int(th["window_ms"])
-        key = memory.make_fact_key(
-            rule_id="LIQ_PRESSURE", rule_version=ENGINE_RULE_VERSION,
-            scope="crypto_market", episode_id=episode_id, occurrence=str(occurred),
-        )
+    falling = (price_known and metrics["median_return"] < 0
+               and metrics.get("breadth_up") is not None and metrics["breadth_up"] < 0.5)
+    started = episode.get("started_at")
+    existing = None
+    if started is not None:
+        cohort = episode.get("symbols") or [m.symbol for m in basket.members]
+        cohort_key = scope_id(*sorted(cohort))[:10]
+        episode_id = f"liq-{started}-{cohort_key}"
+        occurred = started + int(th["window_ms"])
+        key = memory.make_fact_key(rule_id="LIQ_PRESSURE", rule_version=ENGINE_RULE_VERSION,
+                                  scope="crypto_market", episode_id=episode_id, occurrence=str(occurred))
         existing = store.get_fact(db, key)
-        if (
-            existing is not None
-            and existing.get("direction") == "long"
-            and window["end"] > existing["occurred_at"]
-        ):
-            # Новый каскад после затухания — дочерний факт со своим сроком (AC06)
-            children = [
-                f for f in store.query_facts(db, active_now_ms=now)
-                if f.get("parent_key") == key
-            ]
-            if children:
-                child = children[-1]
+        # Older keys can be adopted only after their episode is verified again.
+        if existing is None:
+            legacy_id = f"liq-{started}"
+            legacy_key = memory.make_fact_key(rule_id="LIQ_PRESSURE", rule_version=ENGINE_RULE_VERSION,
+                scope="crypto_market", episode_id=legacy_id, occurrence=str(occurred))
+            legacy_fact = store.get_fact(db, legacy_key)
+            if legacy_fact is not None and not (legacy_fact["payload"].get("basis_symbols")):
+                existing, key = legacy_fact, legacy_key
+        if episode.get("active") and episode.get("phase") == "intensifying" and falling:
+            # Replaying earlier windows must not overwrite a later reinterpretation.
+            if existing is None:
                 memory.begin_fact(
                     db, rule_id="LIQ_PRESSURE", rule_version=ENGINE_RULE_VERSION,
-                    scope="crypto_market", episode_id=episode_id,
-                    parent_key=key, direction="short",
-                    occurred_at=child["occurred_at"], detected_at=now,
-                    available_at=now, time_precision="window",
-                    payload=_pressure_payload(liq, metrics),
-                    state="confirmed", memory_hours=memory_hours,
-                )
-            else:
-                memory.child_fact(
-                    db, key, rule_id="LIQ_PRESSURE", rule_version=ENGINE_RULE_VERSION,
                     scope="crypto_market", episode_id=episode_id, direction="short",
-                    occurred_at=window["end"], detected_at=now, available_at=now,
-                    time_precision="window",
-                    payload=_pressure_payload(liq, metrics),
-                    state="confirmed", memory_hours=memory_hours,
+                    occurred_at=occurred, detected_at=now, available_at=now,
+                    time_precision="window", payload={**_pressure_payload(liq, metrics),
+                        "phase_at": window["end"], "basket_version": basket.version,
+                        "price_basis": basis_for_window(metrics), "basis_symbols": sorted(cohort),
+                        "context_model": MODEL_VERSION},
+                    state="confirmed" if window["closed"] else "provisional",
+                    memory_hours=memory_hours,
                 )
-        else:
-            memory.begin_fact(
-                db, rule_id="LIQ_PRESSURE", rule_version=ENGINE_RULE_VERSION,
-                scope="crypto_market", episode_id=episode_id, direction="short",
-                occurred_at=occurred, detected_at=now, available_at=now,
-                time_precision="window", payload=_pressure_payload(liq, metrics),
-                state="confirmed" if window["closed"] else "provisional",
-                memory_hours=memory_hours,
+            elif (existing["direction"] == "short" and existing["state"] in ("confirmed", "provisional")
+                  and existing["valid_until"] > now and not existing["payload"].get("context_invalidated")):
+                old = existing["payload"]
+                basis = basis_for_window(metrics)
+                if basis:
+                    merged = merge_basis(old.get("price_basis") or basis, basis)
+                    payload = {**old, "price_basis": merged, "basis_symbols": sorted(cohort),
+                               "context_model": MODEL_VERSION}
+                    if payload != old:
+                        store.upsert_fact(db, {**existing, "payload": payload, "updated_at": now})
+            return key
+        if (episode.get("phase") == "fading" and existing is not None
+                and existing["direction"] in ("short", None)
+                and not existing["payload"].get("context_invalidated")
+                and window["end"] > existing["payload"].get("interpretation_evaluated_through", 0)
+                and existing["state"] in ("provisional", "confirmed")
+                and existing["valid_until"] > now
+                and _recovery_ok(th, metrics, bars_by_symbol, basket, window["end"],
+                                 min_coverage=float(settings.events_basket_min_coverage))
+                and _holds_basis(existing, bars_by_symbol, window["end"], settings)):
+            memory.reinterpret_fact(
+                db, key, new_direction="long", at_ms=now,
+                reason="каскад завершён: три тихих окна и восстановление цены и ширины",
+                payload={"recovery_rule": "LIQ_RECOVERY", "phase_at": window["end"],
+                         "pressure_released": False, "context_model": MODEL_VERSION,
+                         "interpretation_evaluated_through": window["end"],
+                         "summary": "После каскада ликвидации затихли; цена и ширина рынка восстанавливаются — контекст LONG (пороги проектные)"},
             )
-        return
-    if episode.get("active") and episode.get("phase") == "fading":
-        recovery = _recovery_ok(th, metrics, bars_by_symbol, basket, now)
-        if recovery:
-            occurred = episode["started_at"] + int(th["window_ms"])
-            key = memory.make_fact_key(
-                rule_id="LIQ_PRESSURE", rule_version=ENGINE_RULE_VERSION,
-                scope="crypto_market", episode_id=episode_id, occurrence=str(occurred),
-            )
-            existing = store.get_fact(db, key)
-            if (
-                existing is not None
-                and existing.get("direction") == "short"
-                and existing.get("state") in ("provisional", "confirmed")
-            ):
-                memory.reinterpret_fact(
-                    db, key, new_direction="long", at_ms=now,
-                    reason="затухание каскада, восстановление цены/ширины",
-                    payload={
-                        "recovery_rule": "LIQ_RECOVERY",
-                        "summary": (
-                            "Каскад лонг-ликвидаций затухает, цена и ширина "
-                            "рынка восстанавливаются — контекст LONG"
-                        ),
-                    },
-                )
-                return
-    # Эпизодные условия не выполнены: чистый факт объёма без направления (§6)
+            return key
+
+
+def _volume_fact(db, liq: dict, now: int, memory_hours: int) -> None:
+    window = liq["window"]
+    th = get_rule("LIQ_PRESSURE").thresholds
     memory.begin_fact(
-        db, rule_id="LIQ_FACT", rule_version=ENGINE_RULE_VERSION,
-        scope="crypto_market", episode_id=f"liqfact-{window['start']}",
-        direction=None, occurred_at=window["end"], detected_at=now,
-        available_at=now, time_precision="window",
-        payload={
-            "summary": (
-                "Зафиксирован объём ликвидаций: "
-                f"лонг {liq['sum_long_usd']:.0f} USD, "
-                f"шорт {liq['sum_short_usd']:.0f} USD за окно 4ч"
-            ),
-            "sum_long_usd": liq["sum_long_usd"],
-            "sum_short_usd": liq["sum_short_usd"],
-            "long_share": liq.get("long_share"),
-            "multiple": liq.get("multiple"),
-            "coverage": liq.get("coverage"),
-            "window_ms": int(th["window_ms"]),
-        },
-        state="confirmed", memory_hours=memory_hours,
+        db, rule_id="LIQ_FACT", rule_version=ENGINE_RULE_VERSION, scope="crypto_market",
+        episode_id=f"liqfact-{window['start']}", direction=None,
+        occurred_at=window["end"], detected_at=now, available_at=now, time_precision="window",
+        payload={"summary": ("Зафиксирован объём ликвидаций: "
+                 f"лонг {liq['sum_long_usd']:.0f} USD, шорт {liq['sum_short_usd']:.0f} USD за окно 4ч"),
+                 "sum_long_usd": liq["sum_long_usd"], "sum_short_usd": liq["sum_short_usd"],
+                 "long_share": liq.get("long_share"), "multiple": liq.get("multiple"),
+                 "coverage": liq.get("coverage"), "window_ms": int(th["window_ms"])},
+        state="confirmed" if window["closed"] else "provisional", memory_hours=memory_hours,
     )
+
+
+def _holds_basis(fact: dict, bars_by_symbol: dict, end: int, settings) -> bool:
+    check = price_check(fact["payload"].get("price_basis") or {}, bars_by_symbol,
+                        now=end, max_age_ms=HOUR_MS - 1,
+                        min_coverage=float(settings.events_basket_min_coverage))
+    return check["status"] == "verified" and not check["below_floor"]
+
+
+def _revalidate_facts(db, settings, bars_by_symbol: dict, basket: Basket, now: int, *,
+                      observed_keys: set[str] | None = None) -> None:
+    """Keep history, permanently supersede older phases, revoke a broken recovery."""
+    facts = [f for f in store.query_facts(db) if f["scope"] == "crypto_market"
+             and f["rule_id"] in ("LIQ_PRESSURE", "LIQ_RECOVERY")
+             and f["occurred_at"] <= now and f["available_at"] <= now]
+    if not facts:
+        return
+    eligible = [f for f in facts if not f["payload"].get("superseded_by")
+                and f["state"] != "provisional" and phase_order(f)[0] <= now]
+    if not eligible:
+        return
+    latest = max(eligible, key=phase_order)
+    for fact in facts:
+        if phase_order(fact) < phase_order(latest) and not fact["payload"].get("superseded_by"):
+            store.upsert_fact(db, {**fact, "updated_at": now, "payload": {
+                **fact["payload"], "superseded_by": latest["fact_key"],
+            }})
+    if latest["state"] not in ("provisional", "confirmed") or latest["valid_until"] <= now:
+        return
+    payload = latest["payload"]
+    basis = payload.get("price_basis") or {}
+    current_symbols = {m.symbol for m in basket.members}
+    overlap = len(current_symbols.intersection(basis)) / len(basis) if basis else 0
+    check = price_check(basis, bars_by_symbol, now=now,
+                        max_age_ms=int(settings.events_price_max_age_seconds) * 1000,
+                        min_coverage=float(settings.events_basket_min_coverage))
+    if overlap < float(settings.events_basket_min_coverage):
+        check = {"status": "unverified", "reason": "composition_or_basis_missing"}
+    if observed_keys is not None and latest["fact_key"] not in observed_keys:
+        check = {"status": "unverified", "reason": "event_not_reproduced_in_history"}
+    if latest["direction"] == "long" and basis:
+        path = broken_since(basis, bars_by_symbol, start=payload.get("phase_at") or latest["occurred_at"],
+                            end=now, min_coverage=float(settings.events_basket_min_coverage))
+        if path["broken_at"] is not None:
+            memory.reinterpret_fact(db, latest["fact_key"], new_direction=None, at_ms=now,
+                reason="закрытия H1 опустились ниже основания восстановления",
+                payload={"context_invalidated": True, "invalidated_at": path["broken_at"],
+                         "invalidation_reason": "Закрытия H1 ниже основания восстановления",
+                         "current_check": check,
+                         "summary": "Каскад сохранён в истории; трактовка восстановления опровергнута закрытиями H1"})
+            return
+        if not path["path_complete"]:
+            check = {"status": "unverified", "reason": "price_path_incomplete"}
+    if (latest["direction"] == "short" and check.get("above_origin")
+            and check["status"] == "verified"):
+        memory.reinterpret_fact(db, latest["fact_key"], new_direction=None, at_ms=now,
+            reason="цены вернулись выше начала каскада; прежнее давление не подтверждается",
+            payload={"pressure_released": True, "current_check": check,
+                     "interpretation_evaluated_through": check["as_of"],
+                     "summary": "Каскад сохранён; цены вернулись к началу снижения, прежнее давление снято"})
+        return
+    if check != payload.get("current_check"):
+        store.upsert_fact(db, {**latest, "updated_at": now, "payload": {**payload, "current_check": check}})
 
 
 def _pressure_payload(liq: dict, metrics: dict) -> dict:
@@ -798,41 +949,46 @@ def _pressure_payload(liq: dict, metrics: dict) -> dict:
     }
 
 
-def _recovery_ok(th: dict, metrics: dict | None,
-                 bars_by_symbol: dict, basket: Basket, now: int) -> bool:
-    """Затухание + восстановление: медиана доходностей корзины за последние
-    recovery_windows окон 4h > 0 либо ширина роста >= 0.5 (проектные критерии)."""
-    breadth = (metrics or {}).get("breadth_up")
-    if breadth is not None and breadth >= 0.5:
-        return True
+def _closed_window_prices(basket: Basket, bars_by_symbol: dict, end: int,
+                          window_ms: int, min_coverage: float) -> dict | None:
+    """Require all hourly bars within each included member's closed window."""
+    start = end - window_ms
+    returns = []
+    members = {}
+    for member in basket.members:
+        segment = complete_window(bars_by_symbol.get(member.symbol, []), start, end)
+        if not segment:
+            continue
+        ret = float(segment[-1]["close"]) / float(segment[0]["open"]) - 1.0
+        returns.append(ret)
+        members[member.symbol] = {"open": float(segment[0]["open"]),
+            "close": float(segment[-1]["close"]), "min_close": min(float(b["close"]) for b in segment)}
+    ratio = len(returns) / len(basket.members) if basket.members else 0.0
+    if not returns or ratio < min_coverage:
+        return None
+    return {"median_return": float(median([Decimal(str(r)) for r in returns])),
+            "breadth_up": sum(r > 0 for r in returns) / len(returns),
+            "coverage": {"ok": len(returns), "total": len(basket.members), "ratio": ratio},
+            "members": members}
+
+
+def _recovery_ok(th: dict, metrics: dict | None, bars_by_symbol: dict,
+                 basket: Basket, now: int, *, min_coverage: float = 0.8) -> bool:
+    """Every required closed window must confirm both price and breadth recovery."""
     window_ms = int(th["window_ms"])
-    count = int(th["recovery_windows"])
-    current = now - (now % window_ms)
-    medians = []
-    for i in range(1, count + 1):
-        start, end = current - i * window_ms, current - (i - 1) * window_ms
-        returns = []
-        for member in basket.members:
-            bars = sorted(
-                (b for b in bars_by_symbol.get(member.symbol, [])
-                 if b.get("quality") == "ok"),
-                key=lambda b: b["end"],
-            )
-            before = [b for b in bars if b["end"] <= start]
-            inside = [b for b in bars if b["start"] >= start and b["end"] <= end]
-            if before and inside:
-                returns.append(inside[-1]["close"] / before[-1]["close"] - 1.0)
-        med = median([Decimal(str(r)) for r in returns])
-        if med is not None:
-            medians.append(med)
-    med3 = median(medians)
-    return med3 is not None and med3 > 0
+    end = now // window_ms * window_ms
+    for i in range(int(th["recovery_windows"])):
+        prices = _closed_window_prices(basket, bars_by_symbol, end - i * window_ms,
+                                       window_ms, min_coverage)
+        if (prices is None or prices["median_return"] <= 0 or prices["breadth_up"] < 0.5):
+            return False
+    return True
 
 
 # --- Время и статистика ----------------------------------------------------
 
 
-def _time_ctx(basket: Basket, bars_by_symbol: dict, now: int) -> dict:
+def _time_ctx(basket: Basket, bars_by_symbol: dict, now: int, *, min_coverage: float = 0.8) -> dict:
     weekday = msk_weekday(now)
     day_start = msk_day_start_ms(now)
     completed = []
@@ -842,10 +998,13 @@ def _time_ctx(basket: Basket, bars_by_symbol: dict, now: int) -> dict:
                 basket, bars_by_symbol, day_start_ms=start, day_end_ms=end,
             )
             med = ret["median_return"]
+            if ret["members_ok"] / ret["members_total"] < min_coverage:
+                med = None
             completed.append({
                 "day_start_ms": start,
                 "weekday": msk_weekday(start),
                 "median_return": med,
+                "complete": ret["complete"],
                 "sign": None if med is None else day_sign(med),
             })
     week_seq = None
@@ -859,6 +1018,8 @@ def _time_ctx(basket: Basket, bars_by_symbol: dict, now: int) -> dict:
                     basket, bars_by_symbol, day_start_ms=start, day_end_ms=end,
                 )
                 med = ret["median_return"]
+                if ret["members_ok"] / ret["members_total"] < min_coverage:
+                    med = None
                 signs[start] = None if med is None else day_sign(med)
         mon_sign = signs.get(monday)
         tue_sign = signs.get(monday + DAY_MS)
@@ -874,6 +1035,8 @@ def _time_ctx(basket: Basket, bars_by_symbol: dict, now: int) -> dict:
         "hour_msk": msk_hour(now),
         "day_start_ms": day_start,
         "next_day_start_ms": msk_day_end_ms(now),
+        "next_h1_close_ms": (now // HOUR_MS + 1) * HOUR_MS,
+        "next_liquidation_close_ms": (now // (4 * HOUR_MS) + 1) * (4 * HOUR_MS),
         "completed_days": completed,
         "week_seq": week_seq,
     }
@@ -885,6 +1048,7 @@ def _stats(db, settings) -> dict:
     samples = [
         s for s in store.metric_series(db, "basket_day_return")
         if s.get("complete") and s.get("median_return") is not None
+        and s.get("historical_composition_known", False) and s.get("method_version") == MODEL_VERSION
     ]
     n = len(samples)
     if n < min_n:
@@ -932,10 +1096,12 @@ def _store_payload(db, payload: dict, now: int) -> None:
 
 
 def _put_liq(db, row: dict, now: int) -> None:
-    start = int(row["time"])
+    start = _source_time(row, DAY_MS, now)
     long_usd = as_decimal(row["aggregated_long_liquidation_usd"])
     short_usd = as_decimal(row["aggregated_short_liquidation_usd"])
-    quality = "integrity_error" if long_usd < 0 or short_usd < 0 else "ok"
+    if not finite_number(long_usd) or not finite_number(short_usd):
+        raise ValueError("invalid liquidation volume")
+    quality = "ok"
     upsert_bucket(
         db, scope_id=LIQ_SCOPE, series="liq", interval="1d", bucket_start=start,
         payload={"long_usd": long_usd, "short_usd": short_usd},
@@ -944,11 +1110,12 @@ def _put_liq(db, row: dict, now: int) -> None:
 
 
 def _put_oi(db, scope: str, series: str, row: dict, now: int) -> None:
-    start = int(row["time"])
+    start = _source_time(row, DAY_MS, now)
     open_, high, low, close = (as_decimal(row[k]) for k in ("open", "high", "low", "close"))
+    if (not all(finite_number(v) for v in (open_, high, low, close))
+            or min(open_, close) < low or max(open_, close) > high):
+        raise ValueError("invalid OI OHLC")
     quality = "ok"
-    if min(open_, close) < low or max(open_, close) > high or low < 0 or open_ < 0:
-        quality = "integrity_error"
     upsert_bucket(
         db, scope_id=scope, series=series, interval="1d", bucket_start=start,
         payload={"open": open_, "high": high, "low": low, "close": close},
@@ -957,8 +1124,10 @@ def _put_oi(db, scope: str, series: str, row: dict, now: int) -> None:
 
 
 def _put_funding(db, row: dict, now: int) -> None:
-    start = int(row["time"])
+    start = _source_time(row, DAY_MS, now)
     close = as_decimal(row["close"])
+    if not close.is_finite():
+        raise ValueError("invalid funding")
     upsert_bucket(
         db, scope_id=FUND_SCOPE, series="funding", interval="1d", bucket_start=start,
         payload={"close_percent": close, "rate_kind": "indicative", "unit": "percent"},
@@ -986,6 +1155,9 @@ def _evaluate_stored(db, settings, now: int, price_source: str | None) -> dict:
     oi_coin = [_oi_bar(row, now) for row in _load(db, OI_COIN_SCOPE, "oi_coin")]
     oi_usd = [_oi_bar(row, now) for row in _load(db, OI_USD_SCOPE, "oi_usd")]
     funding = [_fund_bar(row, now) for row in _load(db, FUND_SCOPE, "funding")]
+    expected = now // DAY_MS * DAY_MS - DAY_MS
+    data_stale = any(not any(b and b.closed and b.t == expected for b in series)
+                     for series in (liq, oi_coin, funding))
     return evaluate(EvaluationInput(
         symbol="BTC",
         now_ms=now,
@@ -1003,7 +1175,7 @@ def _evaluate_stored(db, settings, now: int, price_source: str | None) -> dict:
         liq_scope=LIQ_SCOPE,
         oi_scope=OI_COIN_SCOPE,
         funding_scope=FUND_SCOPE,
-        data_stale=False,
+        data_stale=data_stale,
         asset_profile="BTC",
         scope_asset="BTC",
     ))
@@ -1018,7 +1190,7 @@ def _closed(start: int, now: int) -> bool:
 
 
 def _liq_bar(row: dict, now: int):
-    if row.get("quality") != "ok":
+    if row.get("quality") != "ok" or not all(finite_number(row.get(k)) for k in ("long_usd", "short_usd")):
         return None
     return LiqBar(
         t=row["t"],
@@ -1029,7 +1201,7 @@ def _liq_bar(row: dict, now: int):
 
 
 def _oi_bar(row: dict, now: int):
-    if row.get("quality") != "ok":
+    if row.get("quality") != "ok" or not all(finite_number(row.get(k)) for k in ("open", "close")):
         return None
     return OiBar(
         t=row["t"],
@@ -1040,6 +1212,13 @@ def _oi_bar(row: dict, now: int):
 
 
 def _fund_bar(row: dict, now: int):
+    if row.get("quality") != "ok":
+        return None
+    try:
+        if not as_decimal(row.get("close_percent")).is_finite():
+            return None
+    except InvalidOperation:
+        return None
     return FundingBar(
         t=row["t"],
         close_percent=Decimal(str(row["close_percent"])),

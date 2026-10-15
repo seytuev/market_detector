@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from app.adapters.coinmarketcap import CmcListing
 from app.alt.universe import classify_exclusion
 from app.events.mathutil import DAY_MS, D, median
+from .validation import HOUR_MS, complete_window, hourly_bars
 
 DEFAULT_SIZE = 20
 COVERAGE_OK = 0.8  # проектный порог достаточности покрытия (вызывающий может переопределить)
@@ -83,9 +84,12 @@ def build_basket(
     """
     members: list[BasketMember] = []
     exclusions: list[dict] = []
+    seen_symbols, seen_ids = set(), set()
     for item in sorted(listings, key=_rank_of):
         listing = _as_listing(item)
         reason = classify_exclusion(listing)
+        if listing.symbol in seen_symbols or (listing.cmc_id and listing.cmc_id in seen_ids):
+            reason = "duplicate"
         pair = f"{listing.symbol}USDT"
         if reason is None and pair not in available_pairs:
             reason = "no_binance_pair"
@@ -101,6 +105,9 @@ def build_basket(
             symbol=listing.symbol, cmc_id=listing.cmc_id,
             rank=listing.rank, pair=pair,
         ))
+        seen_symbols.add(listing.symbol)
+        if listing.cmc_id:
+            seen_ids.add(listing.cmc_id)
     members = members[:size]
     return Basket(
         version=_basket_version(day_start_ms, members),
@@ -113,6 +120,7 @@ def build_basket(
 
 def basket_from_static(symbols: list[str], *, day_start_ms: int) -> Basket:
     """Статическая корзина из явного списка символов (cmc_id=0)."""
+    symbols = list(dict.fromkeys(s.strip().upper() for s in symbols if s.strip()))
     members = [
         BasketMember(symbol=s, cmc_id=0, rank=i + 1, pair=f"{s}USDT")
         for i, s in enumerate(symbols)
@@ -161,26 +169,26 @@ def basket_metrics(
     Участник без свежих/полных данных не считается нулём: он не входит
     в медиану и ширину и уменьшает покрытие.
     """
-    window_start = now_ms - window_ms
     members_out: list[dict] = []
     returns: list[float] = []
     ok = 0
     for m in basket.members:
-        bars = _ok_bars(bars_by_symbol, m.symbol)
-        completed = [b for b in bars if b["end"] <= now_ms]
-        fresh = [b for b in completed if b["end"] >= now_ms - max_age_ms]
+        indexed = hourly_bars(bars_by_symbol.get(m.symbol, []))
+        completed = [b for b in indexed.values() if b["end"] <= now_ms]
+        last = max(completed, key=lambda b: b["end"]) if completed else None
+        target_end = now_ms // HOUR_MS * HOUR_MS
+        ret = None
         if not completed:
             status = "missing"
-        elif not fresh:
+        elif last["end"] < now_ms - max_age_ms:
             status = "stale"
         else:
-            status = "ok"
-            ok += 1
-        ret = None
-        before = [b for b in completed if b["end"] <= window_start]
-        if completed and before:
-            ret = completed[-1]["close"] / before[-1]["close"] - 1.0
-            returns.append(ret)
+            segment = complete_window(indexed, target_end - window_ms, target_end)
+            status = "ok" if segment else "incomplete"
+            if segment:
+                ret = float(segment[-1]["close"]) / float(segment[0]["open"]) - 1.0
+                returns.append(ret)
+                ok += 1
         members_out.append({
             "symbol": m.symbol, "pair": m.pair, "status": status, "return": ret,
         })
@@ -216,13 +224,10 @@ def msk_day_return(
     """
     returns: list[float] = []
     for m in basket.members:
-        bars = [
-            b for b in _ok_bars(bars_by_symbol, m.symbol)
-            if b["start"] >= day_start_ms and b["end"] <= day_end_ms
-        ]
+        bars = complete_window(bars_by_symbol.get(m.symbol, []), day_start_ms, day_end_ms)
         if not bars:
             continue
-        returns.append(bars[-1]["close"] / bars[0]["open"] - 1.0)
+        returns.append(float(bars[-1]["close"]) / float(bars[0]["open"]) - 1.0)
     total = len(basket.members)
     med = median([D(r) for r in returns])
     return {

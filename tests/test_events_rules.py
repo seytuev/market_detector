@@ -50,6 +50,7 @@ def test_liq_thresholds_are_project_defaults():
         "long_share": 0.60,
         "episode_multiple": 1.5,
         "baseline_days": 30,
+        "baseline_min_samples": 14,
         "fade_ratio": 0.5,
         "recovery_windows": 3,
         "window_ms": 4 * 3_600_000,

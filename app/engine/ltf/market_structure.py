@@ -12,7 +12,7 @@ from dataclasses import dataclass, replace
 from ...models import Direction
 from .pivots import PivotCandidate
 
-RULE_VERSION = "structure-2026-10-14"
+RULE_VERSION = "structure-2026-10-15-impulse-origin"
 
 
 def opposite(direction):
@@ -43,6 +43,7 @@ class StructureMachine:
     def __init__(self):
         self.frames: list[Frame] = []
         self.last: dict[str, PivotCandidate] = {}
+        self.observed_origins: dict[str, PivotCandidate] = {}
         self.roles: dict[tuple, str] = {}
         self.fired: set[str] = set()
         self.seen: set[tuple] = set()
@@ -106,6 +107,26 @@ class StructureMachine:
                     else:
                         self._role(pivot, "LH" if kind == "high" else "HL")
         self.last[pivot.kind] = pivot
+        # A newer confirmed pivot starts a new candidate swing. Anything
+        # more extreme in its right window would have prevented confirmation.
+        self.observed_origins[pivot.kind] = pivot
+
+    def _observe_origins(self, candle):
+        for kind, price in (("low", candle.low), ("high", candle.high)):
+            base = self.observed_origins.get(kind) or self.last.get(kind)
+            if base is None or candle.open_time <= base.pivot_at:
+                continue
+            direction = Direction.BEAR if kind == "low" else Direction.BULL
+            if crosses(direction, price, base.price):
+                self.observed_origins[kind] = replace(
+                    base, price=price, pivot_at=candle.open_time,
+                    candle_open_time=candle.open_time, confirmed_at=candle.close_time,
+                    pivot_id=None, state="candidate", role="none", left=0, right=0,
+                )
+
+    def _bos_origin(self, direction, fallback):
+        kind = "low" if direction == Direction.BULL else "high"
+        return self.observed_origins.get(kind) or self.last.get(kind) or fallback
 
     def _event(self, kind, direction, pivot, frame, candle, now_ms, depth, stage="primary"):
         from .breaks import StructureEventDraft, _level_key, _ref
@@ -119,6 +140,8 @@ class StructureMachine:
             correction = self.last.get("low" if direction == Direction.BULL else "high")
             if correction and frame.extreme and correction.pivot_at > frame.extreme.pivot_at:
                 origin = correction
+        if kind == "BOS":
+            origin = self._bos_origin(direction, origin)
         refs = [origin, pivot] if origin is not None else [pivot]
         parent = frame if reversal and kind == "SMS" else self.frames[depth - 1] if depth else None
         event = StructureEventDraft(
@@ -134,6 +157,10 @@ class StructureMachine:
                 "close": candle.close, "anchor_price": origin.price if origin else None,
                 "ref_price": frame.origin.price, "structure_depth": depth,
                 "origin_pivot_id": _ref(origin) if origin else None,
+                "origin_at": origin.pivot_at if origin else None,
+                "origin_known_at": origin.confirmed_at if origin else None,
+                "origin_provenance": ("structural_candidate" if origin.state != "confirmed"
+                                      else "confirmed_pivot") if origin else None,
                 "parent_direction": parent.direction.value if parent else None,
                 "parent_origin_price": parent.origin.price if parent else None,
                 "parent_extreme_price": parent.extreme.price if parent and parent.extreme else None,
@@ -148,6 +175,7 @@ class StructureMachine:
         if self.last_close_at is not None and candle.close_time <= self.last_close_at:
             return []
         self.last_close_at = candle.close_time
+        self._observe_origins(candle)
         for pending in self.frames:
             if pending.extreme is None:
                 price = getattr(candle, "high" if pending.direction == Direction.BULL else "low", candle.close)
@@ -162,7 +190,7 @@ class StructureMachine:
             if direction is None:
                 return []
             level = high if direction == Direction.BULL else low
-            origin = low if direction == Direction.BULL else high
+            origin = self._bos_origin(direction, low if direction == Direction.BULL else high)
             level = self._role(level, "HH" if direction == Direction.BULL else "LL")
             origin = self._role(origin, "HL" if direction == Direction.BULL else "LH")
             frame = Frame(direction, origin, level, level.pivot_at)
@@ -186,7 +214,9 @@ class StructureMachine:
                     correction = self.last.get("high" if direction == Direction.BEAR else "low")
                     if correction:
                         origin = correction
+                    origin = self._bos_origin(direction, origin)
                     if origin:
+                        origin = self._role(origin, "HL" if direction == Direction.BULL else "LH")
                         prefix = self.frames[:depth]
                         if prefix and prefix[-1].direction == direction and prefix[-1].extreme and prefix[-1].extreme.price == level.price:
                             prefix = prefix[:-1]
@@ -213,7 +243,8 @@ class StructureMachine:
                 self.frames = self.frames[:depth + 1]
                 correction = self.last.get("low" if frame.direction == Direction.BULL else "high")
                 if kind == "BOS" and correction and correction.pivot_at > frame.extreme.pivot_at:
-                    frame.origin = self._role(correction, "HL" if frame.direction == Direction.BULL else "LH")
+                    origin = self._bos_origin(frame.direction, correction)
+                    frame.origin = self._role(origin, "HL" if frame.direction == Direction.BULL else "LH")
                 previous_extreme = frame.extreme
                 frame.extreme, frame.internal, frame.shifted = None, None, False
                 frame.started_at = previous_extreme.pivot_at

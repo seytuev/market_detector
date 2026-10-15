@@ -257,11 +257,7 @@ function initChart() {
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     autoSize: true,
   });
-  state.candleSeries = state.chart.addCandlestickSeries({
-    upColor: theme.up, downColor: theme.down,
-    wickUpColor: theme.up, wickDownColor: theme.down,
-    borderVisible: false,
-  });
+  state.candleSeries = state.chart.addCandlestickSeries(HTF.candleOptions(theme));
   state.candleSeries.applyOptions({
     autoscaleInfoProvider: (original) => {
       const focus = state.h1PriceFocus;
@@ -1875,11 +1871,7 @@ function initReviewChart() {
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     autoSize: true,
   });
-  reviewState.candleSeries = reviewState.chart.addCandlestickSeries({
-    upColor: theme.up, downColor: theme.down,
-    wickUpColor: theme.up, wickDownColor: theme.down,
-    borderVisible: false,
-  });
+  reviewState.candleSeries = reviewState.chart.addCandlestickSeries(HTF.candleOptions(theme));
   reviewState.chart.timeScale().subscribeVisibleLogicalRangeChange(() => drawReviewZone());
   // как в Обзоре: перетаскивание шкал не даёт событий ТФ — перерисовываем
   // зону по движению указателя (троттлинг через rAF)
@@ -2017,6 +2009,11 @@ function syncThemeChoices() {
     btn.classList.toggle('active', on);
     btn.setAttribute('aria-pressed', on ? 'true' : 'false');
   });
+  document.querySelectorAll('[data-candle-palette]').forEach((btn) => {
+    const on = btn.dataset.candlePalette === HTF.candlePalette.get();
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
 }
 
 function initAppearance() {
@@ -2025,6 +2022,9 @@ function initAppearance() {
       HTF.theme.set(btn.dataset.themeChoice);
       syncThemeChoices();
     };
+  });
+  document.querySelectorAll('[data-candle-palette]').forEach((btn) => {
+    btn.onclick = () => HTF.candlePalette.set(btn.dataset.candlePalette);
   });
   syncThemeChoices();
 }
@@ -2039,10 +2039,7 @@ function paintCharts() {
     },
     rightPriceScale: { borderColor: theme.border },
   };
-  const candle = {
-    upColor: theme.up, downColor: theme.down,
-    wickUpColor: theme.up, wickDownColor: theme.down,
-  };
+  const candle = HTF.candleOptions(theme);
   if (state.chart) {
     state.chart.applyOptions(opts);
     if (state.candleSeries) state.candleSeries.applyOptions(candle);
@@ -2058,6 +2055,12 @@ function paintCharts() {
   }
 }
 window.addEventListener('lf-theme', paintCharts);
+window.addEventListener('lf-candle-palette', () => {
+  const options = HTF.candleOptions();
+  state.candleSeries?.applyOptions(options);
+  reviewState.candleSeries?.applyOptions(options);
+  syncThemeChoices();
+});
 
 // Клик по кандидату: НЕ переключаем вкладку — грузим его инструмент/ТФ,
 // свечи вокруг формирования зоны и открываем инспектор здесь же.

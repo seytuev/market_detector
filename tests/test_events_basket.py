@@ -40,6 +40,11 @@ def bar(start, end, open_, close, quality="ok") -> dict:
             "close": float(close), "quality": quality}
 
 
+def day_bars(start, end, final):
+    return [bar(t, t + HOUR_MS, 100, final if t + HOUR_MS == end else 100)
+            for t in range(start, end, HOUR_MS)]
+
+
 def test_build_basket_records_exclusion_reasons():
     listings = [
         listing("BTC", 1),
@@ -115,11 +120,11 @@ def test_basket_metrics_median_breadth_coverage():
     ws = NOW - DAY_MS  # начало окна
     basket = basket_from_static(["AAA", "BBB", "CCC", "DDD"], day_start_ms=DAY_START)
     bars = {
-        "AAA": [bar(ws - 2000, ws - 1000, 100, 100), bar(NOW - 2000, NOW - 1000, 100, 110)],
-        "BBB": [bar(ws - 2000, ws - 1000, 100, 100), bar(NOW - 2000, NOW - 1000, 100, 90)],
+        "AAA": day_bars(ws, NOW, 110),
+        "BBB": day_bars(ws, NOW, 90),
         # Свежий бар непригодного качества не считается; старый ok-бар → stale.
-        "CCC": [bar(NOW - 5 * HOUR_MS, NOW - 5 * HOUR_MS + 1000, 100, 100),
-                bar(NOW - 1000, NOW, 100, 105, quality="bad")],
+        "CCC": [bar(NOW - 5 * HOUR_MS, NOW - 4 * HOUR_MS, 100, 100),
+                bar(NOW - HOUR_MS, NOW, 100, 105, quality="bad")],
     }
     metrics = basket_metrics(basket, bars, now_ms=NOW, max_age_ms=HOUR_MS)
     assert metrics["window_ms"] == DAY_MS
@@ -136,21 +141,19 @@ def test_basket_metrics_median_breadth_coverage():
 
 def test_basket_metrics_fresh_bar_without_window_start_reference():
     basket = basket_from_static(["AAA"], day_start_ms=DAY_START)
-    bars = {"AAA": [bar(NOW - 1000, NOW, 100, 110)]}
+    bars = {"AAA": [bar(NOW - HOUR_MS, NOW, 100, 110)]}
     metrics = basket_metrics(basket, bars, now_ms=NOW, max_age_ms=HOUR_MS)
-    assert metrics["members"][0]["status"] == "ok"
+    assert metrics["members"][0]["status"] == "incomplete"
     assert metrics["members"][0]["return"] is None
     assert metrics["median_return"] is None
-    assert metrics["coverage"]["ratio"] == 1.0
+    assert metrics["coverage"]["ratio"] == 0.0
 
 
 def test_msk_day_return_complete_and_incomplete():
     basket = basket_from_static(["AAA", "BBB"], day_start_ms=DAY_START)
     bars_full = {
-        "AAA": [bar(DAY_START, DAY_START + 1000, 100, 101),
-                bar(DAY_START + 1000, DAY_START + 2000, 101, 103)],
-        "BBB": [bar(DAY_START, DAY_START + 1000, 100, 100),
-                bar(DAY_START + 1000, DAY_END, 100, 97)],
+        "AAA": day_bars(DAY_START, DAY_END, 103),
+        "BBB": day_bars(DAY_START, DAY_END, 97),
     }
     res = msk_day_return(basket, bars_full, day_start_ms=DAY_START, day_end_ms=DAY_END)
     assert res == {

@@ -8,8 +8,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
-from .rules import ENGINE_RULE_VERSION, get_rule
+from .rules import ENGINE_RULE_VERSION
+from .revalidation import MODEL_VERSION
 
 _EVENT_CLASSES = ("market_event",)
 _TIME_CLASSES = ("time_condition", "combination")
@@ -50,6 +52,7 @@ class MarketInput:
     source_states: dict            # source → {quality, detail, ...}
     registry: list                 # RuleSpec для оценки (caller применяет overrides)
     coverage_threshold: float = 0.8
+    memory_hours: int = 240
 
 
 def evaluate_market(inp: MarketInput) -> dict:
@@ -59,26 +62,47 @@ def evaluate_market(inp: MarketInput) -> dict:
     # --- Голоса фактов: внутри семьи один голос по приоритету правила (§6) ---
     events_votes: list[dict] = []
     time_votes: list[dict] = []
+    registry = {r.rule_id: r for r in inp.registry}
+    history_unverified = False
     for fact in inp.facts:
+        if (fact.get("scope") != "crypto_market" or fact.get("state") != "confirmed"
+                or any(fact.get(k, 0) > inp.now_ms for k in ("occurred_at", "available_at"))
+                or fact.get("valid_until", inp.now_ms + 1) <= inp.now_ms):
+            continue
+        payload = fact.get("payload") or {}
+        if (not payload.get("superseded_by") and fact.get("direction") in ("long", "short")
+                and (payload.get("current_check") or {}).get("status") == "unverified"):
+            history_unverified = True
+        if (payload.get("superseded_by") or payload.get("context_invalidated")
+                or (payload.get("current_check") or {}).get("status") == "unverified"
+                or payload.get("phase_at", 0) > inp.now_ms):
+            continue
         direction = fact.get("direction")
         if direction not in ("long", "short"):
             continue  # LIQ_FACT и сервисные факты не голосуют
-        rule = get_rule(fact.get("rule_id") or "")
+        effective_rule = (fact.get("payload") or {}).get("recovery_rule") or fact.get("rule_id") or ""
+        if effective_rule == "LIQ_PRESSURE" and direction == "long":
+            effective_rule = "LIQ_RECOVERY"
+        rule = registry.get(effective_rule)
+        if (rule is None or not rule.enabled or rule.rule_class != "market_event"
+                or rule.direction not in ("long", "short") or rule.direction != direction):
+            continue
         family = rule.family if rule else (fact.get("rule_id") or "unknown")
         priority = rule.priority if rule else 0
         rclass = rule.rule_class if rule else "market_event"
         group = "time" if rclass in _TIME_CLASSES else "events"
         vote = {
             "group": group, "side": direction, "sign": 1 if direction == "long" else -1,
-            "rule_id": fact.get("rule_id"), "family": family, "priority": priority,
+            "rule_id": effective_rule, "family": family, "priority": priority,
             "occurred_at": fact.get("occurred_at"), "fact": fact, "rule": rule,
+            "phase_at": (fact.get("payload") or {}).get("phase_at") or fact.get("occurred_at"),
         }
         (time_votes if group == "time" else events_votes).append(vote)
 
     # --- Голоса временных правил: только enabled+validated, §13.1 ---
     weekday = inp.time_ctx.get("weekday")
     hour = inp.time_ctx.get("hour_msk")
-    basket_history_ok = bool(inp.time_ctx.get("completed_days"))
+    basket_history_ok = any(d.get("sign") is not None for d in inp.time_ctx.get("completed_days") or [])
     for rule in inp.registry:
         if rule.rule_class not in _TIME_CLASSES:
             continue
@@ -118,21 +142,39 @@ def evaluate_market(inp: MarketInput) -> dict:
     if inp.metrics is not None:
         cov = inp.metrics.get("coverage") or {}
         ratio = float(cov.get("ratio", 0.0) or 0.0)
-        price_ok = ratio >= inp.coverage_threshold
+        price_ok = (ratio >= inp.coverage_threshold and cov.get("total", 0) > 0
+                    and isinstance(inp.metrics.get("median_return"), (int, float))
+                    and math.isfinite(inp.metrics["median_return"]))
         coverage = {
             "ok": cov.get("ok", 0), "total": cov.get("total", 0),
             "ratio": ratio, "sufficient": price_ok,
         }
     if not price_ok:
         unknown_deps.insert(0, "price")
-    liq_ok = bool(inp.liq and inp.liq.get("available"))
+    liq_ok = bool(inp.liq and inp.liq.get("available") and inp.liq.get("baseline_ok", True))
+    for source in ("price", "liquidations"):
+        quality = (inp.source_states.get(source) or {}).get("quality")
+        if quality not in ("ok", "partial"):
+            if source == "price":
+                price_ok = False
+            else:
+                liq_ok = False
+            if source not in unknown_deps:
+                unknown_deps.append(source)
+    if inp.liq and not inp.liq.get("baseline_ok", True):
+        unknown_deps.append("liquidations_baseline")
     if not liq_ok:
-        unknown_deps.insert(1 if not price_ok else 0, "liquidations")
+        if "liquidations" not in unknown_deps:
+            unknown_deps.insert(1 if not price_ok else 0, "liquidations")
+    if not price_ok and "price" not in unknown_deps:
+        unknown_deps.insert(0, "price")
+    if history_unverified:
+        unknown_deps.append("event_history")
 
     events_contra = _contradictory(events_votes)
     time_contra = _contradictory(time_votes)
     events_direction = (
-        "unknown" if not (price_ok and liq_ok) else _group_direction(events_votes)
+        "unknown" if not (price_ok and liq_ok) or history_unverified else _group_direction(events_votes)
     )
     time_direction = _group_direction(time_votes)  # календарь всегда доступен
 
@@ -144,6 +186,10 @@ def evaluate_market(inp: MarketInput) -> dict:
         direction = _group_direction(all_votes)
 
     quality = _quality(inp.source_states)
+    if quality == "ok" and (not (price_ok and liq_ok) or history_unverified):
+        quality = "partial"
+    if coverage:
+        coverage["sufficient"] = price_ok
     quality_by_dependency = {
         src: (st or {}).get("quality") for src, st in (inp.source_states or {}).items()
     }
@@ -152,8 +198,28 @@ def evaluate_market(inp: MarketInput) -> dict:
     if direction == "unknown" and _low_coverage_with_data(inp, coverage):
         market_line = _LINE_LOW_COVERAGE
 
-    n_long = sum(1 for v in all_votes if v["sign"] > 0)
-    n_short = sum(1 for v in all_votes if v["sign"] < 0)
+    counted_votes = (events_votes if events_direction != "unknown" else []) + time_votes
+    n_long = sum(1 for v in counted_votes if v["sign"] > 0)
+    n_short = sum(1 for v in counted_votes if v["sign"] < 0)
+    selected_keys = {v["fact"]["fact_key"] for v in all_votes if v.get("fact")}
+    active_facts = []
+    for fact in inp.facts:
+        item = _fact_out(fact)
+        selected = fact.get("fact_key") in selected_keys
+        item["used_for_direction"] = selected and events_direction != "unknown"
+        item["context_status"] = (
+            "invalidated" if (fact.get("payload") or {}).get("context_invalidated") else
+            "awaiting_confirmation" if (fact.get("payload") or {}).get("pressure_released") else
+            "unverified" if ((fact.get("payload") or {}).get("current_check") or {}).get("status") == "unverified" else
+            "non_directional" if fact.get("direction") not in ("long", "short") else
+            "unverified" if events_direction == "unknown" else
+            "driving" if selected else "background"
+        )
+        active_facts.append(item)
+    status_rank = {"driving": 0, "unverified": 1, "invalidated": 1,
+                   "awaiting_confirmation": 1, "background": 2, "non_directional": 3}
+    active_facts.sort(key=lambda f: (status_rank[f["context_status"]],
+                                   -(f.get("phase_at") or f.get("occurred_at") or 0)))
 
     return {
         "assessment_id": "",
@@ -179,7 +245,25 @@ def evaluate_market(inp: MarketInput) -> dict:
         "arrow": _ARROWS[direction],
         "reasons": _reasons(all_votes, direction, contradictory, inp.time_ctx),
         "unknown_dependencies": unknown_deps,
-        "active_facts": [_fact_out(f) for f in inp.facts],
+        "active_facts": active_facts,
+        "liquidations": {k: (inp.liq or {}).get(k) for k in (
+            "window", "coverage", "baseline_ok", "baseline_samples", "episode",
+        )},
+        "memory_policy": {"hours": inp.memory_hours, "expiry_is_model_limit": True},
+        "methodology": {
+            "id": MODEL_VERSION,
+            "label": "Экспериментальная модель корзины · Binance · окна 4ч",
+            "study_scope": "Исследование: BTC, дневные ликвидации на 10 биржах",
+            "limitations": [
+                "Числа исследования BTC не являются вероятностями для корзины монет.",
+                "OI не участвует в общей оценке направления этой модели.",
+                "История восстанавливается по текущему составу корзины; срок памяти — настройка модели.",
+                "Восстановление снимается при закрытиях H1 ниже основания каскада; это проектный критерий корзины.",
+            ],
+        },
+        "time_rules_active": any(r.enabled and r.confirmation == "validated"
+                                 and r.direction in ("long", "short")
+                                 for r in inp.registry if r.rule_class in _TIME_CLASSES),
         "time_context": inp.time_ctx,
         "statistics": inp.stats,
         "btc_background": None,
@@ -192,13 +276,12 @@ def evaluate_market(inp: MarketInput) -> dict:
 
 
 def _family_votes(votes: list[dict]) -> list[dict]:
-    """Один голос на коррелирующую семью: приоритет правила, при равенстве —
-    позднее occurred_at (§6: порог/доля/кратность одного эпизода — не три голоса)."""
+    """One vote per family; a later phase supersedes an older interpretation."""
     by_family: dict[str, dict] = {}
     for vote in votes:
         cur = by_family.get(vote["family"])
-        key = (vote["priority"], vote.get("occurred_at") or 0)
-        if cur is None or key > (cur["priority"], cur.get("occurred_at") or 0):
+        key = (vote.get("phase_at") or vote.get("occurred_at") or 0, vote["priority"])
+        if cur is None or key > (cur.get("phase_at") or cur.get("occurred_at") or 0, cur["priority"]):
             by_family[vote["family"]] = vote
     return list(by_family.values())
 
@@ -302,13 +385,21 @@ def _fact_out(fact: dict) -> dict:
     return {
         "fact_key": fact.get("fact_key"),
         "rule_id": fact.get("rule_id"),
+        "effective_rule_id": (fact.get("payload") or {}).get("recovery_rule") or fact.get("rule_id"),
         "direction": fact.get("direction"),
         "state": fact.get("state"),
         "occurred_at": fact.get("occurred_at"),
         "detected_at": fact.get("detected_at"),
         "available_at": fact.get("available_at"),
+        "first_detected_at": fact.get("created_at") or fact.get("detected_at"),
         "valid_until": fact.get("valid_until"),
         "time_precision": fact.get("time_precision"),
+        "phase_at": (fact.get("payload") or {}).get("phase_at"),
+        "episode_id": fact.get("episode_id"),
+        "coverage": (fact.get("payload") or {}).get("coverage"),
+        "current_check": (fact.get("payload") or {}).get("current_check"),
+        "invalidation_reason": (fact.get("payload") or {}).get("invalidation_reason"),
+        "invalidated_at": (fact.get("payload") or {}).get("invalidated_at"),
         "summary": (fact.get("payload") or {}).get("summary"),
     }
 
@@ -316,9 +407,11 @@ def _fact_out(fact: dict) -> dict:
 def _next_review(inp: MarketInput) -> int | None:
     candidates = []
     next_day = inp.time_ctx.get("next_day_start_ms")
-    if next_day:
+    if next_day and next_day > inp.now_ms:
         candidates.append(next_day)
+    candidates.extend(inp.time_ctx[k] for k in ("next_h1_close_ms", "next_liquidation_close_ms")
+                      if inp.time_ctx.get(k, 0) > inp.now_ms)
     candidates.extend(
-        f["valid_until"] for f in inp.facts if f.get("valid_until")
+        f["valid_until"] for f in inp.facts if f.get("valid_until", 0) > inp.now_ms
     )
     return min(candidates) if candidates else None

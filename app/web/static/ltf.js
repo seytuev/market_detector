@@ -1219,8 +1219,7 @@ function renderJournal() {
 function initChart() {
   const theme = HTF.chartTheme();
   // фон/сетка — из темы LevelFrame (chartTheme: var(--lf-surface) и т.д.),
-  // чтобы работала светлая тема; белые растущие / синие падающие свечи —
-  // устойчивая стилистика LTF-снимка
+  // чтобы работала светлая тема; стандартная палитра LTF — белая/синяя.
   state.chart = LightweightCharts.createChart($('chart'), {
     layout: { background: { color: theme.background }, textColor: theme.text },
     grid: {
@@ -1232,10 +1231,10 @@ function initChart() {
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     autoSize: true,
   });
-  state.candleSeries = state.chart.addCandlestickSeries({
+  state.candleSeries = state.chart.addCandlestickSeries(HTF.candleOptions(theme, {
     upColor: '#E8EAF0', downColor: '#3B9DF0',
     wickUpColor: '#E8EAF0', wickDownColor: '#3B9DF0', borderVisible: false,
-  });
+  }));
   state.chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
     drawLtfLayers();
     scheduleH1HistoryReload();
@@ -1270,6 +1269,22 @@ function initChart() {
     closeH1Card();
   });
 }
+
+function paintChartTheme() {
+  if (!state.chart) return;
+  const theme = HTF.chartTheme();
+  state.chart.applyOptions({
+    layout: { background: { color: theme.background }, textColor: theme.text },
+    grid: { vertLines: { color: theme.grid }, horzLines: { color: theme.grid } },
+    rightPriceScale: { borderColor: theme.border },
+  });
+  state.candleSeries.applyOptions(HTF.candleOptions(theme, {
+    upColor: '#E8EAF0', downColor: '#3B9DF0',
+    wickUpColor: '#E8EAF0', wickDownColor: '#3B9DF0',
+  }));
+}
+window.addEventListener('lf-theme', paintChartTheme);
+window.addEventListener('lf-candle-palette', paintChartTheme);
 
 // пустота справа после последней свечи (баров H1); временной setVisibleRange
 // клампится к последнему бару — отступ задаётся только логическим диапазоном

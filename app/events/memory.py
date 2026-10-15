@@ -99,8 +99,8 @@ def confirm_fact(db, fact_key: str, at_ms: int,
     fact = store.get_fact(db, fact_key)
     if fact is None:
         return None
-    if fact["state"] != "provisional":
-        return fact
+    if not _eligible(db, fact, at_ms) or fact["state"] != "provisional":
+        return store.get_fact(db, fact_key)
     store.set_fact_state(db, fact_key, "confirmed", at_ms)
     store.add_fact_transition(
         db, fact_key=fact_key, transition="confirmed",
@@ -114,8 +114,8 @@ def invalidate_fact(db, fact_key: str, at_ms: int, reason: str) -> dict | None:
     fact = store.get_fact(db, fact_key)
     if fact is None:
         return None
-    if fact["state"] not in ("provisional", "confirmed"):
-        return fact
+    if not _eligible(db, fact, at_ms):
+        return store.get_fact(db, fact_key)
     store.set_fact_state(db, fact_key, "invalidated", at_ms)
     store.add_fact_transition(
         db, fact_key=fact_key, transition="invalidated",
@@ -131,6 +131,11 @@ def reinterpret_fact(db, fact_key: str, *, new_direction: str | None,
     fact = store.get_fact(db, fact_key)
     if fact is None:
         return None
+    if not _eligible(db, fact, at_ms):
+        return store.get_fact(db, fact_key)
+    merged = {**fact["payload"], **(payload or {})}
+    if fact["direction"] == new_direction and merged == fact["payload"]:
+        return fact
     store.set_fact_direction(db, fact_key, new_direction, at_ms)
     if payload:
         merged = {**fact["payload"], **payload}
@@ -141,6 +146,17 @@ def reinterpret_fact(db, fact_key: str, *, new_direction: str | None,
         payload={"from_direction": fact["direction"], "to_direction": new_direction},
     )
     return store.get_fact(db, fact_key)
+
+
+def _eligible(db, fact: dict, at_ms: int) -> bool:
+    if fact["state"] not in ("provisional", "confirmed") or at_ms < fact["available_at"]:
+        return False
+    if fact["valid_until"] <= at_ms:
+        store.set_fact_state(db, fact["fact_key"], "expired", at_ms)
+        store.add_fact_transition(db, fact_key=fact["fact_key"], transition="expired",
+            from_state=fact["state"], to_state="expired", reason=None, at_ms=at_ms)
+        return False
+    return True
 
 
 def expire_due(db, now_ms: int) -> list[dict]:

@@ -15,6 +15,7 @@ window.HTF = (() => {
   // data-theme на <html> ставит также inline-скрипт в <head> (до загрузки CSS),
   // здесь — API для настроек и подписка на смену системной темы.
   const THEME_KEY = 'lf:theme';
+  const CANDLE_PALETTE_KEY = 'lf:candle-palette';
   const lightMq = window.matchMedia ? window.matchMedia('(prefers-color-scheme: light)') : null;
 
   function themeGet() {
@@ -38,6 +39,25 @@ window.HTF = (() => {
     localStorage.setItem(THEME_KEY, choice === 'dark' || choice === 'light' ? choice : 'system');
     return themeApply();
   }
+
+  function candlePaletteGet() {
+    return localStorage.getItem(CANDLE_PALETTE_KEY) === 'monochrome' ? 'monochrome' : 'standard';
+  }
+
+  function candlePaletteSet(choice) {
+    const palette = choice === 'monochrome' ? 'monochrome' : 'standard';
+    localStorage.setItem(CANDLE_PALETTE_KEY, palette);
+    window.dispatchEvent(new CustomEvent('lf-candle-palette', { detail: { palette } }));
+    return palette;
+  }
+
+  window.addEventListener('storage', (event) => {
+    if (event.key === CANDLE_PALETTE_KEY || event.key === null) {
+      window.dispatchEvent(new CustomEvent('lf-candle-palette', {
+        detail: { palette: candlePaletteGet() },
+      }));
+    }
+  });
 
   if (lightMq) {
     const onSystemTheme = () => { if (themeGet() === 'system') themeApply(); };
@@ -74,6 +94,23 @@ window.HTF = (() => {
       accent: cssVar('--lf-brand', '#4268DD'),
       up: cssVar('--lf-positive', '#62C9B0'),
       down: cssVar('--lf-negative', '#F08D98'),
+    };
+  }
+
+  function candleOptions(theme = chartTheme(), standard = {}) {
+    if (candlePaletteGet() === 'monochrome') {
+      const outline = document.documentElement.dataset.theme === 'light' ? '#171A24' : '#E8EAF0';
+      return {
+        upColor: '#FFFFFF', downColor: '#171A24',
+        wickUpColor: outline, wickDownColor: outline,
+        borderUpColor: outline, borderDownColor: outline, borderVisible: true,
+      };
+    }
+    return {
+      upColor: theme.up, downColor: theme.down,
+      wickUpColor: theme.up, wickDownColor: theme.down,
+      borderUpColor: theme.up, borderDownColor: theme.down, borderVisible: false,
+      ...standard,
     };
   }
 
@@ -523,8 +560,9 @@ window.HTF = (() => {
     getToken, ensureToken, api, connectWs, isWsConnected: () => !!currentSocket && currentSocket.readyState === 1,
     fmtPrice, fmtTime, parseMskLocal, esc, tradingviewUrl,
     captureChartRange, restoreChartRange, bindChartOverlayCrosshair,
-    chartTheme, chartTimeOptions, openModal, closeModal, setConnectionState,
+    chartTheme, candleOptions, chartTimeOptions, openModal, closeModal, setConnectionState,
     theme: { get: themeGet, set: themeSet, apply: themeApply },
+    candlePalette: { get: candlePaletteGet, set: candlePaletteSet },
     DomainSync,
   };
 })();

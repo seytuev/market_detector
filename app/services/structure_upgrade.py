@@ -15,13 +15,14 @@ def legacy_scenarios(db, instrument_id):
 
 def prepare_upgrade(db, cfg, instrument_id, as_of):
     key = f"structure:rules:{instrument_id}"
-    if db.get_meta(key) == RULE_VERSION:
+    previous_rules = db.get_meta(key)
+    if previous_rules == RULE_VERSION:
         return False
     old = db.conn.execute(
         "SELECT 1 FROM ltf_pivot p JOIN calc_version v ON v.id=p.calc_version_id "
         "WHERE p.instrument_id=? AND v.kind='ltf_structure' AND v.rule_version<>? LIMIT 1",
         (instrument_id, RULE_VERSION_LTF)).fetchone()
-    if old is None:
+    if old is None and previous_rules is None:
         db.set_meta(key, RULE_VERSION)
         return False
     candles = db.get_candles(instrument_id, "H1", end_ms=as_of)
@@ -30,8 +31,8 @@ def prepare_upgrade(db, cfg, instrument_id, as_of):
     # Keep the old scenario/event/notification journal. It must not suppress
     # a new calculation's historical events or keep an obsolete entry active.
     legacy_key = f"structure:legacy_scenarios:{instrument_id}"
-    recorded = db.get_meta(legacy_key)
-    if recorded is not None:
+    prepared_key = f"structure:upgrade_prepared:{instrument_id}:{RULE_VERSION}"
+    if db.get_meta(prepared_key) == "1":
         return True
     if db.path != ":memory:" and not db.is_postgres:
         source_path = Path(db.path).resolve()
@@ -68,5 +69,6 @@ def prepare_upgrade(db, cfg, instrument_id, as_of):
         # The engine records the version only after replay succeeds. A failed
         # replay therefore retries on the next tick without sending old signals.
         db.set_meta(legacy_key, json.dumps([s.id for s in scenarios]))
+        db.set_meta(prepared_key, "1")
         db._commit()
     return True

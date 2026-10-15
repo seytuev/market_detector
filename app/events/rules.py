@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from .revalidation import MODEL_VERSION
 
 ENGINE_RULE_VERSION = "events-time-2.0"
 
@@ -21,6 +22,7 @@ _LIQ_THRESHOLDS = {
     "long_share": 0.60,
     "episode_multiple": 1.5,
     "baseline_days": 30,
+    "baseline_min_samples": 14,
     "fade_ratio": 0.5,
     "recovery_windows": 3,
     "window_ms": 4 * HOUR_MS,
@@ -44,6 +46,7 @@ class RuleSpec:
     priority: int              # внутри семьи побеждает больший
     enabled: bool
     thresholds: dict           # версионированные проектные defaults
+    method_version: str = MODEL_VERSION
 
 
 RULE_REGISTRY: tuple[RuleSpec, ...] = (
@@ -78,7 +81,7 @@ RULE_REGISTRY: tuple[RuleSpec, ...] = (
         rule_class="market_event",
         scope="crypto_market",
         dependencies=("price", "liquidations"),
-        window="Затухание эпизода: recovery_windows окон по 4ч после пика каскада",
+        window="После каскада: recovery_windows завершённых окон по 4ч ниже fade_ratio от пика",
         formula=(
             "после эпизода лонг-ликвидаций активность ниже fade_ratio от пика "
             "в течение recovery_windows окон, цена и ширина корзины восстанавливаются"

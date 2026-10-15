@@ -197,7 +197,7 @@ def test_overview_market_stale_flag(monkeypatch, tmp_path):
     client = _client(db, settings)
 
     body = _get(client, "/api/events/overview").json()
-    assert body["ready"] is False  # legacy BTC-снимка нет, рыночный блок всё равно есть
+    assert body["ready"] is True  # готовность общей оценки не зависит от legacy BTC
     assert body["legacy_methodology"] is None
     assert body["market"]["assessment_id"] == "old"
     assert body["market_age_seconds"] == 300
@@ -346,7 +346,7 @@ def test_calendar_market_upcoming_real_switches_only(tmp_path):
     market = body["market"]
     assert market["time_context"]["weekday"] == 3  # четверг МСК
     upcoming = market["upcoming"]
-    assert {u["kind"] for u in upcoming} <= {"msk_day_boundary", "fact_expiry"}
+    assert {u["kind"] for u in upcoming} <= {"msk_day_boundary", "fact_expiry", "h1_close", "liquidation_window_close"}
 
     day = next(u for u in upcoming if u["kind"] == "msk_day_boundary")
     assert day["label"] == "Смена дня МСК"

@@ -77,6 +77,16 @@ def causal_origin(direction, event: StructureEventDraft, pivots, candles):
     kind = "low" if bull else "high"
     bos_at = int(event.occurred_at)
     break_open = int(event.break_candle_open_time)
+    evidence = event.evidence or {}
+    if evidence.get("origin_provenance") == "structural_candidate":
+        at = int(evidence["origin_at"])
+        known_at = int(evidence["origin_known_at"])
+        if at <= break_open and known_at <= bos_at:
+            return {
+                "key": f"candidate:{at}", "price": float(evidence["anchor_price"]),
+                "at": at, "known_at": known_at,
+                "provenance": "structural_candidate", "role": None,
+            }
     confirmed = [
         p for p in pivots
         if p.state == "confirmed" and p.kind == kind
@@ -368,7 +378,8 @@ def apply_candle(state: dict, candle: Candle, events: list, pivots: list, candle
             current["superseded_at"] = int(event.occurred_at)
             current["as_of"] = int(event.occurred_at)
             dirty.append(current)
-        origin = _origin_from_pivot(corr) if corr is not None else causal_origin(
+        observed = (event.evidence or {}).get("origin_provenance") == "structural_candidate"
+        origin = _origin_from_pivot(corr) if corr is not None and not observed else causal_origin(
             direction, event, pivots, candles,
         )
         dirty.append(_open_leg(state, event, pivots, candles, int(candle.close_time), origin))
