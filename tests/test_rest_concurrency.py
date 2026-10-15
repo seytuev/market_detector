@@ -129,7 +129,7 @@ async def test_rest_concurrency_setting_bounds_per_venue():
     worker = _make_worker(db, CountingExchange(), rest_concurrency=2)
     active = peak = 0
     await asyncio.gather(*(worker.data_sync.request("binance", slow) for _ in range(4)))
-    assert peak == 2
+    assert peak == 1  # one of the two slots is reserved for last_price
     await worker.calc_queue.stop()
     db.close()
 

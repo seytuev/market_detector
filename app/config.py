@@ -510,11 +510,10 @@ class Settings:
     # ожидание/доставку — держать 1 до замеров.
     calculation_concurrency: int = field(
         default_factory=lambda: int(_env("HTF_CALC_CONCURRENCY", "1")))
-    # Этап 5 (спека §10): параллельные REST-запросы на venue (свечи разных
-    # инструментов). Стартовое значение — прежнее (2); увеличивать после
-    # baseline и тестов, отдельно от расчётов.
+    # One price slot plus two candle slots: a slow history request must
+    # leave capacity for another instrument's hourly boundary.
     rest_concurrency: int = field(
-        default_factory=lambda: int(_env("HTF_REST_CONCURRENCY", "2")))
+        default_factory=lambda: int(_env("HTF_REST_CONCURRENCY", "3")))
     host: str = field(default_factory=lambda: _env("HTF_HOST", "127.0.0.1"))
     port: int = field(default_factory=lambda: int(_env("HTF_PORT", "8000")))
     # Публичный URL сайта для ссылок из Telegram (кнопка «Открыть график»);

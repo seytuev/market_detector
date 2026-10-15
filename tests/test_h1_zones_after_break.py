@@ -46,7 +46,7 @@ def test_fvg_on_and_after_break_kept_with_separate_times():
     assert [z for z in wrong.zones if z.direction != Direction.BULL] == []
 
 
-def test_context_finished_before_confirmation_rejects_without_clock_limit():
+def test_context_finished_bounds_discovery_without_clock_limit():
     candles, avail, mv, cfg = _detection(DetectorConfig())
     # Дедлайн — закрытие слома. Поздняя тройка к завершённому контексту не относится.
     det = detect_entry_zones(
@@ -54,11 +54,10 @@ def test_context_finished_before_confirmation_rejects_without_clock_limit():
         context_until=mv.end_at + H1_MS,
     )
     assert ("FVG", 11.8, 12.4) not in _by_bounds(det)
-    assert any(
-        r["reason"] == "контекст завершён до подтверждения зоны"
-        and r["formed_at"] == T0 + 13 * H1_MS
-        for r in det.rejected
-    )
+    # A finished context bounds discovery itself. Later candidates are not
+    # scanned just to create rejection messages for years of future candles.
+    assert all(z.confirmed_at <= mv.end_at + H1_MS for z in det.zones)
+    assert not any(r.get('formed_at') == T0 + 13 * H1_MS for r in det.rejected)
     # Тот же ряд без дедлайна позднюю зону принимает: числа свечей после слома нет.
     open_det = detect_entry_zones(candles, mv, avail, Direction.BEAR, cfg)
     assert ("FVG", 11.8, 12.4) in _by_bounds(open_det)

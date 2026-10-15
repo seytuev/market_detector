@@ -13,7 +13,10 @@ def worker_for(db):
     worker = SimpleNamespace(db=db, scan_tfs=("D1",), _stop=asyncio.Event())
     worker.scanner = Scanner(db, DetectorConfig())
     worker.data_sync = DataSync(worker)
-    worker._calculate = worker.data_sync.calculate
+    async def calculate(fn, *args, calculation_instrument=None, **kwargs):
+        return await worker.data_sync.calculate(fn, *args,
+                                               instrument_id=calculation_instrument, **kwargs)
+    worker._calculate = calculate
     worker.deliveries = []
     async def dispatch(events):
         worker.deliveries.extend(e.id for e in events)
