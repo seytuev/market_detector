@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from ..engine.depth import max_depth_in_interval, zone_depth
-from ..engine.ltf.breaks import expected_structure_conditions
+from .structure_expectations import expected_structure_conditions
 from ..engine.ltf.pivots import PivotCandidate
 from ..models import Direction, EventKind, ZoneStatus, ZoneType
 from ..notify.formatting import format_level, fmt_time_msk
@@ -823,7 +823,7 @@ def build_presentation(
         if open_last is not None and not open_last.closed:
             candles.append(open_last)
         conditions = expected_structure_conditions(
-            pivots, [c for c in candles if c.closed], selected.direction, now, since_ms=since,
+            pivots, [c for c in candles if c.closed], selected.direction, now, since_ms=since, db=db,
         )
     touch = None
     if conditions and inconsistent is None:

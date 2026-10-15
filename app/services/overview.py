@@ -18,7 +18,7 @@ from ..engine.ltf.eligibility import (
     evaluate_final,
 )
 from ..engine.ltf.entries import fvg_fill_status
-from ..engine.ltf.breaks import (
+from .structure_expectations import (
     expected_reverse_condition,
     expected_structure_conditions,
 )
@@ -920,7 +920,7 @@ def _cancel_condition(db, settings, obs, sc) -> dict[str, Any]:
     start = sc.created_at
     return expected_reverse_condition(
         pivots, candles, sc.direction, now_ms(),
-        since_ms=since, cancel_not_before_ms=start,
+        since_ms=since, cancel_not_before_ms=start, db=db,
     )
 
 
@@ -1524,7 +1524,7 @@ def _expected_levels(
     if as_of is not None:
         candles = [c for c in candles if c.close_time <= moment]
     conditions = expected_structure_conditions(
-        pivots, candles, obs.direction, moment, since_ms=since,
+        pivots, candles, obs.direction, moment, since_ms=since, db=db,
     )
     return legacy_expected(conditions, obs.direction.value)
 
