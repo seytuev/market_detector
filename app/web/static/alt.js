@@ -795,6 +795,7 @@ function renderNotes() {
     notes.push('Часть истории не загружена. Рамка не подменяется границами видимого фрагмента.');
   }
   $('alt-chart-note').textContent = notes.filter(Boolean).join(' ');
+  $('alt-chart-notes').hidden = !notes.some(Boolean);
 }
 
 function writeUrl() {
@@ -1677,16 +1678,19 @@ function applyTableMode() {
 function openAnalysisScreen(push = true) {
   if (state.screen === 'list' && push) {
     state.listScroll = $('alt-table-mode').querySelector('.alt-table-scroll').scrollTop;
+    state.listPageScroll = $('alt-page').scrollTop;
     history.pushState(null,'',location.href);
   }
   state.screen = 'analysis'; state.tableMode = false; state.pane = 'chart';
   $('alt-page').dataset.mobilePane = 'chart';
   applyTableMode(); applyPane();
+  $('alt-page').scrollTop = 0;
 }
 function returnToScreener() {
   state.screen = 'list'; state.tableMode = true; state.pane = 'list';
   applyTableMode(); applyPane(); writeUrl(); renderTable();
   requestAnimationFrame(() => { $('alt-table-mode').querySelector('.alt-table-scroll').scrollTop = state.listScroll || 0;
+    $('alt-page').scrollTop = state.listPageScroll || 0;
     $('alt-tbody').querySelector('[aria-selected="true"]')?.focus({preventScroll:true}); });
 }
 function renderTable() {
@@ -1699,7 +1703,7 @@ function renderTable() {
     const id = kind === 'nodata' ? '' : objectId(row);
     const cmc = row.asset && row.asset.cmc_id != null ? row.asset.cmc_id : '';
     return `<tr tabindex="0" aria-selected="${selected ? 'true' : 'false'}" data-kind="${kind}" data-id="${id}" data-cmc="${cmc}">` +
-      columns.map((col) => `<td${col.num ? ' class="num"' : ''}>${col.render(row)}</td>`).join('') + '</tr>';
+      columns.map((col) => `<td data-column="${col.id}" data-label="${esc(col.title)}"${col.num ? ' class="num"' : ''}>${col.render(row)}</td>`).join('') + '</tr>';
   }).join('');
   if (!rows.length) $('alt-tbody').innerHTML = `<tr><td colspan="${columns.length}" class="alt-empty">${state.listPhase === 'loading' ? 'Загружаем активы…' : state.listPhase === 'error' ? 'Список не загрузился. Повторите загрузку.' : esc(emptyListText())}</td></tr>`;
 }
@@ -1814,6 +1818,7 @@ function bind() {
     if (panel.classList.contains('hidden')) openPanel('alt-filter-panel', $('alt-filters-toggle'));
     else closePanel('alt-filter-panel');
   };
+  $('alt-filter-close').onclick = () => closePanel('alt-filter-panel');
   $('alt-filter-panel').onsubmit = (event) => {
     event.preventDefault();
     const errors = validateFilters();
@@ -1991,6 +1996,9 @@ function bind() {
     const on = !work.classList.contains('chart-expanded');
     work.classList.toggle('chart-expanded', on);
     $('alt-expand').setAttribute('aria-pressed', on ? 'true' : 'false');
+    $('alt-expand').setAttribute('aria-label', on ? 'Вернуть панели' : 'Развернуть график');
+    $('alt-expand').title = on ? 'Вернуть панели' : 'Развернуть график';
+    $('alt-expand').textContent = on ? 'Вернуть панели' : 'Развернуть график';
     scheduleDraw();
   };
   $('alt-card-toggle').onclick = () => {
@@ -2131,6 +2139,10 @@ function bind() {
 
 async function init() {
   await HTF.ensureToken();
+  const mobileLayout = window.matchMedia('(max-width: 767px)');
+  const placeNotes = () => { $('alt-chart-notes').open = !mobileLayout.matches; };
+  mobileLayout.addEventListener('change', placeNotes);
+  placeNotes();
   loadPrefs();
   syncControls();
   initChart();

@@ -2,6 +2,9 @@
    All page overrides stay below 768px; desktop layouts retain their own rules. */
 .mobile-disclosure-summary, .mobile-page-title { display: none; }
 .alt-buckets, .ltf-data-disclosure, .ltf-data-status { display: contents; }
+.alt-chart-notes > summary { display: none; }
+.alt-chart-notes[hidden] { display: none; }
+.alt-filter-heading { display: flex; flex: 1 0 100%; justify-content: space-between; align-items: center; gap: 8px; }
 
 @media (max-width: 767px) {
   .app-body { font-size: 13px; line-height: 1.5; }
@@ -197,8 +200,84 @@
   #alt-page .alt-filter-panel input, #alt-page .alt-filter-panel select { width: 100%; }
   #alt-page .alt-filter-actions { width: 100%; }
   #alt-page .alt-filter-actions .btn { flex: 1; }
+  #alt-page .alt-filter-heading { position: sticky; top: -16px; z-index: 1; padding: 8px 0; background: var(--lf-surface); }
   #alt-page .alt-layers label { min-height: 44px; }
   #alt-page .alt-layers input[type="checkbox"] { width: 18px; height: 18px; }
+
+  /* Screener controls and results fit the phone instead of a wide desktop table. */
+  #alt-page .alt-fresh { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; padding-top: 10px; }
+  #alt-page .alt-fresh-main { display: contents; }
+  #alt-page .alt-fresh-main > h1 { grid-column: 1; grid-row: 1; }
+  #alt-page .alt-fresh-main > p, #alt-page .alt-fresh-main > .badge { grid-column: 1 / -1; }
+  #alt-page .alt-fresh h1 { font-size: 21px; line-height: 28px; }
+  #alt-page #alt-proc-toggle { grid-column: 2; grid-row: 1; padding: 0 8px; font-size: 11px; }
+  #alt-page .alt-fresh:has(#alt-run-state:not(:empty)) #alt-running { display: none; }
+  #alt-page[data-screen="list"] .alt-fresh .h1-events-context { display: grid; grid-column: 1 / -1; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; }
+  #alt-page[data-screen="analysis"] .alt-fresh .h1-events-context { display: none; }
+  #alt-page .alt-fresh .h1-events-context .side-card-head { grid-column: 1 / -1; }
+  #alt-page .alt-fresh .h1-events-context .side-open { min-height: 32px; padding: 0 6px; font-size: 10px; }
+  #alt-page .alt-tabs { grid-template-columns: minmax(0, 1fr) auto; gap: 6px; padding-bottom: 8px; }
+  #alt-page .alt-venue-label { display: flex; grid-column: 1; flex-direction: row; align-items: center; gap: 6px; }
+  #alt-page #alt-filters-toggle { grid-column: 2; }
+  #alt-page .alt-venue-label select { flex: 1; width: 0; }
+  #alt-page #alt-table-toggle, #alt-page #alt-table-back { display: none; }
+  #alt-page .alt-table-mode { background: transparent; border: 0; padding: 0; overflow: visible; }
+  #alt-page #alt-table-mode .alt-list-head { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 12px; margin-bottom: 8px; border: 1px solid var(--lf-border); border-radius: 14px; background: var(--lf-surface); }
+  #alt-page #alt-table-mode .alt-list-head label { min-width: 0; }
+  #alt-page #alt-table-mode .alt-search-label { grid-column: 1 / -1; }
+  #alt-page #alt-table-mode .alt-list-head input, #alt-page #alt-table-mode .alt-list-head select { width: 100% !important; box-sizing: border-box; }
+  #alt-page #alt-table-mode .alt-list-head > a { grid-column: 1 / -1; font-size: 11px; justify-self: end; padding: 4px 0; }
+  #alt-page .alt-table-scroll { overflow: visible; max-height: none; }
+  #alt-table, #alt-tbody { display: block; width: 100%; white-space: normal; }
+  #alt-table thead { display: none; }
+  #alt-tbody { display: grid; gap: 8px; }
+  #alt-table tbody tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; padding: 12px; border: 1px solid var(--lf-border); border-radius: 14px; background: var(--lf-surface); }
+  #alt-table tbody tr[aria-selected="true"] { border-color: var(--lf-brand); }
+  #alt-table tbody tr td, #alt-table tbody tr td:first-child { position: static; display: block; min-width: 0; padding: 0; border: 0; text-align: left; background: transparent; box-shadow: none; overflow-wrap: anywhere; }
+  #alt-table tbody tr td.num { text-align: left; }
+  #alt-table td::before { content: attr(data-label); display: block; margin-bottom: 2px; font-size: 10px; color: var(--lf-text2); }
+  #alt-table td[data-column="asset"] { grid-column: 1 / -1; font-size: 17px; font-weight: 600; }
+  #alt-table td[data-column="asset"]::before, #alt-table td[colspan]::before { display: none; }
+  #alt-table td[data-column="asset"] .alt-dim { display: block; font-size: 11px; font-weight: 400; }
+  #alt-table td[data-column="last"], #alt-table td[data-column="data"], #alt-table td[colspan] { grid-column: 1 / -1; }
+
+  /* Give the plot priority; long history explanations remain expandable. */
+  #alt-page[data-screen="analysis"] .alt-fresh h1 { font-size: 18px; line-height: 26px; }
+  #alt-page[data-screen="analysis"] #alt-proc-toggle { width: 44px; padding: 0; font-size: 0; }
+  #alt-page[data-screen="analysis"] #alt-proc-toggle::before { content: '⋯'; font-size: 22px; }
+  #alt-page .alt-chart-col { overflow: visible; }
+  #alt-page .alt-asset-head { grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; align-items: center; }
+  #alt-page .alt-back { grid-column: 1 / -1; min-height: 32px; }
+  #alt-page .alt-asset-head h2 { grid-column: 1; grid-row: 2; margin: 0; }
+  #alt-page .alt-structure-link { grid-column: 2; grid-row: 2; padding: 0 8px; font-size: 10px; }
+  #alt-page #alt-chart-sub { grid-column: 1 / -1; line-height: 17px; margin: 2px 0; }
+  #alt-page .alt-toolbar { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; margin: 6px 0; }
+  #alt-page .alt-toolbar .btn { min-width: 0; padding: 4px; white-space: normal; line-height: 15px; }
+  #alt-page .alt-modes { grid-column: 1 / -1; }
+  #alt-page .alt-tf { grid-column: 1 / 3; padding: 0; }
+  #alt-page .alt-tf button { flex: 1; min-width: 0; }
+  #alt-page #alt-expand { grid-column: 4; grid-row: 2; font-size: 0; }
+  #alt-page #alt-expand::before { content: '⛶'; font-size: 23px; }
+  #alt-page #alt-range { grid-column: span 2; }
+  #alt-page .alt-chart-notes { flex: none; margin: 0 0 6px; border-radius: 8px; background: var(--lf-raised); }
+  #alt-page .alt-chart-notes > summary { display: flex; align-items: center; justify-content: space-between; min-height: 36px; padding: 0 10px; font-size: 11px; color: var(--lf-text2); cursor: pointer; list-style: none; }
+  #alt-page .alt-chart-notes > summary::-webkit-details-marker { display: none; }
+  #alt-page .alt-chart-notes > summary::after { content: '+'; }
+  #alt-page .alt-chart-notes[open] > summary::after { content: '−'; }
+  #alt-page .alt-chart-note { padding: 0 10px 10px; margin: 0; font-size: 11px; line-height: 17px; }
+  #alt-page #chart-container { height: clamp(320px, 52svh, 540px); }
+  #alt-page:has(.chart-expanded) .alt-fresh,
+  #alt-page:has(.chart-expanded) #alt-analysis-tabs,
+  #alt-page .chart-expanded .alt-asset-head,
+  #alt-page .chart-expanded .alt-modes,
+  #alt-page .chart-expanded .alt-chart-notes,
+  #alt-page .chart-expanded #alt-180,
+  #alt-page .chart-expanded #alt-range,
+  #alt-page .chart-expanded #alt-all-history { display: none; }
+  #alt-page .chart-expanded #chart-container { height: max(320px, calc(100svh - 210px)); }
+  #alt-page .chart-expanded #alt-expand { grid-row: 1; }
+  #alt-page .alt-chart-actions { display: flex; align-items: center; gap: 6px; }
+  #alt-page .alt-chart-actions .chart-share { flex: 1; justify-content: center; }
 
   /* Market and calendar: smaller typography and shorter card spacing. */
   #events-root .market-header { align-items: flex-start; gap: 10px; }

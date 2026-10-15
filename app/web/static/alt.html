@@ -69,7 +69,7 @@
         <span id="alt-problem" class="badge hidden" role="status">Проблема данных</span>
         <span id="alt-running" class="badge hidden">Идёт обработка</span>
       </div>
-      <button type="button" id="alt-proc-toggle" class="btn small" aria-expanded="false" aria-controls="alt-proc">Обработка</button>
+      <button type="button" id="alt-proc-toggle" class="btn small" aria-expanded="false" aria-controls="alt-proc" aria-label="Состояние обработки" title="Состояние обработки">Обработка</button>
     </header>
     <section id="alt-proc" class="alt-proc hidden">
       <p id="alt-proc-body"></p>
@@ -92,6 +92,7 @@
     </div>
     <div id="alt-chips" class="alt-chips" aria-label="Применённые фильтры"></div>
     <form id="alt-filter-panel" class="alt-filter-panel hidden">
+      <div class="alt-filter-heading"><strong>Фильтры</strong><button type="button" id="alt-filter-close" class="btn small">Закрыть</button></div>
       <label>Ранг капитализации от
         <input id="flt-rank-min" type="number" min="0" inputmode="numeric">
       </label>
@@ -171,9 +172,9 @@
           <button type="button" id="alt-back" class="btn small alt-back">← К скринеру</button>
           <h2 id="alt-chart-title">Выберите монету</h2>
           <p id="alt-chart-sub" class="alt-dim"></p>
+          <a class="btn small alt-structure-link" href="/?mode=h1#desk">Структура H1</a>
         </div>
         <div class="alt-toolbar" id="alt-toolbar">
-          <a class="btn small" href="/?mode=h1#desk">Структура H1</a>
           <div class="alt-modes" role="group" aria-label="Режим событий">
             <button type="button" id="alt-mode-setup" data-mode="setup" aria-pressed="true">Сетап</button>
             <button type="button" id="alt-mode-history" data-mode="history" aria-pressed="false">История</button>
@@ -187,7 +188,7 @@
           <button type="button" id="alt-180" class="btn small">180D</button>
           <button type="button" id="alt-range" class="btn small">Весь диапазон</button>
           <button type="button" id="alt-all-history" class="btn small">Вся история</button>
-          <button type="button" id="alt-expand" class="btn small" aria-pressed="false">Развернуть график</button>
+          <button type="button" id="alt-expand" class="btn small" aria-pressed="false" aria-label="Развернуть график" title="Развернуть график">Развернуть график</button>
           <button type="button" id="alt-card-toggle" class="btn small alt-card-toggle" aria-expanded="false">Карточка</button>
         </div>
         <div id="alt-layers" class="alt-layers hidden">
@@ -209,7 +210,10 @@
           </fieldset>
           <p class="alt-dim">История показывает рамки эпизодов этой монеты. События остаются у выбранного сетапа. Внутренняя полка не меняет основную рамку. Масштаб режим не меняет.</p>
         </div>
-        <p id="alt-chart-note" class="alt-chart-note"></p>
+        <details id="alt-chart-notes" class="alt-chart-notes" open>
+          <summary>О данных и истории</summary>
+          <p id="alt-chart-note" class="alt-chart-note"></p>
+        </details>
         <div id="chart-container">
           <div id="chart"></div>
           <div id="alt-overlay"></div>
