@@ -132,7 +132,7 @@ def _stored_terminal(zone, as_of):
 def _input_version(db, instrument_id):
     last = db.last_candle(instrument_id, 'H1')
     return json.dumps([db.instrument_domain('seq:ltf', instrument_id), _parent_inputs(db, instrument_id),
-                       db.get_domain('seq:config'),
+                       db.get_meta('settings:active_profile'),
                        last.close_time if last else None,
                        db.latest_candle_revision_at(instrument_id, 'H1')])
 

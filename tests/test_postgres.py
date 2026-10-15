@@ -140,6 +140,18 @@ def test_committed_materialized_ideas_projection(pg, monkeypatch):
                 test_uncommitted_or_changed_inputs_are_never_materialized(pg, iid, scoped, mode)
 
 
+def test_instrument_flag_idempotence_and_independent_asset_versions(pg, monkeypatch):
+    import asyncio
+    from tests.test_domain_versions import test_repeated_instrument_flags_preserve_config_and_cancel_disabled_quotes
+    from tests.test_runtime_startup import test_repeated_startup_seed_does_not_invalidate_all_asset_snapshots
+    from tests.test_materialized_ideas import test_adding_another_asset_keeps_projection_but_real_rule_changes_invalidate
+    iid = pg.upsert_instrument(Instrument(None, 'ETH', 'binance', 'spot', 'ETHUSDT', 'USDT'))
+    test_repeated_instrument_flags_preserve_config_and_cancel_disabled_quotes(pg, iid)
+    asyncio.run(test_repeated_startup_seed_does_not_invalidate_all_asset_snapshots(pg))
+    other = pg.upsert_instrument(Instrument(None, 'SOL', 'binance', 'spot', 'SOLUSDT', 'USDT'))
+    test_adding_another_asset_keeps_projection_but_real_rule_changes_invalidate(pg, other, monkeypatch)
+
+
 def test_bulk_market_history_matches_scalar_and_rolls_back(pg):
     from tests.test_events_store_v2 import test_bulk_buckets_match_scalar_updates_and_rollback
     test_bulk_buckets_match_scalar_updates_and_rollback(pg)

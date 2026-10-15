@@ -1741,12 +1741,23 @@ function displayPair(symbol) {
   return s || '—';
 }
 
+// Вкладка «Проверка зон» показывается только когда есть актуальные зоны на
+// проверку; сервер отдаёт список кандидатов уже без проверенных.
+function updateReviewTabVisibility() {
+  const pending = (reviewState.all || []).filter((c) => !reviewState.doneMap.has(c.id)).length;
+  for (const elId of ['nav-review', 'nav-review-mobile']) {
+    const el = document.getElementById(elId);
+    if (el) el.classList.toggle('hidden', pending === 0);
+  }
+}
+
 async function loadCandidates() {
   const id = state.instrumentId;
   const req = ++state.candidateReq;
   const list = (await analysisApi('/api/candidates')).filter(isHtf); // только HTF
   if (id !== state.instrumentId || req !== state.candidateReq) return;
   reviewState.all = list;
+  updateReviewTabVisibility();
   const mine = state.instrumentId
     ? list.filter((z) => z.instrument_id === state.instrumentId)
     : list;

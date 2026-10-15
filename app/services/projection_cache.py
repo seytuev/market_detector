@@ -49,9 +49,9 @@ class ProjectionCache:
 
 
 def structural_version(db, instrument_id, cfg):
-    """Forming candles/quotes cannot invalidate closed-bar calculations."""
+    """Quotes and unrelated asset switches cannot invalidate closed-bar inputs."""
     return (db.instrument_domain('seq:ltf', instrument_id), db.instrument_domain('seq:zones', instrument_id),
-            db.get_domain('seq:config'), repr(cfg),
+            repr(cfg),
             tuple((tf, c.open_time if c else None, c.close if c else None,
                    db.latest_candle_revision_at(instrument_id, tf))
                   for tf in ('H1', 'D1', 'W1')

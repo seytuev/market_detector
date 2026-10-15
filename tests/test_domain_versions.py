@@ -96,6 +96,29 @@ def test_quote_bump_only_on_accepted_write(db: Database, instrument_id: int):
     assert db.get_domain(key) == 2
 
 
+def test_repeated_instrument_flags_preserve_config_and_cancel_disabled_quotes(db, instrument_id):
+    start = db.get_domain('seq:config')
+    state = db.get_state_seq()
+    db.set_instrument_enabled(instrument_id, True)
+    assert db.get_domain('seq:config') == start and db.get_state_seq() == state
+    db.set_instrument_active(instrument_id, True)
+    changed = db.get_domain('seq:config')
+    state = db.get_state_seq()
+    db.set_instrument_active(instrument_id, True)
+    assert db.get_domain('seq:config') == changed and db.get_state_seq() == state
+    db.set_instrument_enabled(instrument_id, False)
+    disabled = db.get_domain('seq:config')
+    db.spool_quote(instrument_id, source='test', event_at=T0, received_at=T0,
+                   price=100, price_kind='trade', source_seq='disabled-recovery')
+    db.set_instrument_enabled(instrument_id, False)
+    assert db.get_domain('seq:config') == disabled
+    assert not db.spool_counts().get(instrument_id)
+    db.set_instrument_active(instrument_id, False)
+    disabled = db.get_domain('seq:config'); state = db.get_state_seq()
+    db.set_instrument_active(instrument_id, False)
+    assert db.get_domain('seq:config') == disabled and db.get_state_seq() == state
+
+
 def test_insert_candles_bumps_only_changed_rows(db: Database, instrument_id: int):
     key = f"seq:candles:{instrument_id}:H1"
     db.insert_candles([make_candle(

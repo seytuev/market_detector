@@ -115,6 +115,20 @@ async def test_worker_conflict_waits_until_shutdown_without_starting_scanner(db)
         await task
 
 
+async def test_repeated_startup_seed_does_not_invalidate_all_asset_snapshots(db):
+    from app.models import Instrument
+    iid = db.upsert_instrument(Instrument(None, 'HYPE', 'binance', 'spot', 'HYPEUSDT', 'USDT', enabled=False))
+    worker, _ = _make_worker(db, FakeAdapter())
+    try:
+        await worker.seed_instruments()
+        version = db.get_domain('seq:config')
+        await worker.seed_instruments()
+        assert db.get_domain('seq:config') == version
+        assert not db.get_instrument(iid).enabled
+    finally:
+        await worker.data_sync.shutdown()
+
+
 async def test_telegram_conflict_waits_without_starting_polling(db, monkeypatch):
     old = runtime.claim_owner(db, runtime.TELEGRAM_OWNER, {"instance_id": "old", "pid": 1})["owner"]
     db.runtime_instance_id = "new"

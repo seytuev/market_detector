@@ -980,12 +980,16 @@ class Database:
         )
 
     def set_instrument_enabled(self, instrument_id: int, enabled: bool) -> None:
-        self.conn.execute(
-            "UPDATE instrument SET enabled=? WHERE id=?", (int(enabled), instrument_id)
+        cursor = self.conn.execute(
+            "UPDATE instrument SET enabled=? WHERE id=? AND enabled<>?",
+            (int(enabled), instrument_id, int(enabled)),
         )
+        changed = cursor.rowcount > 0
         self._commit()
         if not enabled:
             self.cancel_quote_work(instrument_id)
+        if not changed:
+            return
         self.bump_state_seq()
         # включение/выключение инструмента — конфигурация контура (§13)
         self.bump_domain("seq:config")
@@ -1001,14 +1005,17 @@ class Database:
         зон и сценариев не удаляется.
         """
         flag = int(bool(active))
-        self.conn.execute(
-            "UPDATE instrument SET enabled=?, ltf_analyze=? WHERE id=?",
-            (flag, flag, instrument_id),
+        cursor = self.conn.execute(
+            "UPDATE instrument SET enabled=?, ltf_analyze=? WHERE id=? AND (enabled<>? OR ltf_analyze<>?)",
+            (flag, flag, instrument_id, flag, flag),
         )
+        changed = cursor.rowcount > 0
         self._commit()
 
         if not active:
             self.cancel_quote_work(instrument_id)
+        if not changed:
+            return
         self.bump_state_seq()
         self.bump_domain("seq:config")
         publisher = getattr(self,"publisher",None)

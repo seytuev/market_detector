@@ -1,4 +1,5 @@
 import json
+from dataclasses import asdict, replace
 
 import pytest
 
@@ -52,6 +53,27 @@ def test_parent_quote_depth_keeps_snapshot_but_invalidation_does_not(db, instrum
     assert ideas.project_ideas(db, instrument_id, DetectorConfig(), MOMENT, live=True) == exact
     db.update_zone(parent, market_validity='invalid')
     assert not ideas.projection_checkpoint_fresh(db, instrument_id, DetectorConfig(), MOMENT)
+
+
+def test_adding_another_asset_keeps_projection_but_real_rule_changes_invalidate(db, instrument_id, monkeypatch):
+    from app.services.projection_cache import structural_version
+    seed(db, instrument_id); bars(db, instrument_id, 10)
+    publish(db, instrument_id, monkeypatch)
+    ideas.mark_ideas_checkpoint(db, instrument_id)
+    expected = ideas.project_ideas(db, instrument_id, DetectorConfig(), MOMENT)
+    before = structural_version(db, instrument_id, DetectorConfig())
+    other = db.upsert_instrument(Instrument(None, 'NEW', 'binance', 'spot', 'NEWUSDT', 'USDT', enabled=False))
+    db.set_instrument_active(other, True)
+    assert structural_version(db, instrument_id, DetectorConfig()) == before
+    assert ideas.ideas_checkpoint_fresh(db, instrument_id)
+    monkeypatch.setattr(ideas, '_PUBLISHED_PROJECTIONS', ProjectionCache())
+    monkeypatch.setattr(db, 'ltf_projection_bundle', lambda *a, **k: pytest.fail('other asset invalidated history'))
+    assert ideas.project_ideas(db, instrument_id, DetectorConfig(), MOMENT, live=True) == expected
+    changed = replace(DetectorConfig(), entry_reuse_max_depth=.5)
+    assert structural_version(db, instrument_id, changed) != before
+    assert not ideas.projection_checkpoint_fresh(db, instrument_id, changed, MOMENT)
+    db.set_meta('settings:active_profile', json.dumps(asdict(changed)))
+    assert not ideas.ideas_checkpoint_fresh(db, instrument_id)
 
 
 def test_projection_survives_database_reopen(tmp_path, monkeypatch):
