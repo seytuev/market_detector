@@ -472,7 +472,7 @@ class LtfEngine:
 
     @_activation_session
     def replay_observation(self, observation_id: int, *, resume: bool = False,
-                           start_ms: Optional[int] = None) -> LtfTickResult:
+                           start_ms: Optional[int] = None, replay_key: Optional[str] = None) -> LtfTickResult:
         """§13: детерминированный прогон по сохранённым свечам тем же кодом.
 
         detected_at = закрытие свечи, события processing_mode='replay'
@@ -499,9 +499,11 @@ class LtfEngine:
         now = closed[-1].close_time if closed else _real_now_ms()
         from .market_structure import RULE_VERSION as structure_rules
         checkpoint_key = f"structure:replay_cursor:{obs.instrument_id}:{structure_rules}"
+        if replay_key is not None:
+            checkpoint_key += ':' + replay_key
         checkpoint = int(self.db.get_meta(checkpoint_key) or 0) if resume else 0
         if start_ms is not None:
-            checkpoint = max((c.close_time for c in closed if c.close_time < start_ms), default=0)
+            checkpoint = max(checkpoint, max((c.close_time for c in closed if c.close_time < start_ms), default=0))
         elif resume and not checkpoint:
             # Before the first observation/context there are no domain
             # transitions to replay. Structure/local-leg inputs still warm

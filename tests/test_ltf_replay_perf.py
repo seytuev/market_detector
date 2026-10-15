@@ -372,7 +372,8 @@ def test_replay_state_identical_with_and_without_cache():
     assert diffs == [], f"расхождения таблиц: {diffs}"
 
 
-def test_resumable_replay_matches_uninterrupted_replay_after_crash():
+@pytest.mark.parametrize('start_ms', [None, T0 + 10 * H1_MS])
+def test_resumable_replay_matches_uninterrupted_replay_after_crash(start_ms):
     snapshots = []
     for interrupted in (False, True):
         db = _build_db(20, ltf_cache=True)
@@ -389,9 +390,9 @@ def test_resumable_replay_matches_uninterrupted_replay_after_crash():
                     raise RuntimeError('simulated crash inside atomic bar')
             engine._process_candle = crash
             with pytest.raises(RuntimeError, match='simulated crash'):
-                engine.replay_observation(obs.id, resume=True)
+                engine.replay_observation(obs.id, resume=True, start_ms=start_ms, replay_key='recovery-test')
             engine = LtfEngine(db, _CFG)
-        engine.replay_observation(obs.id, resume=True)
+        engine.replay_observation(obs.id, resume=True, start_ms=start_ms, replay_key='recovery-test')
         snapshots.append(_dump_state(db))
         db.close()
     assert snapshots[0] == snapshots[1]

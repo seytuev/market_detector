@@ -1224,7 +1224,7 @@ class Worker:
         if realigned:
             candidates = realigned + ([(pending['start'], pending['observation'])] if pending else [])
             reach, oid = min(candidates)
-            pending = {'start': reach, 'observation': oid}
+            pending = {'start': reach, 'observation': oid, 'generation': now_ms()}
             # Publish the new activation and its unfinished replay together.
             # A restart must not mistake the moved activation for finished work.
             def prepare():
@@ -1235,7 +1235,9 @@ class Worker:
             await self.data_sync._write(prepare)
         if pending:
             reach, oid = pending['start'], pending['observation']
-            await self._calculate(self.ltf_engine.replay_observation, oid, start_ms=reach)
+            replay_key = f"realign:{pending.get('generation', str(oid)+':'+str(reach))}"
+            await self._calculate(self.ltf_engine.replay_observation, oid, start_ms=reach,
+                                  resume=True, replay_key=replay_key)
             await self.data_sync._write(self.db.set_meta, pending_key, '')
 
     @instrument_owned
