@@ -1894,13 +1894,18 @@ class Worker:
     async def events_loop(self) -> None:
         """Coinglass и оценка событий. Сбой этого цикла не останавливает H1."""
         while not self._stop.is_set():
+            started = time.monotonic()
             try:
                 await asyncio.to_thread(self._events_once)
             except Exception:
                 log.exception("events: цикл не удался, расчёт H1 не затронут")
+            # The configured period is between cycle starts. Sleeping a full
+            # minute after a 40-second calculation made even successful market
+            # assessments cross the two-period freshness limit before renewal.
+            delay = max(0.0, self.settings.events_poll_seconds - (time.monotonic() - started))
             try:
                 await asyncio.wait_for(
-                    self._stop.wait(), self.settings.events_poll_seconds,
+                    self._stop.wait(), delay,
                 )
             except asyncio.TimeoutError:
                 pass

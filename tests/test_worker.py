@@ -82,6 +82,32 @@ def _deliveries(db):
     ).fetchall()
 
 
+@pytest.mark.parametrize("duration,failed,expected_wait", [(35, False, 25), (90, False, 0), (35, True, 25)])
+async def test_market_cycle_period_includes_calculation_time(db, monkeypatch, duration, failed, expected_wait):
+    import app.worker as worker_module
+    from types import SimpleNamespace
+    worker, _ = _make_worker(db, FakeAdapter())
+    worker.settings.events_poll_seconds = 60
+    clock = [100.0]
+    waits = []
+
+    async def calculate(fn):
+        clock[0] += duration
+        if failed:
+            raise RuntimeError("source failed")
+
+    async def wait_for_stop(awaitable, timeout):
+        awaitable.close()
+        waits.append(timeout)
+        worker._stop.set()
+
+    monkeypatch.setattr(worker_module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(worker_module.asyncio, "to_thread", calculate)
+    monkeypatch.setattr(worker_module.asyncio, "wait_for", wait_for_stop)
+    await worker.events_loop()
+    assert waits == [expected_wait]
+
+
 def _fresh_candles(close: float = 110.0):
     """По свежей свече D1 и W1 — freshness-контроль молчит."""
     now = now_ms()
