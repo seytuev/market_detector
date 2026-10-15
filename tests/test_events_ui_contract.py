@@ -105,7 +105,7 @@ def client_with_market() -> TestClient:
 def test_statics_served_and_screener_mounts_card(client: TestClient):
     events_html = client.get("/events.html")
     assert events_html.status_code == 200
-    assert 'section=sources#settings' in events_html.text
+    assert 'href="/#settings"' in events_html.text
     assert 'href="/#help"' in events_html.text
     assert 'data-mode="sources"' not in events_html.text
 

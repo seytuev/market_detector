@@ -257,11 +257,12 @@ def register_bot_handlers(app, settings, db: Database):
     async def _send_chart(
         message, instrument_id: int, tf: str, days: int, mask: int,
         observation_id: int | None = None,
+        snapshot_now: int | None = None,
     ) -> None:
         """Один снимок: instrument_current вызывается один раз, тот же now
         идёт и в рендер картинки, и в caption — цена/сценарий/время совпадают.
         Один график выбранного контекста, без серий изображений."""
-        now = now_ms()
+        now = snapshot_now if snapshot_now is not None else now_ms()
         cur = instrument_current(db, settings, instrument_id)
         if cur is None:
             await message.reply_text("Инструмент не найден.")
@@ -272,22 +273,18 @@ def register_bot_handlers(app, settings, db: Database):
             if obs is None or obs.instrument_id != instrument_id:
                 await message.reply_text("Контекст недоступен.")
                 return
-        if obs_id is None:
-            await message.reply_text(
-                "Нет активного контекста — недостаточно данных для графика."
-            )
-            return
         ins = cur["instrument"]
         source = f"{ins['venue']} {ins['market_type']} / {ins['symbol']}"
-        out = _chart_out(f"ltf_bot_{obs_id}_{tf}_{days}_{mask}_{now}.png")
+        out = _chart_out(f"ltf_bot_{instrument_id}_{obs_id}_{tf}_{days}_{mask}_{now}.png")
         path = await asyncio.to_thread(
             render_ltf_chart,
             db, obs_id, out,
             tf=tf, period_days=days, layers=layers_from_mask(mask),
             source_label=source, settings=settings, now=now,
+            **({"instrument_id": instrument_id} if obs_id is None else {}),
         )
         if path is None:
-            await message.reply_text("Недостаточно данных для графика.")
+            await message.reply_text(f"{'LTF · H1' if tf == 'H1' else 'HTF · ' + tf}: недостаточно свечей для графика.")
             return
         caption = render_chart_caption(cur, now, tf, days)
         if obs_id != cur["selected_context_id"]:
@@ -330,10 +327,18 @@ def register_bot_handlers(app, settings, db: Database):
         if tf == "H1" and outside:
             caption += "\nНачало движения вне окна — полное движение доступно в приложении."
         from ..notify.navigation import reusable_photo
+        image_url = None
+        base = public_base_url(settings)
+        if base:
+            from ..services.chart_links import save_chart_image
+            image_url = base + await asyncio.to_thread(
+                save_chart_image, settings, Path(path).read_bytes(),
+            )
+        caption = ("LTF · " if tf == "H1" else "HTF · ") + caption
         await reusable_photo(db, app.bot, settings.telegram_chat_id,
-            f"ltf:{instrument_id}:{obs_id}", path, caption,
+            f"ltf:{instrument_id}:{obs_id}:{tf}" + (f":{now}" if snapshot_now is not None else ""), path, caption,
             chart_result_inline(instrument_id, tf, days, mask, settings=settings, instrument=ins,
-                                observation_id=obs_id),
+                                observation_id=obs_id, image_url=image_url),
             message.reply_photo)
 
     async def _send_zone_snapshot(message, zone) -> None:
@@ -784,6 +789,19 @@ def register_bot_handlers(app, settings, db: Database):
                 label = ins.symbol if ins is not None else f"#{iid}"
                 await edit(f"Уведомления по {label} включены.")
                 await query.answer()
+            elif kind == "nowasset":
+                iid = int(parts[2])
+                await query.answer()
+                snapshot_now = now_ms()
+                for tf, days in (("D1", 0), ("H1", 7)):
+                    try:
+                        await _send_chart(query.message, iid, tf, days, DEFAULT_MASK,
+                                          snapshot_now=snapshot_now)
+                    except Exception:
+                        log.exception("Не удалось отправить график %s для %s", tf, iid)
+                        await query.message.reply_text(
+                            f"{'LTF' if tf == 'H1' else 'HTF'}: не удалось подготовить график. Повторите запрос."
+                        )
             elif kind == "asset":
                 iid = int(parts[2])
                 await edit(

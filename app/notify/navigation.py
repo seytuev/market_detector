@@ -8,6 +8,16 @@ from telegram.error import BadRequest
 
 
 def card_keyboard(packet_id, targets=None):
+    if targets and len(targets) == 1 and targets[0].get("kind") == "market_context":
+        target = targets[0]
+        rows = []
+        if target.get("url"):
+            rows.append([Button("Открыть контекст рынка ↗", url=target["url"])])
+        details = [Button("Подробнее", callback_data=f"nf:d:{packet_id}:0")]
+        if target.get("journal_url"):
+            details.append(Button("Журнал", url=target["journal_url"]))
+        rows.append(details)
+        return Markup(rows)
     graph = Button("📊 График", callback_data=f"nf:g:{packet_id}")
     if targets and len(targets) == 1:
         if targets[0].get("chart"):

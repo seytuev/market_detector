@@ -78,8 +78,8 @@ def instruments_inline(
 
 
 def now_inline(db: Database) -> InlineKeyboardMarkup:
-    """Кнопки активов (nav:asset:<iid>) + «🔄 Обновить» (nav:now:refresh)."""
-    rows = _instrument_rows(db, "nav:asset")
+    """Выбор актива для пары HTF/LTF + «🔄 Обновить» список."""
+    rows = _instrument_rows(db, "nav:nowasset")
     rows.append([InlineKeyboardButton("🔄 Обновить", callback_data="nav:now:refresh")])
     return InlineKeyboardMarkup(rows)
 
@@ -292,12 +292,17 @@ def _chart_context(rows, observation_id):
 def chart_result_inline(
     instrument_id: int, tf: str, days: int, mask: int,
     settings=None, instrument=None, observation_id: int | None = None,
+    image_url: str | None = None,
 ) -> InlineKeyboardMarkup:
     """Кнопки на сообщении с графиком (ТЗ 07.10.2026 §8): «Обновить» и
     периоды — сразу новый рендер той же маской; слои — отдельным сообщением;
     ссылки приложения/TradingView — только при публичном адресе (§12)."""
     iid = instrument_id
     rows = []
+    if image_url:
+        rows.append([InlineKeyboardButton(
+            "↗ LTF · PNG" if tf == "H1" else "↗ HTF · PNG", url=image_url,
+        )])
     period_row = [InlineKeyboardButton(
         "🔄 Обновить", callback_data=f"nav:chartgo:{iid}:{tf}:{days}:{mask}"
     )]

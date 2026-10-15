@@ -130,6 +130,85 @@
     return extra > 0 ? unique.join(' · ') + ' · ещё ' + extra : unique.join(' · ');
   }
 
+  function structureLabel(el, options) {
+    el.classList.add('structure-caption');
+    el._structureLabel = options;
+    el._structureTitle = el.title;
+    return el;
+  }
+
+  // One bounded layout for D1 and H1. Move event captions along their own
+  // levels, never move the levels themselves or build a tower of label lanes.
+  function layoutStructureLabels(overlay, paneRight, height) {
+    const bounds = overlay.getBoundingClientRect();
+    const relative = (rect) => ({ left: rect.left - bounds.left, right: rect.right - bounds.left,
+      top: rect.top - bounds.top, bottom: rect.bottom - bounds.top });
+    const occupied = Array.from(overlay.querySelectorAll(
+      '.d1-structure-status, .h1-zone-tag, .zone-group-badge, .h1-pd-label, .h1-origin-missing'
+    )).filter(el => el.getClientRects().length).map(el => relative(el.getBoundingClientRect()));
+    const labels = Array.from(overlay.querySelectorAll('.structure-caption'));
+    labels.forEach(el => {
+      el.classList.remove('structure-caption-dot');
+      el.style.visibility = '';
+      el.title = el._structureTitle;
+    });
+    // Read dimensions once before placing the batch; re-layout is idempotent.
+    const rows = labels.map((el, index) => {
+      const parent = el.offsetParent || overlay;
+      const rect = relative(parent.getBoundingClientRect());
+      return { el, ...el._structureLabel, index, width: el.offsetWidth, height: el.offsetHeight,
+        parentX: rect.left + parent.clientLeft, parentY: rect.top + parent.clientTop };
+    }).sort((a, b) => b.priority - a.priority || (b.time || 0) - (a.time || 0) || b.index - a.index);
+    const free = box => box.left >= 2 && box.right <= paneRight - 2
+      && box.top >= 2 && box.bottom <= height - 2
+      && !occupied.some(p => box.left < p.right + 4 && box.right + 4 > p.left
+        && box.top < p.bottom + 3 && box.bottom + 3 > p.top);
+    const placed = [];
+    const apply = (row, box) => {
+      Object.assign(row.el.style, { left: (box.left - row.parentX) + 'px',
+        top: (box.top - row.parentY) + 'px', bottom: 'auto', right: 'auto' });
+      occupied.push(box);
+      placed.push({ row, box });
+    };
+    rows.forEach(row => {
+      const { el, x, y, side = 'above', width, height: h, kind } = row;
+      // Current conditions stay readable even when their anchor is only a
+      // few candles from the right edge; the dashed line keeps its origin.
+      const min = kind === 'expected' ? 2 : Math.max(2, row.minX ?? 2);
+      const max = Math.min(paneRight - width - 2, (row.maxX ?? paneRight - 2) - width);
+      const clamp = value => Math.max(min, Math.min(max, value));
+      const xs = kind === 'pivot' ? [clamp(x - width / 2)]
+        : kind === 'expected' ? [max, clamp(x), min]
+        : [clamp((min + max) / 2), max, min];
+      const gap = row.gap || 5;
+      const preferred = side === 'above' ? y - h - gap : y + gap;
+      const ys = kind === 'pivot' ? [preferred, preferred + (side === 'above' ? -16 : 16)]
+        : [preferred, side === 'above' ? y + 5 : y - h - 5];
+      if (max >= min) {
+        for (const top of ys) for (const left of xs) {
+          const box = { left, right: left + width, top, bottom: top + h };
+          if (free(box)) { apply(row, box); return; }
+        }
+      }
+      if (kind === 'pivot') {
+        const left = Math.max(2, Math.min(paneRight - 8, x - 3));
+        const top = side === 'above' ? y - 10 : y + 4;
+        const box = { left, right: left + 6, top, bottom: top + 6 };
+        if (free(box)) {
+          el.classList.add('structure-caption-dot');
+          apply(row, box);
+          return;
+        }
+        // A coincident higher-priority caption remains a hover target for
+        // the omitted pivot, so its role/price are still discoverable.
+        const other = placed.find(({ box }) => x >= box.left - 12 && x <= box.right + 12
+          && y >= box.top - 20 && y <= box.bottom + 20);
+        if (other && !other.row.el.title.includes(el.title)) other.row.el.title += '\n' + el.title;
+      }
+      el.style.visibility = 'hidden';
+    });
+  }
+
   function emptyZoneMessage(status, view) {
     const info = view || {};
     if (info.error || (status && status.state === 'error')) {
@@ -358,8 +437,7 @@
     return timeOk && priceOk;
   }
 
-  function markerList(layers, selectedId) {
-    const settings = loadSettings();
+  function markerList(layers, selectedId, settings = loadSettings()) {
     // У опоры, от которой нарисована линия пробоя (BOS/SMS), свинг-роль
     // дублируется подписью события и накладывается на неё текстом.
     const anchored = new Set();
@@ -386,7 +464,8 @@
       position: p.kind === 'high' ? 'aboveBar' : 'belowBar',
       shape: p.kind === 'high' ? 'arrowDown' : 'arrowUp',
       color: colorOf ? colorOf(p.role) : '#A2B0C5',
-      text: p.role || (p.kind === 'high' ? 'H' : 'L'),
+      // Text lives in the DOM layout shared with BOS/SMS and D1 captions.
+      text: '',
     }));
   }
 
@@ -474,6 +553,18 @@
       overlay.appendChild(div);
       return div;
     };
+
+    markerList(layers, ctx.selectedEventId, settings).forEach(p => {
+      if (p.price == null || !(p.candle_open_time || p.pivot_at)) return;
+      const x = xOf(p.candle_open_time || p.pivot_at), y = yOf(p.price);
+      if (x == null || y == null || x < 0 || x > paneRight || y < 0 || y > height) return;
+      const role = p.role || (p.kind === 'high' ? 'H' : 'L');
+      const el = add('ltf-pivot role-' + role);
+      el.textContent = role;
+      el.title = 'H1 ' + role + ' · ' + fmtPrice(p.price) + ' · экстремум ' + fmtTime(p.pivot_at);
+      structureLabel(el, { kind: 'pivot', x, y, side: p.kind === 'high' ? 'above' : 'below',
+        priority: p.temporary ? 50 : 20, time: p.pivot_at, gap: 18 });
+    });
 
     const setup = layers.setup;
     if (setup && (!setup.history || settings.historicalZones)
@@ -758,6 +849,9 @@
         const label = doc.createElement('span');
         label.className = 'h1-break-label';
         label.textContent = plan.caption;
+        label.title = div.title;
+        structureLabel(label, { kind: 'event', x: x1, y, minX: x1, maxX: x2,
+          priority: 30, time: plan.endMs, side: ev.direction === 'bull' ? 'above' : 'below' });
         div.appendChild(label);
         placed.push({ ev, div, label, y, x: x2 });
         div.onclick = () => ctx.onEvent && ctx.onEvent([ev]);
@@ -773,6 +867,8 @@
         items.forEach((item, index) => {
           if (index === 0) {
             item.label.textContent = mergeCaption(items.map((row) => row.ev));
+            item.label.title = items.map(row => row.div.title).join('\n');
+            item.label._structureTitle = item.label.title;
             item.div.onclick = () => ctx.onEvent && ctx.onEvent(items.map((row) => row.ev));
           } else {
             item.label.remove();
@@ -801,6 +897,9 @@
         const span = doc.createElement('span');
         span.className = row.direction === 'bull' ? 'lbl-above' : 'lbl-below';
         span.textContent = text;
+        span.title = div.title;
+        structureLabel(span, { kind: 'expected', x: x1, y, minX: x1, maxX: paneRight - 4,
+          priority: 40, side: row.direction === 'bull' ? 'above' : 'below' });
         div.appendChild(span);
       });
     }
@@ -863,6 +962,7 @@
         if (outside[0] && ctx.onShowZone) ctx.onShowZone(outside[0]);
       };
     }
+    if (!ctx.deferLayout) layoutStructureLabels(overlay, paneRight, height);
   }
 
   function zonesWord(n) {
@@ -950,6 +1050,8 @@
     clipZoneBox,
     placeZoneLabel,
     mergeCaption,
+    structureLabel,
+    layoutStructureLabels,
     emptyZoneMessage,
     markerList,
     seriesMarkers,

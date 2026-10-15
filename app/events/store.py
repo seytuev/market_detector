@@ -523,6 +523,18 @@ def metric_series(db, series: str, *, since_ms: int = 0) -> list[dict]:
     return out
 
 
+def upsert_metrics(db, *, series: str, rows: list[dict]) -> None:
+    """Write a calendar history chunk in one database batch."""
+    values = [(series, row["bucket_start"], _dump(row)) for row in rows]
+    if values:
+        with db.batch_writes():
+            db.conn.executemany(
+                """INSERT INTO events_metric (series, bucket_start, payload_json)
+                   VALUES (?,?,?) ON CONFLICT(series,bucket_start)
+                   DO UPDATE SET payload_json=excluded.payload_json""", values,
+            )
+
+
 def _bundle_row(row) -> dict:
     return {
         "id": row["id"],

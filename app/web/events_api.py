@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
+from datetime import datetime
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException
@@ -11,6 +12,10 @@ from ..events.evaluate import RULES, market_direction, relation_to_h1
 from ..events.mathutil import RULE_VERSION
 from ..events.rules import ENGINE_RULE_VERSION, RULE_REGISTRY
 from ..events.runner import run_cycle
+from ..events.calendar import BTC_SERIES, CALENDAR_VERSION, calendar_statistics
+from ..events.calendar_history import STATE_KEY as CALENDAR_HISTORY_KEY
+from ..events.revalidation import MODEL_VERSION
+from ..events.timeutil import CONTEXT_STALE_AFTER_MS, MSK, msk_day_start_ms
 from ..events.store import (
     assessment_as_of,
     bundle_publications,
@@ -19,6 +24,7 @@ from ..events.store import (
     get_source_states,
     latest_assessment,
     latest_snapshot,
+    metric_series,
     list_bundles,
     list_deliveries,
     list_journal,
@@ -77,13 +83,40 @@ def register_events_routes(app: FastAPI, db, settings, require_auth) -> None:
         }
 
     @app.get("/api/events/calendar", dependencies=[Depends(require_auth)])
-    def calendar() -> dict[str, Any]:
+    def calendar(day: str | None = None, scope: str = "BTC") -> dict[str, Any]:
+        if scope not in ("BTC", "basket"):
+            raise HTTPException(status_code=400, detail="Область календаря: BTC или basket")
+        now = now_ms()
+        target = msk_day_start_ms(now)
+        if day is not None:
+            try:
+                parsed = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=MSK)
+                if parsed.strftime("%Y-%m-%d") != day or not 2017 <= parsed.year <= 2100:
+                    raise ValueError("invalid calendar date")
+                target = int(parsed.timestamp() * 1000)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Дата календаря: ГГГГ-ММ-ДД, годы 2017–2100")
         snap = latest_snapshot(db, "BTC")
         if snap is None:
             payload = {"ready": False, "empty_reason": "Оценка ещё не выполнялась"}
         else:
             payload = dict(snap.get("calendar") or {})
-        payload["market"] = _market_calendar(latest_assessment(db))
+        market = _market_calendar(latest_assessment(db)) or {"time_context": {}, "upcoming": []}
+        if scope == "BTC":
+            rows = [r for r in metric_series(db, BTC_SERIES) if r.get("method_version") == CALENDAR_VERSION]
+            raw_state = db.get_meta(CALENDAR_HISTORY_KEY)
+            history_state = json.loads(raw_state) if raw_state else {"quality": "unavailable", "days": len(rows)}
+        else:
+            rows = [{**r, "return": r.get("median_return"), "range": None}
+                    for r in metric_series(db, "basket_day_return")
+                    if r.get("historical_composition_known") and r.get("method_version") == MODEL_VERSION]
+            history_state = {"quality": "accumulating", "days": sum(bool(r.get("complete")) for r in rows)}
+        forecast = calendar_statistics(rows, target=target, now=now, min_n=settings.events_stats_min_n)
+        forecast.update({"scope": scope, "scope_label": "BTCUSDT · Binance Spot" if scope == "BTC" else "Медиана исторической корзины рынка",
+                         "history": history_state})
+        market["time_context"] = {**market["time_context"], "completed_days": forecast.pop("completed_days")}
+        market["forecast"] = forecast
+        payload["market"] = market
         return payload
 
     @app.get("/api/events/rules", dependencies=[Depends(require_auth)])
@@ -223,13 +256,14 @@ def _health_payload(db) -> dict:
 
 
 def _market_timing(market: dict | None, health: dict) -> tuple[int | None, bool | None]:
-    """Возраст последней оценки; устаревший снимок не представлять актуальным (§11.4)."""
+    """Возраст оценки: устаревание после четырёх часов, независимо от опроса."""
     if market is None:
         return None, None
-    elapsed = (now_ms() - int(market["evaluated_at"])) // 1000
+    elapsed_ms = now_ms() - int(market["evaluated_at"])
+    elapsed = elapsed_ms // 1000
     age = max(0, elapsed)
     cycle = health.get("cycle_seconds") or _DEFAULT_CYCLE_SECONDS
-    return age, age > 2 * int(cycle) or elapsed < -int(cycle)
+    return age, elapsed_ms > CONTEXT_STALE_AFTER_MS or elapsed < -int(cycle)
 
 
 def _bundles(db, limit: int = 50) -> list[dict]:

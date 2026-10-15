@@ -60,6 +60,12 @@ const state = {
   h1Settings: null,
 };
 
+ChartShare.bind(document.getElementById('chart-share'), () => ({
+  chart: state.chart, overlay: document.getElementById('ltf-overlay'),
+  ready: state.candles.length && state.current?.instrument?.id === state.instrumentId,
+  title: `${state.current?.instrument?.symbol || ''} · LTF · H1`,
+}));
+
 // Локальные fallback-формулировки; актуальные — GET /api/labels (texts_ru)
 let LTF_KIND_RU = {
   bos: 'слом BOS', sms: 'слом SMS', range_ready: 'диапазон готов',
@@ -1265,7 +1271,7 @@ function initChart() {
   $('chart').addEventListener('dblclick', scheduleOverlay);
   $('chart').addEventListener('wheel', scheduleOverlay, { passive: true });
   $('chart-container').addEventListener('click', (event) => {
-    if (event.target.closest('#h1-event-card, .h1-zone, .h1-zone-tag, .h1-liquidity')) return;
+    if (event.target.closest('#h1-event-card, .h1-zone, .h1-zone-tag, .h1-liquidity, .ltf-break, .h1-origin-missing')) return;
     closeH1Card();
   });
 }
@@ -1434,6 +1440,7 @@ function closeH1Card() {
   card.classList.add('hidden'); card.innerHTML = '';
   state.h1SelectedEventId = null; state.h1SelectedZoneId = null;
   paintH1Markers();
+  drawLtfLayers();
 }
 
 function ltfH1Query(extra) {
@@ -1738,6 +1745,10 @@ function drawLtfLayers() {
       div.style.left = (x - 5) + 'px';
       div.style.top = (p.kind === 'high' ? y - 12 : y + 4) + 'px';
       div.textContent = p.role !== 'none' ? p.role : '';
+      if (window.H1Layers && div.textContent) window.H1Layers.structureLabel(div, {
+        kind: 'pivot', x, y, side: p.kind === 'high' ? 'above' : 'below',
+        priority: 20, time: p.pivot_at,
+      });
     }
   }
 
@@ -1752,7 +1763,10 @@ function drawLtfLayers() {
     }
   }
 
-  if (!window.H1Layers || !state.h1Layers) return;
+  if (!window.H1Layers || !state.h1Layers) {
+    window.H1Layers?.layoutStructureLabels(overlay, paneRight, height - 30);
+    return;
+  }
   const viewRange = ts.getVisibleRange();
   let timeScaleHeight = 0;
   try { timeScaleHeight = state.chart.timeScale().height() || 0; } catch (e) { timeScaleHeight = 0; }
@@ -1767,6 +1781,7 @@ function drawLtfLayers() {
   }
   window.H1Layers.draw(overlay, {
     layers: state.h1Layers,
+    selectedEventId: state.h1SelectedEventId,
     settings: window.H1Layers.loadSettings(),
     xOf,
     yOf,
@@ -1794,6 +1809,7 @@ function drawLtfLayers() {
       const first = events && events[0];
       state.h1SelectedEventId = first ? first.id : null;
       paintH1Markers();
+      drawLtfLayers();
       showH1Card((events || []).map((ev) => window.H1Layers.eventCard(ev, { time: fmtTime, price: fmtPrice })).join(''));
     },
     onShowZone: focusH1Zone,

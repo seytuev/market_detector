@@ -101,7 +101,7 @@ def _chart_candles(
 
 def render_ltf_chart(
     db: Database,
-    observation_id: int,
+    observation_id: int | None,
     out_path,
     *,
     tf: str = "H1",
@@ -112,6 +112,7 @@ def render_ltf_chart(
     now: Optional[int] = None,
     end_ms: Optional[int] = None,
     event=None,
+    instrument_id: int | None = None,
 ) -> Optional[str]:
     """PNG графика выбранного контекста: свечи + слои htf/bos/range/entries.
 
@@ -127,22 +128,27 @@ def render_ltf_chart(
     выводится (ТЗ 07.10.2026 §5.1).
     event — запись LtfEvent. Картинка объясняется этим событием и не
     подменяет его сценарий более поздним. Цены события берутся из payload.
+    instrument_id — снимок без наблюдения: свечи и доступная структура
+    инструмента рисуются и до появления LTF-контекста.
     """
     import mplfinance as mpf
     from matplotlib import pyplot as plt
     from matplotlib.patches import Rectangle
 
-    obs = db.get_ltf_observation(observation_id)
-    if obs is None:
+    obs = db.get_ltf_observation(observation_id) if observation_id is not None else None
+    if observation_id is not None and obs is None:
         return None
-    ins = db.get_instrument(obs.instrument_id)
+    instrument_id = obs.instrument_id if obs is not None else instrument_id
+    if instrument_id is None:
+        return None
+    ins = db.get_instrument(instrument_id)
     if event is not None and end_ms is None:
         end_ms = int(event.occurred_at)
     if event is not None and now is None:
         now = int(event.occurred_at)
     now = now if now is not None else now_ms()
     requested_since = now - period_days * 86_400_000 if tf == "H1" else None
-    candles = _chart_candles(db, obs.instrument_id, tf, period_days, now,
+    candles = _chart_candles(db, instrument_id, tf, period_days, now,
                              end_ms=end_ms)
     if not candles:
         return None
@@ -153,7 +159,7 @@ def render_ltf_chart(
     if settings is not None and tf == "H1":
         from ..services.h1_setup import project_setup
         setup = project_setup(
-            db, settings.detector, obs.instrument_id, moment,
+            db, settings.detector, instrument_id, moment,
             mode="event" if end_ms is not None else "current",
         )
         frame = setup.get("frame_from") if setup else None
@@ -164,7 +170,7 @@ def render_ltf_chart(
                 sliced_to_cause = True
     layer_set = set(layers)
     info = None
-    if settings is not None:
+    if settings is not None and obs is not None:
         layer_kwargs = {}
         if end_ms is not None or event is not None:
             layer_kwargs["as_of"] = int(moment)
@@ -182,11 +188,13 @@ def render_ltf_chart(
     if settings is not None and tf == "H1":
         from ..services.h1_chart import assemble_h1_layers
         h1_layers = assemble_h1_layers(
-            db, settings, obs.instrument_id, as_of=int(moment),
+            db, settings, instrument_id, as_of=int(moment),
             window_from=candles[0].open_time, window_to=int(moment),
             context_id=observation_id, setup_event=end_ms is not None,
         )
         setup = h1_layers.get("setup") or setup
+        if info is None:
+            info = {"structure_events": h1_layers.get("structural_events", []), "ranges": []}
 
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -229,6 +237,22 @@ def render_ltf_chart(
     pz = (info or {}).get("parent_zone")
     htf_far_note: Optional[str] = None
     last_close = candles[-1].close
+    if tf in ("D1", "W1") and "htf" in layer_set and event is None and end_ms is None:
+        from .cards import htf_zones
+        for zone in htf_zones(db, instrument_id):
+            if zone.timeframe not in ("D1", "W1"):
+                continue
+            if not zone_on_scale(zone.lower, zone.upper, c_lo, c_hi):
+                continue
+            color = "#62c9b0" if zone.direction.value == "bull" else "#f08d98"
+            x0 = x_since(zone.formed_at)
+            ax.add_patch(Rectangle((x0, zone.lower), xr - x0,
+                                  zone.upper - zone.lower, facecolor=color,
+                                  edgecolor=color, alpha=0.15, zorder=1))
+            for price in (zone.lower, zone.upper):
+                ax.hlines(price, x0, xr, color=color, linewidth=0.8, zorder=3)
+            labels.append((zone.upper, f"{zone.type.value.upper()} {zone.timeframe}", color, False))
+        pz = None  # All relevant HTF zones above include the selected parent.
     if pz:
         lo, hi = float(pz["lower"]), float(pz["upper"])
         on_scale = zone_on_scale(lo, hi, c_lo, c_hi)

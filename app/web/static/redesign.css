@@ -156,6 +156,14 @@ body { font-size: var(--lf-reading); }
 .lf-calendar-grid small { font-size: 11px; }
 .lf-calendar-grid > span { text-align: center; font-size: 12px; padding: 4px; }
 .lf-calendar-agenda { margin-top: 24px; border-top: 1px solid var(--lf-border); padding-top: 16px; }
+.calendar-scope { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
+.calendar-scope .btn[aria-pressed="true"] { background: var(--lf-brand); color: var(--lf-accent-ink); }
+.calendar-forecast { margin: 24px 0; }
+.calendar-forecast h4 { font-size: 17px; margin: 0 0 12px; }
+.calendar-patterns { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 12px; margin-top: 16px; }
+.calendar-pattern { border: 1px solid var(--lf-border); border-radius: 10px; padding: 16px; min-width: 0; overflow-wrap: anywhere; }
+.calendar-pattern h5 { font-size: 15px; margin: 0 0 12px; }
+.calendar-pattern p { margin: 8px 0; }
 @media (min-width: 1024px) and (max-width: 1439px) {
   .desk-main { grid-template-columns: minmax(0,1fr); }
   .desk-assets { display: none; }

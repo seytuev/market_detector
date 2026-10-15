@@ -326,5 +326,5 @@ def test_render_bundle_text_includes_changes_and_link():
     text = publish.render_bundle_text(db, bundle["id"], base_url="http://x")
     assert "↑ Рынок: перевес в сторону роста" in text
     assert "Направление изменилось" in text
-    assert "Данные оценки: данные доступны · покрытие 18/20" in text
-    assert "http://x/events.html#assessment=a1" in text
+    assert "Данные доступны · покрытие 18/20" in text
+    assert "http://x/events.html?assessment=a1" in text

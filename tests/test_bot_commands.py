@@ -198,7 +198,7 @@ async def test_now_lists_assets_sorted_by_stage(db, seeded):
     assert text.index("ETHUSDT") < text.index("BTCUSDT") < text.index("SOLUSDT")
     # inline-клавиатура: активы + «Обновить»
     callbacks = [b.callback_data for row in markup.inline_keyboard for b in row]
-    assert f"nav:asset:{seeded['eth']}" in callbacks
+    assert f"nav:nowasset:{seeded['eth']}" in callbacks
     assert "nav:now:refresh" in callbacks
 
 

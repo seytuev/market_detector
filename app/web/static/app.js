@@ -64,6 +64,12 @@ const state = {
   warmupText: null,   // §11: текст прогрева над пустым графиком (событие lf-warmup)
 };
 
+ChartShare.bind(document.getElementById('chart-share'), () => ({
+  chart: state.chart, overlay: document.getElementById('zone-overlay'),
+  ready: state.candles.length && state.loadedCandleInstrument === state.instrumentId && state.loadedCandleTf === state.timeframe,
+  title: `${state.instruments.find(i => i.id === state.instrumentId)?.symbol || ''} · ${state.chartMode === 'h1' ? 'LTF · H1' : 'HTF · ' + state.timeframe}`,
+}));
+
 // Режим «Проверка» (U04): собственный график + очередь + инспектор в одном
 // экране. График создаётся лениво при первом входе во вкладку и живёт дальше.
 const reviewState = {
@@ -295,7 +301,7 @@ function initChart() {
   });
   HTF.bindChartOverlayCrosshair($('chart'), $('zone-overlay'));
   chartWrap.addEventListener('click', (event) => {
-    if (event.target.closest('#h1-event-card, .h1-zone, .h1-zone-tag, .h1-liquidity')) return;
+    if (event.target.closest('#h1-event-card, .h1-zone, .h1-zone-tag, .h1-liquidity, .ltf-break, .h1-origin-missing')) return;
     closeH1Card();
   });
   chartWrap.addEventListener('pointerdown', () => { state.pointerDown = true; });
@@ -464,7 +470,7 @@ function drawZones() {
   const ts = state.chart.timeScale();
   // Слой H1 готовится независимо от отбора и отрисовки HTF-контекста.
   drawH1Breaks(overlay, ts, paneRight, height);
-  drawDailyStructure(overlay, ts, paneRight, height);
+  drawDailyStructure(overlay, ts, paneRight, height, true);
   // по умолчанию на графике только зоны выбранного ТФ; «Все ТФ» показывает
   // оба, а чекбоксы слоёв позволяют скрыть конкретный ТФ в этом режиме
   const tfOn = (tf) => {
@@ -766,6 +772,7 @@ function drawZones() {
       overlay.appendChild(div);
     }
   }
+  window.H1Layers?.layoutStructureLabels(overlay, paneRight, h1PaneHeight(height));
 }
 
 function hideH1Chrome() {
@@ -797,6 +804,7 @@ function closeH1Card() {
     state.candleSeries.setMarkers(state.h1Layers ? window.H1Layers.seriesMarkers(
       state.h1Layers, null, structurePointColor) : []);
   }
+  drawZones();
 }
 
 function h1PaneHeight(fullHeight) {
@@ -904,10 +912,8 @@ async function closeSelectedHtfIdea(ideaId) {
   await loadDeskExtras();
 }
 
-function drawDailyStructure(overlay, ts, paneRight, height) {
+function drawDailyStructure(overlay, ts, paneRight, height, deferLayout = false) {
   const daily = state.dailyStructure;
-  const mobile = window.matchMedia('(max-width: 767px)').matches;
-  const mobileLabels = [];
   if (!$('layer-structure-d1')?.checked) return;
   const status = document.createElement('span');
   status.className = 'd1-structure-status';
@@ -933,7 +939,7 @@ function drawDailyStructure(overlay, ts, paneRight, height) {
     // W1 maps each D1 anchor onto its containing weekly candle.
     return ts.timeToCoordinate(bars[lo].time);
   };
-  const label = (x, y, text, role, title) => {
+  const label = (x, y, text, role, title, side, time) => {
     const el = document.createElement('span');
     el.className = 'd1-structure-label ltf-pivot role-' + role;
     el.textContent = text; el.title = title;
@@ -941,9 +947,7 @@ function drawDailyStructure(overlay, ts, paneRight, height) {
       top:y + 'px', whiteSpace:'nowrap', zIndex:'15'});
     overlay.appendChild(el);
     el.style.left = Math.max(0, Math.min(x, paneRight - el.offsetWidth - 4)) + 'px';
-    if (mobile) {
-      mobileLabels.push(el);
-    }
+    window.H1Layers?.structureLabel(el, {kind:'pivot', x, y, side, time, priority:20});
   };
   const visiblePoint = p => {
     const x = xAt(p.pivot_at);
@@ -952,8 +956,9 @@ function drawDailyStructure(overlay, ts, paneRight, height) {
   (daily.pivots || []).filter(p => ['HH','HL','LH','LL'].includes(p.role) && visiblePoint(p)).slice(-20).forEach(p => {
     const x = xAt(p.pivot_at), y = state.candleSeries.priceToCoordinate(p.price);
     if (x == null || x < 0 || x > paneRight || y == null || y < 12 || y > height - 40) return;
-    label(x - 5, y + (p.kind === 'high' ? -17 : 4), 'D1 ' + p.role, p.role,
-      `D1 ${p.role} · ${fmtPrice(p.price)} · подтверждение ${fmtTime(p.confirmed_at)}`);
+    label(x, y, 'D1 ' + p.role, p.role,
+      `D1 ${p.role} · ${fmtPrice(p.price)} · подтверждение ${fmtTime(p.confirmed_at)}`,
+      p.kind === 'high' ? 'above' : 'below', p.pivot_at);
   });
   const line = (anchor, end, level, text, title, options = {}) => {
     const {kind = '', direction = 'bull', expected = false, color = null} = options;
@@ -981,7 +986,9 @@ function drawDailyStructure(overlay, ts, paneRight, height) {
     overlay.appendChild(el);
     caption.style.left = Math.max(-left, Math.min(expected ? 2 : 0,
       paneRight - left - caption.offsetWidth - 4)) + 'px';
-    if (mobile) mobileLabels.push(caption);
+    window.H1Layers?.structureLabel(caption, {kind:expected ? 'expected' : 'event',
+      x:left, y, minX:left, maxX:right - 2, priority:expected ? 40 : 30,
+      time:end || 0, side:direction === 'bull' ? 'above' : 'below'});
   };
   (daily.events || []).filter(e => {
     const end = xAt(e.open_time), start = xAt(e.anchor_at);
@@ -1004,19 +1011,7 @@ function drawDailyStructure(overlay, ts, paneRight, height) {
   const target = sync?.target;
   if (target) line(bars[0].time * 1000, null, target.price,
     'Цель · ' + target.type + ' D1', target.text, {expected:true, color:'#c88a35'});
-  if (mobile) {
-    // Current conditions and targets are drawn last: give them priority over
-    // older event/pivot captions. Keep every level line at its actual price.
-    const occupied = [status.getBoundingClientRect()];
-    const bounds = overlay.getBoundingClientRect();
-    for (const el of mobileLabels.reverse()) {
-      const rect = el.getBoundingClientRect();
-      const overlaps = occupied.some(other => rect.left < other.right + 4 &&
-        rect.right + 4 > other.left && rect.top < other.bottom + 3 && rect.bottom + 3 > other.top);
-      if (overlaps || rect.top < bounds.top || rect.bottom > bounds.top + height - 35) el.remove();
-      else occupied.push(rect);
-    }
-  }
+  if (!deferLayout) window.H1Layers?.layoutStructureLabels(overlay, paneRight, height - 35);
 }
 
 function drawH1Breaks(overlay, ts, paneRight, height) {
@@ -1032,6 +1027,8 @@ function drawH1Breaks(overlay, ts, paneRight, height) {
   const paneHeight = h1PaneHeight(height);
   window.H1Layers.draw(overlay, {
     layers,
+    deferLayout: true,
+    selectedEventId: state.h1SelectedEventId,
     settings: window.H1Layers.loadSettings(),
     xOf: (ms) => barCoordinate(ts, ms),
     yOf: (price) => state.candleSeries.priceToCoordinate(price),
@@ -1057,6 +1054,7 @@ function drawH1Breaks(overlay, ts, paneRight, height) {
         state.candleSeries.setMarkers(window.H1Layers.seriesMarkers(
           layers, state.h1SelectedEventId, structurePointColor));
       }
+      drawZones();
       showH1Card((events || []).map((ev) => window.H1Layers.eventCard(ev, h1CardFormat())).join(''));
     },
     onShowZone: focusH1Zone,

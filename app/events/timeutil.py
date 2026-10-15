@@ -14,6 +14,7 @@ from .mathutil import DAY_MS
 
 MSK = ZoneInfo("Europe/Moscow")
 HOUR_MS = 3_600_000
+CONTEXT_STALE_AFTER_MS = 4 * HOUR_MS
 WEEKDAY_RU = ("понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье")
 
 

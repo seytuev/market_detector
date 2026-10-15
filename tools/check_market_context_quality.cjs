@@ -11,6 +11,7 @@ const assert = require('node:assert/strict');
     executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe', headless: true,
   });
   const fixture = {
+    market_age_seconds: 300, market_stale: false,
     market: {
       direction: 'long', arrow: 'up', market_line: '↑ LONG', events_direction: 'long',
       time_direction: 'neutral', time_rules_active: false, quality: 'partial',
@@ -47,7 +48,7 @@ const assert = require('node:assert/strict');
         window.HTF={getToken:()=>true, ensureToken:async()=>true,
           esc:s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),
           fmtTime:ms=>new Date(ms).toLocaleString('ru-RU',{timeZone:'Europe/Moscow'}),
-          api:async()=>fixture};` });
+          api:async(url)=>{(window.apiCalls??=[]).push(url);return url.includes('/market/assessment/') ? fixture.market : fixture}};` });
       const file = path.resolve(__dirname, '../app/web/static', url.pathname.slice(1));
       if (fs.existsSync(file) && fs.statSync(file).isFile()) {
         const type = file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css'
@@ -63,6 +64,7 @@ const assert = require('node:assert/strict');
       await settle();
       await page.evaluate(t => document.documentElement.dataset.theme = t, theme);
       assert.ok(await page.$('.market-hero'));
+      assert.doesNotMatch(await page.$eval('.market-hero', el => el.textContent), /мин назад|Оценка устарела/);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
       assert.match(await page.$eval('.market-quality', el => el.textContent), /9 из 20 монет/);
       assert.match(await page.$eval('.market-methodology', el => el.textContent), /OI не участвует/);
@@ -78,7 +80,28 @@ const assert = require('node:assert/strict');
       await page.click('.market-more summary');
       await page.click('#market-refresh'); await settle();
       assert.equal(await page.$eval('.market-more', el => el.open), true);
+      if (theme === 'light' && width === 1440) {
+        await page.evaluate(() => {
+          fixture.market_age_seconds = 14400; fixture.market_stale = false;
+          document.querySelector('#market-refresh').click();
+        });
+        await settle();
+        assert.doesNotMatch(await page.$eval('.market-hero', el => el.textContent), /ч назад|Оценка устарела/);
+        await page.evaluate(() => {
+          fixture.market_age_seconds = 14401; fixture.market_stale = true;
+          document.querySelector('#market-refresh').click();
+        });
+        await settle();
+        assert.match(await page.$eval('.market-hero', el => el.textContent), /4 ч назад/);
+        assert.match(await page.$eval('.market-hero', el => el.textContent), /Оценка устарела/);
+        await page.evaluate(() => {
+          fixture.market_age_seconds = 300; fixture.market_stale = false;
+          document.querySelector('#market-refresh').click();
+        });
+        await settle();
+      }
       if (width !== 900) {
+        await page.$eval('.market-header', el => el.scrollIntoView({ block: 'start' }));
         await page.screenshot({ path: path.join(out, `${theme}-${width}.png`), fullPage: true });
         await page.$eval('.market-facts', el => el.scrollIntoView({ block: 'start' }));
         await page.screenshot({ path: path.join(out, `${theme}-${width}-memory.png`) });
@@ -93,6 +116,12 @@ const assert = require('node:assert/strict');
       assert.ok(await page.$('.market-hero'));
       await page.evaluate(data => { window.fixture.market = data.market; }, fixture);
       console.log(`${theme} ${width}: OK`);
+    }
+    for (const reference of ['?assessment=notice-snapshot', '#assessment=notice-legacy']) {
+      await page.goto('http://market.local/events.html' + reference); await settle();
+      await page.waitForSelector('.events-saved-assessment');
+      const id = reference.split('=')[1];
+      assert.ok(await page.evaluate(id => window.apiCalls.includes('/api/events/market/assessment/' + id), id));
     }
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }

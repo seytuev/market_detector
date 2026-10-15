@@ -20,7 +20,9 @@ const draw = source.slice(source.indexOf('function drawDailyStructure('), source
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
     await page.setContent('<input id="layer-structure-d1" type="checkbox" checked><div style="position:relative;width:1000px;height:560px"><div id="chart" style="height:560px"></div><div id="overlay" style="position:absolute;inset:0;pointer-events:none"></div></div>');
+    await page.addStyleTag({path:path.join(root, 'app/web/static/style.css')});
     await page.addScriptTag({path:path.join(root, 'app/web/static/vendor/lightweight-charts.js')});
+    await page.addScriptTag({path:path.join(root, 'app/web/static/h1_layers.js')});
     await page.evaluate(data => {
       window.fixture = data;
       window.$ = id => document.getElementById(id);

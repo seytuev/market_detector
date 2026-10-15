@@ -1,0 +1,8 @@
+.chart-share { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; white-space: nowrap; border-radius: 8px; padding: 5px 9px; font-size: 12px; }
+.chart-share svg { width: 15px; height: 15px; }
+.chart-share-result { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 6px 8px; background: var(--lf-surface); border: 1px solid var(--lf-border); border-radius: 8px; max-width: 100%; min-width: 0; }
+.chart-share-result input { width: 190px; max-width: 42vw; min-width: 0; font-size: 11px; color: var(--lf-text2); background: transparent; border: 0; }
+.chart-share-result a { font-size: 12px; }
+.chart-share-error { font-size: 12px; color: var(--lf-negative); }
+.desk-modebar { flex-wrap: wrap; gap: 8px; }
+.alt-chart-actions { flex-wrap: wrap; }

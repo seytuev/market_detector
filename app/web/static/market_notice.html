@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="ru" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'">
+  <!-- SHARED_STYLE -->
+  <style>
+    * { box-sizing: border-box; }
+    html, body { width: 1080px; height: 1080px; margin: 0; overflow: hidden; }
+    body { padding: 40px; display: block; background: var(--lf-bg); color: var(--lf-text); font-family: Arial, 'DejaVu Sans', sans-serif; }
+    #notice { padding: 32px 38px 26px; display: flex; flex-direction: column; gap: 22px; background: var(--lf-surface); border: 1px solid var(--lf-border); border-radius: 22px; }
+    #notice header { display: flex; align-items: center; justify-content: space-between; height: 106px; flex: none; padding-bottom: 14px; border-bottom: 1px solid var(--lf-border); }
+    #notice-logo { width: 174px; height: 112px; object-fit: contain; margin-left: -12px; }
+    #notice .meta { text-align: right; }
+    #notice .overline { color: var(--lf-text2); font-size: 17px; line-height: 1.5; letter-spacing: .09em; text-transform: uppercase; font-weight: 600; }
+    #notice .meta p { margin: 7px 0 0; font-size: 20px; color: var(--lf-text); }
+    #notice .hero { display: grid; grid-template-columns: minmax(0, 1fr) 90px; gap: 18px; align-items: center; }
+    #notice h1 { max-width: 720px; margin: 9px 0 0; font-size: 59px; line-height: 1.12; letter-spacing: -1.8px; font-weight: 650; text-wrap: balance; }
+    #notice .status-icon { display: flex; align-items: center; justify-content: center; width: 90px; height: 90px; border-radius: 20px; background: var(--lf-selected); color: var(--lf-brand); font-size: 58px; }
+    #notice .change { padding: 18px 22px; background: var(--lf-raised); border: 1px solid var(--lf-border); border-radius: 13px; }
+    #notice .change p { margin: 5px 0 0; font-size: 29px; line-height: 1.25; font-weight: 600; }
+    #notice .context h2 { margin: 0 0 12px; font-size: 19px; font-weight: 600; }
+    #notice ul { padding: 0; margin: 0; list-style: none; display: grid; gap: 14px; }
+    #notice li { display: flex; align-items: flex-start; gap: 12px; font-size: 27px; line-height: 1.35; }
+    #notice .notice-bullet { width: 6px; height: 6px; flex: 0 0 6px; margin-top: 15px; background: var(--lf-brand); border-radius: 50%; }
+    #notice .metrics { display: grid; grid-template-columns: 1fr 1fr 1fr; margin-top: auto; border: 1px solid var(--lf-border); border-radius: 13px; background: var(--lf-surface); }
+    #notice .metric { min-width: 0; padding: 19px 17px; }
+    #notice .metric + .metric { border-left: 1px solid var(--lf-border); }
+    #notice .metric strong { display: block; margin-top: 9px; font-size: 26px; font-weight: 600; line-height: 1.25; }
+    #notice .metric small { display: block; margin-top: 8px; font-size: 16px; line-height: 1.4; color: var(--lf-text2); }
+    #notice footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--lf-text2); font-size: 17px; line-height: 1.5; padding-top: 2px; }
+    #notice .footer-brand { color: var(--lf-brand); font-weight: 600; }
+    #notice[data-direction="long"] .status-icon { color: var(--lf-positive); }
+    #notice[data-direction="short"] .status-icon { color: var(--lf-negative); }
+    #notice[data-direction="mixed"] .status-icon { color: var(--lf-warning); }
+  </style>
+</head>
+<body>
+  <article id="notice" data-direction="{{direction}}">
+    <header><img id="notice-logo" src="/* BRAND_LOGO */" alt="STV Market Researcher">
+      <div class="meta"><div class="overline">Контекст рынка</div><p>{{stamp}}</p></div></header>
+    <section class="hero"><div><div class="overline">{{mode_label}}</div><h1>{{title}}</h1></div><span class="status-icon">{{icon}}</span></section>
+    <section class="change"><div class="overline">{{change_title}}</div><p>{{change}}</p></section>
+    <section class="context"><h2>{{reason_heading}}</h2><ul><!-- NOTICE_REASONS --></ul></section>
+    <section class="metrics">
+      <div class="metric"><div class="overline">События</div><strong>{{events}}</strong><small>Влияние на общую оценку</small></div>
+      <div class="metric"><div class="overline">Время</div><strong>{{time}}</strong><small>Календарные факторы</small></div>
+      <div class="metric"><div class="overline">Покрытие</div><strong>{{coverage}}</strong><small>{{quality}}</small></div>
+    </section>
+    <footer><span class="footer-brand">STV Market Researcher</span><span>{{footer}}</span></footer>
+  </article>
+  <script>
+    Promise.all([document.fonts.ready, ...[...document.images].map(img => img.decode())]).then(() => {
+      const content = document.getElementById('notice');
+      const fits = content.scrollHeight <= content.clientHeight && content.scrollWidth <= content.clientWidth
+        && content.getBoundingClientRect().bottom + 40 <= 1080
+        && [...document.querySelectorAll('#notice .hero > div, #notice .metric, #notice .change')].every(el => el.scrollWidth <= el.clientWidth);
+      document.documentElement.dataset.imageHeight = String(Math.ceil(content.getBoundingClientRect().bottom + 40));
+      document.documentElement.dataset.rendered = String(fits);
+    }).catch(() => { document.documentElement.dataset.rendered = 'false'; });
+  </script>
+</body>
+</html>

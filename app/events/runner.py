@@ -36,12 +36,14 @@ from .basket import (
 from .evaluate import EvaluationInput, FundingBar, LiqBar, OiBar, PriceBar, evaluate, market_direction
 from .episodes import liquidation_history
 from .btc_context import btc_liquidation_oi
+from .calendar_history import update_calendar_history
 from .market import MarketInput, evaluate_market
 from .mathutil import DAY_MS, median
 from .rules import ENGINE_RULE_VERSION, get_rule, registry_for_eval
 from .stats import frequency, insufficient
 from .store import apply_snapshot, load_buckets, upsert_bucket
 from .timeutil import (
+    CONTEXT_STALE_AFTER_MS,
     WEEKDAY_RU,
     completed_msk_days,
     msk_day_end_ms,
@@ -200,6 +202,7 @@ def _run_cycle(db, settings, *, fetcher=None, now_ms: int | None = None, ownersh
     # --- Цены участников корзины (1h, 35 дней) ---
     bars_by_symbol, metrics = _prices_cycle(db, settings, fetcher, basket, now)
     _store_day_metrics(db, basket, bars_by_symbol, now)
+    update_calendar_history(db, settings, fetcher, bars_by_symbol, now=now)
 
     # --- Coinglass: ликвидации 4h рынка, затем legacy BTC 1d / OI / funding ---
     cg = _coinglass_arg(settings, fetcher)
@@ -261,7 +264,7 @@ def _run_cycle(db, settings, *, fetcher=None, now_ms: int | None = None, ownersh
             "direction_note": market_direction(snapshot),
             "label": "Фон BTC",
             "evaluated_at": snapshot.get("evaluated_at"),
-            "stale": now - int(snapshot.get("evaluated_at") or 0) > 2 * int(settings.events_poll_seconds) * 1000,
+            "stale": now - int(snapshot.get("evaluated_at") or 0) > CONTEXT_STALE_AFTER_MS,
         }
     evidence = btc_liquidation_oi(_load(db, LIQ_SCOPE, "liq"), _load(db, OI_COIN_SCOPE, "oi_coin"), now=now)
     if snapshot or evidence["current"] or evidence["recent_events"]:

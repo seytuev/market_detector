@@ -756,6 +756,8 @@ def create_app(
     app.state.alt_runner = alt_runner
     from .auth import register_auth_routes
     register_auth_routes(app, db, settings, require_auth)
+    from .chart_links_api import register_chart_link_routes
+    register_chart_link_routes(app, settings, require_auth)
     from ..services.settings_jobs import SettingsJobs
     app.state.settings_jobs = SettingsJobs(app, db, settings, ltf_engine, _save_detector_to_file)
     if callable(event_bus):

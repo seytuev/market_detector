@@ -138,7 +138,7 @@ def test_downtime_digest_marks_old_assessment_and_shows_recorded_changes(db):
     assert "последняя сохранённая оценка" in text
     assert "43 ч 0 мин" in text
     assert "Оценка на:" in text
-    assert "дождитесь новой оценки" in text
+    assert "Дождитесь новой оценки" in text
     assert "Изменений в журнале не зафиксировано" in text
     assert "Не учтено: ликвидации" in text
     assert "ok;" not in text

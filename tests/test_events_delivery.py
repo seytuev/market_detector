@@ -251,12 +251,13 @@ async def test_stale_bundle_rendered_as_actualized_summary():
 
     row = _events_packets(db)[0]
     card = await publish._render_packet(row, publish._OUTBOX.members(row["id"]))
-    assert "Сводка актуализирована · последняя сохранённая оценка" in card.text
+    assert "Сводка актуализирована: Последняя сохранённая оценка" in card.text
     assert "перевес в сторону снижения" in card.text
     assert "перевес в сторону роста" not in card.text
     assert "Новое событие: давление" not in card.text
     assert "Новое событие: давление" in card.details
-    assert "Причина замены: исходные изменения устарели до отправки" in card.text
+    assert "Исходные изменения устарели до отправки" in card.text
+    assert card.targets[0]["url"].endswith("?assessment=a2")
 
     # исходный пакет сохранён, не перезаписан (§10)
     pubs = store.bundle_publications(db, bundle_id)
@@ -278,9 +279,8 @@ async def test_old_bundle_rendered_as_actualized_summary():
 
     row = _events_packets(db)[0]
     card = await publish._render_packet(row, publish._OUTBOX.members(row["id"]))
-    assert card.text.startswith(
-        "Сводка актуализирована · последняя сохранённая оценка")
-    assert "Причина замены: исходные изменения устарели до отправки" in card.text
+    assert "Сводка актуализирована: Последняя сохранённая оценка" in card.text
+    assert "Исходные изменения устарели до отправки" in card.text
 
 
 async def test_finish_marks_delivery_sent_per_publication():

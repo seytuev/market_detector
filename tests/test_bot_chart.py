@@ -67,7 +67,8 @@ def _fake_render(tmp_path, captured: dict):
         captured.update(kw)
         captured["observation_id"] = observation_id
         Path(out).parent.mkdir(parents=True, exist_ok=True)
-        Path(out).write_bytes(b"\x89PNG\r\n\x1a\nfake")
+        from PIL import Image
+        Image.new("RGB", (8, 8), "white").save(out, format="PNG")
         return str(out)
     return fake
 
@@ -257,7 +258,49 @@ async def test_chart_no_context_answers_text(db, seeded, tmp_path):
     update, replies, photos = _msg_photo_update("/chart SOL H1")
     await _command(app, "chart")(update, _context(["SOL", "H1"]))
     assert photos == []
-    assert replies and "недостаточно данных" in replies[0][0]
+    assert replies and "недостаточно свечей" in replies[0][0]
+
+
+@pytest.mark.parametrize("has_context", [True, False])
+async def test_now_asset_sends_both_charts_with_image_links(db, seeded, tmp_path, monkeypatch, has_context):
+    settings = _settings(tmp_path)
+    settings.public_base_url = "https://charts.example.com"
+    iid = seeded["eth"] if has_context else _instrument(db, "SOLUSDT")
+    captured = []
+    fake = _fake_render(tmp_path, {})
+
+    def render(db_, obs_id, out, **kwargs):
+        captured.append((obs_id, kwargs))
+        return fake(db_, obs_id, out, **kwargs)
+
+    monkeypatch.setattr("app.bot.handlers.render_ltf_chart", render)
+    app = build_application(settings, db)
+    update, answers, edits, texts, photos = _cb_photo_update(f"nav:nowasset:{iid}")
+    await _nav_callback(app)(update, _context())
+    assert answers == [None] and not edits and not texts
+    assert len(photos) == 2
+    assert [kw["tf"] for _, kw in captured] == ["D1", "H1"]
+    assert captured[0][1]["now"] == captured[1][1]["now"]
+    if not has_context:
+        assert all(obs is None and kw["instrument_id"] == iid for obs, kw in captured)
+    for photo, label in zip(photos, ("HTF", "LTF")):
+        assert photo["caption"].startswith(label)
+        buttons = [b for row in photo["reply_markup"].inline_keyboard for b in row]
+        image_button = next(b for b in buttons if b.text == f"↗ {label} · PNG")
+        assert image_button.url.startswith(settings.public_base_url + "/charts/")
+        assert settings.auth_token not in image_button.url
+
+
+@pytest.mark.parametrize("tf", ["H1", "D1"])
+def test_render_chart_without_observation_uses_instrument_candles(db, tmp_path, tf):
+    iid = _instrument(db, "SOLUSDT")
+    now = now_ms()
+    step = H1 if tf == "H1" else 24 * H1
+    db.insert_candles([make_candle(now - (20 - i) * step, 100, 105, 95, 101,
+                                timeframe=tf, instrument_id=iid) for i in range(20)])
+    path = render_ltf_chart(db, None, tmp_path / f"{tf}.png", tf=tf,
+                            instrument_id=iid, settings=_settings(tmp_path), now=now)
+    assert path and Path(path).stat().st_size > 1000
 
 
 async def test_chart_without_args_shows_picker(db, seeded, tmp_path):

@@ -92,6 +92,11 @@
     return `${Math.round(s / 3600)} ч назад`;
   }
 
+  // Normal source cadence need not match the UI polling interval.
+  function staleAge(seconds) {
+    return seconds != null && Number(seconds) > 4 * 60 * 60 ? fmtAge(seconds) : '';
+  }
+
   function fmtNum(value) {
     if (value == null || value === '') return '—';
     const n = Number(value);
@@ -227,7 +232,8 @@
 
     const stale = data.market_stale
       ? '<p class="events-warn">Снимок устарел — показана последняя сохранённая оценка.</p>' : '';
-    box.innerHTML = `<div class="side-card-head"><span class="market-orbit" aria-hidden="true">↗</span><strong>Рыночный фон</strong><span class="market-snapshot-age">${data.market_age_seconds != null ? esc(fmtAge(data.market_age_seconds)) : ''}</span></div>
+    const age = staleAge(data.market_age_seconds);
+    box.innerHTML = `<div class="side-card-head"><span class="market-orbit" aria-hidden="true">↗</span><strong>Рыночный фон</strong>${age ? `<span class="market-snapshot-age">${esc(age)}</span>` : ''}</div>
       <p class="side-market-line">${stateChip(market)}</p>
       ${stale}
       <a class="btn small side-open" href="/events.html">Открыть рынок</a>`;
@@ -237,8 +243,8 @@
       overview.dataset.direction = market.direction || 'unknown';
       overview.innerHTML = `<div class="market-hero-main"><div class="market-eyebrow">Рыночный фон · крипторынок</div>` +
         `<h2>${stateChip(market)}</h2>` +
-        `<p class="market-hero-meta">${data.market_age_seconds != null ? 'Снимок ' + esc(fmtAge(data.market_age_seconds)) : 'Время снимка не получено'}` +
-        (market.coverage?.total != null ? ` · Данные ${esc(market.coverage.ok)} из ${esc(market.coverage.total)} монет` : '') + `</p>${stale}` +
+        `<p class="market-hero-meta">${[age ? 'Снимок ' + esc(age) : data.market_age_seconds == null ? 'Время снимка не получено' : '',
+          market.coverage?.total != null ? `Данные ${esc(market.coverage.ok)} из ${esc(market.coverage.total)} монет` : ''].filter(Boolean).join(' · ')}</p>${stale}` +
         `<a class="btn side-open" href="/events.html">Разобрать рынок <span aria-hidden="true">↗</span></a></div>` +
         `<div class="market-hero-reasons"><div class="market-eyebrow">Что влияет сейчас</div>` +
         (reasons.length ? reasons.map(reasonLine).join('') : '<p>Причин для направленной оценки пока недостаточно.</p>') +
@@ -273,7 +279,8 @@
     const coverageLine = coverage && coverage.total != null
       ? `<p>Проверено монет: <strong>${esc(fmtNum(coverage.ok))} из ${esc(fmtNum(coverage.total))}</strong></p><p class="events-service">${coverage.sufficient ? 'Данных по монетам достаточно для общей оценки.' : 'Монет с данными слишком мало для полной картины рынка.'}</p>`
       : '<p class="events-service">Число проверенных монет пока неизвестно.</p>';
-    const age = data.market_age_seconds != null ? ` · обновлено ${fmtAge(data.market_age_seconds)}` : '';
+    const snapshotAge = staleAge(data.market_age_seconds);
+    const age = snapshotAge ? ` · обновлено ${snapshotAge}` : '';
     const stale = data.market_stale
       ? '<p class="events-warn">Оценка устарела. Показан последний сохранённый результат.</p>' : '';
     const legacy = '';
@@ -371,11 +378,40 @@
   }
 
   // ---- полный раздел: «Календарь» ------------------------------------------
-  let calendarMonth = '', calendarDay = '', calendarData = null;
+  let calendarMonth = '', calendarDay = '', calendarScope = 'BTC';
   const mskDate = ms => new Date(Number(ms)+10800000).toISOString().slice(0,10);
+  function calendarForecastHtml(forecast) {
+    if (!forecast) return '<section class="calendar-forecast"><h4>Расчёт по закрытиям дней</h4><p>Сохранённый календарь ещё не содержит условной статистики.</p></section>';
+    const pct = value => value == null ? '—' : `${(Number(value)*100).toLocaleString('ru-RU',{maximumFractionDigits:2})}%`;
+    const counts = s => `Совпадений: ${fmtNum(s.n)} · рост: ${fmtNum(s.up)} · снижение: ${fmtNum(s.down)} · без изменения: ${fmtNum(s.flat)}`;
+    const base = forecast.baseline || {}, history = forecast.history || {};
+    const previous = (forecast.previous_days || []).map(day => `${mskDate(day.day_start_ms).slice(5).split('-').reverse().join('.')} ${day.sign == null ? 'нет данных' : day.sign > 0 ? '↑' : day.sign < 0 ? '↓' : '↔'}`).join(' · ');
+    const rows = (forecast.patterns || []).map(row => `<article class="calendar-pattern">
+      <h5>${esc(row.label)}</h5><p class="calendar-counts">${esc(counts(row))}</p>
+      ${!row.condition_known ? `<p>${esc(row.reason || 'Условие ещё неизвестно.')}</p>` : !row.available
+        ? `<p>Статистика недостаточна: нужно не менее ${esc(row.min_n)} совпадений. Проценты пока не рассчитываются.</p>`
+        : `<p><strong>Рост ${esc(pct(row.up_frequency))} · снижение ${esc(pct(row.down_frequency))}</strong></p>
+          <p>95% интервал частоты роста: ${esc(pct(row.up_interval?.low))}–${esc(pct(row.up_interval?.high))}</p>
+          <p>Средняя доходность: ${esc(pct(row.mean_return))} · медиана: ${esc(pct(row.median_return))}</p>
+          <p>Средний диапазон дня: ${esc(pct(row.mean_range))}${row.mean_range == null ? ' (недостаточно полных OHLC)' : ''}</p>
+          ${row.lift_pp != null ? `<p>Частота роста относительно всей базы: ${esc(fmtNum(row.lift_pp))} п.п.</p>` : ''}`}
+      ${row.period ? `<small>Выборка: ${esc(mskDate(row.period.from))} — ${esc(mskDate(row.period.to))}${row.range_n !== row.n ? ` · дней с диапазоном: ${esc(row.range_n)}` : ''}</small>` : ''}
+    </article>`).join('');
+    return `<section class="calendar-forecast"><h4>Расчёт по закрытиям предшествующих дней</h4>
+      <p><strong>${esc(forecast.scope_label)}</strong> · день 00:00–24:00 МСК</p>
+      ${previous ? `<p>Предшествующие дни: ${esc(previous)}</p>` : ''}
+      ${forecast.mode === 'reconstruction' ? '<p>Реконструкция перед открытием выбранного дня. Его собственное закрытие исключено из выборки.</p>' : forecast.mode === 'future' ? '<p>Будущий день: доступна статистика дня недели. Условия закрытия ещё формирующихся дней неизвестны.</p>' : '<p>Расчёт на весь выбранный день по завершённым дням; это не оценка оставшихся часов.</p>'}
+      <p class="calendar-baseline">Вся база до выбранного дня: ${esc(base.n || 0)} дней${base.available ? ` · рост ${esc(pct(base.up_frequency))}` : ''}${base.period ? ` · ${esc(mskDate(base.period.from))} — ${esc(mskDate(base.period.to))}` : ''}.</p>
+      ${history.quality === 'backfilling' ? `<p>История BTC загружается частями. Сохранено ${esc(history.days)} дней; осталось проверить ${esc(history.remaining_days)} дней истории.</p>` : ''}
+      ${history.detail ? `<p class="events-warn">${esc(history.detail)}</p>` : ''}
+      ${history.missing_days ? `<p>В загруженном периоде пропущено полных дней: ${esc(history.missing_days)}. Они не считаются нулевыми.</p>` : ''}
+      ${history.quality === 'accumulating' ? '<p>Статистика корзины накапливается по зафиксированным составам соответствующих дней. История BTC в неё не переносится. Диапазоны корзины пока не сохраняются.</p>' : ''}
+      <div class="calendar-patterns">${rows}</div>
+      <details class="market-technical" data-persist="calendar-method"><summary>Методика и ограничения</summary><p>${esc(forecast.method_note)}</p><p>${esc(forecast.range_note)}</p><p>Частоты пересекающихся условий не объединяются в одну вероятность. Они пока не меняют итоговое направление рынка.</p></details>
+    </section>`;
+  }
   function renderCalendarMarket(market) {
     if (!market) return '';
-    calendarData = market;
     if (!calendarDay) calendarDay = mskDate(Date.now());
     if (!calendarMonth) calendarMonth = calendarDay.slice(0,7);
     const tc = market.time_context || {}, days = tc.completed_days || [];
@@ -390,13 +426,14 @@
       const completed = days.find(day => day.day_start_ms && mskDate(day.day_start_ms) === date);
       const n = upcoming.filter(item => (item.at || item.at_ms) && mskDate(item.at || item.at_ms) === date).length;
       const move = completed ? dayMove(completed.sign) : '';
-      const glyph = completed ? completed.sign > 0 ? '↑' : completed.sign < 0 ? '↓' : '↔' : '';
+      const glyph = completed ? completed.sign == null ? '—' : completed.sign > 0 ? '↑' : completed.sign < 0 ? '↓' : '↔' : '';
       return `<button type="button" class="btn" data-calendar-day="${date}" aria-pressed="${date===calendarDay}" aria-label="${date}${move ? ' · '+move : n ? ' · Событий: '+n : ''}">${i+1}${completed ? `<small title="${move}">${glyph}</small>` : n ? `<small title="Запланированные события">• ${n}</small>` : ''}</button>`;
     }).join('');
     const agenda = upcoming.filter(item => (item.at || item.at_ms) && mskDate(item.at || item.at_ms) === calendarDay);
     const completed = days.find(day => day.day_start_ms && mskDate(day.day_start_ms) === calendarDay);
     const list = agenda.map(item => `<li><strong>${esc(UPCOMING_KIND_RU[item.kind] || 'Пересмотр оценки')}</strong><p>${esc(fmtMsk(item.at || item.at_ms))}</p>${item.fact_key ? '<small>Область: рыночный фактор</small>' : ''}</li>`).join('');
-    return `<article class="events-card"><div class="lf-calendar-head"><button type="button" class="btn" data-calendar-shift="-1" aria-label="Предыдущий месяц">←</button><h2>${esc(monthLabel)}</h2><button type="button" class="btn" data-calendar-shift="1" aria-label="Следующий месяц">→</button></div><div class="lf-calendar-grid">${['Пн','Вт','Ср','Чт','Пт','Сб','Вс'].map(day=>`<span>${day}</span>`).join('')}${'<span></span>'.repeat(offset)}${cells}</div><section class="lf-calendar-agenda"><h3>${esc(new Date(calendarDay+'T12:00:00+03:00').toLocaleDateString('ru-RU',{day:'numeric',month:'long',year:'numeric',timeZone:'Europe/Moscow'}))}</h3>${completed ? `<p>Завершённый день: ${dayMove(completed.sign)}</p>${completed.median_return != null ? `<p>Медианное изменение цены: ${esc(fmtNum(Number(completed.median_return)*100))}%</p>` : ''}` : ''}${list ? `<ul>${list}</ul>` : '<p>Нет запланированных изменений оценки на выбранный день.</p>'}</section><p class="events-service">Все даты и границы дня указаны по МСК. Будущие ликвидации заранее неизвестны.</p></article>`;
+    const nextDate = mskDate(new Date(calendarDay+'T00:00:00+03:00').getTime()+86400000);
+    return `<article class="events-card"><div class="calendar-scope" role="group" aria-label="Область статистики"><button type="button" class="btn" data-calendar-scope="BTC" aria-pressed="${calendarScope==='BTC'}">BTC · исследование</button><button type="button" class="btn" data-calendar-scope="basket" aria-pressed="${calendarScope==='basket'}">Корзина рынка</button></div><div class="lf-calendar-head"><button type="button" class="btn" data-calendar-shift="-1" aria-label="Предыдущий месяц">←</button><h2>${esc(monthLabel)}</h2><button type="button" class="btn" data-calendar-shift="1" aria-label="Следующий месяц">→</button></div><p class="events-service">Стрелки — фактические закрытия выбранной области. • — число запланированных пересмотров.</p><div class="lf-calendar-grid">${['Пн','Вт','Ср','Чт','Пт','Сб','Вс'].map(day=>`<span>${day}</span>`).join('')}${'<span></span>'.repeat(offset)}${cells}</div><section class="lf-calendar-agenda"><h3>${esc(new Date(calendarDay+'T12:00:00+03:00').toLocaleDateString('ru-RU',{day:'numeric',month:'long',year:'numeric',timeZone:'Europe/Moscow'}))}</h3>${completed ? `<p>Завершённый день: ${dayMove(completed.sign)}</p>${completed.median_return != null ? `<p>Изменение ${calendarScope==='BTC' ? 'цены BTC' : 'медианы корзины'}: ${esc(fmtNum(Number(completed.median_return)*100))}%</p>` : ''}<button type="button" class="btn" data-calendar-day="${nextDate}">Расчёт следующего дня по этому закрытию →</button>` : ''}${calendarForecastHtml(market.forecast)}<h4>Запланированные пересмотры рыночной оценки</h4>${list ? `<ul>${list}</ul>` : '<p>Нет запланированных изменений оценки на выбранный день.</p>'}</section><p class="events-service">Все даты и границы дня указаны по МСК. Будущие ликвидации заранее неизвестны.</p></article>`;
   }
 
   // ---- полный раздел: «Правила и статистика» --------------------------------
@@ -425,7 +462,8 @@
     const rows = Object.keys(sources).map((name) => {
       const src = sources[name] || {};
       const capability = String(src.detail || '').includes('CAPABILITY');
-      const age = src.age_seconds != null ? ` · ${fmtAge(src.age_seconds)}` : '';
+      const sourceAge = staleAge(src.age_seconds);
+      const age = sourceAge ? ` · ${sourceAge}` : '';
       return `<div class="events-src-row">
         <strong>${esc(SOURCE_RU[name] || name)}</strong>
         <span>${esc(qualityWord(src.quality))}</span>
@@ -661,7 +699,9 @@
     const status = document.getElementById('market-status');
     body.setAttribute('aria-busy', 'true');
     if (status) status.textContent = 'Обновляем данные…';
-    const endpoint = { now: 'overview', feed: 'journal', calendar: 'calendar', rules: 'rules', sources: 'health' }[mode] || 'overview';
+    const endpoint = mode === 'calendar'
+      ? `calendar?day=${encodeURIComponent(calendarDay || mskDate(Date.now()))}&scope=${calendarScope}`
+      : { now: 'overview', feed: 'journal', rules: 'rules', sources: 'health' }[mode] || 'overview';
     let data = null;
     try {
       await HTF.ensureToken();
@@ -725,11 +765,14 @@
   document.getElementById('market-refresh')?.addEventListener('click', refresh);
   document.getElementById('events-body')?.addEventListener('click', event => {
     const day = event.target.closest('[data-calendar-day]'), shift = event.target.closest('[data-calendar-shift]');
-    if (!day && !shift) return;
-    if (day) calendarDay = day.dataset.calendarDay;
+    const scope = event.target.closest('[data-calendar-scope]');
+    if (!day && !shift && !scope) return;
+    if (day) { calendarDay = day.dataset.calendarDay; calendarMonth = calendarDay.slice(0,7); }
+    if (scope) calendarScope = scope.dataset.calendarScope;
     if (shift) { const [year,month] = calendarMonth.split('-').map(Number);
-      calendarMonth = new Date(Date.UTC(year,month-1+Number(shift.dataset.calendarShift),1)).toISOString().slice(0,7); }
-    const body = document.getElementById('events-body'); body.innerHTML = renderCalendarMarket(calendarData); body._marketHtml = body.innerHTML;
+      calendarMonth = new Date(Date.UTC(year,month-1+Number(shift.dataset.calendarShift),1)).toISOString().slice(0,7);
+      calendarDay = calendarMonth+'-01'; }
+    show('calendar');
   });
   window.addEventListener('popstate', () => {
     if (!document.getElementById('events-root')) return;
@@ -790,7 +833,8 @@
       initial.setAttribute('aria-pressed', 'true');
     }
     // Глубокая ссылка на сохранённую оценку: /events.html?assessment=<id>
-    const requested = new URLSearchParams(location.search).get('assessment');
+    const requested = new URLSearchParams(location.search).get('assessment')
+      || new URLSearchParams(location.hash.slice(1)).get('assessment');
     if (requested) loadSavedAssessment(requested).catch(() => {});
     show(currentMode).catch((err) => {
       const body = document.getElementById('events-body');

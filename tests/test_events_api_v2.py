@@ -201,9 +201,16 @@ def test_overview_market_stale_flag(monkeypatch, tmp_path):
     assert body["legacy_methodology"] is None
     assert body["market"]["assessment_id"] == "old"
     assert body["market_age_seconds"] == 300
-    assert body["market_stale"] is True  # 300с > 2 × 60с цикла
+    assert body["market_stale"] is False  # five minutes is normal source cadence
+
+    db.set_meta("events:health", '{"cycle_seconds": 86400}')
+    for elapsed_ms, expected in ((4 * HOUR, False), (4 * HOUR + 1, True), (5 * HOUR, True)):
+        monkeypatch.setattr(events_api, "now_ms", lambda elapsed_ms=elapsed_ms: NOW - 300_000 + elapsed_ms)
+        body = _get(client, "/api/events/overview").json()
+        assert body["market_stale"] is expected
 
     # свежая оценка снимает признак устаревания
+    monkeypatch.setattr(events_api, "now_ms", lambda: NOW)
     store.insert_assessment(db, _assessment(aid="fresh", evaluated=NOW - 30_000))
     body = _get(client, "/api/events/overview").json()
     assert body["market"]["assessment_id"] == "fresh"
@@ -364,7 +371,9 @@ def test_calendar_empty_db(tmp_path):
     db, settings = Database(":memory:"), _settings(tmp_path)
     body = _get(_client(db, settings), "/api/events/calendar").json()
     assert body["ready"] is False
-    assert body["market"] is None
+    # Calendar conditions remain readable while the worker has no assessment.
+    assert body["market"]["forecast"]["baseline"]["n"] == 0
+    assert body["market"]["forecast"]["baseline"]["up_frequency"] is None
 
 
 # --- Правила и статистика ---------------------------------------------------

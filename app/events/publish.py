@@ -12,7 +12,10 @@
 from __future__ import annotations
 
 import hashlib
+import asyncio
+import logging
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 
 from ..models import now_ms as _now_ms
 from . import store
@@ -23,6 +26,7 @@ _SETTINGS = None
 _DB = None
 _SENDER = None
 _OUTBOX = None
+log = logging.getLogger(__name__)
 
 # Retry (§9): пакет старше 10 минут к моменту отправки заменяется актуальной
 # сводкой; исходные строки events_bundle/events_publication не перезаписываются.
@@ -138,19 +142,31 @@ async def _render_packet(row, members):
     db, settings = _DB, _SETTINGS
     bundle_id = int(str(row["semantic_key"]).rsplit(":", 1)[-1])
     base_url = settings.effective_base_url() if settings is not None else ""
-    text = render_bundle_text(db, bundle_id, base_url=base_url)
+    from .notification import notice_text
+    from .notification_image import render_notice_image
+    notice = _bundle_notice(db, bundle_id, base_url=base_url)
+    details = "Исходный пакет изменений · историческая цепочка\n\n" + render_bundle_details(db, bundle_id, base_url=base_url)
     bundle = store.get_bundle(db, bundle_id)
-    original = text
     if bundle is not None and bundle["kind"] != "downtime_digest" and _bundle_stale(db, bundle):
         latest = store.latest_assessment(db)
-        lines = ["Сводка актуализирована · последняя сохранённая оценка"]
-        if latest:
-            lines.append(render_bundle_text(db, bundle_id, base_url=base_url, assessment_override=latest))
-        else:
-            lines.append("Новой оценки нет · дождитесь обновления")
-        lines.append("Причина замены: исходные изменения устарели до отправки")
-        text = "\n".join(lines)
-    return Card(text=text, details=original if text != original else "")
+        from .notification import build_notice
+        notice = build_notice(latest, [], bundle, base_url=base_url, mode="updated")
+    if notice is None:
+        return Card(text="Контекст рынка пока недоступен", details=details)
+    text = notice_text(notice)
+    # Leave margin for Telegram's 1024 UTF-16 caption limit. The complete URL
+    # remains in the keyboard if a long configured hostname consumes the budget.
+    if len(text.encode("utf-16-le")) // 2 > 980:
+        text = notice_text(notice, include_url=False)
+    image_path = None
+    try:
+        directory = Path(getattr(settings, "db_path", "data/htf_zones.db")).parent / "charts" / "market"
+        image_path = await asyncio.to_thread(render_notice_image, notice, directory)
+    except Exception:
+        log.exception("events: изображение уведомления недоступно; отправляем текст")
+    targets = [{"kind": "market_context", "label": "Контекст рынка", "url": notice["url"],
+                "journal_url": notice["journal_url"]}]
+    return Card(text=text, details=details, image_path=image_path, targets=targets)
 
 
 def _pub_key(*, rule_id: str, scope: str, episode_or_fact: str,
@@ -479,7 +495,30 @@ def startup_digest(db, settings, now_ms: int) -> None:
     db.set_meta("events:last_digest_gap_end", str(int(last["evaluated_at"])))
 
 
+def _bundle_notice(db, bundle_id: int, base_url: str = "", *, assessment_override=None):
+    from .notification import build_notice
+    bundle = store.get_bundle(db, bundle_id)
+    if bundle is None:
+        return None
+    pubs = store.bundle_publications(db, bundle_id) if assessment_override is None else []
+    assessment = assessment_override
+    for pub in reversed(pubs):
+        if pub.get("assessment_id"):
+            assessment = store.get_assessment(db, pub["assessment_id"])
+            if assessment is not None:
+                break
+    mode = "digest" if bundle["kind"] == "downtime_digest" and assessment_override is None else "changes"
+    return build_notice(assessment, pubs, bundle, base_url=base_url, mode=mode)
+
+
 def render_bundle_text(db, bundle_id: int, base_url: str = "", *, assessment_override=None) -> str:
+    """Concise current-state caption; the full transition history stays in Details."""
+    from .notification import notice_text
+    notice = _bundle_notice(db, bundle_id, base_url, assessment_override=assessment_override)
+    return notice_text(notice) if notice else ""
+
+
+def render_bundle_details(db, bundle_id: int, base_url: str = "", *, assessment_override=None) -> str:
     """Текст пакета: итог, изменения, обе причины конфликта, качество, ссылка."""
     bundle = store.get_bundle(db, bundle_id)
     if bundle is None:
@@ -544,5 +583,6 @@ def render_bundle_text(db, bundle_id: int, base_url: str = "", *, assessment_ove
             labels = {"liquidations": "ликвидации", "funding": "ставки финансирования", "open_interest": "открытый интерес"}
             lines.append("Не учтено: " + ", ".join(labels.get(str(x), str(x)) for x in unknown))
         if base_url:
-            lines.append(f"{base_url.rstrip('/')}/events.html#assessment={assessment['assessment_id']}")
+            from urllib.parse import quote
+            lines.append(f"{base_url.rstrip('/')}/events.html?assessment={quote(str(assessment['assessment_id']), safe='')}")
     return "\n".join(lines)

@@ -993,10 +993,7 @@ function initChart() {
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     autoSize: true,
   });
-  state.candleSeries = state.chart.addCandlestickSeries({
-    upColor: theme.up, downColor: theme.down,
-    wickUpColor: theme.up, wickDownColor: theme.down, borderVisible: false,
-  });
+  state.candleSeries = state.chart.addCandlestickSeries(HTF.candleOptions(theme));
   state.candleSeries.setMarkers([]);
   state.chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
     state.followRight = pinnedRight();
@@ -1017,10 +1014,7 @@ function paintChartTheme() {
     rightPriceScale: { borderColor: theme.border },
     timeScale: { borderColor: theme.border },
   });
-  state.candleSeries.applyOptions({
-    upColor: theme.up, downColor: theme.down,
-    wickUpColor: theme.up, wickDownColor: theme.down,
-  });
+  state.candleSeries.applyOptions(HTF.candleOptions(theme));
 }
 function destroyChart() {
   if (state.ro) state.ro.disconnect();
@@ -1588,17 +1582,9 @@ async function exportPng(zoom) {
     ctx.fillText(marker.label, x + 5, marker.y + 7.5);
   });
   ctx.restore();
-  const ticker = String(asset.symbol || 'ALT').replace(/[^A-Za-z0-9_-]+/g, '') || 'ALT';
-  const datePart = lastOpen ? mskDay(lastOpen) : 'nodate';
-  const name = `${ticker}_${state.timeframe}_${datePart}.png`;
-  out.toBlob((blob) => {
-    if (!blob) return;
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = name;
-    link.click();
-    setTimeout(() => URL.revokeObjectURL(link.href), 10000);
-  }, 'image/png');
+  const blob = await new Promise(resolve => out.toBlob(resolve, 'image/png'));
+  if (!blob) throw new Error('Не удалось создать PNG.');
+  ChartShare.showLink($('alt-png'), await ChartShare.publish(blob));
 }
 
 function applyPane() {
@@ -1891,8 +1877,13 @@ function bind() {
       : '';
     renderNotes();
   };
-  $('alt-png').onclick = () => { exportPng(1); };
-  $('alt-png2').onclick = () => { exportPng(2); };
+  $('alt-png').onclick = async () => {
+    const button = $('alt-png');
+    button.disabled = true;
+    try { await exportPng(2); }
+    catch (error) { alert(error.message || 'Не удалось создать ссылку.'); }
+    finally { button.disabled = false; }
+  };
   $('alt-layers-toggle').onclick = () => {
     if ($('alt-layers').classList.contains('hidden')) openPanel('alt-layers', $('alt-layers-toggle'));
     else closePanel('alt-layers');
@@ -2056,6 +2047,7 @@ function bind() {
     if (state.pane === 'chart' && window.innerWidth < 1100) $('alt-back').click();
   });
   window.addEventListener('lf-theme', paintChartTheme);
+  window.addEventListener('lf-candle-palette', paintChartTheme);
   window.addEventListener('pagehide', destroyChart);
   window.addEventListener('popstate', async () => {
     const query = new URLSearchParams(location.search);

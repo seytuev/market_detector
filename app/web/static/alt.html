@@ -17,6 +17,7 @@
   <link rel="stylesheet" href="/workspace.css">
   <script src="/vendor/lightweight-charts.js"></script>
   <link rel="stylesheet" href="/brand/brand.css">
+  <link rel="stylesheet" href="/chart_share.css">
 </head>
 <body class="app-body">
   <a class="skip" href="#main">К содержимому</a>
@@ -211,7 +212,7 @@
         </div>
         <div class="alt-chart-actions">
           <button type="button" id="alt-auto" class="btn small" title="Показать все загруженные свечи и подобрать ценовую шкалу по ним">Авто</button>
-          <details class="lf-export"><summary class="btn small">Экспорт</summary><div><button type="button" id="alt-png" class="btn small" title="Скачать текущий вид графика в PNG">PNG</button><button type="button" id="alt-png2" class="btn small" title="Скачать текущий вид графика в PNG, двойное разрешение">PNG 2×</button></div></details>
+          <button type="button" id="alt-png" class="btn small chart-share" title="Создать ссылку на картинку текущего графика">↗ Ссылка на график</button>
         </div>
         <p id="alt-chart-empty" class="alt-empty">Выберите монету слева — график и карточка обновятся.</p>
         <section class="alt-journal" id="alt-journal">
@@ -301,6 +302,7 @@
   </div>
 
   <script src="/common.js"></script>
+  <script src="/chart_share.js"></script>
   <script src="/ui.js"></script>
   <script src="/alt_chart.js"></script>
   <script src="/events.js"></script>

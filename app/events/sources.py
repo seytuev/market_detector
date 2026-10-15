@@ -56,6 +56,8 @@ def fetch_prices(settings, pairs: list[str], *, start_ms: int,
                         "end": c.open_time + TIMEFRAME_MS["H1"],
                         "open": c.open,
                         "close": c.close,
+                        "high": c.high,
+                        "low": c.low,
                         "quality": "ok",
                     }
                     for c in candles

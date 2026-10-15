@@ -884,6 +884,16 @@ select, input, textarea {
 .ltf-pivot.role-HH, .ltf-pivot.role-HL { color: var(--green); }
 .ltf-pivot.role-LL, .ltf-pivot.role-LH { color: var(--red); }
 
+/* Shared HTF/LTF caption layout keeps true price levels and candle anchors. */
+.structure-caption {
+  position: absolute; white-space: nowrap; line-height: 14px;
+  pointer-events: auto; z-index: 15;
+}
+.structure-caption.structure-caption-dot {
+  width: 6px; height: 6px; padding: 0; border-radius: 50%;
+  font-size: 0; line-height: 0; background: currentColor;
+}
+
 /* ---------- телефон (§3.5): карточка → график → зоны → журнал ---------- */
 
 @media (max-width: 900px) {
