@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ru" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'">
+  <!-- SHARED_STYLE -->
+  <style>
+    body { display: block; width: 1920px; height: 960px; background: var(--lf-surface); overflow: hidden; }
+    #heading { height: 58px; padding: 7px 12px; display: flex; align-items: baseline; gap: 20px; }
+    #title { font-size: 22px; font-weight: 650; }
+    #subtitle { font-size: 14px; color: var(--lf-text2); }
+    #frame { position: relative; height: 902px; }
+    #chart { position: absolute; inset: 0; }
+    #zone-overlay { overflow: hidden; }
+    .h1-layer-status { bottom: 28px; }
+    .h1-offscreen { bottom: 28px; padding: 4px 8px; }
+  </style>
+</head>
+<body>
+  <div id="heading"><span id="title"></span><span id="subtitle"></span></div>
+  <div id="frame">
+    <div id="chart"></div><div id="zone-overlay"></div>
+    <div id="transition" class="h1-transition hidden"></div>
+    <div id="status" class="h1-layer-status hidden"></div>
+    <div id="offscreen" class="h1-offscreen hidden"></div>
+  </div>
+  <!-- SHARED_SCRIPTS -->
+  <script>window.h1Snapshot = /* SNAPSHOT_DATA */;</script>
+  <script>/* SNAPSHOT_RENDERER */</script>
+</body>
+</html>

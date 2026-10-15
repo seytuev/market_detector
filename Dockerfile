@@ -1,6 +1,9 @@
 FROM python:3.11.14-slim
 
 WORKDIR /srv
+RUN apt-get update && apt-get install -y --no-install-recommends chromium fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+ENV HTF_CHROMIUM_PATH=/usr/bin/chromium
 COPY pyproject.toml ./
 COPY requirements.lock ./
 COPY app ./app

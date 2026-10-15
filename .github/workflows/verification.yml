@@ -71,6 +71,17 @@ jobs:
       - run: python tools/check_package.py
       - run: docker build -t levelframe:verification .
       - run: docker run --rm --entrypoint python levelframe:verification -c "from app.db import Database; d=Database(); print(d.conn.execute('PRAGMA integrity_check').fetchone()[0]); d.close()"
+      - name: Verify offline notification rendering in the production image
+        run: |
+          docker run --rm --network none --entrypoint python levelframe:verification -c '
+          from app.notify.h1_image import render_snapshot
+          from PIL import Image
+          bars = [{"time": 1767225600 + i * 86400, "open": 100, "high": 105, "low": 95, "close": 102} for i in range(120)]
+          path = render_snapshot({"title": "D1", "subtitle": "Offline notification", "timeframe": "D1", "candles": bars, "overlays": []}, "/tmp/notification.png")
+          with Image.open(path) as image:
+              assert image.size == (1920, 960)
+          print("Offline notification PNG verified")
+          '
       - uses: actions/upload-artifact@v4
         with:
           name: packages

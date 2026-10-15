@@ -172,16 +172,18 @@ class LtfDispatcher:
 
     async def _render_event_chart(self, ev: LtfEvent,
                                   ctx: LtfContext) -> Optional[str]:
-        """График события (§7/§11.1): H1, правая граница — время события,
-        период 3 дня с авторасширением 7/14 от HTF-касания (§8)."""
+        """График H1 в оформлении сайта, зафиксированный на время события.
+
+        Минимум неделя данных даёт контекст перед текущей ногой; видимое
+        окно выбирает общий с сайтом H1Layers.currentFrame.
+        """
         if self.settings is None or ctx.observation is None:
             return None
-        from ..bot.charts import render_ltf_chart
+        from .h1_image import render_h1_event_chart
         from .chart_snapshot import (
             chart_meta_matches,
             chart_signature,
             find_saved_chart,
-            layers_for_kind,
             write_chart_meta,
         )
 
@@ -208,10 +210,8 @@ class LtfDispatcher:
         if reused:
             return reused
         path = await asyncio.to_thread(
-            render_ltf_chart, self.db, obs.id, str(out),
-            tf="H1", period_days=days,
-            layers=layers_for_kind(ev.kind, ev.payload),
-            settings=self.settings, now=ev.occurred_at, end_ms=ev.occurred_at,
+            render_h1_event_chart, self.db, obs.id, str(out),
+            period_days=days, settings=self.settings,
             event=ev,
         )
         if path:

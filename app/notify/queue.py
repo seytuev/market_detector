@@ -37,7 +37,7 @@ from .suppress import (
 log = logging.getLogger(__name__)
 
 # §11 п.7: сколько последних свечей ТФ зоны попадает на снимок для Telegram
-CHART_CANDLES = 75  # ~2,5 месяца D1: ближе к текущим свечам, зона читается
+CHART_CANDLES = 168  # общий кадр с H1/ALT: история для 97 видимых свечей
 
 # ТЗ 07.10.2026 §13.6: «входовые» виды событий — для них доставка проверяет
 # актуальность зоны на момент отправки. События-факты об инвалидации
@@ -241,7 +241,7 @@ class EventDispatcher:
     async def _attach_image(self, payload: MessagePayload) -> None:
         """§11 п.7: снимок графика зоны первого события пакета.
 
-        Рендер CPU-bound (matplotlib) — в отдельном потоке; сбой генерации
+        Рендер Chromium — в отдельном потоке; сбой генерации
         не должен ломать доставку текста.
         """
         if self.charts_dir is None or not payload.views:
@@ -263,10 +263,10 @@ class EventDispatcher:
         )
         source = f"{ins.venue} {ins.market_type} / {ins.symbol}"
         try:
-            from .chartimg import render_zone_chart  # тяжёлый импорт — лениво
+            from .h1_image import render_zone_notification
 
             payload.image_path = await asyncio.to_thread(
-                render_zone_chart, candles, zone, out, source,
+                render_zone_notification, candles, zone, out, source,
                 event_at=view.event.occurred_at, event_price=view.event.price,
             )
         except Exception:

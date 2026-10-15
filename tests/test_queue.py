@@ -329,7 +329,7 @@ async def test_chart_image_uses_current_forming_close(tmp_path, monkeypatch):
         Path(out).write_bytes(b"\x89PNG\r\n\x1a\nfake")
         return str(out)
 
-    monkeypatch.setattr("app.notify.chartimg.render_zone_chart", fake_render)
+    monkeypatch.setattr("app.notify.h1_image.render_zone_notification", fake_render)
     sender = LogSender()
     disp = EventDispatcher(db, DetectorConfig(notification_digest_seconds=0), sender, charts_dir=str(tmp_path))
     await disp.dispatch(
