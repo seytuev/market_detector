@@ -1618,7 +1618,7 @@ function applyTableMode() {
     else $('alt-list-pane').prepend(searchHead);
   }
   const title = document.querySelector('.alt-fresh h1');
-  title.textContent = state.screen === 'analysis' ? 'Анализ · Сетап D1/W1' : 'Скринер ALTs';
+  title.textContent = state.screen === 'analysis' ? 'Анализ · Сетап D1/W1' : 'Скринер';
   document.querySelectorAll('.sidebar .app-tab').forEach(link => {
     const isAnalysis = link.getAttribute('href') === '/#desk';
     const isScreener = link.textContent.trim().startsWith('Скринер');
