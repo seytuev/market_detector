@@ -164,6 +164,46 @@ def test_gap_then_backfill_and_manual_close_survive_repair(db, instrument_id):
     assert db.list_htf_ideas(instrument_id)[0]["reason"] == "manual"
 
 
+def test_reconcile_uses_bulk_originals_without_per_zone_reads(db, instrument_id, monkeypatch):
+    cfg = DetectorConfig()
+    _, _, _, zone = seed(db, instrument_id)
+    rows = bars(db, instrument_id, 5)
+    touch = replace(rows[-1], high=115)
+    db.insert_candles([touch])
+    before = db.get_ltf_entry_zone(zone.id)
+    expected, _ = zone_at(before, rows[:-1] + [touch], touch.close_time, cfg)
+
+    def unexpected_read(*args, **kwargs):
+        pytest.fail("reconciliation must use the bulk original zone snapshot")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(db, "get_ltf_entry_zone", unexpected_read)
+        reconcile_ideas(db, instrument_id, cfg, touch.close_time)
+    assert db.get_ltf_entry_zone(zone.id) == expected
+    assert before.max_test_depth == 0  # projection does not mutate its originals
+
+
+def test_reconcile_rolls_back_lifecycle_when_idea_publication_fails(db, instrument_id, monkeypatch):
+    cfg = DetectorConfig()
+    _, _, _, zone = seed(db, instrument_id)
+    rows = bars(db, instrument_id, 5)
+    touch = replace(rows[-1], high=115)
+    db.insert_candles([touch])
+    before = db.get_ltf_entry_zone(zone.id)
+
+    def fail_publication(*args, **kwargs):
+        raise RuntimeError("publication failed")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(db, "save_htf_idea", fail_publication)
+        with pytest.raises(RuntimeError, match="publication failed"):
+            reconcile_ideas(db, instrument_id, cfg, touch.close_time)
+    assert db.get_ltf_entry_zone(zone.id) == before
+    assert db.list_htf_ideas(instrument_id) == []
+    reconcile_ideas(db, instrument_id, cfg, touch.close_time)
+    assert db.get_ltf_entry_zone(zone.id).max_test_depth == .5
+
+
 def test_parent_invalidated_closes_idea_but_not_its_past(db, instrument_id):
     cfg = DetectorConfig()
     parent, _, _, _ = seed(db, instrument_id)

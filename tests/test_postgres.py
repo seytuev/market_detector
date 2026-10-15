@@ -66,6 +66,17 @@ def test_scenario_entry_returning_and_version_selection(pg):
     test_scenario_entry_upsert(pg,sc,iid)
 
 
+def test_ideas_reconciliation_bulk_snapshot_and_atomic_publication(pg, monkeypatch):
+    from tests.test_htf_ideas import (
+        test_reconcile_uses_bulk_originals_without_per_zone_reads,
+        test_reconcile_rolls_back_lifecycle_when_idea_publication_fails,
+    )
+    iid = pg.upsert_instrument(Instrument(None, 'BTC', 'binance', 'spot', 'BTCUSDT', 'USDT'))
+    test_reconcile_uses_bulk_originals_without_per_zone_reads(pg, iid, monkeypatch)
+    other = pg.upsert_instrument(Instrument(None, 'ETH', 'binance', 'spot', 'ETHUSDT', 'USDT'))
+    test_reconcile_rolls_back_lifecycle_when_idea_publication_fails(pg, other, monkeypatch)
+
+
 def test_deferred_publication_flags_do_not_open_nested_postgres_units(pg, monkeypatch):
     from app.postgres import Session
     statements=[]

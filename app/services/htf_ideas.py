@@ -207,10 +207,15 @@ def project_ideas(db, instrument_id, cfg, as_of, *, zones=None, candles=None):
 
 
 def reconcile_ideas(db, instrument_id, cfg, as_of):
-    ideas, _, facts = project_ideas(db, instrument_id, cfg, as_of)
-    with db.batch_writes():
+    with db.batch_writes(join_repository_writes=True):
+        # Project detached lifecycle values from one snapshot. Re-reading every
+        # original zone separately turns each H1 close into thousands of network
+        # round trips on PostgreSQL, even when no lifecycle field has changed.
+        zones = db.list_ltf_entry_zones(instrument_id=instrument_id)
+        originals = {z.id: z for z in zones}
+        ideas, _, facts = project_ideas(db, instrument_id, cfg, as_of, zones=zones)
         for z, fact in facts.values():
-            original = db.get_ltf_entry_zone(z.id)
+            original = originals[z.id]
             if fact["data_quality"] != "complete":
                 continue  # missing history must never erase known consumption
             fields = dict(first_test_at=z.first_test_at, max_test_depth=z.max_test_depth,
