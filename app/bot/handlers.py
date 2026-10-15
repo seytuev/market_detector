@@ -59,8 +59,9 @@ from .cards import (
     split_long,
 )
 from .charts import (
-    DEFAULT_MASK, layers_from_mask, render_ltf_chart, screenshot_candles,
+    DEFAULT_MASK, layers_from_mask, screenshot_candles,
 )
+from .chart_image import render_bot_chart as render_ltf_chart
 from .keyboards import (
     MENU_ALERTS,
     MENU_HIST,
@@ -281,6 +282,7 @@ def register_bot_handlers(app, settings, db: Database):
             db, obs_id, out,
             tf=tf, period_days=days, layers=layers_from_mask(mask),
             source_label=source, settings=settings, now=now,
+            quote_snapshot=(cur["price"], cur.get("quote_at")),
             **({"instrument_id": instrument_id} if obs_id is None else {}),
         )
         if path is None:
@@ -301,9 +303,9 @@ def register_bot_handlers(app, settings, db: Database):
                 lines.append(f"Контекст: {zone.type.value.upper()} {zone.timeframe} · "
                              f"{fmt_price_ru(zone.lower)}–{fmt_price_ru(zone.upper)}")
             sc = db.get_active_ltf_scenario(obs_id) if obs.state in _ACTIVE_STATES else None
-            if sc is not None:
+            if sc is not None and tf == "H1":
                 lines.append(f"{sc.trigger} подтверждён: уровень {fmt_price_ru(sc.break_level)}")
-            elif obs.state in _ACTIVE_STATES:
+            elif tf == "H1" and obs.state in _ACTIVE_STATES:
                 lines.append("BOS/SMS ещё не подтверждён (ожидаемый — пунктиром)")
             # Retain quote/candle freshness from the same current snapshot
             # when a different HTF context is explicitly selected.
@@ -323,9 +325,6 @@ def register_bot_handlers(app, settings, db: Database):
                     "показан по состоянию на текущий снимок; актуальный "
                     "сценарий — кнопкой «Зоны входа»."
                 )
-        _, outside = _auto_days(obs_id, now)
-        if tf == "H1" and outside:
-            caption += "\nНачало движения вне окна — полное движение доступно в приложении."
         from ..notify.navigation import reusable_photo
         image_url = None
         base = public_base_url(settings)

@@ -192,8 +192,8 @@ async def test_now_lists_assets_sorted_by_stage(db, seeded):
     assert len(replies) == 1
     text, markup = replies[0]
     assert "ETHUSDT" in text and "BTCUSDT" in text and "SOLUSDT" in text
-    assert "Ждём BOS/SMS" in text
-    # сортировка: «Ждём BOS/SMS» выше «Ждём HTF-зону»/«Недостаточно данных»,
+    assert "Контекст SHORT · ждём H1" in text
+    # Контекст с ожидаемым подтверждением выше активов без контекста/данных;
     # равные этапы — по символу
     assert text.index("ETHUSDT") < text.index("BTCUSDT") < text.index("SOLUSDT")
     # inline-клавиатура: активы + «Обновить»

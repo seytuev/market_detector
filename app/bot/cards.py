@@ -1,12 +1,11 @@
 """Текстовые карточки бота поверх read model app/services/overview.py."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any, Optional
 
 from ..db import Database
 from ..models import Zone, ZoneStatus, now_ms
-from ..notify.formatting import fmt_pct_ru
+from ..notify.formatting import fmt_pct_ru, fmt_time_msk
 from ..notify.telegram import _fmt_price, _fmt_time
 from ..services.overview import (
     STAGE_DATA_PENDING,
@@ -91,8 +90,7 @@ def _clip(text: str, limit: int = TEXT_LIMIT) -> str:
 
 
 def _fmt_hhmm(ms: int) -> str:
-    dt = datetime.fromtimestamp(ms / 1000, tz=timezone.utc)
-    return dt.strftime("%H:%M")
+    return fmt_time_msk(ms).split(" ", 1)[1]
 
 
 def _next_step(stage: str) -> str:
@@ -119,8 +117,8 @@ def _dir_ru(direction: str) -> str:
 
 
 def render_now(db: Database, settings, chat_id: Optional[str] = None) -> str:
-    """Компактный список активов: «СИМВОЛ · биржа — этап; HTF-контекст;
-    зон входа: N; обновлено HH:MM». Сортировка по этапу (STAGE_RANK),
+    """Короткие блоки: рыночное состояние, HTF-контекст, допуск H1 и МСК.
+    Биржа нужна только для одинаковых символов. Сортировка по этапу (STAGE_RANK),
     внутри этапа — по символу. Время — max(quote ts, last_event_at).
     chat_id — watchlist владельца бота (ТЗ п.8): непустой список сужает
     выдачу до его активов; пустой/None — все (fallback, как до /start)."""
@@ -132,14 +130,18 @@ def render_now(db: Database, settings, chat_id: Optional[str] = None) -> str:
     if not rows:
         return "Пока нет активов на анализе. Добавьте инструменты в приложении."
     quotes = db.get_all_quotes()
+    symbols = [r["instrument"]["symbol"] for r in rows]
 
     def line(r: dict) -> str:
         ins = r["instrument"]
-        parts = [f"{ins['symbol']} · {ins['venue']} — {r['stage']}"]
+        name = ins['symbol']
+        if symbols.count(name) > 1:
+            name += f" · {ins['venue']} {ins['market_type']}"
+        parts = [f"{name} — {r.get('market_stage') or r['stage']}"]
         ctx = r.get("htf_context")
         if ctx:
-            parts.append(f"HTF: {ctx['type']} {ctx['timeframe']}")
-        parts.append(f"зон входа: {r['eligible_count']}")
+            parts.append(f"HTF: {ctx['type'].upper()} {ctx['timeframe']}")
+        parts.append(f"зон допуска H1: {r['eligible_count']}")
         quote_ts: Optional[int] = None
         quote = quotes.get(ins["id"])
         if quote:
@@ -147,13 +149,13 @@ def render_now(db: Database, settings, chat_id: Optional[str] = None) -> str:
         marks = [t for t in (quote_ts, r.get("last_event_at")) if t]
         if marks:
             parts.append(f"обновлено {_fmt_hhmm(max(marks))}")
-        return "; ".join(parts)
+        return parts[0] + "\n" + " · ".join(parts[1:])
 
     rows = sorted(
         rows,
         key=lambda r: (stage_rank(r["stage"]), r["instrument"]["symbol"]),
     )
-    return "Сейчас по активам:\n" + "\n".join(line(r) for r in rows)
+    return "Сейчас по активам:\n\n" + "\n\n".join(line(r) for r in rows)
 
 
 # --------------------------------------------------------------------- #
@@ -600,8 +602,13 @@ def render_chart_caption(
         lines.append(f"Последнее закрытие H1: {_fmt_time(last_h1)}" if last_h1 is not None else "Последнее закрытие H1: нет данных")
         if last_h1 is None or now - last_h1 > 3_900_000:
             lines.append("⚠️ Свечи H1 неактуальны · дождитесь обновления перед оценкой входа")
-    lines.append(f"Этап: {cur['stage']}")
     asset = (cur.get("presentation") or {}).get("asset") or cur.get("asset")
+    if tf != "H1":
+        lines.append("Активные зоны D1/W1 · структура H1 — на графике H1")
+        lines.append(f"Снимок запроса: {_fmt_time(now)}")
+        return "\n".join(lines)
+    title = ((asset or {}).get("asset_state") or {}).get("title")
+    lines.append(title if asset and asset.get("governs") and title else f"Этап: {cur['stage']}")
     structure = (asset or {}).get("structure") or {}
     transition = structure.get("last_transition") if structure.get("proven") else None
     sc = cur["current_scenario"]
@@ -616,8 +623,6 @@ def render_chart_caption(
     elif cur["selected_context_id"] is not None:
         lines.append("BOS/SMS ещё не подтверждён (ожидаемый — пунктиром)")
     lines.append(f"Снимок запроса: {_fmt_time(now)}")
-    if asset and asset.get("governs") and (asset.get("asset_state") or {}).get("title"):
-        lines.append(asset["asset_state"]["title"])
     return "\n".join(lines)
 
 

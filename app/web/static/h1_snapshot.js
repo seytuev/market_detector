@@ -27,17 +27,35 @@
     const series = chart.addCandlestickSeries({
       ...HTF.candleOptions(theme),
       priceFormat: { type: 'price', precision, minMove: 10 ** -precision },
+      ...(snapshot.quote ? {
+        lastValueVisible: false, priceLineVisible: false,
+        autoscaleInfoProvider: original => {
+          const info = original();
+          if (!info) return info;
+          return { ...info, priceRange: {
+            minValue: Math.min(info.priceRange.minValue, snapshot.quote.price),
+            maxValue: Math.max(info.priceRange.maxValue, snapshot.quote.price),
+          } };
+        },
+      } : {}),
     });
     series.setData(bars);
+    if (snapshot.quote) series.createPriceLine({
+      price: snapshot.quote.price, color: theme.text, lineWidth: 1,
+      lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true,
+      title: 'Котировка',
+    });
     const first = bars[0].time, last = bars[bars.length - 1].time;
-    const markers = layers ? H1Layers.seriesMarkers(layers, null, role =>
+    const markers = layers && snapshot.layer_settings?.points === 'hidden' ? [] : layers ? H1Layers.seriesMarkers(layers, null, role =>
       ['HH', 'HL'].includes(role) ? theme.up : theme.down
     ) : (snapshot.markers || []);
     series.setMarkers(markers.filter(mark => mark.time >= first && mark.time <= last)
       .sort((a, b) => a.time - b.time));
     const ts = chart.timeScale();
     const paneWidth = () => $('frame').clientWidth - chart.priceScale('right').width();
-    ts.setVisibleLogicalRange(H1Layers.currentFrame(bars.length, paneWidth()));
+    ts.setVisibleLogicalRange(snapshot.fit_content
+      ? { from: -1, to: bars.length - 1 + Math.max(2, Math.ceil(bars.length * .06)) }
+      : H1Layers.currentFrame(bars.length, paneWidth()));
     // Wait for the chart's own canvas layout before projecting DOM overlays.
     await new Promise(resolve => setTimeout(resolve, 200));
     const paneHeight = $('frame').clientHeight - ts.height();
@@ -58,7 +76,7 @@
     };
     const visible = ts.getVisibleRange();
     if (layers) H1Layers.draw($('zone-overlay'), {
-      layers, settings: { ...H1Layers.DEFAULTS }, xOf,
+      layers, settings: { ...H1Layers.DEFAULTS, ...snapshot.layer_settings }, xOf,
       yOf: price => series.priceToCoordinate(price), paneRight: paneWidth(), height: paneHeight,
       fmtPrice, fmtTime,
       view: { timeFrom: visible.from * 1000, timeTo: visible.to * 1000,
