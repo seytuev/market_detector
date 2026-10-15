@@ -222,14 +222,13 @@ class Store:
             self.audit("identity_candidate", candidate_id, {"action": action, "reason": reason})
         return {"id": candidate_id, "revision_id": revision}
 
-    def material(self, material_id, as_of=None):
+    def material(self, material_id, as_of=None,revision_id=None):
         moment = self.clock() if as_of is None else as_of
         row = self.one("SELECT r.* FROM research_material_revision r WHERE r.material_id=? AND r.available_at<=? "
-                       "ORDER BY r.available_at DESC,r.change_seq DESC,r.revision_id DESC LIMIT 1", (material_id, moment))
+                       +("AND r.revision_id=? " if revision_id else "")+"ORDER BY r.available_at DESC,r.change_seq DESC,r.revision_id DESC LIMIT 1", (material_id, moment,revision_id) if revision_id else (material_id,moment))
         if not row:
             raise ResearchError("material_not_found", "Материал не найден", 404)
         result = decode(row["payload"])
-        result.update({"id":material_id,"revision_id":row["revision_id"],"available_at":row["available_at"]})
         result.update({"id": material_id, "revision_id": row["revision_id"], "available_at": row["available_at"]})
         result["analyses"] = [decode(r["payload"]) for r in self.rows(
             "SELECT payload FROM research_analysis WHERE material_revision_id=? AND available_at<=? ORDER BY available_at DESC,change_seq DESC,id DESC",

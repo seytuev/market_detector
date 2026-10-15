@@ -105,7 +105,8 @@ class Records:
         if digest(data)!=row["content_hash"]:raise ResearchError("snapshot_corrupt","Контрольная сумма снимка не совпала",409)
         return {**data,"id":identifier,"content_hash":row["content_hash"]}
 
-    def source(self,ref):
+    def source(self,ref,as_of=None):
+        moment=self.s.clock() if as_of is None else as_of
         if not isinstance(ref,dict):raise ResearchError("invalid_reference","Источник должен содержать тип, ID и версию")
         kind=ref.get("kind"); identifier=ref.get("id"); revision=ref.get("revision_id")
         if not revision:raise ResearchError("revision_required","Источник должен ссылаться на конкретную версию")
@@ -117,9 +118,10 @@ class Records:
             return self.get("idea",identifier,revision)
         else:raise ResearchError("invalid_reference","Неизвестный тип исследовательского источника")
         if not row:raise ResearchError("source_not_found","Версия источника не найдена",422)
+        if row["available_at"]>moment:raise ResearchError("source_not_available","Версия источника ещё не была доступна",422)
         value={**decode(row["payload"]),"available_at":row["available_at"],"revision_id":revision,"id":identifier}
         if kind=="material":
-            analysis=self.s.one("SELECT payload FROM research_analysis WHERE material_revision_id=? AND available_at<=? ORDER BY available_at DESC,change_seq DESC,id DESC LIMIT 1",(revision,self.s.clock()))
+            analysis=self.s.one("SELECT payload FROM research_analysis WHERE material_revision_id=? AND available_at<=? ORDER BY available_at DESC,change_seq DESC,id DESC LIMIT 1",(revision,moment))
             value["analyses"]=[decode(analysis["payload"])] if analysis else []
             if analysis:value["available_at"]=max(value["available_at"],value["analyses"][0]["available_at"])
         return value

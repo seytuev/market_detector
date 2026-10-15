@@ -95,9 +95,9 @@ def register_research_routes(app, db, settings, require_auth):
             return result(s.materials(asset_uid,after=cursor,limit=limit,from_at=from_at,to_at=to_at,kind=kind))
 
     @router.get("/materials/{material_id}")
-    def material(material_id:str,as_of:int|None=None):
+    def material(material_id:str,as_of:int|None=None,revision_id:str|None=None):
         with db.read_tx():
-            return result(s.material(material_id,as_of))
+            return result(s.material(material_id,as_of,revision_id))
 
     @router.get("/identity/candidates")
     def identity_candidates():

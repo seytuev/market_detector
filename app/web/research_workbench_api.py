@@ -138,7 +138,7 @@ def register(router,runner,settings,result,mutate):
     @router.get("/playbook/status")
     def playbook_status():check("playbook");return result({"model":Model(s).status(),"retrieval":"native lexical TF-IDF; model comparison is an explicit rule setting",
         "matching_enabled":settings.research_playbook_matching_enabled,"memory_enabled":settings.research_playbook_memory_enabled,
-        "queue":s.rows("SELECT kind,status,COUNT(*) AS n FROM research_job WHERE kind LIKE 'playbook_%' GROUP BY kind,status")})
+        "queue":s.rows("SELECT kind,status,COUNT(*) AS n FROM research_job WHERE kind LIKE ? GROUP BY kind,status",("playbook_%",))})
     @router.post("/playbook/model-check",status_code=202)
     def model_check():return job("model_probe",{},"playbook","probe")
 

@@ -31,8 +31,9 @@ window.ResearchUI = (() => {
     d.addEventListener('close',()=>d.remove());document.body.appendChild(d);d.showModal();return d;
   }
   function errorBox(container,error){container.innerHTML='<p class="research-error" role="alert">'+esc(error.message||'Не удалось загрузить данные')+'</p>';}
-  async function material(id){
-    const response=await api('/materials/'+encodeURIComponent(id)),m=response.data;
+  async function material(id,asOf=null,revisionId=null){
+    const query=new URLSearchParams();if(asOf!=null)query.set('as_of',String(asOf));if(revisionId)query.set('revision_id',revisionId);
+    const response=await api('/materials/'+encodeURIComponent(id)+(query.size?'?'+query.toString():'')),m=response.data;
     const d=dialog(m.title||'Исходный материал','<p>'+safeLink(m.canonical_url,'Открыть оригинал')+'</p>'+
       '<p class="research-muted">Опубликовано: '+esc(fmt(m.published_at))+' · Получено: '+esc(fmt(m.available_at))+'</p>'+
       '<blockquote>'+esc(m.original_text)+'</blockquote>'+

@@ -6,3 +6,12 @@
 .chart-share-error { font-size: 12px; color: var(--lf-negative); }
 .desk-modebar { flex-wrap: wrap; gap: 8px; }
 .alt-chart-actions { flex-wrap: wrap; }
+@media (max-width: 767px) {
+  #view-overview .desk-modebar { flex-wrap: wrap; }
+  .chart-share { min-height: 40px; max-width: 100%; font-size: 11px; padding: 6px 8px; }
+  .chart-share-result { flex: 1 0 100%; width: 100%; box-sizing: border-box; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px; padding: 8px; }
+  .chart-share-result input { grid-column: 1 / -1; width: 100%; max-width: none; box-sizing: border-box; min-height: 36px; font-size: 16px; text-overflow: ellipsis; }
+  .chart-share-result a { display: inline-flex; align-items: center; min-height: 40px; }
+  .chart-share-result .btn { min-height: 40px; font-size: 11px; padding: 6px 10px; }
+  .chart-share-error { flex-basis: 100%; white-space: normal; overflow-wrap: anywhere; }
+}

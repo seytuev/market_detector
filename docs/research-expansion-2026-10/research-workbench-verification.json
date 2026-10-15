@@ -139,5 +139,25 @@
       "calendar_views": 6,
       "javascript_errors": 0
     }
+  },
+  "production_pilot": {
+    "deployment_before_followup": "bfc0e9ad-7d04-4d85-890e-470f16143118",
+    "archive_import": {
+      "imported": 311,
+      "quarantined": 0,
+      "ideas": 13,
+      "external_baskets": 7,
+      "channel_configs": 10
+    },
+    "xai_probe": {
+      "connected": true,
+      "model": "grok-4.3",
+      "attempts": 1,
+      "tokens_in": 1003,
+      "tokens_out": 4,
+      "reserved_usd": "0.5",
+      "actual_usd": null
+    },
+    "followup": "Parameterize PostgreSQL queue diagnostic LIKE; preserve source revision/as-of in historical matching and display archive provenance."
   }
 }

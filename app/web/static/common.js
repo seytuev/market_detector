@@ -261,7 +261,7 @@ window.HTF = (() => {
     }
     if (!resp.ok) {
       let detail = resp.statusText;
-      try { detail = (await resp.json()).detail || detail; } catch (e) { /* не JSON */ }
+      try { const payload = await resp.json(); detail = payload.error?.message || payload.detail || detail; } catch (e) { /* не JSON */ }
       if (typeof detail === 'object') detail = detail.fields ? Object.entries(detail.fields).map(([k,v]) => `${k}: ${v}`).join('\n') : JSON.stringify(detail);
       throw new Error(detail);
     }

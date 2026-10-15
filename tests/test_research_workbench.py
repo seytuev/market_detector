@@ -263,6 +263,8 @@ def test_workbench_api_auth_flags_and_background_results(work):
     client=TestClient(create_app(s.db,cfg));headers={"Authorization":"Bearer test"}
     assert client.get('/api/research/v1/ideas').status_code==401
     assert client.get('/api/research/v1/workbench/config',headers=headers).json()['data']['features']['lab']
+    diagnostic=client.get('/api/research/v1/playbook/status',headers=headers)
+    assert diagnostic.status_code==200 and isinstance(diagnostic.json()['data']['queue'],list)
     create=client.post('/api/research/v1/ideas',headers={**headers,'Idempotency-Key':'idea1'},json=idea(assets[1]))
     assert create.status_code==200,create.text
     repeat=client.post('/api/research/v1/ideas',headers={**headers,'Idempotency-Key':'idea1'},json=idea(assets[1]))
@@ -437,3 +439,15 @@ def test_distillation_sends_bounded_train_evidence_with_exact_lineage(work):
     assert set(rule["evidence_example_revision_ids"])=={e["revision_id"] for e in captured[0]["examples"]}
     assert set(rule["evidence_example_revision_ids"])<=set(data["partitions"]["train"])
     assert rule["status"]=="draft" and rule["provenance"]=="model"
+
+
+def test_match_snapshot_excludes_later_analysis(work):
+    s,r,m,ids,assets=work;ref=source(s,assets[1],999)
+    future=NOW+HOUR
+    s.execute("INSERT INTO research_analysis VALUES(?,?,?,?,?)",("future-analysis",ref["revision_id"],future,1,encode({"available_at":future,"claims":[{"verified":True}],"summary":"Later analysis must not change the saved matching evidence"})))
+    m[0]=NOW+2*HOUR;book=Playbook(s)
+    assert book.source_snapshot(ref,NOW)["verified_quote"] is None
+    assert book.source_snapshot(ref)["verified_quote"] is True
+    material=s.material(ref["id"],NOW,ref["revision_id"])
+    assert material["revision_id"]==ref["revision_id"] and material["analyses"]==[]
+    with pytest.raises(ResearchError):s.material(ref["id"],NOW,"unknown-version")

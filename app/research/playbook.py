@@ -41,8 +41,8 @@ class Playbook:
             "track":choice(value.get("track","research"),{"catalyst","narrative","attention","risk","trade_hypothesis","research"},"track"),
             "status":choice(value.get("status","active"),{"active","archived"},"status")},identifier,body.get("expected_revision"),body.get("reason","Создана рубрика учебника"))
 
-    def source_snapshot(self,ref):
-        value=self.r.source(ref);assets=[]
+    def source_snapshot(self,ref,as_of=None):
+        value=self.r.source(ref,as_of);assets=[]
         if ref["kind"]=="material":
             rows=self.s.rows("SELECT asset_uid FROM research_material_asset WHERE revision_id=? AND resolution IN ('manual','verified')",(ref["revision_id"],))
             assets=[r["asset_uid"] for r in rows]
@@ -278,11 +278,11 @@ class Playbook:
                 ref={"kind":"material","id":row["material_id"],"revision_id":row["revision_id"]}
                 key=digest([identity,row["revision_id"],mode]);already=self.s.one("SELECT id FROM research_object WHERE id=?",(key,))
                 if not already:
-                    try:decision=self.decide(rule,self.source_snapshot(ref),train,end)
+                    try:decision=self.decide(rule,self.source_snapshot(ref,end),train,end)
                     except ResearchError as error:decision={"decision":"error","error_code":error.code,"rationale":error.message}
                     calls+=int(rule["retrieval_method"]=="model")
                     value={"rule_id":identifier,"rule_revision_id":identity,"source_ref":ref,"source_revision_id":row["revision_id"],"mode":mode,"status":"new",
-                        "title":decode(row["payload"]).get("title","Материал"),"evaluated_at":self.s.clock(),**decision}
+                        "title":decode(row["payload"]).get("title","Материал"),"evaluated_at":self.s.clock(),"snapshot_as_of":end,**decision}
                     # Deterministic object ID makes restarts idempotent, including recorded errors.
                     with self.s.db.batch_writes():self.r.save("match",value,reason="Проверен материал правила",actor="worker",new_id=key)
                 last_at=row["available_at"];last_id=row["revision_id"];processed+=1
@@ -307,7 +307,8 @@ class Playbook:
         rule=self.r.get("rule",match["rule_id"],match["rule_revision_id"])
         data=self.r.dataset(rule["dataset_id"],"playbook")
         train=[e for e in data["examples"] if e["revision_id"] in data["partitions"]["train"]]
-        try:decision=self.decide(rule,self.source_snapshot(match["source_ref"]),train,match["evaluated_at"])
+        moment=match.get("snapshot_as_of",match["evaluated_at"])
+        try:decision=self.decide(rule,self.source_snapshot(match["source_ref"],moment),train,moment)
         except ResearchError as error:decision={"decision":"error","error_code":error.code,"rationale":error.message}
         value={k:v for k,v in match.items() if k not in {"error_code","raw_response","usage","model"}}
         return self.r.save("match",{**value,**decision,"retried_at":self.s.clock()},identifier,match["revision_id"],"Явный повтор проверки после ошибки",actor="worker")

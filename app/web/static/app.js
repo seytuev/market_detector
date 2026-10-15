@@ -4234,6 +4234,18 @@ function initSettingsSections() {
 
 function initAnalysisPanels() {
   const view = $('view-overview'), layout = view.querySelector('.overview-layout');
+  // Keep status text outside the plot on phones, preserving the desktop overlay.
+  const chartContainer = $('chart-container');
+  const chartNotes = document.createElement('div');
+  chartNotes.className = 'mobile-chart-notes';
+  chartContainer.after(chartNotes);
+  const mobileChart = window.matchMedia('(max-width: 767px)');
+  const placeChartNotes = () => {
+    const target = mobileChart.matches ? chartNotes : chartContainer;
+    ['h1-transition', 'h1-layer-status', 'h1-offscreen'].forEach(id => target.appendChild($(id)));
+  };
+  mobileChart.addEventListener('change', placeChartNotes);
+  placeChartNotes();
   view.dataset.mobilePane = 'chart';
   const savedAssets = localStorage.getItem('lf:analysis:assets');
   if (savedAssets === 'closed') view.querySelector('.desk-main').classList.add('assets-hidden');

@@ -62,11 +62,16 @@
     display: grid; grid-template-columns: minmax(0, 1fr) 56px 44px 68px 44px;
     gap: 6px; min-height: 56px; padding: 6px 12px; background: transparent;
   }
+  /* LTF hides the candle timeframe selector; collapse its column as well. */
+  #view-overview .workbar:has(.tf-switch.hidden) { grid-template-columns: minmax(0, 1fr) 44px 68px 44px; }
+  #view-overview .workbar:has(.tf-switch.hidden) .layer-menu { grid-column: 2; }
+  #view-overview .workbar:has(.tf-switch.hidden) #btn-new-zone { grid-column: 3; }
+  #view-overview .workbar:has(.tf-switch.hidden) #desk-expand { grid-column: 4; }
   #view-overview .lf-analysis-actions { display: contents; }
   #view-overview #desk-side-toggle { display: none; }
   #view-overview #instrument-select { grid-column: 1; grid-row: 1; width: 100%; min-width: 0; font-size: 12px; }
   #view-overview .tf-switch { grid-column: 2; grid-row: 1; min-width: 0; }
-  #view-overview #tf-select { width: 100%; font-size: 12px; }
+  #view-overview #tf-select { width: 100%; padding: 0 4px; font-size: 12px; }
   #view-overview .layer-menu { grid-column: 3; grid-row: 1; min-width: 0; }
   #view-overview .workbar .layer-menu summary { width: 44px; min-width: 0; padding: 0; justify-content: center; }
   #view-overview .layer-label, #view-overview .layer-active { display: none; }
@@ -88,7 +93,7 @@
   #view-overview .overview-layout { display: flex; flex-direction: column; padding: 0 12px 12px; gap: 0; }
   #view-overview .desk-main, #view-overview .desk-side { display: contents; }
   #view-overview .chart-block { width: 100%; gap: 0; border: 1px solid var(--lf-border); border-radius: 16px; overflow: hidden; background: var(--lf-surface); }
-  #view-overview .desk-modebar { min-height: 52px; padding: 4px 10px; border: 0; gap: 8px; flex-wrap: nowrap; border-radius: 0; }
+  #view-overview .desk-modebar { min-height: 52px; padding: 4px 10px; border: 0; gap: 8px; flex-wrap: wrap; border-radius: 0; }
   #view-overview .mode-tabs { gap: 2px; }
   #view-overview .mode-tab { justify-content: center; min-width: 52px; min-height: 44px; padding: 0 12px; font-size: 12px; border: 0; border-radius: 9px; }
   #view-overview .mode-tab.active { background: var(--lf-selected); color: var(--lf-brand); }
