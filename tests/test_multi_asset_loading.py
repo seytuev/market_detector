@@ -109,3 +109,36 @@ async def test_marked_parents_are_seeded_in_one_replay_after_all_observations_ex
         assert len(calls) == 1
     finally:
         await worker.data_sync.shutdown()
+
+
+def test_parallel_restore_and_backfill_keep_replaying_until_both_finish(db):
+    worker, _ = _make_worker(db, FakeAdapter())
+    worker._set_replaying(1, True)
+    worker._set_replaying(1, True)
+    worker._set_replaying(1, False)
+    assert db.get_meta('replaying:1') == '1'
+    worker._set_replaying(1, False)
+    assert db.get_meta('replaying:1') == '0'
+
+
+async def test_htf_background_replay_does_not_hold_other_instrument_calculations(db, monkeypatch):
+    worker, _ = _make_worker(db, FakeAdapter())
+    entered, release = threading.Event(), threading.Event()
+    def replay_instrument(iid):
+        entered.set()
+        assert release.wait(5)
+        return []
+    # Bind a normally named scanner method so the worker assigns its key.
+    def slow(self, iid):
+        return replay_instrument(iid)
+    slow.__name__ = 'replay_instrument'
+    monkeypatch.setattr(worker.scanner, 'replay_instrument', slow.__get__(worker.scanner))
+    pending = asyncio.create_task(worker._calculate(worker.scanner.replay_instrument, 1))
+    try:
+        assert await asyncio.to_thread(entered.wait, 2)
+        assert await asyncio.wait_for(worker._calculate(lambda: 'quote', calculation_instrument=2), 2) == 'quote'
+        assert not pending.done()
+    finally:
+        release.set()
+        await pending
+        await worker.data_sync.shutdown()

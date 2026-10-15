@@ -92,6 +92,16 @@ def test_multi_asset_calculation_ownership_and_engine_isolation(pg, monkeypatch)
     asyncio.run(test_cancelled_calculation_retains_its_instrument_without_blocking_other_assets(pg))
 
 
+def test_coordinated_htf_history_keeps_idempotence_and_delayed_events(pg):
+    from app.config import DetectorConfig
+    from tests.test_replay import test_replay_idempotent, test_replay_events_delayed
+    cfg = DetectorConfig()
+    btc = pg.upsert_instrument(Instrument(None, 'BTC', 'binance', 'spot', 'BTCUSDT', 'USDT'))
+    test_replay_idempotent(pg, cfg, btc)
+    eth = pg.upsert_instrument(Instrument(None, 'ETH', 'binance', 'spot', 'ETHUSDT', 'USDT'))
+    test_replay_events_delayed(pg, cfg, eth)
+
+
 def test_deferred_publication_flags_do_not_open_nested_postgres_units(pg, monkeypatch):
     from app.postgres import Session
     statements=[]

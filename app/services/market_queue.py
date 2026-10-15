@@ -233,7 +233,7 @@ class MarketQueue:
                     self.db.conn.execute('INSERT INTO market_publication(instrument_id,event_ids,created_at) VALUES(?,?,?)',(entry.instrument_id,json.dumps(event_ids),now_ms()))
                 return events
         async with self.worker.data_sync.instrument(entry.instrument_id):
-            result=await self.worker._calculate(calculate_then_receipt)
+            result=await self.worker._calculate(calculate_then_receipt, calculation_instrument=entry.instrument_id)
         self._metrics.counter('market_queue_drained',labels={'venue':venue})
         return result
 

@@ -724,10 +724,6 @@ class DataSync:
                 result["processing_duration_s"] = round(time.monotonic() - processing_started, 3)
                 result.update(processing=False, error=None, error_stage=None, finished_at=now_ms())
                 await self._write(self._save_channel, ins, tf, result)
-                # A borrowed marker belongs to restore/backfill. That owner
-                # may have finished while this request was running.
-                if not was_replaying:
-                    await self._write(self.worker._set_replaying, ins.id, False)
                 status = self.channel_status(ins, tf)
                 await self.worker._check_freshness(ins, tf)
                 await self._write(

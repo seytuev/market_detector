@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import time
+from threading import RLock
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -115,6 +116,8 @@ class Worker:
         self.broadcast = broadcast
         self.ltf_engine = ltf_engine
         self._ltf_engines = {}
+        self._replay_depth = {}
+        self._replay_lock = RLock()
         self.ltf_dispatcher = ltf_dispatcher
         self.alt_runner = alt_runner
         self.alt_dispatcher = alt_dispatcher
@@ -175,8 +178,13 @@ class Worker:
         self.seed_catalog_retry_seconds = 60.0
         self.seed_catalog_max_attempts = 5
 
-    async def _calculate(self, fn, *args, **kwargs):
-        calculation_instrument = None
+    async def _calculate(self, fn, *args, calculation_instrument=None, **kwargs):
+        if getattr(fn, '__self__', None) is self.scanner and args:
+            self.scanner._bar_checkpoint = self._calculation_checkpoint
+            if fn.__name__ in ('replay_instrument', 'process_candle_revisions', 'on_price'):
+                calculation_instrument = args[0]
+            elif fn.__name__ == 'on_closed_candle':
+                calculation_instrument = args[0].instrument_id
         if self.ltf_engine is not None and getattr(fn, '__self__', None) is self.ltf_engine:
             name = fn.__name__
             if name in ('process_h1_close', 'on_htf_zone_touched') and args:
@@ -194,14 +202,7 @@ class Worker:
                         self.db, self.cfg, scan_cursors=self.ltf_engine.scan_cursors)
                     self._ltf_engines[calculation_instrument] = engine
                 engine.cfg = self.cfg
-                def checkpoint():
-                    if self._stop.is_set():
-                        raise InterruptedError('worker_stopping')
-                    claim = getattr(self, '_calc_claim', None)
-                    if claim:
-                        from .services.runtime import CALC_OWNER, assert_owner
-                        assert_owner(self.db, CALC_OWNER, claim)
-                engine._bar_checkpoint = checkpoint
+                engine._bar_checkpoint = self._calculation_checkpoint
                 fn = getattr(engine, name)
         from functools import wraps
         @wraps(fn)
@@ -234,6 +235,14 @@ class Worker:
             if claim: assert_owner(self.db, CALC_OWNER, claim, check_expiry=False)
             return result
         return await self.data_sync.calculate(atomic_calculation, instrument_id=calculation_instrument)
+
+    def _calculation_checkpoint(self):
+        if self._stop.is_set():
+            raise InterruptedError('worker_stopping')
+        claim = getattr(self, '_calc_claim', None)
+        if claim:
+            from .services.runtime import CALC_OWNER, assert_owner
+            assert_owner(self.db, CALC_OWNER, claim)
 
 
     # ---------- подготовка ----------
@@ -1838,11 +1847,15 @@ class Worker:
     def _set_replaying(self, instrument_id: int, on: bool) -> None:
         """D02: маркер восстановления/replay в meta — API помечает снимок
         replaying, пока идёт догрузка истории инструмента."""
-        key = f"replaying:{instrument_id}"
-        value = "1" if on else "0"
-        if self.db.get_meta(key) != value:
-            self.db.set_meta(key, value)
-            self.db.bump_state_seq()
+        with self._replay_lock:
+            depth = max(0, self._replay_depth.get(instrument_id, 0) + (1 if on else -1))
+            key = f"replaying:{instrument_id}"
+            value = "1" if depth else "0"
+            with self.db.batch_writes(join_repository_writes=True):
+                if self.db.get_meta(key) != value:
+                    self.db.set_meta(key, value)
+                    self.db.bump_state_seq()
+            self._replay_depth[instrument_id] = depth
 
     async def _mark_stale(self, ins: Instrument, reason: str, *, timeframes=None) -> None:
         """Record an outage only for the affected streams; recovery is per stream.

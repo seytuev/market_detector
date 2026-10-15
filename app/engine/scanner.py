@@ -834,8 +834,11 @@ class Scanner:
             tf: [c for c in full if start_ms is not None and c.open_time < start_ms]
             for tf, full in tf_candles.items()
         }
-        with self.db.batch_writes():
+        with self.db.batch_writes(join_repository_writes=True):
             for c in all_candles:
+                checkpoint = getattr(self, '_bar_checkpoint', None)
+                if checkpoint is not None:
+                    checkpoint()
                 boundary = close_boundary_ms(c.open_time, c.timeframe)
                 prev = self._last_price.get(instrument_id)
                 created += self._track_all(

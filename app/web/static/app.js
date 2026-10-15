@@ -59,6 +59,7 @@ const state = {
   zoneReq: 0,
   eventReq: 0,
   candidateReq: 0,
+  detailReq: 0,
   candleVersion: 0,
   warmupText: null,   // §11: текст прогрева над пустым графиком (событие lf-warmup)
 };
@@ -1517,6 +1518,8 @@ function openZoneDetail(zoneId) {
 }
 
 async function loadZoneDetail(zoneId, focusChart) {
+  const instrument = state.instrumentId;
+  const request = ++state.detailReq;
   const commentEl = $('review-comment');
   const commentKeep = commentEl ? commentEl.value : '';
   const commentFocused = document.activeElement === commentEl;
@@ -1524,6 +1527,8 @@ async function loadZoneDetail(zoneId, focusChart) {
     .map((el) => el.dataset.section);
   const d = await api(`/api/zones/${zoneId}`);
   const z = d.zone;
+  if (request !== state.detailReq || instrument !== state.instrumentId
+      || z.instrument_id !== instrument) return;
   state.selectedZoneId = zoneId;
   // ТЗ §5: внутренние уровни ликвидности — рисуются на графике, пока
   // открыта эта зона; обновляются при каждой перерисовке деталей
@@ -3345,7 +3350,7 @@ function selectAnalysisInstrument(id) {
   // A selection changes every visible domain together. Pending responses have
   // their own identity guards, but the already painted snapshot also belongs
   // to the old instrument and must not frame or annotate the new candles.
-  for (const key of ['candleReq', 'zoneReq', 'eventReq', 'candidateReq', 'h1Req']) state[key]++;
+  for (const key of ['candleReq', 'zoneReq', 'eventReq', 'candidateReq', 'h1Req', 'detailReq']) state[key]++;
   state.lastPrice = null;
   state.candles = [];
   state.zones = [];
@@ -3894,7 +3899,7 @@ async function fetchDeskExtras() {
     failed = true;
   }
   if (req !== deskData.reqSeq || id !== state.instrumentId) return;
-  if (failed || (id && !cur)) {
+  if (failed || (id && (!cur || cur.instrument_id !== id))) {
     deskData.readError = true;
     renderDeskScenario();
     return;
