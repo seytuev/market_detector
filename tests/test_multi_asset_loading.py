@@ -142,3 +142,24 @@ async def test_htf_background_replay_does_not_hold_other_instrument_calculations
         release.set()
         await pending
         await worker.data_sync.shutdown()
+
+
+async def test_calculating_new_asset_preserves_other_assets_projection_versions(db):
+    from app.config import DetectorConfig
+    from app.services.projection_cache import structural_version
+    worker, _ = _make_worker(db, FakeAdapter())
+    before = [structural_version(db, iid, DetectorConfig()) for iid in (1, 2)]
+    def update():
+        with db.batch_writes():
+            db.bump_domain('seq:ltf')
+            db.bump_domain('seq:zones')
+    try:
+        await worker._calculate(update, calculation_instrument=2)
+        after = [structural_version(db, iid, DetectorConfig()) for iid in (1, 2)]
+        assert after[0] == before[0]
+        assert after[1] != before[1]
+        # An API edit without a calculation scope must invalidate both assets.
+        update()
+        assert all(structural_version(db, iid, DetectorConfig()) != after[iid-1] for iid in (1, 2))
+    finally:
+        await worker.data_sync.shutdown()

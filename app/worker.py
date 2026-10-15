@@ -231,7 +231,12 @@ class Worker:
                         from .engine.ltf.engine import LtfTickResult
                         return LtfTickResult()
                     return None if name == "on_htf_zone_touched" else []
-            result = fn(*args, **kwargs)
+            previous_scope = getattr(self.db._local, 'calculation_instrument', None)
+            self.db._local.calculation_instrument = calculation_instrument
+            try:
+                result = fn(*args, **kwargs)
+            finally:
+                self.db._local.calculation_instrument = previous_scope
             if claim: assert_owner(self.db, CALC_OWNER, claim, check_expiry=False)
             return result
         return await self.data_sync.calculate(atomic_calculation, instrument_id=calculation_instrument)

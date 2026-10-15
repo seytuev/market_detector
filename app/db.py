@@ -1413,11 +1413,21 @@ class Database:
         Вызывать только когда запись реально изменила данные домена.
         В batch-режиме откладывается до конца unit of work — один инкремент
         на ключ за батч (тот же механизм, что у state_seq)."""
+        keys = [key]
+        if key in ('seq:ltf', 'seq:zones'):
+            iid = getattr(self._local, 'calculation_instrument', None)
+            keys.append(f'{key}:instrument:{iid}' if iid is not None else f'{key}:external')
         if self._batch_depth > 0:
-            self._domain_seq_dirty.add(key)
+            self._domain_seq_dirty.update(keys)
             return
-        self._write_domain_seq(key)
+        for item in keys:
+            self._write_domain_seq(item)
         self._commit()
+
+    def instrument_domain(self, key: str, instrument_id: int):
+        """Local calculations invalidate one asset; unscoped edits invalidate all."""
+        return (self.get_domain(f'{key}:instrument:{instrument_id}'),
+                self.get_domain(f'{key}:external'))
 
     def get_domain(self, key: str) -> int:
         r = self.conn.execute(

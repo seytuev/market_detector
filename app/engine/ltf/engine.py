@@ -541,8 +541,8 @@ class LtfEngine:
                 # atomic bar. Cached reads inside it need no separate epoch SQL.
                 self.db._note_external_epoch()
                 from ...services.metrics import get_registry
-                sample = get_registry().profile('ltf_replay_bar' if sampled == 0 else 'ltf_replay_warm_bar',
-                    instrument_id=obs.instrument_id, close_time=c.close_time) if resume and sampled in (0,9) else nullcontext()
+                sample = get_registry().profile(f'ltf_replay:{obs.instrument_id}',
+                    instrument_id=obs.instrument_id, close_time=c.close_time) if resume and (sampled in (0,9) or sampled % 1000 == 0) else nullcontext()
                 sampled += 1
                 with sample, self.db.batch_writes(join_repository_writes=True):
                     bar_checkpoint = getattr(self, '_bar_checkpoint', None)

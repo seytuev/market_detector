@@ -87,9 +87,11 @@ def test_multi_asset_calculation_ownership_and_engine_isolation(pg, monkeypatch)
     from tests.test_multi_asset_loading import (
         test_engine_batches_are_isolated_and_slow_asset_does_not_block_another,
         test_cancelled_calculation_retains_its_instrument_without_blocking_other_assets,
+        test_calculating_new_asset_preserves_other_assets_projection_versions,
     )
     asyncio.run(test_engine_batches_are_isolated_and_slow_asset_does_not_block_another(pg, monkeypatch))
     asyncio.run(test_cancelled_calculation_retains_its_instrument_without_blocking_other_assets(pg))
+    asyncio.run(test_calculating_new_asset_preserves_other_assets_projection_versions(pg))
 
 
 def test_coordinated_htf_history_keeps_idempotence_and_delayed_events(pg):
