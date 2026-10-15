@@ -2728,24 +2728,28 @@ class Database:
             )
             entries = self._bundle_by_scenario(
                 instrument_id,
-                """WITH versions AS (
-                       SELECT scenario_id, MAX(version) AS version FROM ltf_range
-                       WHERE available_at<=? GROUP BY scenario_id
+                """WITH scope AS (
+                       SELECT s.id FROM ltf_scenario s
+                       JOIN ltf_observation o ON o.id=s.observation_id
+                       WHERE o.instrument_id=?
+                   ), versions AS (
+                       SELECT r.scenario_id, MAX(r.version) AS version FROM ltf_range r
+                       JOIN scope s ON s.id=r.scenario_id
+                       WHERE r.available_at<=? GROUP BY r.scenario_id
                    ), ranked AS (
                        SELECT e.*, ROW_NUMBER() OVER (
                            PARTITION BY e.scenario_id, e.entry_zone_id
                            ORDER BY e.added_at, e.id) AS _first,
                            COALESCE(v.version, 0) AS _version
                        FROM ltf_scenario_entry e
-                       JOIN ltf_scenario s ON s.id=e.scenario_id
-                       JOIN ltf_observation o ON o.id=s.observation_id
+                       JOIN scope s ON s.id=e.scenario_id
                        LEFT JOIN versions v ON v.scenario_id=s.id
-                       WHERE o.instrument_id=? AND e.added_at<=?
+                       WHERE e.added_at<=?
                    ) SELECT * FROM ranked
                    WHERE _first=1 OR range_version=_version
                    ORDER BY added_at, id""",
                 self._to_ltf_scenario_entry,
-                parameters=(moment, instrument_id, moment),
+                parameters=(instrument_id, moment, moment),
             )
             ranges = self._bundle_by_scenario(
                 instrument_id,
@@ -2768,7 +2772,7 @@ class Database:
             ltf_events = self._bundle_by_scenario(
                 instrument_id,
                 """WITH ranked AS (
-                     SELECT e.*, ROW_NUMBER() OVER (
+                     SELECT e.id,e.scenario_id,e.kind,e.occurred_at, ROW_NUMBER() OVER (
                        PARTITION BY e.scenario_id
                        ORDER BY e.occurred_at DESC, e.id DESC
                      ) AS _rn
@@ -2778,12 +2782,13 @@ class Database:
                      WHERE o.instrument_id=?
                    ), facts AS (
                      SELECT ranked.*, ROW_NUMBER() OVER (
-                       PARTITION BY scenario_id, json_extract(payload, '$.fact')
-                       ORDER BY occurred_at, id) AS _fact_rn
-                     FROM ranked WHERE _rn<=1000 AND kind='context_update'
-                       AND json_extract(payload, '$.fact') IN ('counter_sweep','htf_fvg50')
-                   ) SELECT * FROM facts WHERE _fact_rn=1
-                   ORDER BY occurred_at DESC, id DESC""",
+                       PARTITION BY ranked.scenario_id, json_extract(e.payload, '$.fact')
+                       ORDER BY ranked.occurred_at, ranked.id) AS _fact_rn
+                     FROM ranked JOIN ltf_event e ON e.id=ranked.id
+                     WHERE _rn<=1000 AND ranked.kind='context_update'
+                       AND json_extract(e.payload, '$.fact') IN ('counter_sweep','htf_fvg50')
+                   ) SELECT e.* FROM facts f JOIN ltf_event e ON e.id=f.id WHERE f._fact_rn=1
+                   ORDER BY e.occurred_at DESC, e.id DESC""",
                 self._to_ltf_event,
             )
             movements_by_id = {
