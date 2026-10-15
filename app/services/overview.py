@@ -1766,6 +1766,9 @@ def instrument_structure(
     limit: int = 500,
     zone_history: bool = False,
     context_layers: Optional[dict[str, Any]] = None,
+    nearby_zones: bool = False,
+    selected_zone_id: Optional[str] = None,
+    mandatory_zone_ids: tuple = (),
 ) -> Optional[dict[str, Any]]:
     """Общая структура H1 инструмента (F12–F14).
 
@@ -1845,6 +1848,8 @@ def instrument_structure(
         "state_version": db.get_state_seq(),
     }
     from .h1_chart import assemble_h1_layers
+    quote = db.get_quote(instrument_id) if as_of is None else None
+    reference_price = quote[0] if quote else (raw[-1].close if raw else None)
     extra = assemble_h1_layers(
         db, settings, instrument_id,
         as_of=as_of, window_from=window_from, window_to=window_to,
@@ -1852,6 +1857,8 @@ def instrument_structure(
         context_id=used_context, zone_history=zone_history,
         # Заполненный now — не запрос прошлого кадра. История PD только у явного as_of.
         setup_event=as_of is not None,
+        nearby_zones=nearby_zones, selected_zone_id=selected_zone_id,
+        mandatory_zone_ids=mandatory_zone_ids, reference_price=reference_price,
     )
     roles = extra.pop("roles_as_of", {})
     if as_of is not None:

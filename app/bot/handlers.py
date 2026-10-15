@@ -308,7 +308,13 @@ def register_bot_handlers(app, settings, db: Database):
                 lines.append(f"{sc.trigger} подтверждён: уровень {fmt_price_ru(sc.break_level)}")
             elif obs.state in _ACTIVE_STATES:
                 lines.append("BOS/SMS ещё не подтверждён (ожидаемый — пунктиром)")
-            lines.append(f"Текущая ситуация: {_fmt_time(now)}")
+            # Retain quote/candle freshness from the same current snapshot
+            # when a different HTF context is explicitly selected.
+            freshness = render_chart_caption(cur, now, tf, days).splitlines()
+            lines = [lines[0]] + [line for line in freshness[1:]
+                                     if line.startswith(("Котировка:", "Последнее закрытие", "⚠️ Свечи"))] + [
+                                         line for line in lines[1:] if not line.startswith("Цена:")]
+            lines.append(f"Снимок запроса: {_fmt_time(now)}")
             caption = "\n".join(lines)
         if observation_id is not None:
             # контекст конкретного сообщения (§8): отменённый сценарий не

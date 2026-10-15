@@ -51,6 +51,8 @@
     params.set('points', settings.points || 'recent');
     if (settings.diagnostic) params.set('diagnostic', 'true');
     if (extra && extra.context_id) params.set('context_id', String(extra.context_id));
+    if (extra && extra.nearby_zones) params.set('nearby_zones', 'true');
+    if (extra && extra.selected_zone_id != null) params.set('selected_zone_id', String(extra.selected_zone_id));
     if (settings.points === 'history' && extra && extra.from != null && extra.to != null) {
       params.set('from', String(extra.from));
       params.set('to', String(extra.to));
@@ -62,6 +64,14 @@
   function caption(ev) {
     const arrow = ev.direction === 'bull' ? '↑' : '↓';
     return (ev.kind || 'BOS') + ' ' + arrow;
+  }
+
+  function needsZoneRefresh(layers, price) {
+    const selection = layers && layers.zone_selection;
+    if (!selection || selection.mode !== 'current_pd' || price == null
+        || selection.reference_price == null || price === selection.reference_price) return false;
+    return (selection.price_from != null && price <= selection.price_from)
+      || (selection.price_to != null && price >= selection.price_to);
   }
 
   function breakPlan(ev, pivotById) {
@@ -240,7 +250,9 @@
     return (idea.direction === 'bull' ? '↑ Покупки' : '↓ Продажи') + ' · '
       + (idea.structure_sync ? idea.structure_sync.status + ' · ' : '')
       + String(idea.parent_type || '').toUpperCase() + ' ' + idea.parent_timeframe
-      + ' #' + idea.parent_zone_id + ' · BOS/SMS ' + new Date(idea.trigger_at).toLocaleString('ru-RU');
+      + ' #' + idea.parent_zone_id + ' · BOS/SMS ' + new Date(idea.trigger_at).toLocaleString('ru-RU', {
+        timeZone: 'Europe/Moscow', hour12: false,
+      }) + ' МСК';
   }
 
   function updateIdeaOptions(layers, settings) {
@@ -348,7 +360,17 @@
 
   function markerList(layers, selectedId) {
     const settings = loadSettings();
-    const points = settings.points === 'hidden' ? [] : ((layers && layers.pivot_markers) || []);
+    // У опоры, от которой нарисована линия пробоя (BOS/SMS), свинг-роль
+    // дублируется подписью события и накладывается на неё текстом.
+    const anchored = new Set();
+    if (settings.breaks) {
+      eventSource(layers).forEach((ev) => {
+        if (ev && ev.break_level != null && ev.level_pivot_id != null) anchored.add(ev.level_pivot_id);
+      });
+    }
+    const points = settings.points === 'hidden'
+      ? []
+      : ((layers && layers.pivot_markers) || []).filter((p) => !anchored.has(p.id));
     const list = points.slice();
     const ev = ((layers && layers.structural_events) || []).find((item) => item.id === selectedId);
     if (!ev || ev.level_pivot_id == null) return list;
@@ -803,6 +825,16 @@
         if (message.reset) actionButton(doc, ctx.statusEl, 'Сбросить фильтры', ctx.onResetFilters);
         if (message.showAll) actionButton(doc, ctx.statusEl, 'Показать все зоны H1', ctx.onShowAllZones);
       }
+      const selection = layers.zone_selection;
+      if (selection && selection.mode === 'current_pd') {
+        ctx.statusEl.classList.remove('hidden');
+        const cap = doc.createElement('span');
+        cap.className = 'h1-zone-selection';
+        cap.textContent = selection.pd_available
+          ? 'Зоны внутри PD + 5 ближайших выше и ниже · показано ' + selection.returned
+          : 'PD ещё не сформирован · показаны обязательные актуальные зоны';
+        ctx.statusEl.appendChild(cap);
+      }
       const setupCap = layers.setup;
       if (setupCap && (setupCap.lower != null || setupCap.range_status)) {
         ctx.statusEl.classList.remove('hidden');
@@ -911,6 +943,7 @@
     loadSettings,
     saveSettings,
     queryString,
+    needsZoneRefresh,
     caption,
     breakPlan,
     zonePlan,

@@ -61,7 +61,7 @@ def alt_snapshot(db, ctx, event):
     return {
         "title": f"{ctx.asset.symbol if ctx.asset else 'ALT'} · Накопление D1 · "
                  f"{_LABELS.get(event.event_type, event.event_type)}",
-        "subtitle": f"LevelFrame · {fmt_time_msk(moment)} · снимок события",
+        "subtitle": f"STV Market Researcher · {fmt_time_msk(moment)} · снимок события",
         "timeframe": "D1", "as_of": moment, "candles": candle_rows(candles),
         "overlays": overlays, "markers": markers, "caption": caption,
     }

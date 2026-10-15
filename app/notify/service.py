@@ -84,6 +84,9 @@ class ServiceNotifications:
         names = "; ".join(f"{symbol} ({', '.join(tfs)})" for symbol, tfs in assets.items())
         recovered = incident["recovered_at"] is not None
         head = ("✅ Данные восстановлены" if recovered else "⚠️ Данные временно недоступны") + f" · {incident['venue']}"
-        detail = "Все затронутые потоки восстановлены." if recovered else "Сигналы могут запаздывать. Проверяем восстановление."
-        text = f"{head}\n{names}\n{detail}"
+        from .formatting import fmt_time_msk
+        detail = ("Все указанные потоки восстановлены · проверьте время новой оценки перед входом" if recovered
+                  else "Сигналы по указанным данным могут запаздывать · дождитесь восстановления и новой оценки")
+        moment = incident["recovered_at"] if recovered else incident["started_at"]
+        text = f"{head}\n{names}\n{detail}\n🕒 {fmt_time_msk(moment)}"
         return Card(text, text)

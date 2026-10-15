@@ -118,7 +118,7 @@ def _reason(snap, event: Event, approach_pct: float) -> str:
 
 def _render_event_details(view, group_members: Optional[list[Zone]] = None,
                         approach_pct: float = 0.02) -> str:
-    """Один блок сообщения (ТЗ 07.10.2026 §5): строка бренда «LevelFrame ·
+    """Один блок сообщения (ТЗ 07.10.2026 §5): строка бренда «STV Market Researcher ·
     символ · площадка рынок» (ребрендинг §8), заголовок «символ · тип ТФ ·
     направление», отдельные строки «Диапазон/Середина/Цена события/Событие/
     Статус/Время события». Без «Обратите внимание», без строки «Источник» —
@@ -132,10 +132,10 @@ def _render_event_details(view, group_members: Optional[list[Zone]] = None,
     # Ребрендинг (LevelFrame_Rebrand §8): первая строка — бренд и источник
     if snap.venue and snap.market_type:
         lines.append(
-            f"LevelFrame · {snap.symbol} · {snap.venue} {snap.market_type}"
+            f"STV Market Researcher · {snap.symbol} · {snap.venue} {snap.market_type}"
         )
     else:
-        lines.append(f"LevelFrame · {snap.symbol}")
+        lines.append(f"STV Market Researcher · {snap.symbol}")
     if zone is not None:
         head = f"{snap.symbol} · {snap.type_ru} {snap.timeframe}"
         if not snap.is_level:
@@ -216,21 +216,29 @@ def _render_event_block(view, group_members=None, approach_pct=0.02) -> str:
     title = f"{icon} {snap.symbol} · {snap.type_ru} {snap.timeframe}"
     if not snap.is_level:
         title += f" · {snap.direction_ru}"
-    lines = [title, "🎯 " + _headline(snap, event)]
+    marker = "⚪" if snap.kind in {NormalizedKind.LIQUIDITY_TAKEN, NormalizedKind.ZONE_INVALIDATED} else "📍"
+    lines = [title, marker + " " + _headline(snap, event)]
     if view.zone:
         lines.append(f"Уровень: {_fmt_price(snap.lower)}" if snap.is_level else
                      f"Зона: {_fmt_price(snap.lower)}–{_fmt_price(snap.upper)}")
-    if snap.event_price is not None:
+    if snap.event_price is not None and not (snap.is_level and snap.event_price == snap.lower):
         lines.append(f"Цена события: {_fmt_price(snap.event_price)}")
     if snap.kind == NormalizedKind.APPROACH and snap.distance_pct is not None:
         lines.append(f"До границы: {fmt_pct_ru(snap.distance_pct * 100)}")
     if event.kind == EventKind.FVG_WEAKENED:
         lines.append("⚠️ FVG ослаблен")
     if event.kind == EventKind.LEVEL_TAKEN:
-        lines.append("Повторные входы по уровню отключены")
+        lines.append("Уровень исключён из новых входов · ждём новое основание H1")
+    elif snap.kind == NormalizedKind.ZONE_INVALIDATED:
+        lines.append("Зона исключена из новых входов · связанные сценарии проверяются отдельно")
+    elif snap.kind == NormalizedKind.APPROACH:
+        lines.append("Далее: ждём касание зоны и реакцию H1")
+    elif snap.kind in {NormalizedKind.TOUCH, NormalizedKind.DEPTH_50, NormalizedKind.DEPTH_90}:
+        lines.append("Далее: проверяем подтверждение H1 · касание само по себе вход не подтверждает")
     if event.delayed:
         lines.append("⚠️ Историческое событие · доставлено с задержкой")
-    lines.append(f"🕒 {_fmt_time(event.occurred_at)}")
+    lines.append(f"🕒 Событие: {_fmt_time(event.occurred_at)}")
+    lines.append("STV Market Researcher")
     return "\n".join(lines)
 
 
@@ -260,6 +268,7 @@ def render_text(payload: MessagePayload) -> str:
             lines.append(f"Ещё событий: {len(blocks) - 4} · в подробностях")
         latest = max(v.event.occurred_at for v in payload.views)
         lines.append(f"🕒 {_fmt_time(latest)}")
+        lines.append("STV Market Researcher")
         return "\n".join(lines)
     return blocks[0] if blocks else ""
 
@@ -306,7 +315,13 @@ class TelegramSender:
         kwargs = dict(chat_id=self.chat_id, message_id=message_id,
                       reply_markup=card_keyboard(packet_id, card.targets), parse_mode="HTML")
         try:
-            if photo:
+            if photo and getattr(card, "replace_image", False) and card.image_path:
+                from telegram import InputMediaPhoto
+                with open(card.image_path, "rb") as fh:
+                    media = InputMediaPhoto(fh, caption=notification_html(card.text, 1000), parse_mode="HTML")
+                    await self._bot.edit_message_media(media=media,
+                        **{key: value for key, value in kwargs.items() if key != "parse_mode"})
+            elif photo:
                 await self._bot.edit_message_caption(caption=notification_html(card.text, 1000), **kwargs)
             else:
                 await self._bot.edit_message_text(text=notification_html(card.text, 4000), **kwargs)

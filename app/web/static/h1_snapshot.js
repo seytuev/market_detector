@@ -16,17 +16,11 @@
     const precision = Math.min(12, Math.max(2, 4 - Math.floor(Math.log10(minPrice))));
     const fmtPrice = value => Number(value).toLocaleString('ru-RU', { maximumFractionDigits: precision });
     const fmtTime = value => new Date(value).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' });
-    const mskTime = time => new Date((time + 3 * 3600) * 1000);
     const chart = LightweightCharts.createChart($('chart'), {
       width: $('frame').clientWidth, height: $('frame').clientHeight,
       layout: { background: { color: theme.background }, textColor: theme.text },
       grid: { vertLines: { color: theme.grid }, horzLines: { color: theme.grid } },
-      timeScale: { timeVisible: period < 86400, secondsVisible: false, borderColor: theme.border,
-        tickMarkFormatter: time => mskTime(time).toLocaleString('ru-RU', {
-          timeZone: 'UTC', day: '2-digit', month: '2-digit',
-          ...(period < 86400 ? { hour: '2-digit', minute: '2-digit' } : {}) }),
-      },
-      localization: { locale: 'ru-RU', timeFormatter: time => fmtTime(time * 1000) },
+      ...HTF.chartTimeOptions({ timeVisible: period < 86400, borderColor: theme.border }),
       rightPriceScale: { borderColor: theme.border },
       handleScroll: false, handleScale: false,
     });

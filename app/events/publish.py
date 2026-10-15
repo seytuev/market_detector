@@ -140,17 +140,17 @@ async def _render_packet(row, members):
     base_url = settings.effective_base_url() if settings is not None else ""
     text = render_bundle_text(db, bundle_id, base_url=base_url)
     bundle = store.get_bundle(db, bundle_id)
-    if bundle is not None and _bundle_stale(db, bundle):
-        lines = ["Сводка актуализирована: часть изменений уже не актуальна, "
-                 "актуальный итог ниже."]
+    original = text
+    if bundle is not None and bundle["kind"] != "downtime_digest" and _bundle_stale(db, bundle):
         latest = store.latest_assessment(db)
-        if latest and latest.get("market_line"):
-            lines.append(latest["market_line"])
-        if text:
-            lines.append(text)
+        lines = ["Сводка актуализирована · последняя сохранённая оценка"]
+        if latest:
+            lines.append(render_bundle_text(db, bundle_id, base_url=base_url, assessment_override=latest))
+        else:
+            lines.append("Новой оценки нет · дождитесь обновления")
         lines.append("Причина замены: исходные изменения устарели до отправки")
         text = "\n".join(lines)
-    return Card(text=text)
+    return Card(text=text, details=original if text != original else "")
 
 
 def _pub_key(*, rule_id: str, scope: str, episode_or_fact: str,
@@ -479,28 +479,47 @@ def startup_digest(db, settings, now_ms: int) -> None:
     db.set_meta("events:last_digest_gap_end", str(int(last["evaluated_at"])))
 
 
-def render_bundle_text(db, bundle_id: int, base_url: str = "") -> str:
+def render_bundle_text(db, bundle_id: int, base_url: str = "", *, assessment_override=None) -> str:
     """Текст пакета: итог, изменения, обе причины конфликта, качество, ссылка."""
     bundle = store.get_bundle(db, bundle_id)
     if bundle is None:
         return ""
-    pubs = store.bundle_publications(db, bundle_id)
-    assessment = None
+    pubs = store.bundle_publications(db, bundle_id) if assessment_override is None else []
+    assessment = assessment_override
     for pub in reversed(pubs):
         if pub.get("assessment_id"):
             assessment = store.get_assessment(db, pub["assessment_id"])
             if assessment is not None:
                 break
+    from ..notify.formatting import fmt_time_msk
     lines: list[str] = []
-    if bundle["kind"] == "downtime_digest":
-        summary = (bundle.get("payload") or {}).get("summary")
-        lines.append(summary or "После простоя: сводка")
-    lines.append(assessment["market_line"] if assessment else "События и время · Крипторынок")
+    digest = bundle["kind"] == "downtime_digest" and assessment_override is None
+    payload = bundle.get("payload") or {}
+    if digest:
+        lines.append("🔄 После перерыва · последняя сохранённая оценка")
+        gap = payload.get("gap_ms")
+        if gap is not None:
+            minutes = max(1, int(gap) // 60_000)
+            duration = f"{minutes // 60} ч {minutes % 60} мин" if minutes >= 60 else f"{minutes} мин"
+            lines.append(f"Без новой оценки: {duration}")
+    direction = (assessment or {}).get("direction")
+    lines.append({"long": "↑ Рынок: перевес в сторону роста", "short": "↓ Рынок: перевес в сторону снижения",
+                  "neutral": "↔ Рынок: направленного перевеса нет"}.get(direction,
+                  assessment["market_line"] if assessment else "События и время · Крипторынок"))
     for pub in pubs:
         text = (pub.get("payload") or {}).get("text")
-        if text and text not in lines:
+        if text and text not in lines and pub.get("kind") != "downtime_digest":
             lines.append(text)
+    if digest:
+        counts = payload.get("counts") or {}
+        labels = {"appeared": "новых фактов", "confirmed": "подтверждено", "reinterpreted": "переоценено",
+                  "late_record": "добавлено в историю", "expired": "истекло", "invalidated": "отменено"}
+        changes = [f"{labels.get(key, key)}: {value}" for key, value in counts.items() if value]
+        lines.append("Изменения в журнале: " + "; ".join(changes) if changes else "Изменений в журнале не зафиксировано")
+        lines.append("Далее: дождитесь новой оценки · сохранённое направление могло измениться")
     if assessment is not None:
+        if assessment.get("evaluated_at") is not None:
+            lines.append(f"Оценка на: {fmt_time_msk(assessment['evaluated_at'])}")
         if assessment.get("contradictory"):
             for reason in assessment.get("reasons") or []:
                 text = reason.get("text")
@@ -509,10 +528,21 @@ def render_bundle_text(db, bundle_id: int, base_url: str = "") -> str:
             note = assessment.get("conflict_note") or "Контекст противоречивый"
             if note not in lines:
                 lines.append(note)
+        else:
+            reasons = [r.get("text") for r in assessment.get("reasons") or [] if r.get("text")]
+            lines.extend(f"Основание: {reason}" for reason in reasons[:2] if reason not in lines)
         coverage = assessment.get("coverage")
         cov_text = (
             f"{coverage['ok']}/{coverage['total']}" if coverage else "нет данных"
         )
-        lines.append(f"Качество: {assessment.get('quality')}; покрытие: {cov_text}")
-        lines.append(f"{base_url}/events.html#assessment={assessment['assessment_id']}")
+        quality = {"ok": "данные доступны", "partial": "данные неполные", "stale": "данные устарели",
+                   "unavailable": "данные недоступны", "auth_error": "нет доступа к источнику",
+                   "capability_error": "источник не поддерживает запрос"}.get(assessment.get("quality"), "качество не определено")
+        lines.append(f"Данные оценки: {quality} · покрытие {cov_text}")
+        unknown = assessment.get("unknown_dependencies") or payload.get("unknown_dependencies") or []
+        if unknown:
+            labels = {"liquidations": "ликвидации", "funding": "ставки финансирования", "open_interest": "открытый интерес"}
+            lines.append("Не учтено: " + ", ".join(labels.get(str(x), str(x)) for x in unknown))
+        if base_url:
+            lines.append(f"{base_url.rstrip('/')}/events.html#assessment={assessment['assessment_id']}")
     return "\n".join(lines)

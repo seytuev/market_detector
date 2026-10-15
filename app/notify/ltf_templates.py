@@ -74,21 +74,24 @@ def _footer(ev: LtfEvent, ctx: LtfContext) -> str:
     return line
 
 
-def _render_entry_line(e: dict[str, Any]) -> str:
+def _render_entry_line(e: dict[str, Any], area="Premium") -> str:
     """Одна зона списка (§11.1): уровень K или диапазон L–U с серединой;
     «частично» при частичном попадании в половину (§8.5)."""
     t = LTF_TYPE_RU.get(e.get("type", ""), e.get("type", "?"))
+    if e.get("lower") is None or e.get("upper") is None:
+        return f"{t} H1: границы не сохранены"
     if e.get("lower") == e.get("upper"):
         line = f"{t} H1: {_fmt_price(e['lower'])}"
     else:
         line = (
             f"{t} H1: {_fmt_price(e['lower'])}–{_fmt_price(e['upper'])}"
-            f" (середина {_fmt_price(e['mid'])})"
         )
+        if e.get("mid") is not None:
+            line += f" (середина {_fmt_price(e['mid'])})"
     if e.get("overlap") == "partial":
         line += " — частично"
     if e.get("outside_premium"):
-        line += " — вне Premium (допущено по контексту, §18)"
+        line += f" — вне {area} (допущено по контексту, §18)"
     return line
 
 
@@ -96,7 +99,8 @@ def _context_lines(entries: list[dict[str, Any]], ctx: LtfContext) -> list[str]:
     """§18: аннотации контекстного допуска — после списка зон."""
     if not any(e.get("outside_premium") for e in entries):
         return []
-    lines = ["⚠️ Зона вне Premium — не критично для этого сценария."]
+    area = "Discount" if ctx.scenario and ctx.scenario.direction.value == "bull" else "Premium"
+    lines = [f"⚠️ Зона вне {area} — допущена по HTF-контексту."]
     if any(e.get("context") for e in entries):
         bear = (
             ctx.scenario is None
@@ -110,19 +114,19 @@ def _context_lines(entries: list[dict[str, Any]], ctx: LtfContext) -> list[str]:
     return lines
 
 
-def _render_entries_block(entries: list[dict[str, Any]]) -> list[str]:
+def _render_entries_block(entries: list[dict[str, Any]], area="Premium") -> list[str]:
     """Все зоны списком, по одной строке на зону — без выбора «лучшей»."""
-    return [_render_entry_line(e) for e in entries]
+    return [_render_entry_line(e, area) for e in entries]
 
 
 def _render_range(rng: Optional[dict[str, Any]]) -> Optional[str]:
     """Диапазон и середина — отдельными строками (ТЗ 07.10.2026 §5.1)."""
-    if not rng:
+    if not rng or rng.get("lower") is None or rng.get("upper") is None:
         return None
-    return (
-        f"Диапазон: {_fmt_price(rng['lower'])}–{_fmt_price(rng['upper'])}\n"
-        f"Середина: {_fmt_price(rng['mid'])}"
-    )
+    line = f"Диапазон: {_fmt_price(rng['lower'])}–{_fmt_price(rng['upper'])}"
+    if rng.get("mid") is not None:
+        line += f"\nСередина: {_fmt_price(rng['mid'])}"
+    return line
 
 
 def _split(head: str, entry_lines: list[str], footer: str) -> list[str]:
@@ -133,8 +137,11 @@ def _split(head: str, entry_lines: list[str], footer: str) -> list[str]:
     chunks: list[list[str]] = []
     cur: list[str] = []
     cur_len = 0
+    # Reserve the complete brand/header and footer before filling a chunk.
+    # Otherwise a full entry chunk exceeds Telegram's limit when prefixed.
+    entry_budget = TELEGRAM_TEXT_LIMIT - len(head) - len(footer) - 3
     for line in entry_lines:
-        if cur and cur_len + len(line) + 1 > TELEGRAM_TEXT_LIMIT:
+        if cur and cur_len + len(line) + 1 > entry_budget:
             chunks.append(cur)
             cur, cur_len = [], 0
         cur.append(line)
@@ -186,7 +193,7 @@ def _render_break(ev: LtfEvent, ctx: LtfContext) -> list[str]:
     kind = str(p.get("kind", ev.kind)).upper()
     stage_ru = "вторичный" if p.get("stage") == "secondary" else "первичный"
     head = (
-        f"LevelFrame · {_symbol(ctx)} · H1\n"
+        f"STV Market Researcher · {_symbol(ctx)} · H1\n"
         f"Подтверждён {word} {kind} ({stage_ru}).\n"
         f"HTF-контекст: {_htf_context(ctx)}"
     )
@@ -213,7 +220,7 @@ def _render_break(ev: LtfEvent, ctx: LtfContext) -> list[str]:
     if not entries:
         head += "\nПодтверждение есть; подходящих зон входа сейчас нет"
         return _split(head, [], _footer(ev, ctx))
-    lines = (["Зоны входа:"] + _render_entries_block(entries)
+    lines = (["Зоны входа:"] + _render_entries_block(entries, "Discount" if direction == "bull" else "Premium")
              + _context_lines(entries, ctx))
     return _split(head, lines, _footer(ev, ctx))
 
@@ -221,7 +228,7 @@ def _render_break(ev: LtfEvent, ctx: LtfContext) -> list[str]:
 def _render_entries_ready(ev: LtfEvent, ctx: LtfContext) -> list[str]:
     """§11.2: дополнение к существующему сценарию — только новые зоны."""
     p = ev.payload
-    head = f"LevelFrame · {_symbol(ctx)} · H1\nНовые Entry Zones по сценарию"
+    head = f"STV Market Researcher · {_symbol(ctx)} · H1\nНовые Entry Zones по сценарию"
     if ctx.scenario is not None:
         dir_ru = DIRECTION_RU.get(ctx.scenario.direction.value,
                                   ctx.scenario.direction.value)
@@ -232,7 +239,7 @@ def _render_entries_ready(ev: LtfEvent, ctx: LtfContext) -> list[str]:
         head += f"\n{rng_line}"
     entries = p.get("entries") or []
     return _split(head,
-                  _render_entries_block(entries) + _context_lines(entries, ctx),
+                  _render_entries_block(entries, "Discount" if ctx.scenario and ctx.scenario.direction.value == "bull" else "Premium") + _context_lines(entries, ctx),
                   _footer(ev, ctx))
 
 
@@ -245,7 +252,7 @@ def _render_touch(ev: LtfEvent, ctx: LtfContext) -> list[str]:
         DIRECTION_RU.get(ctx.scenario.direction.value, "")
         if ctx.scenario is not None else ""
     )
-    head = f"LevelFrame · {_symbol(ctx)} · H1"
+    head = f"STV Market Researcher · {_symbol(ctx)} · H1"
     if dir_ru:
         head += f" · {dir_ru}"
     head += f"\nЦена коснулась Entry Zone: {t} H1."
@@ -276,7 +283,8 @@ def _render_touch(ev: LtfEvent, ctx: LtfContext) -> list[str]:
         head += "\nОжидаем закрытия текущей H1 для проверки снятия без закрепления."
     if p.get("outside_premium"):
         # §18: контекстный допуск — факт «вне Premium» показываем, не блокируем
-        head += "\n⚠️ Зона вне Premium — не критично для этого сценария."
+        area = "Discount" if ctx.scenario and ctx.scenario.direction.value == "bull" else "Premium"
+        head += f"\n⚠️ Зона вне {area} — допущена по HTF-контексту."
         if p.get("context"):
             bear = (
                 ctx.scenario is None
@@ -297,7 +305,7 @@ def _render_sweep(ev: LtfEvent, ctx: LtfContext) -> list[str]:
     t = LTF_TYPE_RU.get(p.get("type", ""), p.get("type", "уровень"))
     level = _fmt_price(p["level"]) if p.get("level") is not None else "?"
     close = _fmt_price(p["close_price"]) if p.get("close_price") is not None else "?"
-    head = f"LevelFrame · {_symbol(ctx)} · H1 · {t}"
+    head = f"STV Market Researcher · {_symbol(ctx)} · H1 · {t}"
     if ev.kind == "sweep_confirmed":
         head += (
             f"\nЛиквидность {t} снята."
@@ -338,7 +346,7 @@ def _render_cancellation(ev: LtfEvent, ctx: LtfContext) -> list[str]:
     dir_ru = DIRECTION_RU.get(direction, direction)
     reason = LTF_CANCELLATION_RU.get(p.get("reason", ""), p.get("reason", "?"))
     head = (
-        f"LevelFrame · {_symbol(ctx)}: {dir_ru} LTF-сценарий отменён.\n"
+        f"STV Market Researcher · {_symbol(ctx)}: {dir_ru} LTF-сценарий отменён.\n"
         f"Причина: {reason}."
     )
     if p.get("reason") in ("reverse_bos", "reverse_sms"):
@@ -357,7 +365,7 @@ def render_ltf_messages(ev: LtfEvent, ctx: LtfContext) -> list[str]:
     if ev.kind in ("entries_ready", "range_ready"):
         if ev.kind == "range_ready" and not (ev.payload.get("entries")):
             p = ev.payload
-            head = f"LevelFrame · {_symbol(ctx)} · H1\nДиапазон готов ({_htf_context(ctx)})."
+            head = f"STV Market Researcher · {_symbol(ctx)} · H1\nДиапазон готов ({_htf_context(ctx)})."
             rng_line = _render_range(p.get("range"))
             if rng_line:
                 head += f"\n{rng_line}"
@@ -375,11 +383,11 @@ def render_ltf_messages(ev: LtfEvent, ctx: LtfContext) -> list[str]:
     if ev.kind == "correction":
         # §10.3 (R46): минимальный текст исправления (финальные — этап 10)
         p = ev.payload or {}
-        head = f"LevelFrame · {_symbol(ctx)} · H1\n{p.get('text') or 'Исправление исходных данных.'}"
+        head = f"STV Market Researcher · {_symbol(ctx)} · H1\n{p.get('text') or 'Исправление исходных данных.'}"
         return _split(head, [], _footer(ev, ctx))
     if ev.kind == "context_transition":
         # §9: смысловой переход машины контекста (готовый текст в payload)
         p = ev.payload or {}
-        head = f"LevelFrame · {_symbol(ctx)} · H1\n{p.get('text') or ''}"
+        head = f"STV Market Researcher · {_symbol(ctx)} · H1\n{p.get('text') or ''}"
         return _split(head, [], _footer(ev, ctx))
     return []

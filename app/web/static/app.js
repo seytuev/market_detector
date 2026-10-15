@@ -252,7 +252,7 @@ function initChart() {
       vertLines: { color: theme.grid },
       horzLines: { color: theme.grid },
     },
-    timeScale: { timeVisible: true, secondsVisible: false },
+    ...HTF.chartTimeOptions(),
     rightPriceScale: { borderColor: theme.border },
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     autoSize: true,
@@ -293,10 +293,11 @@ function initChart() {
     redrawQueued = true;
     requestAnimationFrame(() => { redrawQueued = false; drawZones(); });
   };
-  state.chart.subscribeCrosshairMove(() => {
-    if (state.pointerDown) queueZoneRedraw();
-  });
   const chartWrap = $('chart-container');
+  chartWrap.addEventListener('pointermove', event => {
+    if (state.pointerDown && event.buttons) queueZoneRedraw();
+  });
+  HTF.bindChartOverlayCrosshair($('chart'), $('zone-overlay'));
   chartWrap.addEventListener('click', (event) => {
     if (event.target.closest('#h1-event-card, .h1-zone, .h1-zone-tag, .h1-liquidity')) return;
     closeH1Card();
@@ -868,7 +869,7 @@ function scheduleH1HistoryReload() {
 }
 
 function h1QueryExtra() {
-  const extra = {};
+  const extra = { nearby_zones: true, selected_zone_id: state.h1SelectedZoneId };
   const ctx = deskData.current?.instrument_id === state.instrumentId
     ? deskData.current.selected_context_id : null;
   if (ctx) extra.context_id = ctx;
@@ -1741,12 +1742,23 @@ function displayPair(symbol) {
   return s || '—';
 }
 
+// Вкладка «Проверка зон» показывается только когда есть актуальные зоны на
+// проверку; сервер отдаёт список кандидатов уже без проверенных.
+function updateReviewTabVisibility() {
+  const pending = (reviewState.all || []).filter((c) => !reviewState.doneMap.has(c.id)).length;
+  for (const elId of ['nav-review', 'nav-review-mobile']) {
+    const el = document.getElementById(elId);
+    if (el) el.classList.toggle('hidden', pending === 0);
+  }
+}
+
 async function loadCandidates() {
   const id = state.instrumentId;
   const req = ++state.candidateReq;
   const list = (await analysisApi('/api/candidates')).filter(isHtf); // только HTF
   if (id !== state.instrumentId || req !== state.candidateReq) return;
   reviewState.all = list;
+  updateReviewTabVisibility();
   const mine = state.instrumentId
     ? list.filter((z) => z.instrument_id === state.instrumentId)
     : list;
@@ -1858,7 +1870,7 @@ function initReviewChart() {
       vertLines: { color: theme.grid },
       horzLines: { color: theme.grid },
     },
-    timeScale: { timeVisible: true, secondsVisible: false },
+    ...HTF.chartTimeOptions(),
     rightPriceScale: { borderColor: theme.border },
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     autoSize: true,
@@ -1881,6 +1893,7 @@ function initReviewChart() {
     if (reviewState.pointerDown) queueRedraw();
   });
   const wrap = $('review-chart-container');
+  HTF.bindChartOverlayCrosshair($('review-chart'), $('review-zone-overlay'));
   wrap.addEventListener('pointerdown', () => { reviewState.pointerDown = true; });
   window.addEventListener('pointerup', () => {
     if (!reviewState.pointerDown) return;
@@ -2389,7 +2402,7 @@ const SETTINGS_META = {
   },
   scan_timeframes: {
     title: 'Таймфреймы поиска',
-    desc: 'HTF Zones: работают только старшие ТФ — D1,W1 (по умолчанию). H1/H4 убраны из ' +
+    desc: 'STV Market Researcher: работают только старшие ТФ — D1,W1 (по умолчанию). H1/H4 убраны из ' +
           'интерфейса и сканирования по решению пользователя. Применяется после перезапуска сервиса.',
     group: 'Поиск зон',
   },
@@ -3275,6 +3288,13 @@ function handleWsMessage(data) {
   if (data.type === 'price') {
     if (data.instrument_id === state.instrumentId && data.price) {
       state.lastPrice = data.price;
+      if (state.chartMode === 'h1' && window.H1Layers?.needsZoneRefresh(state.h1Layers, data.price)
+          && !state.h1PriceReloadTimer) {
+        state.h1PriceReloadTimer = setTimeout(() => {
+          state.h1PriceReloadTimer = null;
+          if (state.chartMode === 'h1') loadH1Markers().catch(e => console.warn('h1 price zones:', e));
+        }, 300);
+      }
       const bar = data.candles && data.candles[state.timeframe];
       if (bar && state.candleSeries && state.candles) {
         state.candleSeries.update(bar);

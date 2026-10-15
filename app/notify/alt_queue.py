@@ -112,6 +112,12 @@ class AltDispatcher:
         if ctx.setup.state in {"cancelled", "expired_no_retest", "targets_completed"}:
             if all(e.event_type in _ENTRY_TYPES for e in events):
                 return "stale entry"
+            for event in events:
+                if event.event_type in _ENTRY_TYPES:
+                    self.db.conn.execute(
+                        "UPDATE notification_member SET reason='stale entry' WHERE packet_id=? AND event_id=?",
+                        (row["id"], event.id))
+            self.db.conn.commit()
         return None
 
     def _finish_packet(self, event_id, status):
@@ -125,21 +131,33 @@ class AltDispatcher:
         from .alt_templates import _render_block, _TERMINAL_TYPES, _chart_url, _footer
         from .formatting import fmt_time_msk, fmt_price_ru
         events = self._events(members)
+        if not events:
+            return Card(**json.loads(row["card"]))
         ctx = self._load_context(events[0])
         ranks = {"target_hit": 60, "entry_a": 50, "entry_b": 50, "bos_confirmed": 40,
                  "sms_confirmed": 40, "retest": 30, "mature_frozen": 20, "forming_started": 0}
         lead = max(events, key=lambda e: (100 if e.event_type in _TERMINAL_TYPES else ranks.get(e.event_type, 10), e.event_time_ms))
         lines = [f"{'⚪' if lead.event_type in _TERMINAL_TYPES else '🟢'} {ctx.asset.symbol} · Накопление D1"]
-        lines.extend(_render_block(lead, ctx)[:2])
+        block = _render_block(lead, ctx)
+        # Entry/target prices must survive the compact card. Slicing at two
+        # lines previously left a bare «Цели:» with no actual target levels.
+        lines.extend(block if lead.event_type in {"entry_a", "entry_b", "target_hit", "breakout", "retest"} else block[:2])
         if len(events) > 1:
             lines.append(f"Ещё событий: {len(events) - 1} · в подробностях")
-        if ctx.frozen:
+        if ctx.frozen and ctx.frozen.mature_at_ms <= lead.event_time_ms:
             lines.append(f"Диапазон: {fmt_price_ru(ctx.frozen.lower)}–{fmt_price_ru(ctx.frozen.upper)}")
         if any(e.event_type in {"entry_a", "entry_b", "retest"} for e in events) and lead.event_type not in _TERMINAL_TYPES:
-            lines.append("⚠️ Возможность входа · ордер не исполнен автоматически")
+            lines.append("Далее: проверьте условия сетапа · событие не подтверждает исполнение ордера")
         # Keep warnings about uncertain candle ordering and stale data visible.
         lines.extend(line for line in _footer(events, ctx) if line.startswith("⚠"))
-        lines.append(f"🕒 {fmt_time_msk(lead.event_time_ms)}")
+        if ctx.setup.state in {"cancelled", "expired_no_retest", "targets_completed"} and lead.event_type not in _TERMINAL_TYPES:
+            lines.append("Сетап уже завершён · показан факт на время события")
+        lines.append(f"🕒 Событие: {fmt_time_msk(lead.event_time_ms)}")
+        lines.append("STV Market Researcher")
+        from .compact import delivery_delay
+        delay = delivery_delay(lead.event_time_ms, now_ms())
+        if delay:
+            lines.append(delay)
         url = _chart_url(ctx)
         targets = [dict(label=f"{ctx.asset.symbol} · сетап #{ctx.setup.id}", url=url)] if url else []
         old = json.loads(row["card"])
@@ -151,7 +169,8 @@ class AltDispatcher:
                     Path(self.settings.db_path).parent / "charts" / f"alt_notify_{row['id']}.png")
             except Exception:
                 log.warning("ALT chart unavailable", exc_info=True)
-        return Card("\n".join(lines), render_alt_message(events, ctx), path, targets, bool(self.settings and not path))
+        original = [e for m in members if (e := self.db.get_alt_event(m["event_id"])) is not None]
+        return Card("\n".join(lines), render_alt_message(original, ctx), path, targets, bool(self.settings and not path))
 
     async def _deliver_group(self, events: list[AltEvent], ctx: AltContext,
                              chat_id: Optional[str]) -> int:

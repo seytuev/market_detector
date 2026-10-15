@@ -5,6 +5,7 @@ requests are involved. Only closed candles and layers at occurred_at are used.
 """
 from __future__ import annotations
 
+import base64
 import json
 from html import unescape
 import os
@@ -55,18 +56,27 @@ def event_snapshot(db, observation_id: int, settings, event, *, period_days=7):
     )
     if not candles:
         return None
-    from ..services.h1_chart import assemble_h1_layers
+    from ..services.h1_chart import assemble_h1_layers, select_pd_zones
 
+    announced = tuple(e["entry_zone_id"] for e in (event.payload or {}).get("entries", [])
+                      if e.get("entry_zone_id") is not None)
     layers = assemble_h1_layers(
         db, settings, obs.instrument_id, as_of=moment,
         window_from=candles[0].open_time, window_to=moment,
-        context_id=observation_id, setup_event=True,
+        context_id=observation_id, setup_event=True, nearby_zones=True,
+        mandatory_zone_ids=announced,
     )
+    # A legacy parent's admissions may contain hundreds of old objects. They
+    # must not pin the entire history to an otherwise local event chart.
+    zones, selection = select_pd_zones(layers.get("detected_zones") or [], layers.get("setup"),
+                                       mandatory_ids=announced)
+    layers["detected_zones"] = zones
+    layers["zone_selection"] = {**selection, "returned": len(zones)}
     instrument = db.get_instrument(obs.instrument_id)
     return {
         "title": f"{instrument.symbol if instrument else 'H1'} · H1 · "
                  f"{KIND_RU.get(event.kind, event.kind)}",
-        "subtitle": f"LevelFrame · {fmt_time_msk(moment)} · снимок события",
+        "subtitle": f"STV Market Researcher · {fmt_time_msk(moment)} · снимок события",
         "as_of": moment,
         "timeframe": "H1",
         "event": {"kind": event.kind, "payload": event.payload or {}},
@@ -80,12 +90,14 @@ def snapshot_html(snapshot: dict) -> str:
     data = json.dumps(snapshot, ensure_ascii=False, allow_nan=False).replace("<", "\\u003c")
     template = (STATIC / "h1_snapshot.html").read_text(encoding="utf-8")
     css = (STATIC / "style.css").read_text(encoding="utf-8")
+    logo = base64.b64encode((STATIC / "brand" / "stv-logo-v2.png").read_bytes()).decode("ascii")
     scripts = "\n".join(
         "<script>" + (STATIC / name).read_text(encoding="utf-8") + "</script>"
         for name in ("vendor/lightweight-charts.js", "common.js", "h1_layers.js")
     )
     # Replace data last so user text cannot be interpreted as a template token.
     return (template.replace("<!-- SHARED_STYLE -->", "<style>" + css + "</style>")
+            .replace("/* BRAND_LOGO */", "data:image/png;base64," + logo)
             .replace("<!-- SHARED_SCRIPTS -->", scripts)
             .replace("/* SNAPSHOT_RENDERER */", (STATIC / "h1_snapshot.js").read_text(encoding="utf-8"))
             .replace("/* SNAPSHOT_DATA */", data))
@@ -152,7 +164,7 @@ def zone_snapshot(candles, zone, source_label, *, event_at=None, event_price=Non
     label = f"{kind} {zone.timeframe}" + ("" if zone.is_level else f" {arrow}")
     return {
         "title": f"{symbol} · {TYPE_RU.get(zone.type.value, kind)} {zone.timeframe}",
-        "subtitle": f"LevelFrame · {fmt_time_msk(moment)} · снимок события",
+        "subtitle": f"STV Market Researcher · {fmt_time_msk(moment)} · снимок события",
         "timeframe": zone.timeframe, "as_of": moment,
         "candles": candle_rows(candles),
         "overlays": [{"from": zone.display_from if zone.display_from is not None else zone.formed_at,

@@ -328,7 +328,11 @@ class EventDispatcher:
         from .telegram import render_text, _render_event_details, tradingview_url
         from urllib.parse import urlparse
         views = self._packet_views(members)
-        allowed = [v for v in self._active_views(members) if not self._bot_blocked(v) and not self._entry_stale(v)]
+        allowed = [v for v in self._active_views(members) if not self._bot_blocked(v)
+                   and not self._entry_stale(v) and not self._asset_off(v)]
+        if not allowed:
+            import json
+            return Card(**json.loads(row["card"]))
         # Keep every fact in Details; show only the furthest state of a zone.
         ranks = {"approach": 0, "already_in_zone": 1, "touch": 2,
                  "depth_50": 3, "fvg_weakened": 3, "depth_90": 4,
@@ -350,6 +354,11 @@ class EventDispatcher:
         if not payload.image_path:
             await self._attach_image(payload)
         text = render_text(payload)
+        if visible:
+            from .compact import delivery_delay
+            delay = delivery_delay(min(v.event.occurred_at for v in visible), now_ms())
+            if delay:
+                text += "\n" + delay
         if self.charts_dir and not payload.image_path:
             text += "\n📊 График временно недоступен"
         if len(visible) > 1 and payload.image_path:

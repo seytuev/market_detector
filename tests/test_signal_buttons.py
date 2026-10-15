@@ -122,7 +122,8 @@ def _setup_ltf(db, instrument_id):
     return _setup(db, instrument_id)
 
 
-async def test_ltf_keyboard_per_kind(db, instrument_id):
+@pytest.mark.parametrize("kind", ["bos", "entries_ready", "touch", "cancellation"])
+async def test_ltf_keyboard_per_kind(db, instrument_id, kind):
     zone, obs, sc = _setup_ltf(db, instrument_id)
     sender = RecSender()
     disp = LtfDispatcher(db, DetectorConfig(), sender, settings=_settings())
@@ -143,21 +144,16 @@ async def test_ltf_keyboard_per_kind(db, instrument_id):
         },
         "cancellation": {"reason": "reverse_bos"},
     }
-    for kind, payload in cases.items():
-        sender.texts.clear()
-        sender.markups.clear()
-        ev = _event(db, obs, sc, kind, payload, f"{kind}:kb:1")
-        await disp([ev])
-        assert len(sender.texts) == 1, kind
-        markup = sender.markups[-1]
-        assert markup is not None, kind
-        cbs = _callbacks(markup)
-        iid = instrument_id
-        # Карточка: график этого наблюдения, подробности и действия.
-        # Обновить и заглушить открываются из «Действия», не с первой клавиатуры.
-        assert f"nav:charto:{iid}:{obs.id}" in cbs
-        assert any(cb.startswith("nf:d:") for cb in cbs), kind
-        assert any(cb.startswith("nf:a:") for cb in cbs), kind
+    ev = _event(db, obs, sc, kind, cases[kind], f"{kind}:kb:1")
+    await disp([ev])
+    assert len(sender.texts) == 1, kind
+    markup = sender.markups[-1]
+    assert markup is not None, kind
+    cbs = _callbacks(markup)
+    # Every event's independent card exposes its own context and actions.
+    assert f"nav:charto:{instrument_id}:{obs.id}" in cbs
+    assert any(cb.startswith("nf:d:") for cb in cbs), kind
+    assert any(cb.startswith("nf:a:") for cb in cbs), kind
 
 
 async def test_ltf_dispatcher_uses_send_ltf_and_logsender_journals(db, instrument_id):
@@ -181,8 +177,9 @@ async def test_ltf_dispatcher_uses_send_ltf_and_logsender_journals(db, instrumen
     ev2 = _event(db, obs, sc, "bos", dict(BOS_PAYLOAD, entries=entries),
                  "bos:log:2")
     await disp([ev2])
-    assert len(sender.cards) == 2
-    assert sender.cards[1][0].details
+    assert len(sender.cards) == 1
+    assert len(sender.edits) == 1
+    assert sender.edits[0][1].details
 
 
 # ------------------------------ «Обновить» ------------------------------

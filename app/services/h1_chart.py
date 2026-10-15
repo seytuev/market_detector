@@ -359,6 +359,7 @@ def _scenario_index(db: Database, instrument_id: int) -> dict[tuple, list[int]]:
 from .projection_cache import ProjectionCache, structural_version
 _LIVE_PROJECTION = ProjectionCache()
 _DISCOVERY = ProjectionCache()
+_ZONE_PROJECTION = ProjectionCache()
 
 
 def _project_for_chart(db, instrument_id, cfg, moment, zones, candles, *, live: bool):
@@ -813,6 +814,44 @@ def _intersects(zone: dict[str, Any], start: int, end: int) -> bool:
     return left <= end and right >= start
 
 
+def select_pd_zones(zones, setup, *, mandatory_ids=(), selected_zone_id=None, limit=5):
+    """All relevant zones intersecting the current PD, five on either side.
+
+    Mandatory scenario/selected zones survive the proximity limit, but an
+    invalid, consumed or unconfirmed object never becomes relevant by pinning.
+    """
+    required = {str(zid) for zid in mandatory_ids if zid is not None}
+    if selected_zone_id is not None:
+        required.add(str(selected_zone_id))
+    relevant = [z for z in zones if not z.get('candidate')
+                and z.get('confirmed_at') is not None
+                and z.get('lifecycle') == 'active'
+                and z.get('validity') != 'invalid'
+                and z.get('relevance', {}).get('relevant') is True]
+    lower, upper = (setup or {}).get('lower'), (setup or {}).get('upper')
+    has_pd = lower is not None and upper is not None and lower < upper
+    inside, above, below = [], [], []
+    if has_pd:
+        for zone in relevant:
+            if zone['lower'] > upper:
+                above.append(zone)
+            elif zone['upper'] < lower:
+                below.append(zone)
+            else:
+                inside.append(zone)
+        above.sort(key=lambda z: (z['lower'] - upper, -z['formed_at'], str(z['id'])))
+        below.sort(key=lambda z: (lower - z['upper'], -z['formed_at'], str(z['id'])))
+    kept = {str(z['id']) for z in inside + above[:limit] + below[:limit]}
+    kept.update(required)
+    return [z for z in relevant if str(z['id']) in kept], {
+        'mode': 'current_pd', 'per_side': limit,
+        'pd_lower': lower, 'pd_upper': upper,
+        'pd_available': has_pd, 'relevant_total': len(relevant),
+        'inside': len(inside), 'above': min(limit, len(above)),
+        'below': min(limit, len(below)),
+    }
+
+
 def _layer_counts(items: list[dict[str, Any]], shown: list[dict[str, Any]], outside: int):
     shown_ids = {id(item) for item in shown}
     return {
@@ -821,6 +860,87 @@ def _layer_counts(items: list[dict[str, Any]], shown: list[dict[str, Any]], outs
         "filtered": len([item for item in items if id(item) not in shown_ids]),
         "outside_view": outside,
     }
+def _build_zone_projection(db, instrument_id, cfg, moment, load_from, candles, candidates, events, links, *, live, zone_history):
+    stored = [
+        z for z in db.list_ltf_entry_zones(instrument_id=instrument_id)
+        if _stored_zone_visible(z, moment)
+    ]
+    life_from = load_from
+    if stored:
+        earliest = min(
+            z.formed_at if z.confirmed_at is None else min(z.formed_at, z.confirmed_at)
+            for z in stored
+        )
+        life_from = min(life_from, earliest)
+    lifecycle_candles = db.get_candles(
+        instrument_id, "H1", start_ms=life_from, end_ms=moment,
+    )
+    from ..engine.ltf.lifecycle_index import LifecycleIndex
+    lifecycle = LifecycleIndex(lifecycle_candles, moment)
+    ideas, idea_links, lifecycle_facts = _project_for_chart(
+        db, instrument_id, cfg, moment, stored, lifecycle_candles,
+        live=live,
+    )
+    index = _lifecycle_index(db, instrument_id, candles, stored, moment, load_from)
+    zones: list[dict[str, Any]] = []
+    seen = set()
+    for zone in stored:
+        zone, fact = lifecycle_facts[zone.id]
+        first, depth, extreme = _clip_tests(zone, moment)
+        key = _geometry_key(zone.type, zone.direction.value, zone.formed_at, zone.lower, zone.upper)
+        seen.add(key)
+        zones.append(_zone_payload(
+            zone_id=zone.id, type_=zone.type, direction=zone.direction,
+            lower=zone.lower, upper=zone.upper, formed_at=zone.formed_at,
+            confirmed_at=zone.confirmed_at, first_test_at=first,
+            max_test_depth=depth, test_extreme=extreme, validity=zone.validity,
+            evidence=zone.evidence,
+            provenance="ltf_entry", source=zone.source,
+            rule_version=zone.rule_version, index=index, as_of=moment,
+            candidate=zone.confirmed_at is None,
+        ))
+        zones[-1].update(relevance=fact, idea_links=idea_links.get(zone.id, []))
+        if fact["reason"] not in ("ok", "data_gap", "unconfirmed"):
+            end = zones[-1]["display_until"]
+            excluded = fact["excluded_at"]
+            if excluded is not None:
+                end = excluded if end is None else min(end, excluded)
+            zones[-1].update(lifecycle="ended", display_until=end, recently_taken=False)
+    if candles:
+        def discover():
+            return _scan_zones(candidates, candles, events, cfg, moment, index,
+                               _context_bounds(db, instrument_id, links))
+        discovered = (_DISCOVERY.get(db, instrument_id,
+                      (structural_version(db, instrument_id, cfg), (moment + 1) // H1_MS), discover)
+                      if live else discover())
+        for cached_extra in discovered:
+            extra = dict(cached_extra)
+            key = _geometry_key(
+                extra["type"], extra["direction"], extra["formed_at"],
+                extra["lower"], extra["upper"],
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            from ..engine.ltf.relevance import zone_at
+            ghost = LtfEntryZone(
+                id=None, instrument_id=instrument_id, type=extra["type"],
+                direction=Direction(extra["direction"]), lower=extra["lower"], upper=extra["upper"],
+                formed_at=extra["formed_at"], confirmed_at=extra["confirmed_at"],
+            )
+            rebuilt, fact = lifecycle.project(ghost, cfg)
+            extra.update(relevance=fact, idea_links=[], max_test_depth=rebuilt.max_test_depth,
+                         first_test_at=rebuilt.first_test_at, validity=rebuilt.validity)
+            if fact["reason"] not in ("ok", "data_gap", "unconfirmed"):
+                end = extra["display_until"]
+                excluded = fact["excluded_at"]
+                if excluded is not None:
+                    end = excluded if end is None else min(end, excluded)
+                extra.update(lifecycle="ended", display_until=end, recently_taken=False)
+            zones.append(extra)
+    zones.sort(key=lambda z: (z["formed_at"], str(z["id"])))
+
+    return stored, zones, lifecycle_facts, ideas
 
 
 def assemble_h1_layers(
@@ -838,6 +958,10 @@ def assemble_h1_layers(
     context_id: Optional[int] = None,
     zone_history: bool = False,
     setup_event: Optional[bool] = None,
+    nearby_zones: bool = False,
+    mandatory_zone_ids: tuple = (),
+    selected_zone_id: Optional[str] = None,
+    reference_price: Optional[float] = None,
 ) -> dict[str, Any]:
     """Аддитивные группы снимка. Повторный вызов строки не вставляет."""
     moment = as_of if as_of is not None else now_ms()
@@ -905,90 +1029,53 @@ def assemble_h1_layers(
     transition = structure_transition(events, candidates, moment)
     expected = _expected(candidates, candles, transition, moment)
 
-    stored = [
-        z for z in db.list_ltf_entry_zones(instrument_id=instrument_id)
-        if _stored_zone_visible(z, moment)
-    ]
-    life_from = load_from
-    if stored:
-        earliest = min(
-            z.formed_at if z.confirmed_at is None else min(z.formed_at, z.confirmed_at)
-            for z in stored
+    def build_zones():
+        return _build_zone_projection(
+            db, instrument_id, cfg, moment, load_from, candles, candidates, events, links,
+            live=as_of is None, zone_history=zone_history,
         )
-        life_from = min(life_from, earliest)
-    lifecycle_candles = db.get_candles(
-        instrument_id, "H1", start_ms=life_from, end_ms=moment,
+    # Zone geometry/lifecycle depends on closed bars and engine versions, not quotes.
+    # Historical requests use their own exact cutoff and never enter the live cache.
+    stored, zones, lifecycle_facts, ideas = (
+        _ZONE_PROJECTION.get(
+            db, (instrument_id, zone_history),
+            (structural_version(db, instrument_id, cfg), (moment + 1) // H1_MS),
+            build_zones,
+        ) if as_of is None and window_from is None else build_zones()
     )
-    from ..engine.ltf.lifecycle_index import LifecycleIndex
-    lifecycle = LifecycleIndex(lifecycle_candles, moment)
-    ideas, idea_links, lifecycle_facts = _project_for_chart(
-        db, instrument_id, cfg, moment, stored, lifecycle_candles,
-        live=as_of is None,
-    )
-    index = _lifecycle_index(db, instrument_id, candles, stored, moment, load_from)
-    zones: list[dict[str, Any]] = []
-    seen = set()
-    for zone in stored:
-        zone, fact = lifecycle_facts[zone.id]
-        first, depth, extreme = _clip_tests(zone, moment)
-        key = _geometry_key(zone.type, zone.direction.value, zone.formed_at, zone.lower, zone.upper)
-        seen.add(key)
-        zones.append(_zone_payload(
-            zone_id=zone.id, type_=zone.type, direction=zone.direction,
-            lower=zone.lower, upper=zone.upper, formed_at=zone.formed_at,
-            confirmed_at=zone.confirmed_at, first_test_at=first,
-            max_test_depth=depth, test_extreme=extreme, validity=zone.validity,
-            evidence=zone.evidence,
-            provenance="ltf_entry", source=zone.source,
-            rule_version=zone.rule_version, index=index, as_of=moment,
-            candidate=zone.confirmed_at is None,
-        ))
-        zones[-1].update(relevance=fact, idea_links=idea_links.get(zone.id, []))
-        if fact["reason"] not in ("ok", "data_gap", "unconfirmed"):
-            end = zones[-1]["display_until"]
-            excluded = fact["excluded_at"]
-            if excluded is not None:
-                end = excluded if end is None else min(end, excluded)
-            zones[-1].update(lifecycle="ended", display_until=end, recently_taken=False)
-    if candles:
-        def discover():
-            return _scan_zones(candidates, candles, events, cfg, moment, index,
-                               _context_bounds(db, instrument_id, links))
-        discovered = (_DISCOVERY.get(db, instrument_id,
-                      (structural_version(db, instrument_id, cfg), (moment + 1) // H1_MS), discover)
-                      if as_of is None else discover())
-        for cached_extra in discovered:
-            extra = dict(cached_extra)
-            key = _geometry_key(
-                extra["type"], extra["direction"], extra["formed_at"],
-                extra["lower"], extra["upper"],
-            )
-            if key in seen:
-                continue
-            seen.add(key)
-            from ..engine.ltf.relevance import zone_at
-            ghost = LtfEntryZone(
-                id=None, instrument_id=instrument_id, type=extra["type"],
-                direction=Direction(extra["direction"]), lower=extra["lower"], upper=extra["upper"],
-                formed_at=extra["formed_at"], confirmed_at=extra["confirmed_at"],
-            )
-            rebuilt, fact = lifecycle.project(ghost, cfg)
-            extra.update(relevance=fact, idea_links=[], max_test_depth=rebuilt.max_test_depth,
-                         first_test_at=rebuilt.first_test_at, validity=rebuilt.validity)
-            if fact["reason"] not in ("ok", "data_gap", "unconfirmed"):
-                end = extra["display_until"]
-                excluded = fact["excluded_at"]
-                if excluded is not None:
-                    end = excluded if end is None else min(end, excluded)
-                extra.update(lifecycle="ended", display_until=end, recently_taken=False)
-            zones.append(extra)
-    zones.sort(key=lambda z: (z["formed_at"], str(z["id"])))
 
     admission = _admission(db, instrument_id, context_id, zones, stored)
     for row in admission:
         fact = lifecycle_facts.get(row["zone_id"])
         if fact and not fact[1]["relevant"] and row["eligibility"] != "not_evaluated":
             row.update(eligibility="excluded", reason=fact[1]["reason"])
+    setup = _local_setup(
+        db, cfg, instrument_id, moment, candles, candidates,
+        as_of is not None if setup_event is None else setup_event,
+    )
+    zone_selection = {'mode': 'history' if zone_history else 'all'}
+    if nearby_zones and not zone_history:
+        mandatory = set(mandatory_zone_ids)
+        mandatory.update(row['zone_id'] for row in admission
+                         if row['eligibility'] in ('eligible', 'eligible_provisional'))
+        if reference_price is not None:
+            mandatory.update(z['id'] for z in zones
+                             if z['lower'] <= reference_price <= z['upper'])
+        all_zones = zones
+        zones, zone_selection = select_pd_zones(
+            zones, setup, mandatory_ids=mandatory, selected_zone_id=selected_zone_id,
+        )
+        # Quotes do not change PD proximity. A new request is needed only on
+        # crossing a relevant zone boundary (price-containing zones are pinned).
+        if reference_price is not None:
+            boundaries = [edge for z in all_zones
+                          if z.get('relevance', {}).get('relevant') is True
+                          for edge in (z['lower'], z['upper'])]
+            zone_selection.update(
+                reference_price=reference_price,
+                price_from=max((p for p in boundaries if p <= reference_price), default=None),
+                price_to=min((p for p in boundaries if p >= reference_price), default=None),
+            )
     # По умолчанию на график не попадает вся история завершённых зон.
     # Завершённые зоны и снятая ликвидность доступны только в истории.
     # «Исторические зоны» возвращает завершённые объекты выбранного интервала.
@@ -1063,6 +1150,7 @@ def assemble_h1_layers(
         "structure_transition": transition,
         "expected_structure": expected,
         "detected_zones": zones,
+        "zone_selection": {**zone_selection, 'returned': len(zones)},
         "scenario_admission": admission,
         "htf_ideas": ideas,
         "roles_as_of": role_by_id,
@@ -1104,10 +1192,7 @@ def assemble_h1_layers(
             },
         },
         "reversal": _reversal_view(db, instrument_id, moment, cfg),
-        "setup": _local_setup(
-            db, cfg, instrument_id, moment, candles, candidates,
-            as_of is not None if setup_event is None else setup_event,
-        ),
+        "setup": setup,
     }
 
 

@@ -169,7 +169,13 @@ class Outbox:
                     if edit_state.get("due_at", 0) > stamp:
                         continue
                     try:
+                        # Persist the original photo before rendering overwrites
+                        # card JSON. A failed media edit must retry that change.
+                        edit_state.setdefault("image_path", json.loads(row["card"]).get("image_path"))
+                        await asyncio.to_thread(self.db.set_meta, edit_key, json.dumps(edit_state))
                         card = await self._card(row)
+                        card.replace_image = bool(row["photo"] and card.image_path
+                                                  and card.image_path != edit_state["image_path"])
                         if row["message_id"]:
                             await self.sender.edit_card(row["message_id"], card, row["id"], photo=bool(row["photo"]))
                         await self._write("UPDATE notification_packet SET dirty=0 WHERE id=?", (row["id"],))
@@ -179,7 +185,7 @@ class Outbox:
                         attempts = edit_state.get("attempts", 0) + 1
                         wait = getattr(exc, "retry_after", 30 * 2 ** attempts)
                         seconds = wait.total_seconds() if hasattr(wait, "total_seconds") else float(wait)
-                        await asyncio.to_thread(self.db.set_meta, edit_key, json.dumps({"attempts": attempts, "due_at": stamp + int(seconds * 1000)}))
+                        await asyncio.to_thread(self.db.set_meta, edit_key, json.dumps({**edit_state, "attempts": attempts, "due_at": stamp + int(seconds * 1000)}))
                         if attempts >= 5:
                             await self._write("UPDATE notification_packet SET dirty=0,reason='edit attempts exhausted' WHERE id=?", (row["id"],))
                         log.warning("Unable to update notification %s: %s", row["id"], type(exc).__name__)
@@ -289,7 +295,7 @@ class Outbox:
             self.db.conn.execute(
                 "INSERT OR IGNORE INTO notification_packet "
                 "(destination,channel,semantic_key,card,quiet,created_at,due_at) VALUES(?,'digest',?,?,1,?,?)",
-                (self.destination, key, json.dumps(asdict(Card("🔕 Сводка LevelFrame")), ensure_ascii=False), stamp, stamp))
+                (self.destination, key, json.dumps(asdict(Card("🔕 Сводка STV Market Researcher")), ensure_ascii=False), stamp, stamp))
             packet_id = self.db.conn.execute(
                 "SELECT id FROM notification_packet WHERE destination=? AND channel='digest' AND semantic_key=?",
                 (self.destination, key)).fetchone()[0]
@@ -327,7 +333,7 @@ class Outbox:
             blocks.append(card.text)
             details.append(card.details or card.text)
             targets.extend(card.targets)
-        return Card("🔕 Сводка LevelFrame\n\n" + "\n\n".join(blocks), "\n\n".join(details), targets=targets)
+        return Card("🔕 Сводка STV Market Researcher\n\n" + "\n\n".join(blocks), "\n\n".join(details), targets=targets)
 
     async def retry_media(self):
         if now_ms() < self._media_check:

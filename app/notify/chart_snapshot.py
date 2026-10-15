@@ -81,7 +81,7 @@ def chart_signature(ev) -> str:
         })
     rng = payload.get("range") if isinstance(payload.get("range"), dict) else {}
     body = _canonical({
-        "render_version": 4,
+        "render_version": 6,
         "kind": ev.kind,
         "observation_id": ev.observation_id,
         "scenario_id": ev.scenario_id,

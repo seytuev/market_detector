@@ -461,9 +461,7 @@ async function fetchCurrent({ keepRange }) {
   // версий означает, что запись вклинилась между запросами, — пакет
   // перечитывается целиком, левая карточка не рисует счётчик чужого состояния
   const loadBundle = async () => {
-    const h1q = window.H1Layers
-      ? window.H1Layers.queryString(visibleWindowMs())
-      : '';
+    const h1q = ltfH1Query(visibleWindowMs());
     const bundle = await api(`/api/ltf/instruments/${id}/workspace?${h1q}`);
     if (stale()) return null;
     return bundle;
@@ -1229,7 +1227,7 @@ function initChart() {
       vertLines: { color: theme.grid, style: LightweightCharts.LineStyle.Dotted },
       horzLines: { color: theme.grid, style: LightweightCharts.LineStyle.Dotted },
     },
-    timeScale: { timeVisible: true, secondsVisible: false, rightOffset: 10 },
+    ...HTF.chartTimeOptions({ rightOffset: 10 }),
     rightPriceScale: { borderColor: theme.border },
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     autoSize: true,
@@ -1243,8 +1241,30 @@ function initChart() {
     scheduleH1HistoryReload();
   });
   window.addEventListener('resize', drawLtfLayers);
+  HTF.bindChartOverlayCrosshair($('chart'), $('ltf-overlay'));
   new ResizeObserver(() => drawLtfLayers()).observe($('chart-container'));
-  state.chart.subscribeCrosshairMove(() => drawLtfLayers());
+  // Hover only moves the chart crosshair. Redraw overlays when an axis is
+  // dragged/scaled, including vertical scaling which has no time-range event.
+  let overlayFrame = null;
+  let overlayDragging = false;
+  const scheduleOverlay = () => {
+    if (overlayFrame !== null) return;
+    overlayFrame = requestAnimationFrame(() => {
+      overlayFrame = null;
+      drawLtfLayers();
+    });
+  };
+  $('chart').addEventListener('pointerdown', () => { overlayDragging = true; });
+  $('chart').addEventListener('pointermove', event => {
+    if (overlayDragging && event.buttons) scheduleOverlay();
+  });
+  window.addEventListener('pointerup', () => {
+    if (!overlayDragging) return;
+    overlayDragging = false;
+    scheduleOverlay();
+  });
+  $('chart').addEventListener('dblclick', scheduleOverlay);
+  $('chart').addEventListener('wheel', scheduleOverlay, { passive: true });
   $('chart-container').addEventListener('click', (event) => {
     if (event.target.closest('#h1-event-card, .h1-zone, .h1-zone-tag, .h1-liquidity')) return;
     closeH1Card();
@@ -1401,11 +1421,19 @@ function closeH1Card() {
   paintH1Markers();
 }
 
+function ltfH1Query(extra) {
+  const query = new URLSearchParams(window.H1Layers ? window.H1Layers.queryString(extra) : '');
+  query.set('nearby_zones', 'true');
+  const selected = state.h1SelectedZoneId ?? state.selectedEntryZoneId;
+  if (selected != null) query.set('selected_zone_id', String(selected));
+  return query.toString();
+}
+
 async function loadH1Structure() {
   const id = state.instrumentId;
   if (!id || !window.H1Layers) return;
   const obsId = state.current && state.current.selected_context_id;
-  const q = window.H1Layers.queryString(Object.assign(
+  const q = ltfH1Query(Object.assign(
     { context_id: obsId || undefined },
     visibleWindowMs(),
   ));
@@ -2065,6 +2093,12 @@ function handleWsMessage(data) {
     const ins = state.current && state.current.instrument;
     if (ins && data.instrument_id === ins.id && data.price) {
       state.lastPrice = data.price;
+      if (window.H1Layers?.needsZoneRefresh(state.h1Layers, data.price) && !state.h1PriceReloadTimer) {
+        state.h1PriceReloadTimer = setTimeout(() => {
+          state.h1PriceReloadTimer = null;
+          loadH1Structure().catch(e => console.warn('h1 price zones:', e));
+        }, 300);
+      }
       $('ltf-last-price').textContent = fmtPrice(data.price);
       updatePriceLine();
       drawLtfLayers();

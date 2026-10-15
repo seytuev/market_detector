@@ -37,6 +37,15 @@ function check(name, cond) {
 
 check('модуль экспортирован', !!H && typeof H.breakPlan === 'function');
 
+const proximity = { zone_selection: { mode: 'current_pd', reference_price: 100, price_from: 90, price_to: 110 } };
+check('цена внутри прежнего интервала не перегружает зоны', !H.needsZoneRefresh(proximity, 101));
+check('пересечение границы перегружает обязательные зоны', H.needsZoneRefresh(proximity, 110) && H.needsZoneRefresh(proximity, 89));
+check('неизменная цена на границе не зацикливает загрузку',
+  !H.needsZoneRefresh({ zone_selection: { ...proximity.zone_selection, price_to: 100 } }, 100));
+const nearbyQuery = new URLSearchParams(H.queryString({ nearby_zones: true, selected_zone_id: 'h1:OB:1' }));
+check('запрос передаёт режим PD и выбранную сканированную зону',
+  nearbyQuery.get('nearby_zones') === 'true' && nearbyQuery.get('selected_zone_id') === 'h1:OB:1');
+
 const missing = H.breakPlan({
   kind: 'BOS', direction: 'bear', break_level: 10,
   break_candle_open_time: 1_700_000_000_000, occurred_at: 1_700_003_600_000,

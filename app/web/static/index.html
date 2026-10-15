@@ -3,8 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LevelFrame · Среда рыночного анализа</title>
+  <title>STV Market Researcher</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="apple-touch-icon" href="/brand/stv-bot-avatar-v2.png">
+  <meta name="application-name" content="STV Market Researcher">
   <script>(function(){try{var c=localStorage.getItem('lf:theme');var l=window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches;var t=(c==='dark'||c==='light')?c:(c==='system'?(l?'light':'dark'):'light');document.documentElement.dataset.theme=t;var sb=localStorage.getItem('lf:sidebar');if(sb==='collapsed'||sb==='expanded')document.documentElement.dataset.sidebar=sb;var es=localStorage.getItem('lf:eventstrip');if(es==='collapsed')document.documentElement.dataset.eventstrip=es;}catch(e){document.documentElement.dataset.theme='light';}})();</script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
@@ -14,16 +16,15 @@
   <link rel="stylesheet" href="/mobile-pages.css">
   <link rel="stylesheet" href="/workspace.css">
   <script src="/vendor/lightweight-charts.js"></script>
+  <link rel="stylesheet" href="/brand/brand.css">
 </head>
 <body class="app-body">
   <a class="skip" href="#main">К содержимому</a>
   <aside class="sidebar">
     <div class="sidebar-head">
     <a class="brand" href="#now" data-view="now">
-      <svg class="brand-mark" width="30" height="30" viewBox="0 0 30 30" fill="none" aria-hidden="true">
-        <path d="M7 5v20h16M12 9h12M12 15h9M12 21h6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
-      <span class="brand-text">LevelFrame<small>MARKET INTELLIGENCE</small></span>
+      <img class="brand-lockup" src="/brand/stv-logo-v2.png" width="1536" height="1024" alt="STV Market Researcher">
+      <img class="brand-avatar" src="/brand/stv-bot-avatar-v2.png" width="44" height="44" alt="STV Market Researcher">
     </a>
     <button type="button" id="sidebar-toggle" class="sidebar-toggle" aria-label="Свернуть меню" aria-expanded="true" title="Свернуть меню">
       <svg class="ico-collapse" width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -36,14 +37,14 @@
     </div>
     <div class="nav-label">Анализ</div>
     <nav class="app-tabs" aria-label="Основная навигация">
-      <a href="#now" data-view="now" class="app-tab active"><span class="nav-full">Наблюдение</span><span class="nav-short">Наблюдение</span></a>
+      <a href="#now" data-view="now" class="app-tab active"><span class="nav-full">Общая картина</span><span class="nav-short">Общая картина</span></a>
       <a href="#desk" data-view="desk" class="app-tab"><span class="nav-full">Анализ</span><span class="nav-short">Анализ</span></a>
-      <a href="#review" data-view="review" class="app-tab"><span class="nav-full">Проверка</span><span class="nav-short">Проверка</span></a>
-      <a href="/alt.html" class="app-tab"><span class="nav-full">Скринер</span><span class="nav-short">Скринер</span></a>
-      <a href="#journal" data-view="journal" class="app-tab"><span class="nav-full">Журнал</span><span class="nav-short">Журнал</span></a>
-      <a href="/events.html" class="app-tab"><span class="nav-full">Рынок</span><span class="nav-short">Рынок</span></a>
+      <a href="#review" data-view="review" id="nav-review" class="app-tab hidden"><span class="nav-full">Проверка зон</span><span class="nav-short">Проверка зон</span></a>
+      <a href="/alt.html" class="app-tab"><span class="nav-full">Скринер ALTs</span><span class="nav-short">Скринер ALTs</span></a>
+      <a href="/events.html" class="app-tab"><span class="nav-full">Контекст рынка</span><span class="nav-short">Контекст рынка</span></a>
     </nav>
     <div class="sidebar-bottom">
+      <a href="#journal" data-view="journal" class="app-tab"><span class="nav-full">Журнал</span><span class="nav-short">Журнал</span></a>
       <a href="#help" data-view="help" class="app-tab"><span class="nav-full">Справка</span><span class="nav-short">Справка</span></a>
       <a href="#settings" data-view="settings" class="app-tab"><span class="nav-full">Настройки</span><span class="nav-short">Настр.</span></a>
       <span class="conn-status">
@@ -300,7 +301,7 @@
     <header class="review-head">
       <div class="review-head-text">
         <div class="review-over">Контроль разметки</div>
-        <h1 class="review-title">Проверка</h1>
+        <h1 class="review-title">Проверка зон</h1>
         <p class="review-sub">Объект, правило и решение в одном рабочем контексте.</p>
       </div>
       <span class="review-count" id="review-count"><span class="state-dot dot-warning"></span>0 задач</span>
@@ -350,7 +351,7 @@
         <label>С даты <input id="journal-from" type="date"></label>
         <label>По дату <input id="journal-to" type="date"></label>
         <label>Тип события <select id="journal-type-filter"><option value="">Все типы</option></select></label>
-        <label>Область <select id="journal-scope-filter"><option value="">Все источники</option><option value="htf">Зоны D1/W1</option><option value="ltf">Структура H1</option><option value="alt">Скринер</option><option value="context">Рыночный фон</option></select></label>
+        <label>Область <select id="journal-scope-filter"><option value="">Все источники</option><option value="htf">Зоны D1/W1</option><option value="ltf">Структура H1</option><option value="alt">Скринер ALTs</option><option value="context">Рыночный фон</option></select></label>
         <label>Поиск <input id="journal-query" type="search" placeholder="По всей истории"></label>
       </div>
       </details>
@@ -407,7 +408,7 @@
         <div>
           <div class="review-over">Параметры</div>
           <h1 class="review-title">Настройки</h1>
-          <p class="review-sub">Наблюдение, правила анализа и отображение.</p>
+          <p class="review-sub">Общая картина, правила анализа и отображение.</p>
         </div>
       </header>
       <nav class="settings-sections" id="settings-sections" aria-label="Разделы настроек">
@@ -469,20 +470,20 @@
 
     </div>
     <footer class="app-footer">
-      <span>LevelFrame · Среда рыночного анализа</span>
+      <span>STV Market Researcher</span>
       <span>Наблюдение без размещения заявок</span>
     </footer>
   </div>
 
   <nav class="mobile-nav" aria-label="Мобильная навигация">
-    <a href="#now" data-view="now"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg><span>Наблюдение</span></a>
+    <a href="#now" data-view="now"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg><span>Общая картина</span></a>
     <a href="#desk" data-view="desk"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 4v16h16M7 14l4-5 4 3 5-7"/></svg><span>Анализ</span></a>
-    <a href="#review" data-view="review"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="5" y="4" width="14" height="17" rx="3"/><path d="M9 3h6v4H9zM9 14l2 2 4-4"/></svg><span>Проверка</span></a>
-    <a href="/alt.html"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 4v16M12 4v16M19 4v16M2 8h6M9 15h6M16 10h6"/></svg><span>Скринер</span></a>
+    <a href="#review" data-view="review" id="nav-review-mobile" class="hidden"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="5" y="4" width="14" height="17" rx="3"/><path d="M9 3h6v4H9zM9 14l2 2 4-4"/></svg><span>Проверка зон</span></a>
+    <a href="/alt.html"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 4v16M12 4v16M19 4v16M2 8h6M9 15h6M16 10h6"/></svg><span>Скринер ALTs</span></a>
     <button type="button" id="nav-more" aria-expanded="false" aria-controls="nav-more-panel"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg><span>Ещё</span></button>
   </nav>
   <div id="nav-more-panel" class="nav-more-panel hidden" role="menu">
-    <a href="/events.html" role="menuitem">Рынок</a>
+    <a href="/events.html" role="menuitem">Контекст рынка</a>
     <a href="#journal" data-view="journal" role="menuitem">Журнал</a>
     <a href="#help" data-view="help" role="menuitem">Справка</a>
     <a href="#settings" data-view="settings" role="menuitem">Настройки</a>

@@ -77,6 +77,41 @@ window.HTF = (() => {
     };
   }
 
+  // Форматируем только подписи: время свечей и координаты остаются UTC.
+  const chartTickFormats = [
+    { year: 'numeric' },
+    { month: 'short' },
+    { day: '2-digit', month: '2-digit' },
+    { hour: '2-digit', minute: '2-digit' },
+    { hour: '2-digit', minute: '2-digit', second: '2-digit' },
+  ].map(options => new Intl.DateTimeFormat('ru-RU', {
+    ...options, timeZone: 'Europe/Moscow', hour12: false,
+  }));
+  const chartCrosshairFormat = new Intl.DateTimeFormat('ru-RU', {
+    timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  });
+
+  function chartDate(time) {
+    if (typeof time === 'number') return new Date(time * 1000);
+    if (typeof time === 'string') return new Date(time + 'T00:00:00Z');
+    return new Date(Date.UTC(time.year, time.month - 1, time.day));
+  }
+
+  function chartTimeOptions(timeScale = {}) {
+    return {
+      timeScale: {
+        timeVisible: true, secondsVisible: false, ...timeScale,
+        // TickMarkType: год, месяц, день, часы/минуты, часы/минуты/секунды.
+        tickMarkFormatter: (time, type) => chartTickFormats[type].format(chartDate(time)),
+      },
+      localization: {
+        locale: 'ru-RU',
+        timeFormatter: time => chartCrosshairFormat.format(chartDate(time)) + ' МСК',
+      },
+    };
+  }
+
   function setConnectionState(online) {
     // D02: индикатор отражает только транспорт (WS). Свежесть данных —
     // отдельные индикаторы data_state (котировка/свечи/обработка); открытие
@@ -139,7 +174,7 @@ window.HTF = (() => {
     if (tokenDialogPromise) return tokenDialogPromise;
     const modal = document.createElement('div');
     modal.className = 'modal';
-    modal.innerHTML = '<form class="modal-card" role="dialog" aria-modal="true" aria-labelledby="auth-title"><h3 id="auth-title">Доступ к LevelFrame</h3><label>Токен владельца <input type="password" autocomplete="current-password" required></label><p class="form-error" role="alert"></p><div class="modal-actions"><button class="btn primary" type="submit">Продолжить</button></div></form>';
+    modal.innerHTML = '<form class="modal-card" role="dialog" aria-modal="true" aria-labelledby="auth-title"><h3 id="auth-title">Доступ к STV Market Researcher</h3><label>Токен владельца <input type="password" autocomplete="current-password" required></label><p class="form-error" role="alert"></p><div class="modal-actions"><button class="btn primary" type="submit">Продолжить</button></div></form>';
     document.body.appendChild(modal);
     modal.querySelector('.form-error').textContent = error;
     const input = modal.querySelector('input');
@@ -245,6 +280,47 @@ window.HTF = (() => {
       following: logical.to >= candles.length - 1,
       lastTime: candles.length ? candles[candles.length - 1].time : null,
       firstTime: candles.length ? candles[0].time : null };
+  }
+
+  function bindChartOverlayCrosshair(chartEl, overlay) {
+    // Zones must keep their own hover/click handlers. Forward only mouse hover
+    // to the canvas below them, including the empty space after the last bar.
+    let hoveredCanvas = null;
+    const forward = (canvas, type, event) => canvas.dispatchEvent(new MouseEvent(type, {
+      clientX: event.clientX, clientY: event.clientY,
+      screenX: event.screenX, screenY: event.screenY,
+      buttons: event.buttons, relatedTarget: event.relatedTarget,
+      view: window, sourceCapabilities: event.sourceCapabilities,
+      ctrlKey: event.ctrlKey, altKey: event.altKey,
+      shiftKey: event.shiftKey, metaKey: event.metaKey,
+    }));
+    const leave = (event) => {
+      if (hoveredCanvas) forward(hoveredCanvas, 'mouseleave', event);
+      hoveredCanvas = null;
+    };
+    chartEl.parentElement.addEventListener('mousemove', (event) => {
+      if (!event.isTrusted) return;
+      if (!overlay.contains(event.target)) {
+        // Native mouseenter/move now owns the crosshair again. A synthetic
+        // leave here would cancel the canvas's newly installed move listener.
+        if (event.target === hoveredCanvas) hoveredCanvas = null;
+        else leave(event);
+        return;
+      }
+      const canvas = Array.from(chartEl.querySelectorAll('canvas')).reverse().find((el) => {
+        const box = el.getBoundingClientRect();
+        return event.clientX >= box.left && event.clientX < box.right
+          && event.clientY >= box.top && event.clientY < box.bottom;
+      });
+      if (hoveredCanvas !== canvas) leave(event);
+      if (!canvas) return;
+      // Re-enter even when the canvas is unchanged: a native mouseleave can
+      // occur between two zones, or when the overlay is redrawn.
+      forward(canvas, 'mouseenter', event);
+      hoveredCanvas = canvas;
+      forward(canvas, 'mousemove', event);
+    }, true);
+    chartEl.parentElement.addEventListener('mouseleave', leave);
   }
 
   function restoreChartRange(chart, candles, saved) {
@@ -446,8 +522,8 @@ window.HTF = (() => {
   return {
     getToken, ensureToken, api, connectWs, isWsConnected: () => !!currentSocket && currentSocket.readyState === 1,
     fmtPrice, fmtTime, parseMskLocal, esc, tradingviewUrl,
-    captureChartRange, restoreChartRange,
-    chartTheme, openModal, closeModal, setConnectionState,
+    captureChartRange, restoreChartRange, bindChartOverlayCrosshair,
+    chartTheme, chartTimeOptions, openModal, closeModal, setConnectionState,
     theme: { get: themeGet, set: themeSet, apply: themeApply },
     DomainSync,
   };

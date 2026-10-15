@@ -6,10 +6,11 @@
   <!-- SHARED_STYLE -->
   <style>
     body { display: block; width: 1920px; height: 960px; background: var(--lf-surface); overflow: hidden; }
-    #heading { height: 58px; padding: 7px 12px; display: flex; align-items: baseline; gap: 20px; }
+    #heading { height: 72px; padding: 4px 12px; display: flex; align-items: center; gap: 20px; }
+    #brand-logo { width: 96px; height: 64px; object-fit: contain; flex: none; }
     #title { font-size: 22px; font-weight: 650; }
     #subtitle { font-size: 14px; color: var(--lf-text2); }
-    #frame { position: relative; height: 902px; }
+    #frame { position: relative; height: 888px; }
     #chart { position: absolute; inset: 0; }
     #zone-overlay { overflow: hidden; }
     .h1-layer-status { bottom: 28px; }
@@ -17,7 +18,7 @@
   </style>
 </head>
 <body>
-  <div id="heading"><span id="title"></span><span id="subtitle"></span></div>
+  <div id="heading"><img id="brand-logo" src="/* BRAND_LOGO */" alt="STV Market Researcher"><span id="title"></span><span id="subtitle"></span></div>
   <div id="frame">
     <div id="chart"></div><div id="zone-overlay"></div>
     <div id="transition" class="h1-transition hidden"></div>

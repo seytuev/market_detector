@@ -125,7 +125,8 @@ async def test_ltf_same_entry_many_parents_one_card(db, instrument_id):
     assert await disp.deliver(events) == 12
     assert len(sender.cards) == 1
     card = sender.cards[0][0]
-    assert "HTF-контекстов: 12" in card.text
+    assert "HTF-контекстов" not in card.text
+    assert "Основание HTF: OB D1" in card.text
     assert len(card.targets) == 12
     assert len(db.conn.execute("SELECT * FROM ltf_event").fetchall()) == 12
     await disp.deliver(events)
@@ -141,7 +142,8 @@ async def test_late_equivalent_edits_original(db, instrument_id):
         await disp.deliver([ev])
     assert len(sender.cards) == 1
     assert len(sender.edits) == 1
-    assert "HTF-контекстов: 2" in sender.edits[0][1].text
+    assert len(sender.edits[0][1].targets) == 2
+    assert "Основание HTF: OB D1" in sender.edits[0][1].text
 
 
 def test_ltf_identity_preserves_real_differences(db, instrument_id):
@@ -151,7 +153,10 @@ def test_ltf_identity_preserves_real_differences(db, instrument_id):
     original = ltf_key(ev, ctx)
     assert original != ltf_key(replace(ev, occurred_at=ev.occurred_at + 3_600_000), ctx)
     changed = {**BOS_PAYLOAD, "entries": [{**BOS_PAYLOAD["entries"][0], "lower": 97}]}
-    assert original != ltf_key(replace(ev, payload=changed), ctx)
+    # A different set of new zones at the same close updates the same delta.
+    assert original == ltf_key(replace(ev, payload=changed), ctx)
+    touch = replace(ev, kind="touch")
+    assert ltf_key(touch, ctx) != ltf_key(replace(touch, payload=changed), ctx)
     assert original != ltf_key(ev, replace(ctx, instrument=replace(ctx.instrument, venue="bybit")))
     assert original != ltf_key(ev, replace(ctx, instrument=replace(ctx.instrument, market_type="futures")))
 

@@ -160,7 +160,7 @@ async def test_ac22_pending_is_not_delivery_until_real_send():
     assert packet["status"] == "sent" and packet["message_id"] is not None
     assert len(sender.cards) == 1
     text = sender.cards[0][0].text
-    assert "↑ LONG" in text and "Направление изменилось" in text
+    assert "перевес в сторону роста" in text and "Направление изменилось" in text
     assert sender.cards[0][2] is False  # quiet не используется
     # shadow/quiet_hold/pending нигде не осталось: доставка — только sent
     bad = db.conn.execute(
@@ -246,14 +246,16 @@ async def test_stale_bundle_rendered_as_actualized_summary():
 
     # до отправки факт инвалидирован, появилась новая актуальная оценка
     memory.invalidate_fact(db, fact["fact_key"], T0 + 61_000, "условие сломано")
-    store.insert_assessment(db, _asmt(aid="a2", evaluated=T0 + 61_000,
+    store.insert_assessment(db, _asmt(aid="a2", evaluated=T0 + 61_000, direction="short",
                                       market_line="↓ SHORT"))
 
     row = _events_packets(db)[0]
     card = await publish._render_packet(row, publish._OUTBOX.members(row["id"]))
-    assert ("Сводка актуализирована: часть изменений уже не актуальна, "
-            "актуальный итог ниже.") in card.text
-    assert "↓ SHORT" in card.text  # актуальный итог из latest_assessment
+    assert "Сводка актуализирована · последняя сохранённая оценка" in card.text
+    assert "перевес в сторону снижения" in card.text
+    assert "перевес в сторону роста" not in card.text
+    assert "Новое событие: давление" not in card.text
+    assert "Новое событие: давление" in card.details
     assert "Причина замены: исходные изменения устарели до отправки" in card.text
 
     # исходный пакет сохранён, не перезаписан (§10)
@@ -277,7 +279,7 @@ async def test_old_bundle_rendered_as_actualized_summary():
     row = _events_packets(db)[0]
     card = await publish._render_packet(row, publish._OUTBOX.members(row["id"]))
     assert card.text.startswith(
-        "Сводка актуализирована: часть изменений уже не актуальна")
+        "Сводка актуализирована · последняя сохранённая оценка")
     assert "Причина замены: исходные изменения устарели до отправки" in card.text
 
 

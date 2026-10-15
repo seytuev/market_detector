@@ -181,7 +181,7 @@ def render_zone_chart(
             f" · {DIRECTION_RU.get(zone.direction.value, zone.direction.value)}"
         )
     status_ru = STATUS_RU.get(zone.status.value, zone.status.value)
-    subtitle = f"LevelFrame · {status_ru} · снимок {fmt_time_msk(event_at if event_at is not None else now_ms())}"
+    subtitle = f"STV Market Researcher · {status_ru} · снимок {fmt_time_msk(event_at if event_at is not None else now_ms())}"
     header_bottom = set_header(fig, title, subtitle)
     apply_layout(fig, ax, header_bottom)
     layout_price_labels(fig, ax, labels)

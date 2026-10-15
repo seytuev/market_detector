@@ -1,0 +1,13 @@
+/* STV Market Researcher: institutional wordmark and compact avatar. */
+.sidebar .brand { display: flex; align-items: center; justify-content: center; min-width: 0; }
+.brand .brand-lockup { display: block; width: 164px; max-width: 100%; height: auto; }
+.brand .brand-avatar { display: none; width: 44px; height: 44px; flex: none; border-radius: 8px; }
+html[data-theme="dark"] .brand-lockup { filter: brightness(0) invert(.92); }
+@media (min-width: 768px) {
+  html[data-sidebar="collapsed"] .brand .brand-lockup { display: none; }
+  html[data-sidebar="collapsed"] .brand .brand-avatar { display: block; }
+}
+@media (min-width: 768px) and (max-width: 1023px) {
+  html:not([data-sidebar="expanded"]) .brand .brand-lockup { display: none; }
+  html:not([data-sidebar="expanded"]) .brand .brand-avatar { display: block; }
+}

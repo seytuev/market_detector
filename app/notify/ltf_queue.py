@@ -203,7 +203,7 @@ class LtfDispatcher:
         # и не пересчитывает историю на текущих свечах.
         signature = chart_signature(ev)
         out_dir = Path(self.settings.db_path).parent / "charts"
-        out = out_dir / f"ltf_event_{ev.id}.png"
+        out = out_dir / f"ltf_event_{ev.id}_{signature[:12]}.png"
         if chart_meta_matches(out, signature):
             return str(out)
         reused = find_saved_chart(out_dir, signature)
@@ -221,24 +221,35 @@ class LtfDispatcher:
     def _packet_events(self, members):
         return [ev for m in members if not m["reason"] and (ev := self.db.get_ltf_event(m["event_id"])) is not None]
 
+    def _entry_block(self, ev, ctx, cache=None):
+        from ..services.h1_setup import entry_block_reason
+        from .ltf_projection import present_event
+        reason = entry_block_reason(self.db, ev, now_ms(), cfg=self.cfg)
+        if reason:
+            return reason
+        if ev.kind == "entries_ready" and ev.payload.get("entries"):
+            shown = present_event(self.db, self.cfg, ev, ctx, cache=cache, current=True)
+            if not shown.payload.get("entries"):
+                return "no current movement zones"
+        return None
+
     def _validate_packet(self, row, members):
         events = self._packet_events(members)
-        off = [e for e in events if self._asset_off(e)]
-        if off and len(off) == len(events):
-            return "asset disabled"
-        for ev in off:
-            self.db.conn.execute(
-                "UPDATE notification_member SET reason='asset disabled' "
-                "WHERE packet_id=? AND event_id=?",
-                (row["id"], ev.id),
-            )
-        if off:
-            self.db.conn.commit()
-        active = [e for e in events if not e.delayed and self._group_enabled(e.kind)
-                  and not self._bot_blocked(e) and not self._event_stale(e)
-                  and not self._asset_off(e)]
+        active, cache = [], {}
+        for ev in events:
+            reason = ("asset disabled" if self._asset_off(ev) else
+                      "muted, historical or stale" if ev.delayed or not self._group_enabled(ev.kind)
+                      or self._bot_blocked(ev) or self._event_stale(ev) else
+                      self._entry_block(ev, self._load_context(ev), cache))
+            if reason:
+                self.db.conn.execute(
+                    "UPDATE notification_member SET reason=? WHERE packet_id=? AND event_id=?",
+                    (reason, row["id"], ev.id))
+            else:
+                active.append(ev)
+        self.db.conn.commit()
         if not active:
-            return "muted, historical or stale"
+            return "asset disabled" if events and all(self._asset_off(e) for e in events) else "muted, historical or stale"
         if all(self._delivery_blocked(e) for e in active):
             return "wait"
         return None
@@ -263,12 +274,21 @@ class LtfDispatcher:
         from .outbox import Card
         from .telegram import tradingview_url
         events = self._packet_events(members)
+        if not events:
+            import json
+            return Card(**json.loads(row["card"]))
+        validation_cache = {}
         active = [e for e in events if not self._event_stale(e) and not self._bot_blocked(e)
-                  and not self._delivery_blocked(e)]
-        lead = active[0] if active else events[0]
+                  and not self._delivery_blocked(e) and not self._asset_off(e)
+                  and not self._entry_block(e, self._load_context(e), validation_cache)]
+        # A same-close zone delta may have been added before/after the BOS.
+        # Always name the physical break as the headline of the combined card.
+        lead = next((e for e in active if e.kind in ("bos", "sms")),
+                    active[0] if active else events[0])
         ctx = self._load_context(lead)
         targets, details = [], []
-        for ev in events:
+        all_events = [ev for m in members if (ev := self.db.get_ltf_event(m["event_id"])) is not None]
+        for ev in all_events:
             c = self._load_context(ev)
             if c.instrument:
                 details.append(f"Контекст #{ev.observation_id} · сценарий #{ev.scenario_id}\n"
@@ -293,12 +313,18 @@ class LtfDispatcher:
         old = json.loads(row["card"])
         path = old.get("image_path")
         needs_chart = self.settings is not None and (lead.kind in _CHART_KINDS or lead.kind == "entries_ready")
-        if needs_chart and path is None and row["status"] != "sent":
+        if needs_chart and ((path is None and row["status"] != "sent")
+                            or (row["status"] == "sent" and row["dirty"])):
             try:
-                path = await self._render_event_chart(lead, ctx)
+                summary = await asyncio.to_thread(self._summary_event, active or [lead], lead)
+                path = await self._render_event_chart(summary, ctx) or path
             except Exception:
                 log.warning("LTF chart unavailable", exc_info=True)
-        text = self._packet_text(events, lead, ctx)
+        text = await asyncio.to_thread(self._packet_text, active or [lead], lead, ctx)
+        from .compact import delivery_delay
+        delay = delivery_delay(lead.occurred_at, now_ms())
+        if delay:
+            text += "\n" + delay
         if lead.kind not in ("entries_ready", "range_ready", "touch"):
             from dataclasses import replace
             if self._delivery_blocked(replace(lead, kind="entries_ready")):
@@ -306,9 +332,21 @@ class LtfDispatcher:
         if needs_chart and not path:
             text += "\n📊 График временно недоступен"
         if len(targets) > 1 and path:
-            label = f"{ctx.zone.type.value} {ctx.zone.timeframe}" if ctx.zone else "H1"
-            text += f"\n📊 Контекст графика: {label}; остальные — по кнопке"
+            text += "\n📊 На графике — указанное основание HTF; выбор других — по кнопке"
         return Card(text, "\n\n".join(details), path, targets, needs_chart and not path)
+
+    def _summary_event(self, events, lead):
+        from dataclasses import replace
+        from .compact import ordered_entries
+        from .ltf_projection import present_event
+        cache = {}
+        shown = [present_event(self.db, self.cfg, event, self._load_context(event),
+                               cache=cache, current=event.kind == "entries_ready") for event in events]
+        entries = ordered_entries([entry for event in shown for entry in event.payload.get("entries", [])])
+        projected_lead = next(e for e in shown if e.id == lead.id)
+        excluded = [entry for event in shown for entry in event.payload.get("excluded_entries", [])]
+        return replace(projected_lead, payload={**projected_lead.payload, "entries": entries,
+                                               "excluded_entries": excluded})
 
     def _packet_text(self, events, lead, ctx):
         """Обычный BOS остаётся прежним текстом. Карточка перехода — когда
@@ -321,7 +359,8 @@ class LtfDispatcher:
             or any((e.payload or {}).get("reversal_confirmed") for e in events)
         )
         if not use_transition:
-            return ltf_text(lead, ctx, len({e.observation_id for e in events}))
+            combined = self._summary_event(events, lead)
+            return ltf_text(combined, ctx, len({e.observation_id for e in events}))
         from ..services.htf_context import reversal_projection, transition_card_text
         from ..services.h1_setup import project_setup, setup_card_lines
         view = None
@@ -348,8 +387,8 @@ class LtfDispatcher:
     def _enqueue(self, events: list[LtfEvent]) -> list[int]:
         from .outbox import Card
         from .compact import ltf_key
-        pending = []
-        for ev in events:
+        pending, cache = [], {}
+        for ev in sorted(events, key=lambda e: e.kind not in ("bos", "sms")):
             stored = self.db.get_ltf_event(ev.id) if ev.id is not None else None
             if stored is None or ev.delayed:
                 continue
@@ -358,10 +397,19 @@ class LtfDispatcher:
                 self.db.mark_ltf_event_delivered(ev.id)
                 continue
             ctx = self._load_context(ev)
+            if self._entry_block(ev, ctx, cache):
+                self.db.mark_ltf_event_delivered(ev.id)
+                continue
             key = ltf_key(ev, ctx)
             existing = self.db.conn.execute(
-                "SELECT id FROM notification_packet WHERE channel='ltf' AND destination=? AND semantic_key=?",
+                "SELECT id,semantic_key FROM notification_packet WHERE channel='ltf' AND destination=? AND semantic_key=?",
                 (self.outbox.destination, key)).fetchone()
+            # A zone delta on the same close extends the structural card,
+            # including a late arrival, rather than generating a second alert.
+            if ev.kind in ("entries_ready", "bos", "sms") and existing is None:
+                combined = self._same_close_packet(ev, ctx)
+                if combined is not None:
+                    existing, key = combined, combined["semantic_key"]
             # Журнальный delivered общий. Другой получатель всё равно ставит свой пакет.
             if stored.delivered and existing:
                 continue
@@ -373,10 +421,10 @@ class LtfDispatcher:
                     (ctx.instrument.id, ev.kind, ev.occurred_at)).fetchall()
                 for prior in rows:
                     old = self.db.get_ltf_event(prior["id"])
-                    if old.id == ev.id or ltf_key(old, self._load_context(old)) != key:
+                    if ltf_key(old, self._load_context(old)) != key:
                         continue
                     owned = self.db.conn.execute(
-                        """SELECT 1 FROM notification_member m
+                        """SELECT p.id,p.semantic_key,p.status FROM notification_member m
                            JOIN notification_packet p ON p.id=m.packet_id
                            WHERE m.event_id=? AND p.destination=? AND p.channel='ltf'
                              AND p.status IN ('sent','suppressed')""",
@@ -388,16 +436,13 @@ class LtfDispatcher:
                     ).fetchone()
                     # До outbox событие уже ушло одному владельцу: повторно не шлём.
                     # Пакет другого получателя этот адрес не закрывает.
+                    if owned and owned["status"] == "sent":
+                        existing, key = owned, owned["semantic_key"]
+                        break
                     if owned or any_packet is None:
                         historic_match = True
                         break
             packet_id = self.outbox.put("ltf", key, Card(""), [ev.id], quiet=ev.kind == "range_ready")
-            from ..services.h1_setup import entry_block_reason
-            block = entry_block_reason(self.db, ev, now_ms(), cfg=self.cfg)
-            if block:
-                self.outbox.suppress(packet_id, block)
-                self.db.mark_ltf_event_delivered(ev.id)
-                continue
             if historic_match:
                 self.outbox.suppress(packet_id, "equivalent delivered before outbox migration")
                 self.db.mark_ltf_event_delivered(ev.id)
@@ -411,6 +456,35 @@ class LtfDispatcher:
                 self.db.conn.commit()
             pending.append(ev.id)
         return pending
+
+    def _same_close_packet(self, ev, ctx):
+        from .compact import ltf_key
+        from .ltf_projection import direction_of
+        if ctx.instrument is None:
+            return None
+        kinds = "('bos','sms')" if ev.kind == "entries_ready" else "('entries_ready')"
+        rows = self.db.conn.execute(
+            "SELECT DISTINCT p.id,p.semantic_key,e.id AS event_id FROM notification_packet p "
+            "JOIN notification_member m ON m.packet_id=p.id AND m.channel='ltf' "
+            "JOIN ltf_event e ON e.id=m.event_id JOIN ltf_observation o ON o.id=e.observation_id "
+            "WHERE p.destination=? AND p.channel='ltf' AND p.status IN "
+            "('pending','failed','sent','sending','bundled','uncertain') "
+            f"AND e.kind IN {kinds} AND e.occurred_at=? AND o.instrument_id=? "
+            "AND m.reason IS NULL ORDER BY p.id",
+            (self.outbox.destination, ev.occurred_at, ctx.instrument.id)).fetchall()
+        matches = {}
+        for row in rows:
+            other = self.db.get_ltf_event(row["event_id"])
+            context = self._load_context(other)
+            if direction_of(other, context) == direction_of(ev, ctx):
+                if ev.kind in ("bos", "sms"):
+                    attached = self._packet_events(self.outbox.members(row["id"]))
+                    if any(e.kind in ("bos", "sms") and ltf_key(e, self._load_context(e)) != ltf_key(ev, ctx)
+                           for e in attached):
+                        continue
+                matches.setdefault(ltf_key(other, context), row)
+        # Two distinct breaks on the same bar must remain distinguishable.
+        return next(iter(matches.values())) if len(matches) == 1 else None
 
     def _keyboard(self, ev: LtfEvent, ctx: LtfContext):
         """Единый набор кнопок под сигналом (ТЗ бота п.10)."""

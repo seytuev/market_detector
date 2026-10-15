@@ -675,7 +675,7 @@ def render_ltf_chart(
         + f"\nокно {fmt_time_msk(candles[0].open_time)}–"
         f"{fmt_time_msk(candles[-1].close_time)}"
     )
-    subtitle = f"LevelFrame · {state_line}\n{window}"
+    subtitle = f"STV Market Researcher · {state_line}\n{window}"
     if htf_far_note:
         subtitle += f"\n{htf_far_note}"
     if event is None and setup and setup.get("history"):

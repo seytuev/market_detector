@@ -988,7 +988,7 @@ function initChart() {
       vertLines: { color: theme.grid, style: LightweightCharts.LineStyle.Dotted },
       horzLines: { color: theme.grid, style: LightweightCharts.LineStyle.Dotted },
     },
-    timeScale: { timeVisible: true, secondsVisible: false, rightOffset: 4, borderColor: theme.border },
+    ...HTF.chartTimeOptions({ rightOffset: 4, borderColor: theme.border }),
     rightPriceScale: { borderColor: theme.border, autoScale: false },
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     autoSize: true,
@@ -1618,7 +1618,7 @@ function applyTableMode() {
     else $('alt-list-pane').prepend(searchHead);
   }
   const title = document.querySelector('.alt-fresh h1');
-  title.textContent = state.screen === 'analysis' ? 'Анализ · Сетап D1/W1' : 'Скринер';
+  title.textContent = state.screen === 'analysis' ? 'Анализ · Сетап D1/W1' : 'Скринер ALTs';
   document.querySelectorAll('.sidebar .app-tab').forEach(link => {
     const isAnalysis = link.getAttribute('href') === '/#desk';
     const isScreener = link.textContent.trim().startsWith('Скринер');

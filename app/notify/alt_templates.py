@@ -505,7 +505,7 @@ def render_alt_message(events: list[AltEvent], ctx: AltContext) -> str:
         for ev in ordered:
             blocks.append(_render_block(ev, ctx))
 
-    parts = [f"{_symbol(ctx)} · D1"]
+    parts = [f"STV Market Researcher · {_symbol(ctx)} · D1"]
     parts.extend("\n".join(b) for b in blocks)
     parts.append("\n".join(_footer(ordered, ctx)))
     return "\n\n".join(parts)

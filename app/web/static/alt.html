@@ -3,8 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LevelFrame · Скринер</title>
+  <title>STV Market Researcher · Скринер ALTs</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="apple-touch-icon" href="/brand/stv-bot-avatar-v2.png">
+  <meta name="application-name" content="STV Market Researcher">
   <script>(function(){try{var c=localStorage.getItem('lf:theme');var l=window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches;var t=(c==='dark'||c==='light')?c:(c==='system'?(l?'light':'dark'):'light');document.documentElement.dataset.theme=t;var sb=localStorage.getItem('lf:sidebar');if(sb==='collapsed'||sb==='expanded')document.documentElement.dataset.sidebar=sb;}catch(e){document.documentElement.dataset.theme='light';}})();</script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
@@ -14,16 +16,15 @@
   <link rel="stylesheet" href="/mobile-pages.css">
   <link rel="stylesheet" href="/workspace.css">
   <script src="/vendor/lightweight-charts.js"></script>
+  <link rel="stylesheet" href="/brand/brand.css">
 </head>
 <body class="app-body">
   <a class="skip" href="#main">К содержимому</a>
   <aside class="sidebar">
     <div class="sidebar-head">
     <a class="brand" href="/#now">
-      <svg class="brand-mark" width="30" height="30" viewBox="0 0 30 30" fill="none" aria-hidden="true">
-        <path d="M7 5v20h16M12 9h12M12 15h9M12 21h6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
-      <span class="brand-text">LevelFrame<small>MARKET INTELLIGENCE</small></span>
+      <img class="brand-lockup" src="/brand/stv-logo-v2.png" width="1536" height="1024" alt="STV Market Researcher">
+      <img class="brand-avatar" src="/brand/stv-bot-avatar-v2.png" width="44" height="44" alt="STV Market Researcher">
     </a>
     <button type="button" id="sidebar-toggle" class="sidebar-toggle" aria-label="Свернуть меню" aria-expanded="true" title="Свернуть меню">
       <svg class="ico-collapse" width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -36,14 +37,14 @@
     </div>
     <div class="nav-label">Анализ</div>
     <nav class="app-tabs" aria-label="Основная навигация">
-      <a href="/#now" class="app-tab"><span class="nav-full">Наблюдение</span><span class="nav-short">Наблюдение</span></a>
+      <a href="/#now" class="app-tab"><span class="nav-full">Общая картина</span><span class="nav-short">Общая картина</span></a>
       <a href="/#desk" class="app-tab"><span class="nav-full">Анализ</span><span class="nav-short">Анализ</span></a>
-      <a href="/#review" class="app-tab"><span class="nav-full">Проверка</span><span class="nav-short">Проверка</span></a>
-      <span class="app-tab current" aria-current="page"><span class="nav-full">Скринер</span><span class="nav-short">Скринер</span></span>
-      <a href="/#journal" class="app-tab"><span class="nav-full">Журнал</span><span class="nav-short">Журнал</span></a>
-      <a href="/events.html" class="app-tab"><span class="nav-full">Рынок</span><span class="nav-short">Рынок</span></a>
+      <a href="/#review" class="app-tab"><span class="nav-full">Проверка зон</span><span class="nav-short">Проверка зон</span></a>
+      <span class="app-tab current" aria-current="page"><span class="nav-full">Скринер ALTs</span><span class="nav-short">Скринер ALTs</span></span>
+      <a href="/events.html" class="app-tab"><span class="nav-full">Контекст рынка</span><span class="nav-short">Контекст рынка</span></a>
     </nav>
     <div class="sidebar-bottom">
+      <a href="/#journal" class="app-tab"><span class="nav-full">Журнал</span><span class="nav-short">Журнал</span></a>
       <a href="/#help" class="app-tab"><span class="nav-full">Справка</span><span class="nav-short">Справка</span></a>
       <a href="/#settings" class="app-tab"><span class="nav-full">Настройки</span><span class="nav-short">Настр.</span></a>
       <span class="conn-status">
@@ -57,7 +58,7 @@
   <div class="alt-page" id="alt-page" data-pane="list">
     <header class="alt-fresh">
       <div class="alt-fresh-main">
-        <h1>Скринер</h1>
+        <h1>Скринер ALTs</h1>
         <p class="alt-dim">Альткоины · дневной диапазон</p>
         <p id="alt-asof">Данные на …</p>
         <p id="alt-run-state" class="alt-dim"></p>
@@ -280,20 +281,20 @@
   </div>
     </div>
     <footer class="app-footer">
-      <span>LevelFrame · Среда рыночного анализа</span>
+      <span>STV Market Researcher</span>
       <span>Наблюдение без размещения заявок</span>
     </footer>
   </div>
 
   <nav class="mobile-nav" aria-label="Мобильная навигация">
-    <a href="/#now">Наблюдение</a>
+    <a href="/#now">Общая картина</a>
     <a href="/#desk">Анализ</a>
-    <a href="/#review">Проверка</a>
-    <a href="/alt.html" aria-current="page">Скринер</a>
+    <a href="/#review">Проверка зон</a>
+    <a href="/alt.html" aria-current="page">Скринер ALTs</a>
     <button type="button" id="nav-more" aria-expanded="false" aria-controls="nav-more-panel">Ещё</button>
   </nav>
   <div id="nav-more-panel" class="nav-more-panel hidden" role="menu">
-    <a href="/events.html" role="menuitem">Рынок</a>
+    <a href="/events.html" role="menuitem">Контекст рынка</a>
     <a href="/#journal" role="menuitem">Журнал</a>
     <a href="/#help" role="menuitem">Справка</a>
     <a href="/#settings" role="menuitem">Настройки</a>

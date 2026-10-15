@@ -1,0 +1,976 @@
+{
+  "date": "2026-10-15",
+  "environment": {
+    "database": "isolated SQLite backup of local market data",
+    "snapshot_time_utc": "2026-10-14T16:00:00Z",
+    "viewport": [
+      1440,
+      900
+    ],
+    "browser": "headless Chrome",
+    "external_assets": "blocked identically in both variants",
+    "measurement": "navigation until candles and H1 layers are applied, pending reads complete, plus two animation frames",
+    "trials": "one cold process trial and four warm trials per variant; background requests drained between trials",
+    "source_database_changed": false
+  },
+  "rule": {
+    "inside_pd": "all confirmed relevant zones intersecting the current setup PD, including boundary overlaps",
+    "above_pd": 5,
+    "below_pd": 5,
+    "types": "combined, not per type",
+    "mandatory": "price-containing zones, eligible current scenario entries and selected zone; only if still confirmed and relevant",
+    "history": "explicit history bypasses proximity limit"
+  },
+  "summary": {
+    "warm_median_before_ms": 5933.65,
+    "warm_median_after_ms": 3181.9,
+    "warm_reduction_percent": 46.38,
+    "warm_speedup": 1.86,
+    "cold_before_ms": 12770.7,
+    "cold_after_ms": 12478.6,
+    "zones_before": 570,
+    "zones_after": 45,
+    "structure_decoded_bytes_before": 939277,
+    "structure_decoded_bytes_after": 326714
+  },
+  "before": {
+    "label": "before-main",
+    "page": "main_h1",
+    "viewport": [
+      1440,
+      900
+    ],
+    "results": [
+      {
+        "load_ms": 12770.70000000298,
+        "zones": 570,
+        "zone_elements": 114,
+        "selection": null,
+        "pd": {
+          "lower": 81712,
+          "upper": 84146.72
+        },
+        "api_timings": [
+          {
+            "path": "/api/auth/session",
+            "duration_ms": 20.19999998807907
+          },
+          {
+            "path": "/api/ltf/instruments",
+            "duration_ms": 4725.899999991059
+          },
+          {
+            "path": "/api/events/overview",
+            "duration_ms": 34
+          },
+          {
+            "path": "/api/ready",
+            "duration_ms": 36.900000005960464
+          },
+          {
+            "path": "/api/data-sync/status",
+            "duration_ms": 21.900000005960464
+          },
+          {
+            "path": "/api/instruments",
+            "duration_ms": 35.20000000298023
+          },
+          {
+            "path": "/api/labels",
+            "duration_ms": 13
+          },
+          {
+            "path": "/api/candles",
+            "duration_ms": 388.3999999910593
+          },
+          {
+            "path": "/api/zones",
+            "duration_ms": 1010.3999999910593
+          },
+          {
+            "path": "/api/zones/grouped",
+            "duration_ms": 110.70000000298023
+          },
+          {
+            "path": "/api/events",
+            "duration_ms": 132.19999998807907
+          },
+          {
+            "path": "/api/events",
+            "duration_ms": 157.79999999701977
+          },
+          {
+            "path": "/api/candidates",
+            "duration_ms": 778.5
+          },
+          {
+            "path": "/api/ltf/instruments/1/structure",
+            "duration_ms": 12366.70000000298
+          },
+          {
+            "path": "/api/ltf/instruments/1/workspace",
+            "duration_ms": 4777.29999999702
+          },
+          {
+            "path": "/api/journal/page",
+            "duration_ms": 1482.6000000089407
+          },
+          {
+            "path": "/api/ltf/instruments/1/current",
+            "duration_ms": 680.2999999970198
+          },
+          {
+            "path": "/api/ready",
+            "duration_ms": 5.299999997019768
+          },
+          {
+            "path": "/api/ltf/instruments/1/structure",
+            "duration_ms": 6782.5999999940395
+          },
+          {
+            "path": "/api/ready",
+            "duration_ms": 625.6000000089407
+          }
+        ],
+        "mouse_ms": 311.41029999999955,
+        "mouse_dom_mutations": 0,
+        "workspace": [
+          {
+            "path": "/api/ltf/instruments/1/workspace",
+            "bytes": 536811,
+            "status": 200
+          },
+          {
+            "path": "/api/ltf/instruments/1/structure",
+            "bytes": 941489,
+            "status": 200
+          },
+          {
+            "path": "/api/ltf/instruments/1/structure",
+            "bytes": 939277,
+            "status": 200
+          }
+        ],
+        "errors": []
+      },
+      {
+        "load_ms": 5849.199999988079,
+        "zones": 570,
+        "zone_elements": 114,
+        "selection": null,
+        "pd": {
+          "lower": 81712,
+          "upper": 84146.72
+        },
+        "api_timings": [
+          {
+            "path": "/api/auth/session",
+            "duration_ms": 6.299999997019768
+          },
+          {
+            "path": "/api/ltf/instruments",
+            "duration_ms": 5656.70000000298
+          },
+          {
+            "path": "/api/ready",
+            "duration_ms": 8.800000011920929
+          },
+          {
+            "path": "/api/data-sync/status",
+            "duration_ms": 7
+          },
+          {
+            "path": "/api/instruments",
+            "duration_ms": 10.799999997019768
+          },
+          {
+            "path": "/api/events/overview",
+            "duration_ms": 6.299999997019768
+          },
+          {
+            "path": "/api/labels",
+            "duration_ms": 11.099999994039536
+          },
+          {
+            "path": "/api/candles",
+            "duration_ms": 457.29999999701977
+          },
+          {
+            "path": "/api/zones",
+            "duration_ms": 994.1000000089407
+          },
+          {
+            "path": "/api/zones/grouped",
+            "duration_ms": 193.79999999701977
+          },
+          {
+            "path": "/api/events",
+            "duration_ms": 98
+          },
+          {
+            "path": "/api/events",
+            "duration_ms": 82.19999998807907
+          },
+          {
+            "path": "/api/candidates",
+            "duration_ms": 1032.5
+          },
+          {
+            "path": "/api/ltf/instruments/1/structure",
+            "duration_ms": 5557.600000008941
+          },
+          {
+            "path": "/api/ready",
+            "duration_ms": 410.29999999701977
+          }
+        ],
+        "mouse_ms": 266.6948000000011,
+        "mouse_dom_mutations": 0,
+        "workspace": [
+          {
+            "path": "/api/ltf/instruments/1/structure",
+            "bytes": 939277,
+            "status": 200
+          }
+        ],
+        "errors": []
+      },
+      {
+        "load_ms": 6077.0999999940395,
+        "zones": 570,
+        "zone_elements": 114,
+        "selection": null,
+        "pd": {
+          "lower": 81712,
+          "upper": 84146.72
+        },
+        "api_timings": [
+          {
+            "path": "/api/auth/session",
+            "duration_ms": 17.899999991059303
+          },
+          {
+            "path": "/api/events/overview",
+            "duration_ms": 13.299999997019768
+          },
+          {
+            "path": "/api/data-sync/status",
+            "duration_ms": 9.5
+          },
+          {
+            "path": "/api/ready",
+            "duration_ms": 12.100000008940697
+          },
+          {
+            "path": "/api/instruments",
+            "duration_ms": 16.100000008940697
+          },
+          {
+            "path": "/api/labels",
+            "duration_ms": 13
+          },
+          {
+            "path": "/api/candles",
+            "duration_ms": 457.09999999403954
+          },
+          {
+            "path": "/api/zones",
+            "duration_ms": 1072
+          },
+          {
+            "path": "/api/zones/grouped",
+            "duration_ms": 283.5
+          },
+          {
+            "path": "/api/events",
+            "duration_ms": 89.70000000298023
+          },
+          {
+            "path": "/api/events",
+            "duration_ms": 102.6000000089407
+          },
+          {
+            "path": "/api/candidates",
+            "duration_ms": 1113.9000000059605
+          },
+          {
+            "path": "/api/ltf/instruments/1/structure",
+            "duration_ms": 5753.5999999940395
+          },
+          {
+            "path": "/api/ready",
+            "duration_ms": 396.29999999701977
+          }
+        ],
+        "mouse_ms": 266.54060000000027,
+        "mouse_dom_mutations": 0,
+        "workspace": [
+          {
+            "path": "/api/ltf/instruments/1/structure",
+            "bytes": 939277,
+            "status": 200
+          }
+        ],
+        "errors": []
+      },
+      {
+        "load_ms": 5968.5,
+        "zones": 570,
+        "zone_elements": 114,
+        "selection": null,
+        "pd": {
+          "lower": 81712,
+          "upper": 84146.72
+        },
+        "api_timings": [
+          {
+            "path": "/api/auth/session",
+            "duration_ms": 19.299999997019768
+          },
+          {
+            "path": "/api/events/overview",
+            "duration_ms": 12.400000005960464
+          },
+          {
+            "path": "/api/ready",
+            "duration_ms": 16.19999998807907
+          },
+          {
+            "path": "/api/data-sync/status",
+            "duration_ms": 10.300000011920929
+          },
+          {
+            "path": "/api/instruments",
+            "duration_ms": 13.700000002980232
+          },
+          {
+            "path": "/api/labels",
+            "duration_ms": 11.699999988079071
+          },
+          {
+            "path": "/api/candles",
+            "duration_ms": 450.79999999701977
+          },
+          {
+            "path": "/api/zones",
+            "duration_ms": 1055.5
+          },
+          {
+            "path": "/api/zones/grouped",
+            "duration_ms": 206.40000000596046
+          },
+          {
+            "path": "/api/events",
+            "duration_ms": 94.8999999910593
+          },
+          {
+            "path": "/api/events",
+            "duration_ms": 90.20000000298023
+          },
+          {
+            "path": "/api/candidates",
+            "duration_ms": 1113.6000000089407
+          },
+          {
+            "path": "/api/ltf/instruments/1/structure",
+            "duration_ms": 5686.0999999940395
+          },
+          {
+            "path": "/api/ready",
+            "duration_ms": 514.4000000059605
+          }
+        ],
+        "mouse_ms": 282.30319999999483,
+        "mouse_dom_mutations": 0,
+        "workspace": [
+          {
+            "path": "/api/ltf/instruments/1/structure",
+            "bytes": 939277,
+            "status": 200
+          }
+        ],
+        "errors": []
+      },
+      {
+        "load_ms": 5898.800000011921,
+        "zones": 570,
+        "zone_elements": 114,
+        "selection": null,
+        "pd": {
+          "lower": 81712,
+          "upper": 84146.72
+        },
+        "api_timings": [
+          {
+            "path": "/api/auth/session",
+            "duration_ms": 16.5
+          },
+          {
+            "path": "/api/events/overview",
+            "duration_ms": 6.399999991059303
+          },
+          {
+            "path": "/api/data-sync/status",
+            "duration_ms": 9.299999997019768
+          },
+          {
+            "path": "/api/ready",
+            "duration_ms": 13.699999988079071
+          },
+          {
+            "path": "/api/instruments",
+            "duration_ms": 11.700000002980232
+          },
+          {
+            "path": "/api/labels",
+            "duration_ms": 11.799999997019768
+          },
+          {
+            "path": "/api/candles",
+            "duration_ms": 446.79999999701977
+          },
+          {
+            "path": "/api/zones",
+            "duration_ms": 1083.7999999970198
+          },
+          {
+            "path": "/api/events",
+            "duration_ms": 98.5
+          },
+          {
+            "path": "/api/zones/grouped",
+            "duration_ms": 208.59999999403954
+          },
+          {
+            "path": "/api/events",
+            "duration_ms": 86.90000000596046
+          },
+          {
+            "path": "/api/candidates",
+            "duration_ms": 1039.7000000029802
+          },
+          {
+            "path": "/api/ltf/instruments/1/structure",
+            "duration_ms": 5618.399999991059
+          },
+          {
+            "path": "/api/ready",
+            "duration_ms": 382.29999999701977
+          }
+        ],
+        "mouse_ms": 279.0880999999936,
+        "mouse_dom_mutations": 0,
+        "workspace": [
+          {
+            "path": "/api/ltf/instruments/1/structure",
+            "bytes": 939277,
+            "status": 200
+          }
+        ],
+        "errors": []
+      }
+    ]
+  },
+  "after": {
+    "label": "after-main",
+    "page": "main_h1",
+    "viewport": [
+      1440,
+      900
+    ],
+    "results": [
+      {
+        "load_ms": 12478.59999999404,
+        "zones": 45,
+        "zone_elements": 67,
+        "selection": {
+          "mode": "current_pd",
+          "per_side": 5,
+          "pd_lower": 81712,
+          "pd_upper": 84146.72,
+          "pd_available": true,
+          "relevant_total": 550,
+          "inside": 35,
+          "above": 5,
+          "below": 5,
+          "reference_price": 81294.44,
+          "price_from": 81033.66,
+          "price_to": 81959.53,
+          "returned": 45
+        },
+        "pd": {
+          "lower": 81712,
+          "upper": 84146.72
+        },
+        "api_timings": [
+          {
+            "path": "/api/auth/session",
+            "duration_ms": 11.599999994039536
+          },
+          {
+            "path": "/api/ltf/instruments",
+            "duration_ms": 4798.4000000059605
+          },
+          {
+            "path": "/api/events/overview",
+            "duration_ms": 29
+          },
+          {
+            "path": "/api/ready",
+            "duration_ms": 31.799999997019768
+          },
+          {
+            "path": "/api/data-sync/status",
+            "duration_ms": 13.700000002980232
+          },
+          {
+            "path": "/api/instruments",
+            "duration_ms": 30.299999997019768
+          },
+          {
+            "path": "/api/labels",
+            "duration_ms": 8.800000011920929
+          },
+          {
+            "path": "/api/candles",
+            "duration_ms": 399.29999999701977
+          },
+          {
+            "path": "/api/zones",
+            "duration_ms": 1107.9000000059605
+          },
+          {
+            "path": "/api/zones/grouped",
+            "duration_ms": 128.1000000089407
+          },
+          {
+            "path": "/api/events",
+            "duration_ms": 123.59999999403954
+          },
+          {
+            "path": "/api/events",
+            "duration_ms": 97.6000000089407
+          },
+          {
+            "path": "/api/candidates",
+            "duration_ms": 1041.6000000089407
+          },
+          {
+            "path": "/api/ltf/instruments/1/structure",
+            "duration_ms": 12019
+          },
+          {
+            "path": "/api/ltf/instruments/1/workspace",
+            "duration_ms": 4878.70000000298
+          },
+          {
+            "path": "/api/journal/page",
+            "duration_ms": 1532.7000000029802
+          },
+          {
+            "path": "/api/ltf/instruments/1/current",
+            "duration_ms": 700.4000000059605
+          },
+          {
+            "path": "/api/ready",
+            "duration_ms": 78
+          },
+          {
+            "path": "/api/ltf/instruments/1/structure",
+            "duration_ms": 6423.79999999702
+          },
+          {
+            "path": "/api/ready",
+            "duration_ms": 389.59999999403954
+          }
+        ],
+        "mouse_ms": 310.92949999999837,
+        "mouse_dom_mutations": 0,
+        "workspace": [
+          {
+            "path": "/api/ltf/instruments/1/workspace",
+            "bytes": 536811,
+            "status": 200
+          },
+          {
+            "path": "/api/ltf/instruments/1/structure",
+            "bytes": 326714,
+            "status": 200
+          },
+          {
+            "path": "/api/ltf/instruments/1/structure",
+            "bytes": 330501,
+            "status": 200
+          }
+        ],
+        "errors": []
+      },
+      {
+        "load_ms": 3079.6000000089407,
+        "zones": 45,
+        "zone_elements": 67,
+        "selection": {
+          "mode": "current_pd",
+          "per_side": 5,
+          "pd_lower": 81712,
+          "pd_upper": 84146.72,
+          "pd_available": true,
+          "relevant_total": 550,
+          "inside": 35,
+          "above": 5,
+          "below": 5,
+          "reference_price": 81294.44,
+          "price_from": 81033.66,
+          "price_to": 81959.53,
+          "returned": 45
+        },
+        "pd": {
+          "lower": 81712,
+          "upper": 84146.72
+        },
+        "api_timings": [
+          {
+            "path": "/api/auth/session",
+            "duration_ms": 8.200000002980232
+          },
+          {
+            "path": "/api/events/overview",
+            "duration_ms": 10.899999991059303
+          },
+          {
+            "path": "/api/data-sync/status",
+            "duration_ms": 9.099999994039536
+          },
+          {
+            "path": "/api/ready",
+            "duration_ms": 14.299999997019768
+          },
+          {
+            "path": "/api/instruments",
+            "duration_ms": 11.799999997019768
+          },
+          {
+            "path": "/api/labels",
+            "duration_ms": 10.299999997019768
+          },
+          {
+            "path": "/api/candles",
+            "duration_ms": 434.70000000298023
+          },
+          {
+            "path": "/api/zones",
+            "duration_ms": 1028.7999999970198
+          },
+          {
+            "path": "/api/zones/grouped",
+            "duration_ms": 152.6000000089407
+          },
+          {
+            "path": "/api/events",
+            "duration_ms": 82.70000000298023
+          },
+          {
+            "path": "/api/events",
+            "duration_ms": 104.6000000089407
+          },
+          {
+            "path": "/api/candidates",
+            "duration_ms": 1076.0999999940395
+          },
+          {
+            "path": "/api/ltf/instruments/1/structure",
+            "duration_ms": 2791
+          }
+        ],
+        "mouse_ms": 267.11599999999817,
+        "mouse_dom_mutations": 0,
+        "workspace": [
+          {
+            "path": "/api/ltf/instruments/1/structure",
+            "bytes": 326714,
+            "status": 200
+          }
+        ],
+        "errors": []
+      },
+      {
+        "load_ms": 3268.7999999970198,
+        "zones": 45,
+        "zone_elements": 67,
+        "selection": {
+          "mode": "current_pd",
+          "per_side": 5,
+          "pd_lower": 81712,
+          "pd_upper": 84146.72,
+          "pd_available": true,
+          "relevant_total": 550,
+          "inside": 35,
+          "above": 5,
+          "below": 5,
+          "reference_price": 81294.44,
+          "price_from": 81033.66,
+          "price_to": 81959.53,
+          "returned": 45
+        },
+        "pd": {
+          "lower": 81712,
+          "upper": 84146.72
+        },
+        "api_timings": [
+          {
+            "path": "/api/auth/session",
+            "duration_ms": 5.200000002980232
+          },
+          {
+            "path": "/api/events/overview",
+            "duration_ms": 12
+          },
+          {
+            "path": "/api/ready",
+            "duration_ms": 14.899999991059303
+          },
+          {
+            "path": "/api/data-sync/status",
+            "duration_ms": 9
+          },
+          {
+            "path": "/api/instruments",
+            "duration_ms": 12.799999997019768
+          },
+          {
+            "path": "/api/labels",
+            "duration_ms": 8.700000002980232
+          },
+          {
+            "path": "/api/candles",
+            "duration_ms": 445.09999999403954
+          },
+          {
+            "path": "/api/zones",
+            "duration_ms": 1073.8999999910593
+          },
+          {
+            "path": "/api/zones/grouped",
+            "duration_ms": 211.20000000298023
+          },
+          {
+            "path": "/api/events",
+            "duration_ms": 95.79999999701977
+          },
+          {
+            "path": "/api/events",
+            "duration_ms": 80.5
+          },
+          {
+            "path": "/api/candidates",
+            "duration_ms": 1137.7000000029802
+          },
+          {
+            "path": "/api/ltf/instruments/1/structure",
+            "duration_ms": 2887.0999999940395
+          }
+        ],
+        "mouse_ms": 282.1242999999995,
+        "mouse_dom_mutations": 0,
+        "workspace": [
+          {
+            "path": "/api/ltf/instruments/1/structure",
+            "bytes": 326714,
+            "status": 200
+          }
+        ],
+        "errors": []
+      },
+      {
+        "load_ms": 3219.0999999940395,
+        "zones": 45,
+        "zone_elements": 67,
+        "selection": {
+          "mode": "current_pd",
+          "per_side": 5,
+          "pd_lower": 81712,
+          "pd_upper": 84146.72,
+          "pd_available": true,
+          "relevant_total": 550,
+          "inside": 35,
+          "above": 5,
+          "below": 5,
+          "reference_price": 81294.44,
+          "price_from": 81033.66,
+          "price_to": 81959.53,
+          "returned": 45
+        },
+        "pd": {
+          "lower": 81712,
+          "upper": 84146.72
+        },
+        "api_timings": [
+          {
+            "path": "/api/auth/session",
+            "duration_ms": 4.600000008940697
+          },
+          {
+            "path": "/api/events/overview",
+            "duration_ms": 10.800000011920929
+          },
+          {
+            "path": "/api/ready",
+            "duration_ms": 14
+          },
+          {
+            "path": "/api/data-sync/status",
+            "duration_ms": 7.799999997019768
+          },
+          {
+            "path": "/api/instruments",
+            "duration_ms": 11.899999991059303
+          },
+          {
+            "path": "/api/labels",
+            "duration_ms": 10.099999994039536
+          },
+          {
+            "path": "/api/candles",
+            "duration_ms": 514.2000000029802
+          },
+          {
+            "path": "/api/zones",
+            "duration_ms": 1139.3999999910593
+          },
+          {
+            "path": "/api/zones/grouped",
+            "duration_ms": 266
+          },
+          {
+            "path": "/api/events",
+            "duration_ms": 145.3999999910593
+          },
+          {
+            "path": "/api/events",
+            "duration_ms": 136.40000000596046
+          },
+          {
+            "path": "/api/candidates",
+            "duration_ms": 1235.1000000089407
+          },
+          {
+            "path": "/api/ltf/instruments/1/structure",
+            "duration_ms": 2974.9000000059605
+          }
+        ],
+        "mouse_ms": 268.0800999999992,
+        "mouse_dom_mutations": 0,
+        "workspace": [
+          {
+            "path": "/api/ltf/instruments/1/structure",
+            "bytes": 326714,
+            "status": 200
+          }
+        ],
+        "errors": []
+      },
+      {
+        "load_ms": 3144.699999988079,
+        "zones": 45,
+        "zone_elements": 67,
+        "selection": {
+          "mode": "current_pd",
+          "per_side": 5,
+          "pd_lower": 81712,
+          "pd_upper": 84146.72,
+          "pd_available": true,
+          "relevant_total": 550,
+          "inside": 35,
+          "above": 5,
+          "below": 5,
+          "reference_price": 81294.44,
+          "price_from": 81033.66,
+          "price_to": 81959.53,
+          "returned": 45
+        },
+        "pd": {
+          "lower": 81712,
+          "upper": 84146.72
+        },
+        "api_timings": [
+          {
+            "path": "/api/auth/session",
+            "duration_ms": 6.899999991059303
+          },
+          {
+            "path": "/api/events/overview",
+            "duration_ms": 12.299999997019768
+          },
+          {
+            "path": "/api/ready",
+            "duration_ms": 15.200000002980232
+          },
+          {
+            "path": "/api/data-sync/status",
+            "duration_ms": 8.299999997019768
+          },
+          {
+            "path": "/api/instruments",
+            "duration_ms": 13.100000008940697
+          },
+          {
+            "path": "/api/labels",
+            "duration_ms": 9.700000002980232
+          },
+          {
+            "path": "/api/candles",
+            "duration_ms": 438
+          },
+          {
+            "path": "/api/zones",
+            "duration_ms": 1141.800000011921
+          },
+          {
+            "path": "/api/zones/grouped",
+            "duration_ms": 213.09999999403954
+          },
+          {
+            "path": "/api/events",
+            "duration_ms": 84.5
+          },
+          {
+            "path": "/api/events",
+            "duration_ms": 98.59999999403954
+          },
+          {
+            "path": "/api/candidates",
+            "duration_ms": 1097.0999999940395
+          },
+          {
+            "path": "/api/ltf/instruments/1/structure",
+            "duration_ms": 2890.800000011921
+          }
+        ],
+        "mouse_ms": 270.10020000000077,
+        "mouse_dom_mutations": 0,
+        "workspace": [
+          {
+            "path": "/api/ltf/instruments/1/structure",
+            "bytes": 326714,
+            "status": 200
+          }
+        ],
+        "errors": []
+      }
+    ]
+  },
+  "limitations": [
+    "Local measurements are not a production latency guarantee.",
+    "The cold trial did not materially improve; historical discovery and initial projections still run on a cache miss.",
+    "Decoded JSON size is not compressed network transfer size.",
+    "The existing main H1 page already avoided overlay redraws on hover; the unconditional redraw removed by this change was on the standalone LTF page."
+  ],
+  "implementation": "Bounded process-local lifecycle projection cache invalidated by structural versions and the H1 clock boundary. PD selection and mandatory quote-containing zones are reevaluated on every read; explicit historical cutoffs bypass the live cache.",
+  "verification": {
+    "python_focused_suite_passed": 131,
+    "javascript_h1_layers": "passed",
+    "browser_main_and_standalone_ltf": "selection, pinning across reload, clicks, price-axis scaling and zero hover redraws passed",
+    "crosshair_overlay_regression": "main, LTF and review overlays passed",
+    "browser_page_errors": []
+  }
+}

@@ -593,7 +593,13 @@ def render_chart_caption(
         head += f", {days} дн."
     lines = [head]
     if cur["price"] is not None:
-        lines.append(f"Цена: {_fmt_price(cur['price'])}")
+        price_time = f" · {_fmt_time(cur['quote_at'])}" if cur.get("quote_at") else " · время котировки неизвестно"
+        lines.append(f"Котировка: {_fmt_price(cur['price'])}{price_time}")
+    last_h1 = cur.get("last_closed_h1")
+    if tf == "H1":
+        lines.append(f"Последнее закрытие H1: {_fmt_time(last_h1)}" if last_h1 is not None else "Последнее закрытие H1: нет данных")
+        if last_h1 is None or now - last_h1 > 3_900_000:
+            lines.append("⚠️ Свечи H1 неактуальны · дождитесь обновления перед оценкой входа")
     lines.append(f"Этап: {cur['stage']}")
     asset = (cur.get("presentation") or {}).get("asset") or cur.get("asset")
     structure = (asset or {}).get("structure") or {}
@@ -609,10 +615,9 @@ def render_chart_caption(
         )
     elif cur["selected_context_id"] is not None:
         lines.append("BOS/SMS ещё не подтверждён (ожидаемый — пунктиром)")
-    lines.append(f"Текущая ситуация: {_fmt_time(now)}")
+    lines.append(f"Снимок запроса: {_fmt_time(now)}")
     if asset and asset.get("governs") and (asset.get("asset_state") or {}).get("title"):
         lines.append(asset["asset_state"]["title"])
-    lines.append("LevelFrame · Рынок в контексте.")
     return "\n".join(lines)
 
 

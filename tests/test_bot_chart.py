@@ -239,7 +239,7 @@ async def test_chart_caption_matches_snapshot(db, chart_seeded, tmp_path,
     assert "ETHUSDT · H1" in caption
     assert "binance" not in caption  # §5.1: биржа/рынок не выводятся
     assert "BOS подтверждён" in caption  # у seeded сценарий с BOS
-    assert "Текущая ситуация:" in caption
+    assert "Снимок запроса:" in caption
     assert _fmt_time(captured["now"]) in caption
     assert captured["layers"] == layers_from_mask(DEFAULT_MASK)
     assert captured["observation_id"] == chart_seeded["obs_bear"].id

@@ -321,6 +321,8 @@ def register_ltf_routes(app, db: Database, settings, require_auth, ltf_engine=No
         points: str = "recent",
         diagnostic: bool = False,
         zone_history: bool = False,
+        nearby_zones: bool = False,
+        selected_zone_id: Optional[str] = None,
         page: int = 0,
         limit: int = 500,
     ) -> dict[str, Any]:
@@ -339,6 +341,7 @@ def register_ltf_routes(app, db: Database, settings, require_auth, ltf_engine=No
                 as_of=as_of, window_from=window_from, window_to=window_to,
                 points=points, diagnostic=diagnostic, page=page, limit=limit,
                 zone_history=zone_history,
+                nearby_zones=nearby_zones, selected_zone_id=selected_zone_id,
             )
         if data is None:
             raise HTTPException(status_code=404, detail="Инструмент не найден")
@@ -391,6 +394,7 @@ def register_ltf_routes(app, db: Database, settings, require_auth, ltf_engine=No
     @app.get('/api/ltf/instruments/{instrument_id}/workspace', dependencies=[Depends(require_auth)])
     def ltf_workspace(instrument_id: int, points: str = 'recent', diagnostic: bool = False,
                       zone_history: bool = False, include_chart: bool = True,
+                      nearby_zones: bool = True, selected_zone_id: Optional[str] = None,
                       window_from: Optional[int] = Query(None, alias='from'),
                       window_to: Optional[int] = Query(None, alias='to')):
         """One committed snapshot for the whole LTF workspace.
@@ -410,7 +414,10 @@ def register_ltf_routes(app, db: Database, settings, require_auth, ltf_engine=No
                                       points=points, diagnostic=diagnostic,
                                       zone_history=zone_history,
                                       window_from=window_from, window_to=window_to,
-                                      context_layers=layers)
+                                      context_layers=layers,
+                                      nearby_zones=nearby_zones, selected_zone_id=selected_zone_id,
+                                      mandatory_zone_ids=tuple(row['entry_zone_id']
+                                          for row in view.get('eligible_entries', [])))
             candles = db.get_candles(instrument_id, 'H1', closed_only=False, limit=2500)
             return dict(view=view, h1=h1,
                         layers=layers,
