@@ -255,6 +255,52 @@ def _dump_state(db: Database) -> dict:
     return out
 
 
+def test_chunked_replay_matches_bar_commits_and_recovers_after_rollback():
+    snapshots = []
+    for chunk_size in (1, 16):
+        db = _build_db(40, ltf_cache=True)
+        obs = db.list_ltf_observations()[0]
+        engine = LtfEngine(db, _CFG)
+        engine.replay_chunk_size = chunk_size
+        engine.replay_observation(obs.id, resume=True)
+        snapshots.append(_dump_state(db))
+        db.close()
+    assert snapshots[0] == snapshots[1]
+
+
+def test_scenario_write_keeps_old_reference_and_rollback_discards_cached_update():
+    db = _build_db(0, ltf_cache=True)
+    scenario = db.list_ltf_scenarios_for_instrument(1)[0]
+    previous = db.get_ltf_scenario(scenario.id)
+    before = previous.last_processed_close
+    with pytest.raises(ValueError):
+        with db.batch_writes(join_repository_writes=True):
+            db.update_ltf_scenario(scenario.id, last_processed_close=123)
+            assert db.get_ltf_scenario(scenario.id).last_processed_close == 123
+            assert previous.last_processed_close == before
+            raise ValueError('rollback')
+    assert db.get_ltf_scenario(scenario.id).last_processed_close == before
+    db.close()
+
+
+def test_unrelated_event_insert_keeps_other_scenario_journal_cached(monkeypatch):
+    from dataclasses import replace
+    db = _build_db(0, ltf_cache=True)
+    event = db.list_ltf_events(limit=1)[0]
+    db.list_ltf_events(scenario_id=-1)
+    statements = []
+    native = db.conn.execute
+    def execute(sql, *args, **kwargs):
+        statements.append(sql)
+        return native(sql, *args, **kwargs)
+    monkeypatch.setattr(db.conn, 'execute', execute)
+    db.insert_ltf_event(replace(event, id=None, dedupe_key='independent-journal'))
+    assert db.list_ltf_events(scenario_id=-1) == []
+    assert not any('SELECT * FROM ltf_event WHERE 1=1' in s for s in statements)
+    assert any(e.dedupe_key == 'independent-journal' for e in db.list_ltf_events(scenario_id=event.scenario_id))
+    db.close()
+
+
 def test_replay_state_identical_with_and_without_cache():
     """Оптимизации (SQL-кэш LTF-чтений + инкрементальные курсоры сканирования)
     не меняют торговую семантику: полное состояние всех ltf_* таблиц после

@@ -534,29 +534,32 @@ class LtfEngine:
                         cursor.advance(self.db, sync.avail, prefix, prefix[-1].close_time,
                                        self.cfg, persist=start_ms is not None and scanned < checkpoint)
                     self._h1_cursors[obs.instrument_id] = cursor
-            for idx, c in enumerate(closed):
-                if c.close_time <= checkpoint:
-                    continue
-                # Refresh external publications between bars, then publish one
-                # atomic bar. Cached reads inside it need no separate epoch SQL.
+            remaining = [(idx, c) for idx, c in enumerate(closed) if c.close_time > checkpoint]
+            # Small durable chunks amortize network commits and keep hot rows
+            # local while other assets publish quotes. Cancellation rolls back
+            # at most one chunk; the saved cursor always matches committed rows.
+            chunk_size = max(1, int(getattr(self, 'replay_chunk_size', 16))) if resume else 1
+            for offset in range(0, len(remaining), chunk_size):
                 self.db._note_external_epoch()
-                from ...services.metrics import get_registry
-                sample = get_registry().profile(f'ltf_replay:{obs.instrument_id}',
-                    instrument_id=obs.instrument_id, close_time=c.close_time) if resume and (sampled in (0,9) or sampled % 1000 == 0) else nullcontext()
-                sampled += 1
-                with sample, self.db.batch_writes(join_repository_writes=True):
-                    bar_checkpoint = getattr(self, '_bar_checkpoint', None)
-                    if bar_checkpoint is not None:
-                        bar_checkpoint()
-                    self._process_candle(
-                        obs.instrument_id, closed, idx,
-                        detected_at=c.close_time, processing_mode="replay",
-                        detection_lag_ms=max(0, now - c.close_time), result=result,
-                        # Historical roles are persisted only at the head.
-                        persist_roles=idx == len(closed) - 1,
-                    )
-                    if resume:
-                        self.db.set_meta(checkpoint_key, str(c.close_time))
+                with self.db.batch_writes(join_repository_writes=True):
+                    for idx, c in remaining[offset:offset + chunk_size]:
+                        from ...services.metrics import get_registry
+                        sample = get_registry().profile(f'ltf_replay:{obs.instrument_id}',
+                            instrument_id=obs.instrument_id, close_time=c.close_time) if resume and (sampled in (0,9) or sampled % 1000 == 0) else nullcontext()
+                        sampled += 1
+                        with sample:
+                            bar_checkpoint = getattr(self, '_bar_checkpoint', None)
+                            if bar_checkpoint is not None:
+                                bar_checkpoint()
+                            self._process_candle(
+                                obs.instrument_id, closed, idx,
+                                detected_at=c.close_time, processing_mode="replay",
+                                detection_lag_ms=max(0, now - c.close_time), result=result,
+                                # Historical roles are persisted only at the head.
+                                persist_roles=idx == len(closed) - 1,
+                            )
+                            if resume:
+                                self.db.set_meta(checkpoint_key, str(c.close_time))
         finally:
             self._batch = None
         if closed:

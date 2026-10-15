@@ -1542,12 +1542,16 @@ class Database:
                 'ltf_sc': 'ltf_scenario', 'ltf_sc_list': 'ltf_scenario', 'ltf_sc_active': 'ltf_scenario', 'ltf_sc_ins': 'ltf_scenario',
                 'ltf_pivot': 'ltf_pivot', 'ltf_pivots': 'ltf_pivot',
                 'ltf_se_keys': 'ltf_structure_event', 'ltf_se_list': 'ltf_structure_event',
-                'ltf_mv_list': 'ltf_movement', 'ltf_rng_cur': 'ltf_range', 'ltf_rng_list': 'ltf_range',
+                'ltf_mv': 'ltf_movement', 'ltf_mv_list': 'ltf_movement', 'ltf_rng_cur': 'ltf_range', 'ltf_rng_list': 'ltf_range',
                 'ltf_ez': 'ltf_entry_zone', 'ltf_sce': 'ltf_scenario_entry',
                 'ltf_sce_zones': 'ltf_scenario_entry',
                 'ltf_lt': 'ltf_liquidity_test', 'ltf_ev': 'ltf_event',
             }.get(key[0])
             def token():
+                if key[0] == 'ltf_ev' and (key[1] is not None or key[2] is not None):
+                    scope, owner = ('event_scenario', key[2]) if key[2] is not None else ('event_observation', key[1])
+                    return (self._ltf_full_version, self._ltf_bulk_versions.get(table, 0),
+                            self._ltf_row_versions.get((scope, owner), 0))
                 if key[0] in ('ltf_obs', 'ltf_sc', 'ltf_pivot', 'ltf_ez', 'ltf_sc_active',
                               'ltf_se_keys', 'ltf_se_list', 'ltf_sce', 'ltf_sce_zones'):
                     scope = 'scenario_observation' if key[0] == 'ltf_sc_active' else table
@@ -3119,10 +3123,12 @@ class Database:
         return int(cur.lastrowid)
 
     def get_ltf_movement(self, movement_id: int) -> Optional[LtfMovement]:
-        r = self.conn.execute(
-            "SELECT * FROM ltf_movement WHERE id=?", (movement_id,)
-        ).fetchone()
-        return self._to_ltf_movement(r) if r else None
+        def load():
+            r = self.conn.execute(
+                "SELECT * FROM ltf_movement WHERE id=?", (movement_id,)
+            ).fetchone()
+            return self._to_ltf_movement(r) if r else None
+        return self._ltf_cached(('ltf_mv', movement_id), load)
 
     def list_ltf_movements(self, scenario_id: int) -> list[LtfMovement]:
         def load() -> list[LtfMovement]:
@@ -3533,7 +3539,11 @@ class Database:
              e.processing_mode, e.detection_lag_ms),
         )
         self._commit()
-        self._bump_ltf_cache('ltf_event')
+        self._bump_ltf_cache('ltf_event', int(cur.lastrowid) if cur.rowcount == 1 else 0)
+        with self._ltf_cache_lock:
+            for scope, owner in (('event_scenario', e.scenario_id), ('event_observation', e.observation_id)):
+                key = (scope, owner)
+                self._ltf_row_versions[key] = self._ltf_row_versions.get(key, 0) + 1
         if cur.rowcount == 1:
             e.id = int(cur.lastrowid)
             iid = self._ltf_observation_iid(e.observation_id)
