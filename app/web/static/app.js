@@ -3670,18 +3670,10 @@ function renderDeskAssets() {
       `<span class="desk-asset-price">${price != null ? esc(fmtPrice(price)) : '—'}</span>` +
       `<span class="desk-asset-state"><span class="state-dot ${st8.dot}"></span>${esc(st8.label)}</span>` +
       `</button>` +
-      `<button type="button" class="btn small desk-asset-off" data-off="${ins.id}" aria-label="Отключить наблюдение ${esc(ins.symbol)}" title="Отключить наблюдение">−</button>` +
       `</div>`;
   }).join('');
   el.querySelectorAll('.desk-asset').forEach((btn) => {
     btn.onclick = () => window.LFDesk.openInstrument(Number(btn.dataset.iid));
-  });
-  el.querySelectorAll('.desk-asset-off').forEach((btn) => {
-    btn.onclick = (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      setInstrumentActive(Number(btn.dataset.off), false);
-    };
   });
 }
 

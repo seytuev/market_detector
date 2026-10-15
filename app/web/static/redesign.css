@@ -39,7 +39,6 @@ body { font-size: var(--lf-reading); }
 .desk-panel-body > .zone-rail { flex: none; overflow: visible; }
 .desk-panel-body { max-height: none; }
 .desk-scenario .asset-visual { display: none; }
-.desk-asset-off { width: 32px; }
 #desk-assets-toggle { display: inline-flex; }
 .desk-main.assets-hidden { grid-template-columns: minmax(0, 1fr); }
 .desk-main.assets-hidden .desk-assets { display: none; }

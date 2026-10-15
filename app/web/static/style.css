@@ -2385,7 +2385,7 @@ html[data-eventstrip="collapsed"] .strip-toggle .strip-chev { transform: rotate(
 .asset-switch.is-off .asset-sym { color: var(--lf-text2); }
 .desk-asset-row { display: flex; align-items: stretch; gap: 4px; }
 .desk-asset-row .desk-asset { flex: 1; min-width: 0; }
-.desk-asset-off, .asset-off { flex: 0 0 auto; align-self: center; }
+.asset-off { flex: 0 0 auto; align-self: center; }
 .settings-grid {
   display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr);
   gap: 16px; align-items: start;
@@ -2521,7 +2521,7 @@ html[data-eventstrip="collapsed"] .strip-toggle .strip-chev { transform: rotate(
   .journal-row { grid-template-columns: minmax(0, 1fr); gap: 6px; }
   .journal-side { justify-self: stretch; }
   .journal-open, .theme-choice, .settings-page .btn,
-  .asset-off, .desk-asset-off, #asset-active-btn { min-height: 44px; }
+  .asset-off, #asset-active-btn { min-height: 44px; }
   .journal-status { min-height: 44px; }
   .settings-page .chip { padding: 10px 16px; }
   .settings-page .settings-form .control-row input { max-width: none; flex: 1; }
