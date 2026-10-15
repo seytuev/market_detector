@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import signal
 from pathlib import Path
 
 import uvicorn
@@ -39,7 +40,14 @@ class ShutdownAwareServer(uvicorn.Server):
 
     def handle_exit(self, sig, frame):
         self.shutdown_requested.set()
-        super().handle_exit(sig, frame)
+        # This process owns several services. Uvicorn's default handler
+        # re-raises SIGTERM when HTTP finishes, killing the process before
+        # the calculation writer can release its lease. async_main drains
+        # the services and exits after that cleanup itself.
+        if self.should_exit and sig == signal.SIGINT:
+            self.force_exit = True
+        else:
+            self.should_exit = True
 
 
 async def finish_calculation_shutdown(db, worker, worker_tasks):

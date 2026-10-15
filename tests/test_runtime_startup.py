@@ -11,15 +11,19 @@ from app.services import runtime
 from .test_worker import FakeAdapter, _make_worker
 
 
-async def test_sigterm_requests_shutdown_before_http_connections_finish():
+async def test_sigterm_requests_shutdown_before_http_connections_finish(monkeypatch):
     import signal
     import uvicorn
     from app.main import ShutdownAwareServer
     requested = asyncio.Event()
     server = ShutdownAwareServer(uvicorn.Config(app=lambda *args: None), requested)
-    server.handle_exit(signal.SIGTERM, None)
+    replayed = []
+    monkeypatch.setattr(signal, 'raise_signal', replayed.append)
+    with server.capture_signals():
+        server.handle_exit(signal.SIGTERM, None)
     assert requested.is_set()
     assert server.should_exit
+    assert not replayed, 'HTTP shutdown must not kill pending calculation cleanup'
 
 
 async def test_calculation_role_released_after_writer_before_unrelated_cleanup(db):
