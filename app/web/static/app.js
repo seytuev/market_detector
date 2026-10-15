@@ -4171,10 +4171,9 @@ function applyH1LegFrame(layers) {
 }
 
 async function reloadAll() {
-  const id = state.instrumentId;
-  await loadCandles();
-  if (id !== state.instrumentId) return;
-  await Promise.all([loadZones(), loadEvents(), loadCandidates(), loadH1Markers()]);
+  // Each loader validates its instrument/request generation before painting.
+  // Candles and structure can arrive in either order; both redraw the frame.
+  await Promise.all([loadCandles(), loadZones(), loadEvents(), loadCandidates(), loadH1Markers()]);
 }
 
 function initSettingsSections() {

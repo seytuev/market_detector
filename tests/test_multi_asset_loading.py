@@ -231,3 +231,59 @@ def test_context_publications_do_not_flush_unchanged_ltf_entities(db, monkeypatc
     db.get_ltf_observation(obs.id)
     db.get_ltf_entry_zone(zone.id)
     assert not any('FROM ltf_observation WHERE id=' in q or 'FROM ltf_entry_zone WHERE id=' in q for q in statements)
+
+
+def test_parent_cache_returns_independent_models_and_tracks_commits_and_rollback(db, monkeypatch):
+    import pytest
+    iid = db.upsert_instrument(Instrument(None, 'BTC', 'binance', 'spot', 'BTCUSDT', 'USDT'))
+    parent = _parent_zone(db, iid)
+    original = db.get_zone(parent.id)
+    original.evidence['uncommitted_nested'] = {'x': 1}
+    original.lower = -1
+    assert db.get_zone(parent.id).lower != -1
+    assert 'uncommitted_nested' not in db.get_zone(parent.id).evidence
+    with pytest.raises(ValueError):
+        with db.batch_writes(join_repository_writes=True):
+            db.update_zone(parent.id, lower=1)
+            assert db.get_zone(parent.id).lower == 1
+            raise ValueError('rollback')
+    assert db.get_zone(parent.id).lower == parent.lower
+    db.update_zone(parent.id, lower=2)
+    assert db.get_zone(parent.id).lower == 2
+    statements = []
+    native = db.conn.execute
+    def execute(sql, *args, **kwargs):
+        statements.append(sql)
+        return native(sql, *args, **kwargs)
+    monkeypatch.setattr(db.conn, 'execute', execute)
+    for _ in range(100):
+        assert db.get_zone(parent.id).lower == 2
+    assert not any('SELECT * FROM zone WHERE id=' in s for s in statements)
+
+
+async def test_interrupted_activation_realign_remains_pending_until_replay_succeeds(db, monkeypatch):
+    import pytest
+    worker, engine = _make_worker(db, FakeAdapter())
+    iid = db.upsert_instrument(Instrument(None, 'BTC', 'binance', 'spot', 'BTCUSDT', 'USDT'))
+    ins = db.get_instrument(iid)
+    parent = _parent_zone(db, iid)
+    obs = engine.on_htf_zone_touched(iid, parent, 2000)
+    monkeypatch.setattr(worker, '_first_htf_reach_ms', lambda zone: 1000)
+    calls = []
+    async def replay(fn, oid, **kwargs):
+        calls.append((oid, kwargs['start_ms']))
+        if len(calls) == 1:
+            raise RuntimeError('interrupted replay')
+        return LtfTickResult()
+    monkeypatch.setattr(worker, '_calculate', replay)
+    try:
+        with pytest.raises(RuntimeError, match='interrupted replay'):
+            await worker._realign_waiting_observations(ins)
+        assert db.get_ltf_observation(obs.id).activated_at == 1000
+        assert db.get_meta(f'ltf:h1:realign_pending:{iid}')
+        # Activation is already moved, but the unfinished work must retry.
+        await worker._realign_waiting_observations(ins)
+        assert calls == [(obs.id, 1000), (obs.id, 1000)]
+        assert not db.get_meta(f'ltf:h1:realign_pending:{iid}')
+    finally:
+        await worker.data_sync.shutdown()

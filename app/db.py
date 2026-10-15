@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import contextlib
+from copy import deepcopy
 import functools
 import json
 import math
@@ -1617,6 +1618,21 @@ class Database:
             self._event_versions[key] = self._event_versions.get(key, 0) + 1
 
     def get_zone(self, zone_id: int) -> Optional[Zone]:
+        if self.ltf_cache_enabled:
+            self._note_external_epoch()
+            key = ('id', zone_id)
+            with self._zone_cache_lock:
+                version = self._zone_cache_version
+                hit = self._zone_cache.get(key)
+                if hit is not None and hit[0] == version:
+                    return deepcopy(hit[1][0]) if hit[1] else None
+            row = self.conn.execute('SELECT * FROM zone WHERE id=?', (zone_id,)).fetchone()
+            value = self._to_zone(row) if row else None
+            with self._zone_cache_lock:
+                if version == self._zone_cache_version:
+                    self._zone_cache[key] = (version, [value] if value else [])
+            # get_zone historically returns an independent mutable model.
+            return deepcopy(value)
         r = self.conn.execute("SELECT * FROM zone WHERE id=?", (zone_id,)).fetchone()
         return self._to_zone(r) if r else None
 
@@ -3324,6 +3340,13 @@ class Database:
             ).fetchone()
             return self._to_ltf_entry_zone(r) if r else None
         return self._ltf_cached(("ltf_ez", entry_zone_id), load)
+
+    def _prime_ltf_entry_zone_cache(self, instrument_id: int) -> None:
+        """One snapshot read replaces hundreds of point reads after restart."""
+        if not self.ltf_cache_enabled:
+            return
+        for zone in self.list_ltf_entry_zones(instrument_id=instrument_id):
+            self._ltf_cached(('ltf_ez', zone.id), lambda zone=zone: zone)
 
     def update_ltf_entry_zone(self, entry_zone_id: int, **fields: Any) -> None:
         self._update_ltf_row("ltf_entry_zone", entry_zone_id, fields)

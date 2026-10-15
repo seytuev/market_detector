@@ -1202,6 +1202,8 @@ class Worker:
     async def _realign_waiting_observations(self, ins: Instrument) -> None:
         """Если наблюдение открыли слишком поздно — вернуть activated_at
         к фактическому входу в зону и переиграть H1."""
+        pending_key = f'ltf:h1:realign_pending:{ins.id}'
+        pending = json.loads(self.db.get_meta(pending_key) or 'null')
         realigned = []
         for obs in self.db.list_ltf_observations(instrument_id=ins.id):
             if obs.state not in LTF_OPEN_STATES:
@@ -1214,15 +1216,27 @@ class Worker:
             reach = self._first_htf_reach_ms(zone)
             if reach >= obs.activated_at:
                 continue
-            self.db.update_ltf_observation(obs.id, activated_at=reach)
             log.info(
                 "LTF: наблюдение %s сдвинуто к фактическому входу %s",
                 obs.id, reach,
             )
             realigned.append((reach, obs.id))
         if realigned:
-            reach, oid = min(realigned)
+            candidates = realigned + ([(pending['start'], pending['observation'])] if pending else [])
+            reach, oid = min(candidates)
+            pending = {'start': reach, 'observation': oid}
+            # Publish the new activation and its unfinished replay together.
+            # A restart must not mistake the moved activation for finished work.
+            def prepare():
+                with self.db.batch_writes(join_repository_writes=True):
+                    self.db.set_meta(pending_key, json.dumps(pending))
+                    for start, observation_id in realigned:
+                        self.db.update_ltf_observation(observation_id, activated_at=start)
+            await self.data_sync._write(prepare)
+        if pending:
+            reach, oid = pending['start'], pending['observation']
             await self._calculate(self.ltf_engine.replay_observation, oid, start_ms=reach)
+            await self.data_sync._write(self.db.set_meta, pending_key, '')
 
     @instrument_owned
     async def _ltf_on_poll(self, ins: Instrument, events: list[Event]) -> None:
@@ -1762,6 +1776,8 @@ class Worker:
                 await self._calculate(self.ltf_engine.process_h1_close, ins.id)
             cursor_raw = self.db.get_meta(f"ltf:h1:last_close:{ins.id}")
             if cursor_raw:
+                if self.db.get_meta(f'ltf:h1:realign_pending:{ins.id}'):
+                    await self._realign_waiting_observations(ins)
                 await self.data_sync._write(
                     self.db.set_meta,
                     f"ltf:h1:scenario_last_close:{ins.id}", cursor_raw,

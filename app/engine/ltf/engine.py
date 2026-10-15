@@ -538,10 +538,11 @@ class LtfEngine:
             # Small durable chunks amortize network commits and keep hot rows
             # local while other assets publish quotes. Cancellation rolls back
             # at most one chunk; the saved cursor always matches committed rows.
-            chunk_size = max(1, int(getattr(self, 'replay_chunk_size', 16))) if resume else 1
+            chunk_size = max(1, int(getattr(self, 'replay_chunk_size', 16)))
             for offset in range(0, len(remaining), chunk_size):
                 self.db._note_external_epoch()
                 with self.db.batch_writes(join_repository_writes=True):
+                    self.db._prime_ltf_entry_zone_cache(obs.instrument_id)
                     for idx, c in remaining[offset:offset + chunk_size]:
                         from ...services.metrics import get_registry
                         sample = get_registry().profile(f'ltf_replay:{obs.instrument_id}',
