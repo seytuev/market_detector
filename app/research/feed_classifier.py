@@ -178,7 +178,9 @@ class FeedClassifier:
             return {'status': 'succeeded', 'revision_id': revision_id}
         except ResearchError as error:
             with self.s.db.batch_writes():
-                self.write(revision_id, 'error', {'error_code': error.code})
+                self.write(revision_id, 'error', {'error_code': error.code,
+                    'retry_at':self.s.clock()+error.retry_after*1000 if hasattr(error,'retry_after') else None,
+                    'rate_limit_source':getattr(error,'rate_limit_source',None)})
             raise
 
     def maintenance(self, runner):
@@ -205,5 +207,11 @@ class FeedClassifier:
                 break
 
     def status(self):
+        rows=self.s.rows("SELECT status,next_attempt_at,created_at FROM research_job WHERE kind='feed_classification' AND status IN ('pending','running')")
+        now=self.s.clock()
         return {'enabled': self.settings.research_enabled and self.settings.research_feed_classification_enabled,
-                'model': self.model.status()}
+                'model': self.model.status(), 'queue': {
+                    'running':sum(r['status']=='running' for r in rows),
+                    'ready':sum(r['status']=='pending' and r['next_attempt_at']<=now for r in rows),
+                    'deferred':sum(r['status']=='pending' and r['next_attempt_at']>now for r in rows),
+                    'oldest_wait_seconds':max(0,(now-min((r['created_at'] for r in rows),default=now))//1000)}}

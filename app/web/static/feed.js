@@ -187,7 +187,7 @@
       if(quiet && previousLast && items.length>50)items.sort((a,b)=>b.published_at-a.published_at || a.id.localeCompare(b.id));
       if(!quiet || !more)more = response.data.has_more;
       const results=await Promise.allSettled([api('/telegram'),api('/config'),api('/channels'),loadIdeas(),api('/feed-classifier')]);
-      if(results[4].status==='fulfilled'){const c=results[4].value.data,m=c.model;$('feed-classifier-status').textContent=!c.enabled?'Автоклассификация выключена':!m.configured?'Автоклассификация: укажите ключ xAI в настройках ИИ':'Автоклассификация xAI · '+m.model+' · новые посты обрабатываются в фоне';}
+      if(results[4].status==='fulfilled'){const c=results[4].value.data,m=c.model,q=c.queue;$('feed-classifier-status').textContent=!c.enabled?'Автоклассификация выключена':!m.configured?'Автоклассификация: укажите ключ xAI в настройках ИИ':'Автоклассификация xAI · '+m.model+(q?' · готовы: '+q.ready+' · выполняются: '+q.running+' · отложены: '+q.deferred:'')+(m.rate_limit?.retry_after?' · пауза xAI: '+m.rate_limit.retry_after+' сек.':' · обработка в фоне');}
       else $('feed-classifier-status').textContent='Не удалось проверить состояние xAI. Ручная классификация доступна.';
       if(results[0].status==='fulfilled'){telegram=results[0].value.data;renderTelegram();}else{$('telegram-status').textContent='Не удалось загрузить обработку Telegram: '+results[0].reason.message;}
       if(results[1].status==='fulfilled' && results[2].status==='fulfilled'){

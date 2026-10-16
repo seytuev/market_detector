@@ -26,6 +26,9 @@ class ResearchRunner:
         self.active_job = None
         self.reminders = Reminders(self.s,settings)
         self.last_schedule = self.last_calendar = self.last_workbench = 0
+        self.last_classification = 0
+        self.lane = 'all'
+        self.classifications_done = 0
         self.legacy_waits_resumed = False
 
     def bind_outbox(self, outbox):
@@ -83,11 +86,18 @@ class ResearchRunner:
         if not self.legacy_waits_resumed:
             with self.s.db.batch_writes():
                 self.s.execute("UPDATE research_job SET next_attempt_at=?,updated_at=?,error_code=NULL "
-                    "WHERE status='pending' AND error_code IN ('budget_blocked','model_rate_limited')",(now,now))
+                    "WHERE status='pending' AND error_code IN ('budget_blocked','model_rate_limited') "
+                    "AND (json_extract(payload,'$.wait_source') IS NULL OR json_extract(payload,'$.wait_source')!='provider')",(now,now))
                 self.s.execute("UPDATE research_telegram_analysis SET status='queued',error_code=NULL,updated_at=? "
                     "WHERE status='error' AND error_code IN ('budget_blocked','model_rate_limited') "
                     "AND revision_id IN (SELECT dedup_key FROM research_job WHERE kind='telegram_analysis' AND status='pending')",(now,))
             self.legacy_waits_resumed = True
+        if self.lane=='classification':
+            if now-self.last_classification>=2000:
+                from .feed_classifier import FeedClassifier
+                FeedClassifier(self.s,self.settings).maintenance(self)
+                self.last_classification=now
+            return self._execute_step(now)
         if now-self.last_schedule >= max(30,self.settings.research_sync_interval_seconds)*1000:
             for channel in self.s.rows("SELECT handle FROM research_channel WHERE enabled=1"):
                 self.enqueue("channel",{"handle":channel["handle"]},key=channel["handle"])
@@ -113,12 +123,21 @@ class ResearchRunner:
             from .workbench import maintenance
             maintenance(self)
             self.last_workbench=now
+        return self._execute_step(now)
+
+    def _execute_step(self,now):
         with self.s.db.batch_writes():
             if self.s.db.is_postgres:
                 self.s.execute("SELECT pg_advisory_xact_lock(741852968)")
-            row = self.s.one("SELECT * FROM research_job WHERE (status='pending' AND next_attempt_at<=?) "
-                             "OR (status='running' AND lease_until<?) ORDER BY CASE WHEN kind IN ('channel','sync','model_probe','collect') THEN 0 "
-                             "WHEN kind='feed_classification' OR (kind='playbook_backfill' AND json_extract(payload,'$.mode')='live') THEN 1 ELSE 2 END,updated_at,id LIMIT 1",(now,now))
+            lane = " AND kind='feed_classification'" if self.lane=='classification' else " AND kind!='feed_classification'" if self.lane=='general' else ''
+            # A combined Telegram analysis and its classification share one request.
+            # Claiming under the queue lock prevents both lanes processing the same post.
+            lane += " AND NOT (kind='feed_classification' AND EXISTS (SELECT 1 FROM research_job t WHERE t.kind='telegram_analysis' AND t.dedup_key=j.dedup_key AND t.status='running' AND t.lease_until>=?))"
+            lane += " AND NOT (kind='telegram_analysis' AND ?=1 AND EXISTS (SELECT 1 FROM research_job f WHERE f.kind='feed_classification' AND f.dedup_key=j.dedup_key AND (f.status='running' OR (f.status='pending' AND f.next_attempt_at<=?))))"
+            order = 'created_at DESC,id' if self.lane=='classification' and self.classifications_done%4!=3 else 'created_at,id' if self.lane=='classification' else 'updated_at,id'
+            row = self.s.one("SELECT * FROM research_job j WHERE ((status='pending' AND next_attempt_at<=?) "
+                             "OR (status='running' AND lease_until<?))"+lane+" ORDER BY CASE WHEN kind IN ('channel','sync','model_probe','collect') THEN 0 "
+                             "WHEN kind='feed_classification' OR (kind='playbook_backfill' AND json_extract(payload,'$.mode')='live') THEN 1 ELSE 2 END,"+order+" LIMIT 1",(now,now,now,int(self.settings.research_feed_classification_enabled),now))
             if not row:
                 return
             changed = self.s.execute("UPDATE research_job SET status='running',attempts=attempts+1,lease_owner=?,lease_until=?,updated_at=? "
@@ -126,6 +145,7 @@ class ResearchRunner:
                                      (self.owner,now+120000,now,row["id"],now)).rowcount
             if not changed:
                 return
+            if row['kind']=='feed_classification':self.classifications_done+=1
         finished=threading.Event();lease=threading.Thread(target=self.heartbeat,args=(row["id"],finished),daemon=True)
         self.active_job=row["id"];lease.start()
         try:
@@ -138,6 +158,10 @@ class ResearchRunner:
                     self.s.execute("UPDATE research_job SET status='pending',attempts=0,progress=?,lease_until=0,next_attempt_at=?,payload=? WHERE id=? AND lease_owner=?",
                         (outcome.get("progress",0),self.s.clock()+1000,encode({**payload,"result":outcome}),row["id"],self.owner))
                     return self.job(row["id"])
+                if outcome.get('superseded'):
+                    self.s.execute("UPDATE research_job SET status='pending',attempts=0,lease_until=0,next_attempt_at=? "
+                        "WHERE id=? AND status='running' AND lease_owner=?",(self.s.clock()+1000,row['id'],self.owner))
+                    return self.job(row['id'])
             elif row["kind"] == 'feed_classification':
                 from .feed_classifier import FeedClassifier
                 outcome=FeedClassifier(self.s,self.settings).classify(payload['material_id'],payload['revision_id'])
@@ -172,12 +196,15 @@ class ResearchRunner:
         except (ResearchError,httpx.HTTPError,ValueError,KeyError) as error:
             code = getattr(error,"code","source_unavailable")
             delay = getattr(error,"retry_after",min(1800,30*2**min(row["attempts"],5))+random.randint(0,15))
-            deferred = row["kind"] in {"telegram_analysis","telegram_digest","feed_classification"} and code=="model_not_configured"
-            if deferred:delay=900
+            provider_wait = code=='model_rate_limited' and getattr(error,'rate_limit_source',None)=='provider'
+            deferred = row["kind"] in {"telegram_analysis","telegram_digest","feed_classification"} and (code=="model_not_configured" or provider_wait)
+            if deferred and not provider_wait:delay=900
             terminal = not deferred and (code=="auth_error" or row["attempts"]>=4)
             with self.s.db.batch_writes():
                 if deferred:
                     self.s.execute("UPDATE research_job SET attempts=0 WHERE id=? AND lease_owner=?",(row["id"],self.owner))
+                self.s.execute('UPDATE research_job SET payload=? WHERE id=? AND lease_owner=?',
+                    (encode({**decode(row['payload']),'wait_source':getattr(error,'rate_limit_source',None)}),row['id'],self.owner))
                 if row["kind"]=="sync":
                     state = self.s.state("terminal")
                     if code in {"cursor_expired","dataset_changed"}:
@@ -192,14 +219,20 @@ class ResearchRunner:
         return self.job(row["id"])
 
     async def run(self, stop):
+        fast=ResearchRunner(self.s.db,self.settings)
+        fast.lane='classification';self.lane='general'
+        await asyncio.gather(self._run_lane(stop),fast._run_lane(stop))
+
+    async def _run_lane(self, stop):
         self.stop_event=stop
         while not stop.is_set():
             try:
-                await asyncio.to_thread(self.step)
+                result=await asyncio.to_thread(self.step)
             except Exception:
                 # Never propagate a research failure into the market worker.
                 log.exception("Research worker failed")
+                result=None
             try:
-                await asyncio.wait_for(stop.wait(),timeout=2)
+                await asyncio.wait_for(stop.wait(),timeout=.05 if result else 1)
             except asyncio.TimeoutError:
                 pass

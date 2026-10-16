@@ -67,14 +67,19 @@ class Model:
         calls=self.s.one("SELECT COUNT(*) AS n FROM research_model_usage WHERE at_ms>=?",(self.s.clock()-86400000,))["n"]
         latest=self.s.one("SELECT at_ms,operation,status,payload FROM research_model_usage ORDER BY at_ms DESC,id DESC LIMIT 1")
         if latest:
-            details=decode(latest.pop("payload"));latest.update({k:details[k] for k in ("model","error_code","http_status","tokens_in","tokens_out","request_id") if k in details})
+            details=decode(latest.pop("payload"));latest.update({k:details[k] for k in ("model","error_code","http_status","tokens_in","tokens_out","request_id","rate_limit_source","retry_at") if k in details})
+        from .model_queue import ProviderCooldown
         return {"provider":c["provider"],"model":c.get("cheap"),"strong_model":c.get("strong"),"configured":bool(c.get("key") and c.get("cheap")),
-                "calls_24h":calls,"last_request":latest,"credential_source":self.credential_source}
+                "calls_24h":calls,"last_request":latest,"credential_source":self.credential_source,
+                "rate_limit":ProviderCooldown(self.s,c).status() if c['provider']=='xai' else None}
 
     def call(self,operation,payload,strong=False,spec=None,max_output_tokens=2200):
         c=self.config;now=self.s.clock();identifier=uid()
         if not c.get("key") or not c.get("strong" if strong else "cheap"):
             raise ResearchError("model_not_configured","Укажите ключ провайдера и модель в настройках ИИ.",503)
+        from .model_queue import ProviderCooldown, CooldownClient
+        cooldown=ProviderCooldown(self.s,c,c.get('strong' if strong else 'cheap')) if c['provider']=='xai' else None
+        if cooldown:cooldown.check()
         with self.s.db.batch_writes():
             # The legacy money columns remain unused for database compatibility.
             self.s.execute("INSERT INTO research_model_usage VALUES(?,?,?,'running','0',NULL,NULL,?)",
@@ -84,6 +89,7 @@ class Model:
                   {"role":"user","content":encode(payload)[:48000]}]
         model=c["strong" if strong else "cheap"]
         owns=self.client is None;client=self.client or httpx.Client(timeout=45,follow_redirects=False)
+        if cooldown:client=CooldownClient(client,cooldown)
         try:
             if c["provider"]=="anthropic":
                 response=client.post("https://api.anthropic.com/v1/messages",headers={"x-api-key":c["key"],"anthropic-version":"2023-06-01"},
@@ -105,14 +111,15 @@ class Model:
             else:raise ResearchError("unsupported_provider","Провайдер STVTerminal не поддержан",422)
             if not isinstance(output,dict):raise ResearchError("invalid_model_json","Модель не вернула структурированный ответ",502)
             request_id=response.headers.get("request-id") or response.headers.get("x-request-id") or raw.get("id")
-            meta={"provider":c["provider"],"model":model,"tokens_in":tokens_in,"tokens_out":tokens_out,"request_id":request_id,
+            meta={"provider":c["provider"],"model":model,"tokens_in":tokens_in,"tokens_out":tokens_out,"request_id":request_id,"duration_ms":max(0,self.s.clock()-now),
                   "prompt_origin":"stvterminal:af1b0b3","truncated":len(encode(payload))>48000}
             with self.s.db.batch_writes():self.s.execute("UPDATE research_model_usage SET status='succeeded',request_id=?,payload=? WHERE id=?",(request_id,encode(meta),identifier))
             return {"output":output,"usage":meta,"usage_id":identifier}
         except (httpx.HTTPError,ValueError,KeyError,TypeError,IndexError,AttributeError,ResearchError) as error:
             code=getattr(error,"code","model_error")
-            status_code=error.response.status_code if isinstance(error,httpx.HTTPStatusError) else None
-            with self.s.db.batch_writes():self.s.execute("UPDATE research_model_usage SET status='error',payload=? WHERE id=?",(encode({"error_code":code,"http_status":status_code,"model":model}),identifier))
+            status_code=error.response.status_code if isinstance(error,httpx.HTTPStatusError) else getattr(error,'http_status',None)
+            with self.s.db.batch_writes():self.s.execute("UPDATE research_model_usage SET status='error',payload=? WHERE id=?",(encode({"error_code":code,"http_status":status_code,"model":model,
+                "rate_limit_source":getattr(error,'rate_limit_source',None),"retry_at":self.s.clock()+error.retry_after*1000 if hasattr(error,'retry_after') else None}),identifier))
             if isinstance(error,ResearchError):raise
             raise ResearchError(code,"Ошибка провайдера или структуры ответа. Результат не считается отрицательным совпадением.",502) from None
         finally:
