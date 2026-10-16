@@ -188,6 +188,25 @@
     $('feed-list').querySelectorAll('[data-open]').forEach(button => button.onclick = () => openPost(items.find(i=>i.id===button.dataset.open),true));
     $('feed-list').querySelectorAll('[data-create]').forEach(b=>b.onclick=()=>{const item=items.find(i=>i.id===b.dataset.create);openPost(item);if(signal(item).direction&&signal(item).primary_asset_uid)createIdea(item).catch(e=>$('feed-status').textContent=e.message);else{$('feed-detail').scrollIntoView({block:'start',behavior:'smooth'});$('feed-asset-search').focus({preventScroll:true});}});
   }
+  function digestHTML(d) {
+    if(!d)return '<div class="digest-empty"><strong>Главное за сутки — в одном месте</strong><p>Дайджест ещё не собран. Обновите его, чтобы увидеть сводку по успешно разобранным сюжетам за последние 24 часа.</p></div>';
+    const stamp = value => value ? new Date(value).toLocaleString('ru-RU',{timeZone:'Europe/Moscow',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}) : '—';
+    const analyzed=d.coverage.analyzed,loaded=d.coverage.posts_loaded;
+    const coverage=loaded>0 ? Math.min(100,Math.max(0,Math.round(analyzed/loaded*100))) : 0;
+    const notes=(values,cls)=>'<ul class="'+cls+'">'+values.map(v=>'<li>'+esc(v)+'</li>').join('')+'</ul>';
+    return `<article class="digest-report" aria-labelledby="digest-headline">
+      <header class="digest-hero">
+        <div class="digest-meta"><span class="digest-eyebrow">Главное за сутки</span><span class="digest-freshness ${d.superseded?'is-stale':''}">${d.superseded?'Есть изменения':'Сводка актуальна'}</span><span class="digest-created">Сформирован ${esc(stamp(d.created_at))} МСК</span></div>
+        <h3 id="digest-headline">${esc(d.headline_ru)}</h3>
+        ${d.superseded?'<p class="digest-stale-note">После создания сводки данные изменились. Обновите дайджест, чтобы учесть изменения.</p>':''}
+        <div class="digest-context"><div class="digest-period"><span>Период сводки · МСК</span><strong>${esc(stamp(d.from_at))} — ${esc(stamp(d.to_at))}</strong></div><div class="digest-coverage"><div><span>Разобрано публикаций</span><strong>${esc(analyzed)} <span>/ ${esc(loaded)}</span></strong></div><div class="digest-progress" role="meter" aria-label="Доля разобранных публикаций" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${coverage}"><span style="width:${coverage}%"></span></div></div></div>
+      </header>
+      <div class="digest-columns"><section class="digest-events" aria-labelledby="digest-events-heading"><div class="digest-section-heading"><h4 id="digest-events-heading">Ключевые события</h4><span>${d.bullets.length}</span></div>
+        <ol class="digest-stories">${d.bullets.map((b,i)=>`<li><span class="digest-story-number" aria-hidden="true">${String(i+1).padStart(2,'0')}</span><div class="digest-story-copy"><p>${esc(b.text_ru)}</p><div class="digest-story-footer">${(b.tickers||[]).length?'<div class="digest-story-tickers">'+b.tickers.map(t=>'<span>'+esc(t)+'</span>').join('')+'</div>':''}<button type="button" class="digest-source" data-digest-story="${esc(b.story_id)}" aria-label="Источники: ${esc(b.text_ru)}">Источники <span aria-hidden="true">↗</span></button></div></div></li>`).join('')}</ol>
+      </section>${d.watch_ru.length||d.funds_ru.length?`<aside class="digest-sidebar">${d.watch_ru.length?'<section class="digest-watch" aria-labelledby="digest-watch-heading"><div class="digest-section-heading"><h4 id="digest-watch-heading"><span class="digest-watch-dot" aria-hidden="true"></span>Что отслеживать</h4></div>'+notes(d.watch_ru,'digest-watch-list')+'</section>':''}${d.funds_ru.length?'<section class="digest-funds" aria-labelledby="digest-funds-heading"><div class="digest-section-heading"><h4 id="digest-funds-heading">Фонды</h4></div>'+notes(d.funds_ru,'digest-watch-list')+'</section>':''}</aside>`:''}</div>
+      ${d.tickers_heat.length?`<section class="digest-heat" aria-labelledby="digest-heat-heading"><div class="digest-section-heading"><h4 id="digest-heat-heading">Тикеры в публикациях</h4><span class="digest-heat-note">Упоминания · каналы</span></div><ul class="digest-tickers">${d.tickers_heat.map(t=>`<li><strong>${esc(t.symbol)}</strong><span><b>${esc(t.mentions)}</b> упом. <span aria-hidden="true">·</span> <b>${esc(t.channels)}</b> кан.</span></li>`).join('')}</ul></section>`:''}
+    </article>`;
+  }
   function renderTelegram() {
     const t=telegram;
     const priority=t.items.filter(s=>s.priority.level==='important').slice(0,3);
@@ -201,7 +220,7 @@
     $('telegram-budget').textContent=`${t.analysis_enabled ? 'Авторазбор включён' : 'Разбор выключен'} · ${m.configured ? m.provider+' / '+m.model : 'Модель не настроена'} · дайджест ${t.digest_enabled ? 'обновляется при изменениях, не чаще 30 минут' : 'выключен'}`;
 
     const d=t.digest;
-    $('telegram-digest-view').innerHTML=d ? `<details open><summary>Дайджест за 24 часа · ${esc(date(d.created_at))}${d.superseded ? ' · появились изменения, требуется обновление' : ''}</summary><h3>${esc(d.headline_ru)}</h3><p class="research-muted">Период: ${esc(date(d.from_at))} — ${esc(date(d.to_at))} · разобрано ${d.coverage.analyzed} из ${d.coverage.posts_loaded} постов</p><ul>${d.bullets.map(b=>'<li>'+esc(b.text_ru)+' <button class="btn small" data-digest-story="'+esc(b.story_id)+'">Источники</button></li>').join('')}</ul>${d.funds_ru.length ? '<h4>Фонды</h4>'+list(d.funds_ru) : ''}<h4>Что отслеживать</h4>${list(d.watch_ru)}<p class="research-muted">${d.tickers_heat.map(t=>esc(t.symbol)+': '+t.mentions+' упоминаний / '+t.channels+' каналов').join(' · ')}</p></details>` : '<p class="research-muted">Дайджест ещё не собран. Он создаётся из успешно разобранных сюжетов за последние 24 часа.</p>';
+    $('telegram-digest-view').innerHTML=digestHTML(d);
     $('telegram-digest-view').querySelectorAll('[data-digest-story]').forEach(b=>b.onclick=()=>{
       const story=t.items.find(s=>s.id===b.dataset.digestStory);
       if(story && !d.superseded)openStory(story,true);else{
