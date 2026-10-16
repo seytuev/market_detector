@@ -114,29 +114,29 @@ def test_digest_rejects_fabricated_source(pipeline):
     assert feed.latest_digest() is None
 
 
-def test_budget_failure_preserves_source_and_no_paid_request(pipeline):
-    s,_,feed,model,calls,_,_=pipeline;mid,rev=post(s);model.config['daily_usd']='0'
+def test_missing_credentials_preserve_source_without_request(pipeline):
+    s,_,feed,model,calls,_,_=pipeline;mid,rev=post(s);model.config['key']=''
     with pytest.raises(ResearchError) as error:feed.analyze(mid,rev)
-    assert error.value.code=='budget_blocked' and not calls
+    assert error.value.code=='model_not_configured' and not calls
     assert s.material(mid)['original_text'].startswith('Bitcoin')
-    assert s.one('SELECT error_code FROM research_telegram_analysis')['error_code']=='budget_blocked'
+    assert s.one('SELECT error_code FROM research_telegram_analysis')['error_code']=='model_not_configured'
 
 
-def test_queue_dedup_manual_retry_and_worker_deferred_budget(pipeline,monkeypatch):
+@pytest.mark.parametrize('old_code',['budget_blocked','model_rate_limited'])
+def test_queue_dedup_and_worker_resumes_legacy_waits(pipeline,monkeypatch,old_code):
     s,_,feed,model,calls,_,cfg=pipeline
     monkeypatch.setattr('app.research.telegram.Model',lambda store:model)
     runner=ResearchRunner(s.db,cfg);mid,rev=post(s)
     first=feed.queue(runner,mid);second=feed.queue(runner,mid)
     assert first['id']==second['id']
-    model.config['daily_usd']='0'
+    model.config['daily_usd']=model.config['reserve_usd']='0'
+    s.execute("UPDATE research_job SET error_code=?,next_attempt_at=? WHERE id=?",(old_code,now_ms()+900000,first['id']))
+    s.execute("UPDATE research_telegram_analysis SET status='error',error_code=? WHERE revision_id=?",(old_code,rev))
     runner.last_schedule=runner.last_calendar=runner.last_workbench=now_ms()
     runner.step()
-    job=runner.job(first['id']);assert job['status']=='pending' and job['error_code']=='budget_blocked'
-    assert not calls
-    model.config['daily_usd']='5'
-    s.execute('UPDATE research_job SET next_attempt_at=0 WHERE id=?',(first['id'],));runner.step()
     assert runner.job(first['id'])['status']=='succeeded' and len(calls)==1
     assert feed.queue(runner,mid,manual=True) is None
+    assert s.one('SELECT COUNT(*) AS n FROM research_analysis')['n']==1
 
 
 def test_automatic_backlog_window_and_digest_schedule(pipeline,monkeypatch):

@@ -65,12 +65,21 @@ class TelegramFeed:
             'postedAt':row['published_at'] or row['available_at'],'text':original[:6000],
             'links':[str(u)[:512] for u in (source.get('links') or re.findall(r'https?://[^\s<>]+',original))[:10]], 'hasMedia':bool(source.get('media_refs'))}
         spec=terminal('telegram_prompt',post=post,channel_title=post['channel'])
+        if self.settings.research_feed_classification_enabled:
+            from .feed_classifier import FeedClassifier,PROMPT,SCHEMA
+            schema=spec['schema']['schema']
+            spec['schema']['schema']={**schema,'required':[*schema['required'],'classification'],
+                'properties':{**schema['properties'],'classification':SCHEMA['schema']}}
+            spec['prompt']+='\nAlso return classification in the classification field, using these rules:\n'+PROMPT
+            candidates=FeedClassifier(self.s,self.settings,self.model).candidates({**source,'revision_id':revision_id})
+        else:candidates=[]
         try:
-            response=self.model.call('telegram_analysis',{'source':spec['user'],'hasMedia':post['hasMedia']},spec=spec,max_output_tokens=6000)
-            analysis=terminal('telegram_validate',value=response['output'])
+            response=self.model.call('telegram_analysis',{'source':spec['user'],'hasMedia':post['hasMedia'],'candidate_assets':candidates},spec=spec,max_output_tokens=6000)
+            analysis=terminal('telegram_validate',value={k:v for k,v in response['output'].items() if k!='classification'})
             result={'analysis':analysis,'usage':response['usage'],'usage_id':response['usage_id'],
                 'source_revision_id':revision_id,'method_version':METHOD,'text_truncated':len(original)>6000,
                 'media_analyzed':False,'links_fetched':False}
+            if isinstance(response['output'].get('classification'),dict):result['classification']=response['output']['classification']
             stamp=self.s.clock()
             # The result is attached to the exact source revision, even if it changed during the request.
             with self.s.db.batch_writes():
@@ -143,7 +152,7 @@ class TelegramFeed:
     def maintenance(self,runner):
         if not self.settings.research_telegram_analysis_enabled:return
         status=self.model.status()
-        if not status['configured'] or not status['automatic_spending_enabled']:return
+        if not status['configured']:return
         queued=0
         for row in self.rows():
             if row['analysis_status'] is None:

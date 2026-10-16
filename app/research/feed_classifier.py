@@ -1,7 +1,6 @@
-"""Budgeted xAI classification of every active X/Telegram source revision."""
+"""xAI classification of every active X/Telegram source revision."""
 import re
 import os
-from decimal import Decimal
 from .contracts import ResearchError, choice, decode, digest, encode, text
 from .credentials import Credentials
 from .feed_signals import FeedSignals
@@ -36,12 +35,11 @@ class FeedClassifier:
     def __init__(self, store, settings, model=None):
         self.s, self.settings = store, settings
         if model is None:
-            # Keep the shared budget; never switch other research operations' provider.
+            # Never switch other research operations' provider.
             shared = Model(store)
             config = {**shared.config, **terminal_settings(provider='xai')}
-            config.update({k: shared.config.get(k) for k in ('daily_usd', 'reserve_usd')})
             if shared.config['provider'] == 'xai':
-                config.update({k: shared.config.get(k) for k in ('cheap', 'strong', 'input_per_million', 'output_per_million')})
+                config.update({k: shared.config.get(k) for k in ('cheap', 'strong')})
             else:
                 config['cheap'] = config['strong'] = os.environ.get('RESEARCH_FEED_XAI_MODEL') or os.environ.get('LLM_TG_GROK_MODEL') or 'grok-4.3'
             if os.environ.get('RESEARCH_FEED_XAI_MODEL'):
@@ -129,10 +127,32 @@ class FeedClassifier:
         try:
             with self.s.db.batch_writes():
                 self.write(revision_id, 'running', {})
-            response = self.model.call('feed_classification', {
-                'source_kind': source['source_kind'], 'author': source.get('author'),
-                'title': str(source.get('title') or '')[:500], 'text': original[:16000],
-                'candidate_assets': candidates}, spec={'prompt': PROMPT, 'schema': SCHEMA}, max_output_tokens=900)
+            if row['source_kind']=='telegram' and self.settings.research_telegram_analysis_enabled:
+                from .telegram import TelegramFeed
+                TelegramFeed(self.s,self.settings,self.model).analyze(material_id,revision_id)
+                saved=self.s.one('SELECT payload FROM research_telegram_analysis WHERE revision_id=? AND status=\'succeeded\'',(revision_id,))
+                if not saved:return {'superseded':True}
+                full=decode(saved['payload'])
+                out=full.get('classification')
+                if not out:
+                    # Old full analyses are reused too, including neutral posts.
+                    analysis=full['analysis'];tickers=analysis.get('tickers',[])
+                    main=[t for t in tickers if t.get('role')=='главный']
+                    ticker=main[0] if len(main)==1 else tickers[0] if len(tickers)==1 else {}
+                    direction=analysis.get('sentiment')
+                    out={'direction':direction if direction in {'bullish','bearish'} else None,
+                        'symbol':ticker.get('symbol'),'asset_uid':None,'confidence':analysis.get('confidence','low'),
+                        'reason_ru':analysis.get('summary_ru','')}
+                    if out['direction'] is None:
+                        self.write(revision_id,'succeeded',{**out,'primary_asset_uid':None,'origin':'xai',
+                            'usage':full['usage'],'usage_id':full['usage_id'],'method_version':METHOD,'source_revision_id':revision_id})
+                        return {'status':'succeeded','revision_id':revision_id}
+                response={'output':out,'usage':full['usage'],'usage_id':full['usage_id']}
+            else:
+                response = self.model.call('feed_classification', {
+                    'source_kind': source['source_kind'], 'author': source.get('author'),
+                    'title': str(source.get('title') or '')[:500], 'text': original[:16000],
+                    'candidate_assets': candidates}, spec={'prompt': PROMPT, 'schema': SCHEMA}, max_output_tokens=900)
             out = response['output']
             direction = choice(out.get('direction'), {'bullish', 'bearish'}, 'direction')
             confidence = choice(out.get('confidence'), {'low', 'medium', 'high'}, 'confidence')
@@ -165,7 +185,7 @@ class FeedClassifier:
         if not self.settings.research_feed_classification_enabled:
             return
         status = self.model.status()
-        if not status['configured'] or Decimal(status['remaining_usd']) < Decimal(status['max_call_usd']) or not status['automatic_spending_enabled']:
+        if not status['configured']:
             return
         pending = self.s.one("SELECT COUNT(*) AS n FROM research_job WHERE kind='feed_classification' AND status IN ('pending','running')")['n']
         capacity = min(10, max(0, 20 - pending))

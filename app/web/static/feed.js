@@ -5,7 +5,7 @@
   const api = (path, options) => HTF.api('/api/research/v1' + path, options);
   const date = value => value ? new Date(value).toLocaleString('ru-RU', {timeZone:'Europe/Moscow'}) + ' МСК' : '—';
   const link = (url,label) => /^https?:\/\//i.test(url || '') ? `<a class="btn small" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(label)} ↗</a>` : '';
-  const errors = {budget_blocked:'Ожидает доступного бюджета',model_not_configured:'Модель не настроена',model_rate_limited:'Ожидает лимита запросов',terminal_validation:'Ответ модели не прошёл проверку',model_error:'Ошибка провайдера',disabled:'Обработка выключена'};
+  const errors = {model_not_configured:'Модель не настроена',terminal_validation:'Ответ модели не прошёл проверку',model_error:'Ошибка провайдера',disabled:'Обработка выключена'};
   let items = [], more = false, busy = false, selected = null, telegram = null, timer = null;
   let stars;
   let assetSearchSeq = 0;
@@ -151,7 +151,7 @@
     $('telegram-status').textContent=`За 7 дней: ${t.posts_loaded} постов · разобрано ${t.analyzed} · ожидают ${t.pending} · ошибок ${t.errors}${t.capped ? ' · ограничено 300 последними постами' : ''}`;
     $('feed-health').textContent=`Telegram: ${t.analyzed} разобрано · ${t.pending} в очереди${t.errors?' · '+t.errors+' требуют внимания':''}`;
     const m=t.model;
-    $('telegram-budget').textContent=`${t.analysis_enabled ? 'Авторазбор включён' : 'Разбор выключен'} · ${m.configured ? m.provider+' / '+m.model : 'Модель не настроена'} · ${m.automatic_spending_enabled ? 'Остаток общего бюджета $'+m.remaining_usd+' / $'+m.daily_budget_usd+' за 24ч' : 'Бюджет модели не включён'} · дайджест ${t.digest_enabled ? 'обновляется при изменениях, не чаще 30 минут' : 'выключен'}`;
+    $('telegram-budget').textContent=`${t.analysis_enabled ? 'Авторазбор включён' : 'Разбор выключен'} · ${m.configured ? m.provider+' / '+m.model : 'Модель не настроена'} · дайджест ${t.digest_enabled ? 'обновляется при изменениях, не чаще 30 минут' : 'выключен'}`;
 
     const d=t.digest;
     $('telegram-digest-view').innerHTML=d ? `<details open><summary>Дайджест за 24 часа · ${esc(date(d.created_at))}${d.superseded ? ' · появились изменения, требуется обновление' : ''}</summary><h3>${esc(d.headline_ru)}</h3><p class="research-muted">Период: ${esc(date(d.from_at))} — ${esc(date(d.to_at))} · разобрано ${d.coverage.analyzed} из ${d.coverage.posts_loaded} постов</p><ul>${d.bullets.map(b=>'<li>'+esc(b.text_ru)+' <button class="btn small" data-digest-story="'+esc(b.story_id)+'">Источники</button></li>').join('')}</ul>${d.funds_ru.length ? '<h4>Фонды</h4>'+list(d.funds_ru) : ''}<h4>Что отслеживать</h4>${list(d.watch_ru)}<p class="research-muted">${d.tickers_heat.map(t=>esc(t.symbol)+': '+t.mentions+' упоминаний / '+t.channels+' каналов').join(' · ')}</p></details>` : '<p class="research-muted">Дайджест ещё не собран. Он создаётся из успешно разобранных сюжетов за последние 24 часа.</p>';
@@ -187,7 +187,7 @@
       if(quiet && previousLast && items.length>50)items.sort((a,b)=>b.published_at-a.published_at || a.id.localeCompare(b.id));
       if(!quiet || !more)more = response.data.has_more;
       const results=await Promise.allSettled([api('/telegram'),api('/config'),api('/channels'),loadIdeas(),api('/feed-classifier')]);
-      if(results[4].status==='fulfilled'){const c=results[4].value.data,m=c.model;$('feed-classifier-status').textContent=!c.enabled?'Автоклассификация выключена':!m.configured?'Автоклассификация: укажите ключ xAI в настройках ИИ':!m.automatic_spending_enabled||Number(m.remaining_usd)<Number(m.max_call_usd)?'xAI · ожидает доступного бюджета. Ручная классификация доступна.':'Автоклассификация xAI · '+m.model+' · новые посты обрабатываются в фоне · остаток общего бюджета $'+m.remaining_usd;}
+      if(results[4].status==='fulfilled'){const c=results[4].value.data,m=c.model;$('feed-classifier-status').textContent=!c.enabled?'Автоклассификация выключена':!m.configured?'Автоклассификация: укажите ключ xAI в настройках ИИ':'Автоклассификация xAI · '+m.model+' · новые посты обрабатываются в фоне';}
       else $('feed-classifier-status').textContent='Не удалось проверить состояние xAI. Ручная классификация доступна.';
       if(results[0].status==='fulfilled'){telegram=results[0].value.data;renderTelegram();}else{$('telegram-status').textContent='Не удалось загрузить обработку Telegram: '+results[0].reason.message;}
       if(results[1].status==='fulfilled' && results[2].status==='fulfilled'){

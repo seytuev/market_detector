@@ -107,7 +107,7 @@ def test_no_ticker_and_ambiguous_symbol_are_not_fabricated(classifier):
     assert item['classification']['symbol'] is None
 
 
-def test_bad_model_output_is_not_used_and_budget_blocks_without_request(classifier):
+def test_bad_model_output_is_not_used_and_zero_legacy_budget_does_not_block(classifier):
     s, _, _, service, model, calls, outputs, default = classifier
     mid, rev = source(s)
     outputs.append({**default, 'asset_uid': 'invented-identity'})
@@ -115,10 +115,9 @@ def test_bad_model_output_is_not_used_and_budget_blocks_without_request(classifi
         service.classify(mid, rev)
     assert service.result(rev)['status'] == 'error'
     model.config['daily_usd'] = '0'
-    with pytest.raises(ResearchError) as error:
-        service.classify(mid, rev)
-    assert error.value.code == 'budget_blocked'
-    assert len(calls) == 1
+    service.classify(mid, rev)
+    assert service.result(rev)['status']=='succeeded'
+    assert len(calls) == 2
 
 
 def test_scheduler_deduplicates_old_and_new_posts_and_runner_dispatches(classifier, monkeypatch):
@@ -158,7 +157,7 @@ def test_retry_api_auth_manual_correction_and_disabled(classifier, monkeypatch):
     assert client.post(path, headers=headers).status_code == 503
 
 
-def test_xai_uses_own_credential_and_shared_budget_even_with_other_provider(classifier, monkeypatch):
+def test_xai_uses_own_credential_even_with_other_provider(classifier, monkeypatch):
     s, _, cfg, _, _, _, _, _ = classifier
     monkeypatch.setenv('LLM_PROVIDER', 'anthropic')
     monkeypatch.setenv('LLM_CHEAP_MODEL', 'claude-fixture')
@@ -169,7 +168,7 @@ def test_xai_uses_own_credential_and_shared_budget_even_with_other_provider(clas
     assert service.model.config['provider'] == 'xai'
     assert service.model.config['key'] == 'private-xai-fixture'
     assert service.model.config['cheap'] != 'claude-fixture'
-    assert service.model.config['daily_usd'] == '3'
+    assert 'daily_usd' not in service.model.config
     assert Model(s).config['provider'] == 'anthropic'
 
 
@@ -185,7 +184,7 @@ def test_manual_backlog_does_not_starve_unclassified_posts(classifier):
     assert s.one("SELECT COUNT(*) AS n FROM research_job WHERE kind='feed_classification'")['n'] == 1
 
 
-def test_runner_defers_budget_without_losing_work(classifier, monkeypatch):
+def test_runner_ignores_zero_legacy_budget(classifier, monkeypatch):
     s, _, cfg, service, model, calls, _, _ = classifier
     mid, rev = source(s)
     runner = ResearchRunner(s.db, cfg)
@@ -194,9 +193,38 @@ def test_runner_defers_budget_without_losing_work(classifier, monkeypatch):
     model.config['daily_usd'] = '0'
     result = runner.step()
     assert result['id'] == job['id']
-    assert result['status'] == 'pending' and result['error_code'] == 'budget_blocked'
-    assert not calls
-    model.config['daily_usd'] = '5'
-    s.execute('UPDATE research_job SET next_attempt_at=0 WHERE id=?', (job['id'],))
-    assert runner.step()['status'] == 'succeeded'
+    assert result['status'] == 'succeeded'
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize('classifier_first',[True,False])
+def test_telegram_full_analysis_and_classification_share_one_request(classifier,classifier_first):
+    from app.research.telegram import TelegramFeed
+    from tests.test_telegram_feed import analysis
+    s,_,cfg,service,model,calls,outputs,default=classifier
+    cfg.research_telegram_analysis_enabled=True
+    mid,rev=source(s,'telegram')
+    outputs.append(analysis(classification=default))
+    feed=TelegramFeed(s,cfg,model)
+    if classifier_first:service.classify(mid,rev)
+    feed.analyze(mid,rev)
+    service.classify(mid,rev)
+    feed.analyze(mid,rev)
+    assert len(calls)==1
+    assert service.result(rev)['status']=='succeeded'
+    assert json.loads(service.result(rev)['payload'])['direction']=='bullish'
+    schema=json.loads(calls[0].content)['response_format']['json_schema']['schema']
+    assert 'classification' in schema['required']
+
+
+def test_existing_telegram_analysis_is_reused_without_model_call(classifier):
+    from app.research.telegram import TelegramFeed
+    from tests.test_telegram_feed import analysis
+    s,_,cfg,service,model,calls,outputs,_=classifier
+    cfg.research_telegram_analysis_enabled=True
+    mid,rev=source(s,'telegram')
+    outputs.append(analysis())
+    TelegramFeed(s,cfg,model).analyze(mid,rev)
+    service.classify(mid,rev)
+    assert len(calls)==1
+    assert service.result(rev)['status']=='succeeded'

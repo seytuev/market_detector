@@ -11,7 +11,7 @@ def test_model_settings_persist_and_select_credentials(db, monkeypatch):
     monkeypatch.setenv('OPENAI_API_KEY','private-openai')
     monkeypatch.setenv('XAI_API_KEY','private-xai')
     store=Store(db)
-    value={'provider':'openai','cheap':'test-small','strong':'test-large','daily_usd':'5','reserve_usd':'0.1'}
+    value={'provider':'openai','cheap':'test-small','strong':'test-large'}
     client=TestClient(create_app(db,Settings(auth_token='test',research_enabled=True)))
     headers={'Authorization':'Bearer test'}
     assert client.put('/api/research/v1/model/settings',json=value).status_code==401
@@ -22,18 +22,18 @@ def test_model_settings_persist_and_select_credentials(db, monkeypatch):
     model=Model(store)
     assert model.config['key']=='private-openai'
     assert model.config['strong']=='test-large'
-    assert model.status()['remaining_usd']=='5'
+    assert store.state('model-settings')==value
     assert client.get('/api/research/v1/model/settings',headers=headers).json()['data']['model']=='test-small'
-    value.update(provider='xai',daily_usd='0',reserve_usd='0')
+    value.update(provider='xai')
     assert client.put('/api/research/v1/model/settings',json=value,headers=headers).status_code==200
     assert Model(store).config['key']=='private-xai'
-    assert not Model(store).status()['automatic_spending_enabled']
+    assert Model(store).status()['configured']
 
 
-@pytest.mark.parametrize('patch',[{'provider':'unknown'},{'provider':[]},{'daily_usd':'NaN'},{'daily_usd':'-1'},{'reserve_usd':'6'},{'cheap':''},{'key':'secret'}])
+@pytest.mark.parametrize('patch',[{'provider':'unknown'},{'provider':[]},{'cheap':''},{'key':'secret'}])
 def test_invalid_settings_leave_saved_configuration_unchanged(db,patch):
     store=Store(db)
-    body={'provider':'xai','cheap':'test','strong':'test','daily_usd':'5','reserve_usd':'0.1'}
+    body={'provider':'xai','cheap':'test','strong':'test'}
     Model(store).save_settings(body)
     from app.research.contracts import ResearchError
     with pytest.raises(ResearchError):Model(store).save_settings({**body,**patch})

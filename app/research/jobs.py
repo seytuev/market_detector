@@ -26,6 +26,7 @@ class ResearchRunner:
         self.active_job = None
         self.reminders = Reminders(self.s,settings)
         self.last_schedule = self.last_calendar = self.last_workbench = 0
+        self.legacy_waits_resumed = False
 
     def bind_outbox(self, outbox):
         self.reminders = Reminders(self.s,self.settings,outbox)
@@ -79,6 +80,14 @@ class ResearchRunner:
         if not self.settings.research_enabled:
             return
         now = self.s.clock()
+        if not self.legacy_waits_resumed:
+            with self.s.db.batch_writes():
+                self.s.execute("UPDATE research_job SET next_attempt_at=?,updated_at=?,error_code=NULL "
+                    "WHERE status='pending' AND error_code IN ('budget_blocked','model_rate_limited')",(now,now))
+                self.s.execute("UPDATE research_telegram_analysis SET status='queued',error_code=NULL,updated_at=? "
+                    "WHERE status='error' AND error_code IN ('budget_blocked','model_rate_limited') "
+                    "AND revision_id IN (SELECT dedup_key FROM research_job WHERE kind='telegram_analysis' AND status='pending')",(now,))
+            self.legacy_waits_resumed = True
         if now-self.last_schedule >= max(30,self.settings.research_sync_interval_seconds)*1000:
             for channel in self.s.rows("SELECT handle FROM research_channel WHERE enabled=1"):
                 self.enqueue("channel",{"handle":channel["handle"]},key=channel["handle"])
@@ -163,7 +172,7 @@ class ResearchRunner:
         except (ResearchError,httpx.HTTPError,ValueError,KeyError) as error:
             code = getattr(error,"code","source_unavailable")
             delay = getattr(error,"retry_after",min(1800,30*2**min(row["attempts"],5))+random.randint(0,15))
-            deferred = row["kind"] in {"telegram_analysis","telegram_digest","feed_classification"} and code in {"budget_blocked","model_rate_limited","model_not_configured"}
+            deferred = row["kind"] in {"telegram_analysis","telegram_digest","feed_classification"} and code=="model_not_configured"
             if deferred:delay=900
             terminal = not deferred and (code=="auth_error" or row["attempts"]>=4)
             with self.s.db.batch_writes():

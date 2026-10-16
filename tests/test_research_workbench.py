@@ -179,15 +179,13 @@ def test_playbook_unknown_require_abstains_and_backfill_is_idempotent(work):
     book.backfill(active["id"],NOW-DAY,NOW+DAY);assert s.one("SELECT COUNT(*) AS n FROM research_object WHERE kind='match'")["n"]==count
 
 
-def test_model_budget_and_error_are_not_negative_predictions(work):
+def test_model_error_is_not_a_negative_prediction(work):
     s,r,m,ids,assets=work
     cfg={"provider":"xai","key":"test-secret","cheap":"test-model","strong":"test-model","daily_usd":"0","reserve_usd":"0.1"}
     client=httpx.Client(transport=httpx.MockTransport(lambda q:httpx.Response(500)))
     model=Model(s,cfg,client)
     with pytest.raises(ResearchError) as e:model.call("match",{})
-    assert e.value.code=="budget_blocked"
-    cfg["daily_usd"]="5"
-    with pytest.raises(ResearchError):model.call("match",{})
+    assert e.value.code=="model_error"
     assert s.one("SELECT status FROM research_model_usage")["status"]=="error"
     assert 'test-secret' not in encode(model.status())
 
