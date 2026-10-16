@@ -4,7 +4,7 @@
 
 ## Проверенные источники
 
-- Продакшен: https://marketdetector-production.up.railway.app/events.html, GET `/api/events/overview` и `/api/events/health` с существующей авторизацией.
+- Продакшен: https://stv-mr.up.railway.app/events.html, GET `/api/events/overview` и `/api/events/health` с существующей авторизацией.
 - Railway: проект `melodious-magic`, сервис `market_detector`, production; источник `seytuev/market_detector`, ветка `main`, успешный деплой коммита `703fa4a`.
 - Предоставленный PDF `BTC_полное_исследование.pdf`: 20 страниц; релевантные разделы 11–12 и шпаргалка, страницы 12–18. Текст извлечён; страницы 12 и 14 просмотрены после рендеринга.
 - Локальные `app/events`, API и `app/web/static/events.js`.

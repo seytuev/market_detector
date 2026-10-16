@@ -16,7 +16,8 @@ class Channels:
                 for r in self.s.rows("SELECT * FROM research_channel ORDER BY handle")]
 
     def save(self,body):
-        handle=text(body.get("handle",""),"handle",5,32).removeprefix("@")
+        from .accounts import normalize_handle
+        handle=normalize_handle(body.get("handle",""),'telegram')
         if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{4,31}",handle):
             raise ResearchError("invalid_channel","Укажите имя публичного Telegram-канала без URL")
         handle=handle.lower()

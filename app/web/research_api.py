@@ -299,6 +299,38 @@ def register_research_routes(app, db, settings, require_auth):
         job=runner.enqueue("channel",{"handle":handle},key=handle)
         return result({"job_id":job["id"]})
 
+    @router.delete("/channels/{handle}")
+    def remove_channel(handle:str):
+        from ..research.accounts import normalize_handle
+        enabled();handle=normalize_handle(handle,'telegram')
+        with s.db.batch_writes():
+            s.execute("DELETE FROM research_channel WHERE handle=?",(handle,))
+            s.audit('channel',handle,{'action':'remove'})
+        return result({'removed':True})
+
+    @router.get("/x-accounts")
+    def x_accounts():
+        from ..research.accounts import XAccounts
+        return result({'items':XAccounts(s).list(),'configured':XAccounts.configured()})
+
+    @router.post("/x-accounts")
+    def save_x_account(body:dict=Body(...),key:str|None=Header(None,alias="Idempotency-Key")):
+        from ..research.accounts import XAccounts
+        return mutate('configure_x_account',key,body,lambda:XAccounts(s).save(body))
+
+    @router.delete("/x-accounts/{handle}")
+    def remove_x_account(handle:str):
+        from ..research.accounts import XAccounts
+        enabled();return result(XAccounts(s).remove(handle))
+
+    @router.post("/x-accounts/{handle}/collect",status_code=202)
+    def collect_x_account(handle:str):
+        from ..research.accounts import XAccounts,normalize_handle
+        enabled();handle=normalize_handle(handle,'x')
+        if not s.state('x-account:'+handle).get('enabled'):raise ResearchError('account_disabled','Аккаунт выключен или удалён',503)
+        if not XAccounts.configured():raise ResearchError('x_not_configured','Для получения постов X задайте X_BEARER_TOKEN на сервере',503)
+        return result({'job_id':runner.enqueue('x_account',{'handle':handle},key=handle)['id']})
+
     @router.post("/subscriptions")
     def subscribe(body:dict=Body(...),key:str|None=Header(None,alias="Idempotency-Key")):
         return mutate("subscribe",key,body,lambda:runner.reminders.subscribe(body))

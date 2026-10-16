@@ -422,8 +422,12 @@
         <button type="button" data-settings-pane-btn="look" aria-pressed="false">Оформление</button>
         <button type="button" data-settings-pane-btn="rules" aria-pressed="false">Правила анализа</button>
         <button type="button" data-settings-pane-btn="sources" aria-pressed="false">Данные и источники</button>
+        <button type="button" data-settings-pane-btn="imports" aria-pressed="false">Импорт Telegram / X</button>
+        <button type="button" data-settings-pane-btn="ai" aria-pressed="false">Модели ИИ</button>
       </nav>
       <div class="settings-panes">
+      <section class="lf-panel integration-settings" data-settings-pane="imports"><div class="lf-panel-head"><h2>Импорт Telegram / X</h2></div><p class="field-desc">Подключайте каналы и обновляйте публикации для общей ленты.</p><div id="integration-settings"></div></section>
+      <section class="lf-panel integration-settings" data-settings-pane="ai"><div class="lf-panel-head"><h2>Модели ИИ</h2></div><p class="field-desc">Общие модели для разбора публикаций, подготовки идей и учебника.</p><div id="ai-settings"></div></section>
       <section class="lf-panel" data-settings-pane="sources"><div class="lf-panel-head"><h2>Данные и источники</h2></div><p class="field-desc">Полнота источника и актуальность расчёта показываются отдельно.</p><button type="button" id="market-sources-refresh" class="btn">Обновить состояние</button><div id="market-sources-body" aria-live="polite"></div></section>
       <section class="lf-panel settings-assets-panel is-active" data-settings-pane="assets" aria-labelledby="set-assets-title">
         <div class="lf-panel-head">
@@ -556,5 +560,7 @@
   <link rel="stylesheet" href="/research.css">
   <script src="/research_workbench.js"></script><script src="/research.js"></script>
   <script src="/events.js"></script>
+  <link rel="stylesheet" href="/integration-settings.css">
+  <script src="/integration-settings.js"></script>
 </body>
 </html>

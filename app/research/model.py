@@ -8,7 +8,7 @@ from .contracts import ResearchError,uid,encode,decode
 from .terminal_bridge import execute as terminal
 
 
-def terminal_settings(path=None):
+def terminal_settings(path=None,provider=None):
     """Read only explicitly configured local env files; never expose keys through API."""
     values={}
     directory=Path(path or os.environ.get("RESEARCH_TERMINAL_SETTINGS_DIR", "../stvterminal/site"))
@@ -20,7 +20,7 @@ def terminal_settings(path=None):
                     key,value=line.split("=",1);values[key.strip()]=value.strip().strip('"').strip("'")
     values.update({key:value for key,value in os.environ.items() if key.startswith(("LLM_","ANTHROPIC_","OPENAI_","XAI_","RESEARCH_MODEL_")) or key=="XAI"})
     if not values.get("XAI_API_KEY") and values.get("XAI"):values["XAI_API_KEY"]=values["XAI"]
-    provider=values.get("LLM_PROVIDER") or ("xai" if values.get("XAI_API_KEY") else "anthropic")
+    provider=provider or values.get("LLM_PROVIDER") or ("xai" if values.get("XAI_API_KEY") else "anthropic")
     provider=provider.lower()
     key=values.get({"anthropic":"ANTHROPIC_API_KEY","openai":"OPENAI_API_KEY","xai":"XAI_API_KEY"}.get(provider,""),"")
     # Explicit successor of the original terminal's retired non-reasoning alias:
@@ -33,7 +33,34 @@ def terminal_settings(path=None):
 
 
 class Model:
-    def __init__(self,store,config=None,client=None):self.s=store;self.config=config if config is not None else terminal_settings();self.client=client
+    def __init__(self,store,config=None,client=None):
+        self.s=store;self.client=client
+        self.config=config if config is not None else terminal_settings()
+        if config is None:
+            saved=store.state("model-settings")
+            self.config.update({k:v for k,v in saved.items() if k in {"provider","cheap","strong","daily_usd","reserve_usd"}})
+            if saved.get("provider"):
+                # Resolve credentials for the selected provider, including local terminal settings.
+                self.config["key"]=terminal_settings(provider=saved["provider"])["key"]
+
+    def save_settings(self,body):
+        allowed={"provider","cheap","strong","daily_usd","reserve_usd"}
+        if set(body)-allowed:raise ResearchError("invalid_settings","Неизвестные поля настроек модели")
+        value={k:self.config.get(k,"") for k in allowed};value.update(body)
+        if not isinstance(value["provider"],str) or value["provider"] not in {"anthropic","openai","xai"}:raise ResearchError("invalid_provider","Выберите провайдера модели")
+        for k in ("cheap","strong"):
+            if not isinstance(value[k],str) or not 1<=len(value[k].strip())<=150:raise ResearchError("invalid_model","Укажите название модели до 150 символов")
+            value[k]=value[k].strip()
+        for k in ("daily_usd","reserve_usd"):
+            try:amount=Decimal(str(value[k]))
+            except (InvalidOperation,ValueError):raise ResearchError("invalid_budget","Укажите корректный бюджет")
+            if not amount.is_finite() or amount<0:raise ResearchError("invalid_budget","Бюджет должен быть конечным и неотрицательным")
+            value[k]=str(amount)
+        if Decimal(value["reserve_usd"])>Decimal(value["daily_usd"]):raise ResearchError("invalid_budget","Лимит запроса не должен превышать суточный бюджет")
+        with self.s.db.batch_writes():
+            self.s.set_state("model-settings",value)
+            self.s.audit("model-settings","shared",{"action":"configure",**value})
+        return Model(self.s).status()
 
     def status(self):
         c=self.config

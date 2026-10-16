@@ -30,7 +30,7 @@ def example(direction="neutral"):
             {"side": "long", "rule_id": "LIQ_RECOVERY"}, {"side": "short", "rule_id": "LIQ_PRESSURE"}])
     elif direction == "unknown":
         assessment.update(quality="unavailable", coverage=None, unknown_dependencies=["price", "liquidations"], active_facts=[])
-    return build_notice(assessment, pubs, {}, base_url="https://marketdetector-production.up.railway.app")
+    return build_notice(assessment, pubs, {}, base_url="https://stv-mr.up.railway.app")
 
 
 def main():

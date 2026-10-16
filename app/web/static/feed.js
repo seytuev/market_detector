@@ -70,7 +70,7 @@
     $('telegram-status').textContent=`За 7 дней: ${t.posts_loaded} постов · разобрано ${t.analyzed} · ожидают ${t.pending} · ошибок ${t.errors}${t.capped ? ' · ограничено 300 последними постами' : ''}`;
     const m=t.model;
     $('telegram-budget').textContent=`${t.analysis_enabled ? 'Авторазбор включён' : 'Разбор выключен'} · ${m.configured ? m.provider+' / '+m.model : 'Модель не настроена'} · ${m.automatic_spending_enabled ? 'Остаток общего бюджета $'+m.remaining_usd+' / $'+m.daily_budget_usd+' за 24ч' : 'Бюджет модели не включён'} · дайджест ${t.digest_enabled ? 'обновляется при изменениях, не чаще 30 минут' : 'выключен'}`;
-    $('telegram-process').disabled=!t.analysis_enabled;$('telegram-digest').disabled=!t.digest_enabled;
+
     const d=t.digest;
     $('telegram-digest-view').innerHTML=d ? `<details open><summary>Дайджест за 24 часа · ${esc(date(d.created_at))}${d.superseded ? ' · появились изменения, требуется обновление' : ''}</summary><h3>${esc(d.headline_ru)}</h3><p class="research-muted">Период: ${esc(date(d.from_at))} — ${esc(date(d.to_at))} · разобрано ${d.coverage.analyzed} из ${d.coverage.posts_loaded} постов</p><ul>${d.bullets.map(b=>'<li>'+esc(b.text_ru)+' <button class="btn small" data-digest-story="'+esc(b.story_id)+'">Источники</button></li>').join('')}</ul>${d.funds_ru.length ? '<h4>Фонды</h4>'+list(d.funds_ru) : ''}<h4>Что отслеживать</h4>${list(d.watch_ru)}<p class="research-muted">${d.tickers_heat.map(t=>esc(t.symbol)+': '+t.mentions+' упоминаний / '+t.channels+' каналов').join(' · ')}</p></details>` : '<p class="research-muted">Дайджест ещё не собран. Он создаётся из успешно разобранных сюжетов за последние 24 часа.</p>';
     $('telegram-digest-view').querySelectorAll('[data-digest-story]').forEach(b=>b.onclick=()=>{
@@ -120,7 +120,7 @@
   $('feed-refresh').onclick = () => load(); $('feed-more').onclick = () => load(true);
   ['feed-kind','feed-stars','feed-view'].forEach(id => $(id).onchange = () => {if(id==='feed-kind' && $('feed-kind').value==='x')$('feed-view').value='posts';render();});
   $('feed-search').oninput = render;
-  $('telegram-process').onclick=()=>action('/telegram/process',$('telegram-process'));
-  $('telegram-digest').onclick=()=>action('/telegram/digest',$('telegram-digest'));
+
+
   load();
 })();

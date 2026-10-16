@@ -34,7 +34,7 @@ class ResearchRunner:
         if not self.settings.research_enabled:
             raise ResearchError("disabled","Исследовательский модуль выключен",503)
         from .workbench import KINDS
-        if kind not in {"sync","collect","quarantine","channel","telegram_analysis","telegram_digest"}|KINDS:
+        if kind not in {"sync","collect","quarantine","channel","x_account","telegram_analysis","telegram_digest"}|KINDS:
             raise ResearchError("unknown_job","Неизвестная задача")
         stamp = self.s.clock()
         with self.s.db.batch_writes():
@@ -82,6 +82,10 @@ class ResearchRunner:
         if now-self.last_schedule >= max(30,self.settings.research_sync_interval_seconds)*1000:
             for channel in self.s.rows("SELECT handle FROM research_channel WHERE enabled=1"):
                 self.enqueue("channel",{"handle":channel["handle"]},key=channel["handle"])
+            from .accounts import XAccounts
+            if XAccounts.configured():
+                for account in XAccounts(self.s).list():
+                    if account.get('enabled'):self.enqueue('x_account',{'handle':account['handle']},key=account['handle'])
             if self.settings.research_terminal_url and self.settings.research_integration_token:
                 state = self.s.state("terminal")
                 if now >= state.get("retry_after",0):
@@ -136,6 +140,9 @@ class ResearchRunner:
                     return self.job(row["id"])
             elif row["kind"]=="collect":
                 collect_deribit(self.s,self.settings)
+            elif row["kind"]=="x_account":
+                from .accounts import XAccounts
+                outcome=XAccounts(self.s).collect(payload['handle'])
             elif row["kind"]=="channel":
                 from .channels import Channels
                 Channels(self.s).collect(payload["handle"])

@@ -47,6 +47,13 @@ def register(router,runner,settings,result,mutate):
             ("ideas","strength","baskets","playbook","playbook_matching","playbook_memory","lab")},"model":Model(s).status(),
             "limits":{"strength_instruments":200,"correlation_instruments":30,"basket_members":30,"lab_instruments":20,"lab_days":366,"lab_timeout_seconds":60,"lab_memory_mb":512}})
 
+    @router.get("/model/settings")
+    def model_settings():return result(Model(s).status())
+
+    @router.put("/model/settings")
+    def save_model_settings(body:dict=Body(...),key:str|None=Header(None,alias="Idempotency-Key")):
+        return mutate("model-settings",key,body,lambda:Model(s).save_settings(body))
+
     @router.post("/ideas/import")
     def import_idea(body:dict=Body(...),key:str|None=Header(None,alias="Idempotency-Key")):
         check("ideas");return mutate("external_idea_import",key,body,lambda:ideas.import_external(body))

@@ -342,7 +342,7 @@ window.ResearchUI = (() => {
   }
   async function page(tab){
     const container=document.getElementById('research-page');if(!container)return;
-    try{await HTF.ensureToken();if(['ideas','strength','baskets','playbook','lab'].includes(tab)&&window.ResearchWorkbench)await ResearchWorkbench.mount(container,tab);else if(tab==='identity')await identity(container);else if(tab==='sources')await sources(container);else await mountCalendar(container,true);}
+    try{await HTF.ensureToken();if(['ideas','strength','baskets','playbook','lab'].includes(tab)&&window.ResearchWorkbench)await ResearchWorkbench.mount(container,tab);else if(tab==='identity')await identity(container);else if(tab==='sources'){location.replace('/?section=imports#settings');return;}else await mountCalendar(container,true);}
     catch(e){errorBox(container,e);}
   }
   document.querySelectorAll('[data-research-tab]').forEach(b=>b.onclick=()=>{const url=new URL(location.href);url.searchParams.set('tab',b.dataset.researchTab);history.pushState(null,'',url);page(b.dataset.researchTab);});

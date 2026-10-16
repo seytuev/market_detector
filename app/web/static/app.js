@@ -4206,7 +4206,7 @@ function initSettingsSections() {
   const nav = document.getElementById('settings-sections');
   if (!nav || nav.dataset.bound) return;
   nav.dataset.bound = '1';
-  const known = ['assets', 'notify', 'look', 'rules', 'sources'];
+  const known = ['assets', 'notify', 'look', 'rules', 'sources', 'imports', 'ai'];
   const show = (id, write) => {
     const pane = known.includes(id) ? id : 'assets';
     document.querySelectorAll('[data-settings-pane]').forEach((el) => {
@@ -4216,6 +4216,7 @@ function initSettingsSections() {
       const on = btn.dataset.settingsPaneBtn === pane;
       btn.classList.toggle('active', on);
       btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      if (on) requestAnimationFrame(() => { nav.scrollLeft = Math.max(0, btn.offsetLeft - nav.offsetLeft - 12); });
     });
     if (!write) return;
     // новая вкладка начинается сверху: контейнер панелей — свой скролл-бокс
