@@ -64,7 +64,30 @@ class Model:
         with self.s.db.batch_writes():
             self.s.set_state("model-settings",value)
             self.s.audit("model-settings","shared",{"action":"configure",**value})
+            if Decimal(value["daily_usd"])>0 and Decimal(value["reserve_usd"])>0:
+                # Configuration changes should wake budget/configuration waits immediately.
+                # Preserve running leases and provider rate-limit cooldowns.
+                self.s.execute("UPDATE research_job SET next_attempt_at=?,updated_at=? "
+                    "WHERE status='pending' AND error_code IN ('budget_blocked','model_not_configured')",
+                    (self.s.clock(),self.s.clock()))
         return Model(self.s).status()
+
+    def actual_cost(self,usage):
+        # xAI reports the billed amount including cache discounts; 10^10 ticks = $1.
+        # https://docs.x.ai/developers/cost-tracking
+        if self.config["provider"]=="xai" and usage.get("cost_in_usd_ticks") is not None:
+            try:
+                ticks=Decimal(str(usage["cost_in_usd_ticks"]))
+                if ticks.is_finite() and ticks>=0 and ticks==ticks.to_integral_value():
+                    return str(ticks/Decimal(10_000_000_000))
+            except InvalidOperation:
+                pass
+        c=self.config
+        if c.get("input_per_million") is not None and c.get("output_per_million") is not None:
+            tokens_in=usage.get("input_tokens",0) if c["provider"]=="anthropic" else usage.get("prompt_tokens",0)
+            tokens_out=usage.get("output_tokens",0) if c["provider"]=="anthropic" else usage.get("completion_tokens",0)
+            return str((Decimal(tokens_in)*Decimal(str(c["input_per_million"]))+Decimal(tokens_out)*Decimal(str(c["output_per_million"])))/1000000)
+        return None
 
     def status(self):
         c=self.config
@@ -75,7 +98,7 @@ class Model:
             details=decode(latest.pop("payload"));latest.update({k:details[k] for k in ("model","error_code","http_status","tokens_in","tokens_out","request_id","possible_charge") if k in details})
         return {"provider":c["provider"],"model":c.get("cheap"),"strong_model":c.get("strong"),"configured":bool(c.get("key") and c.get("cheap")),
                 "daily_budget_usd":c.get("daily_usd","0"),"max_call_usd":c.get("reserve_usd","0"),"automatic_spending_enabled":self.budget()[0]>0 and self.budget()[1]>0,
-                "accounted_usd":str(accounted),"remaining_usd":str(max(Decimal(0),self.budget()[0]-accounted)),"calls_24h":len(rows),"accounting":"actual cost when configured; full reservation otherwise",
+                "accounted_usd":str(accounted),"remaining_usd":str(max(Decimal(0),self.budget()[0]-accounted)),"calls_24h":len(rows),"accounting":"provider-reported cost, configured tariff, or full reservation otherwise",
                 "last_request":latest,
                 "credential_source":self.credential_source,"budget_window":"rolling_24_hours","max_calls_per_hour":60,"max_parallel_calls":1}
 
@@ -109,27 +132,29 @@ class Model:
                   {"role":"user","content":encode(payload)[:48000]}]
         model=c["strong" if strong else "cheap"]
         owns=self.client is None;client=self.client or httpx.Client(timeout=45,follow_redirects=False)
+        actual=None
         try:
             if c["provider"]=="anthropic":
                 response=client.post("https://api.anthropic.com/v1/messages",headers={"x-api-key":c["key"],"anthropic-version":"2023-06-01"},
                     json={"model":model,"max_tokens":max_output_tokens,"system":messages[0]["content"],"messages":[messages[1]],
                           "tools":[{"name":spec["schema"]["name"],"description":"Return only the requested structured result","input_schema":spec["schema"]["schema"]}],
                           "tool_choice":{"type":"tool","name":spec["schema"]["name"]}})
-                response.raise_for_status();raw=response.json();output=next((b["input"] for b in raw.get("content",[]) if b.get("type")=="tool_use"),None)
+                response.raise_for_status();raw=response.json()
                 usage=raw.get("usage",{});tokens_in=usage.get("input_tokens",0);tokens_out=usage.get("output_tokens",0)
+                actual=self.actual_cost(usage)
+                output=next((b["input"] for b in raw.get("content",[]) if b.get("type")=="tool_use"),None)
             elif c["provider"] in {"openai","xai"}:
                 base="https://api.openai.com/v1" if c["provider"]=="openai" else "https://api.x.ai/v1"
                 body={"model":model,"messages":messages,"temperature":0,
                     ("max_tokens" if c["provider"]=="xai" else "max_completion_tokens"):max_output_tokens,"response_format":{"type":"json_schema","json_schema":{"name":spec["schema"]["name"],"schema":spec["schema"]["schema"],"strict":True}}}
                 if c["provider"]=="xai":body["reasoning_effort"]="none"
                 response=client.post(base+"/chat/completions",headers={"Authorization":"Bearer "+c["key"]},json=body)
-                response.raise_for_status();raw=response.json();output=json.loads(raw["choices"][0]["message"]["content"])
+                response.raise_for_status();raw=response.json()
                 usage=raw.get("usage",{});tokens_in=usage.get("prompt_tokens",0);tokens_out=usage.get("completion_tokens",0)
+                actual=self.actual_cost(usage)
+                output=json.loads(raw["choices"][0]["message"]["content"])
             else:raise ResearchError("unsupported_provider","Провайдер STVTerminal не поддержан",422)
             if not isinstance(output,dict):raise ResearchError("invalid_model_json","Модель не вернула структурированный ответ",502)
-            actual=None
-            if c.get("input_per_million") is not None and c.get("output_per_million") is not None:
-                actual=str((Decimal(tokens_in)*Decimal(str(c["input_per_million"]))+Decimal(tokens_out)*Decimal(str(c["output_per_million"])))/1000000)
             request_id=response.headers.get("request-id") or response.headers.get("x-request-id") or raw.get("id")
             meta={"provider":c["provider"],"model":model,"tokens_in":tokens_in,"tokens_out":tokens_out,"request_id":request_id,
                   "actual_usd":actual,"reserved_usd":str(reserve),"prompt_origin":"stvterminal:af1b0b3","truncated":len(encode(payload))>48000}
@@ -138,7 +163,7 @@ class Model:
         except (httpx.HTTPError,ValueError,KeyError,TypeError,IndexError,AttributeError,ResearchError) as error:
             code=getattr(error,"code","model_error")
             status_code=error.response.status_code if isinstance(error,httpx.HTTPStatusError) else None
-            with self.s.db.batch_writes():self.s.execute("UPDATE research_model_usage SET status='error',payload=? WHERE id=?",(encode({"error_code":code,"http_status":status_code,"possible_charge":True,"model":model}),identifier))
+            with self.s.db.batch_writes():self.s.execute("UPDATE research_model_usage SET status='error',actual_usd=?,payload=? WHERE id=?",(actual,encode({"error_code":code,"http_status":status_code,"possible_charge":True,"model":model}),identifier))
             if isinstance(error,ResearchError):raise
             raise ResearchError(code,"Ошибка провайдера или структуры ответа. Результат не считается отрицательным совпадением.",502) from None
         finally:
