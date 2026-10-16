@@ -42,7 +42,7 @@ def _title(symbol: Optional[str], rest: str) -> str:
 
 def _market_items(db: Database, limit: int) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
-    instruments = {i.id: i for i in db.get_instruments(include_retired=True)}
+    instruments = {i.id: i for i in db.get_instruments(include_retired=True, include_removed=True)}
 
     # Приближение не попадает в хронологию: уведомление по нему выключено.
     for e in db.get_events(limit=limit, exclude_kinds=(EventKind.APPROACH.value,)):
@@ -89,7 +89,7 @@ def _market_items(db: Database, limit: int) -> list[dict[str, Any]]:
 
 def _decision_items(db: Database, limit: int) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
-    instruments = {i.id: i for i in db.get_instruments(include_retired=True)}
+    instruments = {i.id: i for i in db.get_instruments(include_retired=True, include_removed=True)}
 
     # get_reviews отдаёт по возрастанию без лимита — берём свежий хвост
     reviews = db.get_reviews()

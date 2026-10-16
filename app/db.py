@@ -364,12 +364,16 @@ class Database:
                 self.conn.execute(
                     "ALTER TABLE instrument ADD COLUMN ltf_analyze INTEGER NOT NULL DEFAULT 1"
                 )
+            if ins_table and "removed" not in ins_cols:
+                self.conn.execute(
+                    "ALTER TABLE instrument ADD COLUMN removed INTEGER NOT NULL DEFAULT 0"
+                )
             # LTF-анализ включён по умолчанию: одноразово включаем для всех
             # уже заведённых инструментов (ручное снятие галочки дальше сохраняется)
             if ins_table and not self.conn.execute(
                 "SELECT 1 FROM meta WHERE key='ltf_analyze_default_on'"
             ).fetchone():
-                self.conn.execute("UPDATE instrument SET ltf_analyze=1")
+                self.conn.execute("UPDATE instrument SET ltf_analyze=1 WHERE removed=0")
                 self.conn.execute(
                     "INSERT INTO meta (key, value) VALUES ('ltf_analyze_default_on', '1')"
                 )
@@ -945,7 +949,10 @@ class Database:
                VALUES (?,?,?,?,?,?,?,?)
                ON CONFLICT (venue, market_type, symbol)
                DO UPDATE SET asset=excluded.asset, quote_asset=excluded.quote_asset,
-                             precision=excluded.precision, enabled=excluded.enabled""",
+                             precision=excluded.precision, enabled=excluded.enabled,
+                             ltf_analyze=CASE WHEN instrument.removed=1 THEN excluded.ltf_analyze
+                                             ELSE instrument.ltf_analyze END,
+                             removed=0""",
             (ins.asset, ins.venue, ins.market_type, ins.symbol, ins.quote_asset,
              ins.precision, int(ins.enabled), int(ins.ltf_analyze)),
         )
@@ -954,14 +961,21 @@ class Database:
             "SELECT id FROM instrument WHERE venue=? AND market_type=? AND symbol=?",
             (ins.venue, ins.market_type, ins.symbol),
         ).fetchone()
+        self._instrument_changed(int(row["id"]))
         return int(row["id"])
 
     def get_instruments(
         self, enabled_only: bool = False, include_retired: bool = False,
+        include_removed: bool = False,
     ) -> list[Instrument]:
         q = "SELECT * FROM instrument"
+        conditions = []
         if enabled_only:
-            q += " WHERE enabled=1"
+            conditions.append("enabled=1")
+        if not include_removed:
+            conditions.append("removed=0")
+        if conditions:
+            q += " WHERE " + " AND ".join(conditions)
         rows = [self._to_instrument(r) for r in self.conn.execute(q).fetchall()]
         if include_retired:
             return rows
@@ -979,11 +993,30 @@ class Database:
             id=r["id"], asset=r["asset"], venue=r["venue"], market_type=r["market_type"],
             symbol=r["symbol"], quote_asset=r["quote_asset"], precision=r["precision"],
             enabled=bool(r["enabled"]), ltf_analyze=bool(r["ltf_analyze"]),
+            removed=bool(r["removed"]),
         )
+
+    def _instrument_changed(self, instrument_id: int) -> None:
+        self.bump_state_seq()
+        self.bump_domain("seq:config")
+        publisher = getattr(self, "publisher", None)
+        if publisher:
+            self.on_commit(lambda: publisher({"type": "instrument", "instrument_id": instrument_id}))
+
+    def remove_instrument(self, instrument_id: int) -> None:
+        """Убирает пару из списка, сохраняя историю для повторного добавления."""
+        with self.batch_writes():
+            cursor = self.conn.execute(
+                "UPDATE instrument SET removed=1, enabled=0, ltf_analyze=0 WHERE id=? AND removed=0",
+                (instrument_id,),
+            )
+            self.cancel_quote_work(instrument_id)
+            if cursor.rowcount:
+                self._instrument_changed(instrument_id)
 
     def set_instrument_enabled(self, instrument_id: int, enabled: bool) -> None:
         cursor = self.conn.execute(
-            "UPDATE instrument SET enabled=? WHERE id=? AND enabled<>?",
+            "UPDATE instrument SET enabled=? WHERE id=? AND removed=0 AND enabled<>?",
             (int(enabled), instrument_id, int(enabled)),
         )
         changed = cursor.rowcount > 0
@@ -1008,7 +1041,7 @@ class Database:
         """
         flag = int(bool(active))
         cursor = self.conn.execute(
-            "UPDATE instrument SET enabled=?, ltf_analyze=? WHERE id=? AND (enabled<>? OR ltf_analyze<>?)",
+            "UPDATE instrument SET enabled=?, ltf_analyze=? WHERE id=? AND removed=0 AND (enabled<>? OR ltf_analyze<>?)",
             (flag, flag, instrument_id, flag, flag),
         )
         changed = cursor.rowcount > 0
@@ -1100,7 +1133,7 @@ class Database:
 
     def set_instrument_ltf_analyze(self, instrument_id: int, analyze: bool) -> None:
         self.conn.execute(
-            "UPDATE instrument SET ltf_analyze=? WHERE id=?",
+            "UPDATE instrument SET ltf_analyze=? WHERE id=? AND removed=0",
             (int(analyze), instrument_id),
         )
         self._commit()

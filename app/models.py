@@ -122,6 +122,7 @@ class Instrument:
     # «Анализировать» (настройки LTF): LTF-наблюдения на подтверждённые
     # OB D1/W1 открываются без ожидания касания
     ltf_analyze: bool = True
+    removed: bool = False
 
 
 @dataclass

@@ -16,7 +16,7 @@ import psycopg
 from psycopg.pq import TransactionStatus
 from psycopg_pool import ConnectionPool
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # Existing databases do not replay schema_postgres.sql on application startup.
 # Every additive change therefore also needs an ordered, transactional upgrade.
@@ -39,6 +39,7 @@ MIGRATIONS = {
         INSERT INTO meta(key,value) VALUES ('alt:v3:storage_upgrade_pending','1')
             ON CONFLICT(key) DO UPDATE SET value=excluded.value;
     """,
+    3: "ALTER TABLE instrument ADD COLUMN IF NOT EXISTS removed BIGINT NOT NULL DEFAULT 0;",
 }
 
 

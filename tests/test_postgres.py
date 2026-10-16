@@ -15,7 +15,7 @@ import pytest
 
 from app.db import Database
 from app.models import Instrument
-from app.postgres import Connection, translate
+from app.postgres import Connection, SCHEMA_VERSION, translate
 from app.services.postgres_migration import IMPORT_KEY, import_sqlite
 from app.services.runtime import claim_owner
 from app.services.maintenance import backup
@@ -56,7 +56,7 @@ def test_v1_upgrade_creates_w1_event_journal_and_preserves_data(pg):
     pg.conn.execute("INSERT INTO postgres_schema_version VALUES (1) ON CONFLICT DO NOTHING")
     pg.conn.migrate()
     pg.conn.migrate()  # restart is idempotent
-    assert pg.conn.execute("SELECT max(version) FROM postgres_schema_version").fetchone()[0] == 2
+    assert pg.conn.execute("SELECT max(version) FROM postgres_schema_version").fetchone()[0] == SCHEMA_VERSION
     assert pg.get_meta("upgrade:keep") == "preserved"
     assert pg.get_meta("alt:v3:initialized") is None
     asset = pg.upsert_alt_asset(AltAsset(None, 6535, "NEAR"))

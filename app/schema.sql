@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS instrument (
     -- «Анализировать» (настройки LTF): наблюдения открываются на все
     -- подтверждённые OB D1/W1 инструмента сразу, без касания
     ltf_analyze INTEGER NOT NULL DEFAULT 1,
+    removed INTEGER NOT NULL DEFAULT 0,
     UNIQUE (venue, market_type, symbol)
 );
 

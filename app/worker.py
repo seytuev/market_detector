@@ -275,7 +275,7 @@ class Worker:
             if adapter is None:
                 continue
             existing = [
-                i for i in self.db.get_instruments()
+                i for i in self.db.get_instruments(include_removed=True)
                 if i.venue == venue and i.symbol == symbol
             ]
             if existing:

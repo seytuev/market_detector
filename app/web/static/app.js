@@ -2865,6 +2865,8 @@ function renderAssetActiveButton() {
   btn.classList.toggle('primary', !on);
 }
 
+const instrumentBusy = new Set();
+
 function renderSettingsAssets() {
   const box = $('settings-assets');
   if (!box) return;
@@ -2874,8 +2876,12 @@ function renderSettingsAssets() {
     count.textContent = state.instruments.length
       ? `${on} из ${state.instruments.length} под наблюдением` : '';
   }
+  const signature = JSON.stringify(state.instruments.map((i) =>
+    [i.id, i.symbol, i.venue, i.market_type, !!i.enabled, instrumentBusy.has(i.id)]));
+  if (box.dataset.signature === signature) return;
+  box.dataset.signature = signature;
   if (!state.instruments.length) {
-    box.innerHTML = '<p class="field-desc">Активов нет.</p>';
+    box.innerHTML = '<p class="field-desc">Активов пока нет. Добавьте первую пару выше.</p>';
     return;
   }
   box.innerHTML = state.instruments.map((ins) => {
@@ -2886,29 +2892,115 @@ function renderSettingsAssets() {
       `<div class="asset-sub">${esc(ins.venue)} · ${esc(ins.market_type || 'spot')}` +
       `${on ? '' : ' · снят с наблюдения'}</div></div>` +
       `<label class="switch"><input type="checkbox" data-active-id="${ins.id}" ` +
-      `${on ? 'checked' : ''}><span class="switch-track" aria-hidden="true"></span></label></div>`;
+      `aria-label="Наблюдать ${esc(displayPair(ins.symbol))}" ${instrumentBusy.has(ins.id) ? 'disabled' : ''} ` +
+      `${on ? 'checked' : ''}><span class="switch-track" aria-hidden="true"></span></label>` +
+      `<button type="button" class="btn small asset-remove" data-remove-asset="${ins.id}" ` +
+      `aria-label="Удалить ${esc(displayPair(ins.symbol))} · ${esc(ins.venue)}" ` +
+      `${instrumentBusy.has(ins.id) ? 'disabled' : ''}>Удалить</button></div>`;
   }).join('');
   box.querySelectorAll('[data-active-id]').forEach((inp) => {
     inp.addEventListener('change', () =>
       setInstrumentActive(Number(inp.dataset.activeId), inp.checked));
   });
+  box.querySelectorAll('[data-remove-asset]').forEach((btn) => {
+    btn.onclick = () => removeSettingsInstrument(Number(btn.dataset.removeAsset));
+  });
+}
+
+function refreshInstrumentViews() {
+  if (!state.instruments.some((i) => i.id === state.instrumentId)) {
+    selectAnalysisInstrument(resolveInitialInstrument());
+    if (!state.instrumentId) {
+      localStorage.removeItem(INSTRUMENT_KEY);
+      const url = new URL(location.href);
+      url.searchParams.delete('instrument');
+      history.replaceState(null, '', url.pathname + url.search + url.hash);
+    }
+  }
+  fillInstrumentSelect();
+  renderSettingsAssets();
+  renderDeskHead();
+  if (state.instrumentId) syncInstrumentContext();
+}
+
+function refreshInstrumentData() {
+  if (window.LFNow?.refresh) window.LFNow.refresh();
+  loadDeskExtras().catch((e) => console.warn('desk extras:', e));
+  if (state.instrumentId) reloadAll().catch((e) => console.warn('reload:', e));
+}
+
+async function addSettingsInstrument(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  if (form.dataset.busy) return;
+  const data = new FormData(form);
+  const status = $('settings-assets-status');
+  form.dataset.busy = 'true';
+  form.querySelectorAll('input, select, button').forEach((el) => { el.disabled = true; });
+  status.textContent = 'Проверяем пару на бирже…';
+  try {
+    const ins = await api('/api/instruments/from-catalog', {
+      method: 'POST', body: JSON.stringify({ venue: data.get('venue'), symbol: data.get('symbol').trim() }),
+    });
+    const index = state.instruments.findIndex((i) => i.id === ins.id);
+    if (index < 0) state.instruments.push(ins);
+    else state.instruments[index] = ins;
+    refreshInstrumentViews();
+    refreshInstrumentData();
+    form.elements.symbol.value = '';
+    status.textContent = `${displayPair(ins.symbol)} · ${ins.venue}: пара добавлена, наблюдение включено.`;
+  } catch (e) {
+    status.textContent = `Не удалось добавить пару. ${e.message || e}`;
+  } finally {
+    delete form.dataset.busy;
+    form.querySelectorAll('input, select, button').forEach((el) => { el.disabled = false; });
+  }
+}
+
+async function removeSettingsInstrument(id) {
+  if (instrumentBusy.has(id)) return;
+  const ins = state.instruments.find((i) => i.id === id);
+  if (!ins) return;
+  instrumentBusy.add(id);
+  renderSettingsAssets();
+  const status = $('settings-assets-status');
+  status.textContent = `Удаляем ${displayPair(ins.symbol)}…`;
+  try {
+    await api(`/api/instruments/${id}`, { method: 'DELETE' });
+    state.instruments = state.instruments.filter((i) => i.id !== id);
+    refreshInstrumentViews();
+    refreshInstrumentData();
+    status.textContent = `${displayPair(ins.symbol)} · ${ins.venue}: пара удалена. Её можно добавить снова.`;
+  } catch (e) {
+    status.textContent = `Не удалось удалить пару. ${e.message || e}`;
+  } finally {
+    instrumentBusy.delete(id);
+    renderSettingsAssets();
+  }
 }
 
 async function setInstrumentActive(id, active) {
   const ins = state.instruments.find((i) => i.id === id);
-  if (!ins || !!ins.enabled === !!active) return;
+  if (!ins || instrumentBusy.has(id) || !!ins.enabled === !!active) return;
+  instrumentBusy.add(id);
+  renderSettingsAssets();
   let res;
   try {
     res = await api(`/api/instruments/${id}/active`, {
       method: 'POST', body: JSON.stringify({ active: !!active }),
     });
+    const current = state.instruments.find((i) => i.id === id);
+    if (current) {
+      current.enabled = !!res.enabled;
+      current.ltf_analyze = !!res.ltf_analyze;
+    }
   } catch (e) {
     LFUI.error(e,'Не удалось изменить наблюдение',() => setInstrumentActive(id,active));
-    renderSettingsAssets(); // не получилось — свитч назад
     return;
+  } finally {
+    instrumentBusy.delete(id);
+    renderSettingsAssets();
   }
-  ins.enabled = !!(res && res.enabled);
-  ins.ltf_analyze = !!(res && res.ltf_analyze);
   // Keep the selected chart and its history when observation is switched off.
   fillInstrumentSelect();
   renderAssetActiveButton();
@@ -2922,6 +3014,8 @@ async function setInstrumentActive(id, active) {
 window.LFInstruments = { setActive: setInstrumentActive };
 
 async function openSettings() {
+  const assetForm = $('settings-asset-add');
+  if (assetForm) assetForm.onsubmit = addSettingsInstrument;
   if (!state.instruments.length) {
     try { state.instruments = await api('/api/instruments'); } catch (e) { /* список ниже */ }
   }
@@ -4015,8 +4109,9 @@ function fillInstrumentSelect() {
 async function loadInstruments() {
   state.instruments = await api('/api/instruments');
   if (!state.instrumentId) state.instrumentId = resolveInitialInstrument();
-  fillInstrumentSelect();
-  renderDeskHead();
+  const selectedRemoved = !!state.instrumentId && !state.instruments.some((i) => i.id === state.instrumentId);
+  refreshInstrumentViews();
+  if (selectedRemoved) refreshInstrumentData();
 }
 
 // updateLayers объявлен внутри main(); смена режима зовёт его после чекбоксов.

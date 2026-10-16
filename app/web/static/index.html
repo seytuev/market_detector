@@ -434,7 +434,14 @@
           <h2 id="set-assets-title">Активы</h2>
           <span id="settings-assets-count" class="settings-tg"></span>
         </div>
-        <p class="field-desc">Одна кнопка останавливает свечи, котировки и расчёт по активу. История остаётся в базе, включение возвращает процедуры.</p>
+        <p class="field-desc">Добавляйте спотовые пары с выбранной биржи. Переключатель приостанавливает наблюдение. Удаление убирает пару из списка; при повторном добавлении её история восстанавливается.</p>
+        <form id="settings-asset-add" class="settings-asset-add">
+          <label>Биржа<select name="venue" aria-label="Биржа"><option value="binance">Binance</option><option value="bybit">Bybit</option><option value="hyperliquid">Hyperliquid</option></select></label>
+          <label class="asset-pair-field">Пара<input name="symbol" aria-label="Пара" placeholder="Например, SOL/USDT" required maxlength="80" autocomplete="off" spellcheck="false" aria-describedby="settings-asset-hint"></label>
+          <button type="submit" class="btn primary">Добавить пару</button>
+        </form>
+        <p id="settings-asset-hint" class="field-desc">Проверим пару на бирже и включим наблюдение. Для Hyperliquid можно указать HYPE или UBTC/USDC.</p>
+        <p id="settings-assets-status" class="field-desc" role="status" aria-live="polite"></p>
         <div id="settings-assets" class="settings-assets"></div>
       </section>
       <section class="lf-panel" data-settings-pane="notify" aria-labelledby="set-notify-title">

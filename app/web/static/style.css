@@ -2383,6 +2383,17 @@ html[data-eventstrip="collapsed"] .strip-toggle .strip-chev { transform: rotate(
 .settings-page .review-head { padding: 0 0 16px; }
 .settings-assets-panel { margin-bottom: 16px; }
 .settings-assets { display: flex; flex-direction: column; }
+.settings-asset-add { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin: 16px 0 8px; }
+.settings-asset-add label { display: grid; gap: 6px; min-width: 0; font-size: 13px; }
+.settings-asset-add .asset-pair-field { flex: 1 1 180px; }
+.settings-asset-add input, .settings-asset-add select { width: 100%; min-width: 0; min-height: 44px; }
+.asset-remove { flex: none; }
+@media (max-width: 480px) {
+  .settings-asset-add label, .settings-asset-add button { flex: 1 1 100%; width: 100%; }
+  .asset-switch { flex-wrap: wrap; gap: 8px; }
+  .asset-switch .asset-info { flex-basis: calc(100% - 30px); }
+  .asset-switch .switch { margin-left: 20px; }
+}
 .asset-switch {
   display: flex; align-items: center; gap: 12px;
   padding: 12px 0; border-top: 1px solid var(--lf-border);

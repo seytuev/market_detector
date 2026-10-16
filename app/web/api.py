@@ -405,6 +405,11 @@ class InstrumentIn(BaseModel):
     precision: int = Field(default=8, ge=0, le=16)
 
 
+class CatalogInstrumentIn(BaseModel):
+    venue: Literal["binance", "bybit", "hyperliquid"]
+    symbol: str = Field(min_length=1, max_length=80)
+
+
 class ManualZoneIn(BaseModel):
     """Ручная зона (§10, ТЗ §7): диапазон L/U либо один уровень ``level``.
 
@@ -793,14 +798,61 @@ def create_app(
             symbol=body.symbol, quote_asset=body.quote_asset, precision=body.precision,
             enabled=True,
         )
-        ins_id = db.upsert_instrument(ins)
-        db.set_instrument_enabled(ins_id, True)
+        with db.batch_writes():
+            ins_id = db.upsert_instrument(ins)
+            db.set_instrument_active(ins_id, True)
         return instrument_to_dict(db.get_instrument(ins_id))
+
+    @app.post("/api/instruments/from-catalog", status_code=201,
+              dependencies=[Depends(require_auth)])
+    async def add_catalog_instrument(body: CatalogInstrumentIn) -> dict[str, Any]:
+        """Подключает только существующий спот с метаданными самой биржи."""
+        from ..adapters.binance import BinanceSpotAdapter
+        from ..adapters.bybit import BybitSpotAdapter
+        from ..adapters.hyperliquid import HyperliquidSpotAdapter
+        from ..adapters.base import AdapterError
+
+        adapter_class, base_url = {
+            "binance": (BinanceSpotAdapter, settings.binance_base_url),
+            "bybit": (BybitSpotAdapter, settings.bybit_base_url),
+            "hyperliquid": (HyperliquidSpotAdapter, settings.hyperliquid_base_url),
+        }[body.venue]
+        adapter = adapter_class(base_url, trust_env=settings.market_trust_env)
+        try:
+            catalog = await adapter.catalog()
+        except AdapterError as exc:
+            logger.warning("Каталог %s недоступен: %s", body.venue, exc)
+            raise HTTPException(status_code=503, detail="Не удалось проверить пару на бирже. Попробуйте ещё раз.") from exc
+        finally:
+            await adapter.aclose()
+
+        def normalized(value: str) -> str:
+            return value.strip().upper().replace("/", "").replace("-", "").replace("_", "")
+
+        requested = normalized(body.symbol)
+        match = next((i for i in catalog if i.market_type == "spot" and requested in {
+            normalized(i.symbol), normalized(i.asset + i.quote_asset),
+        }), None)
+        if match is None:
+            raise HTTPException(status_code=422, detail="Спотовая пара не найдена на выбранной бирже. Проверьте название и биржу.")
+        return add_instrument(InstrumentIn(
+            asset=match.asset, venue=match.venue, symbol=match.symbol,
+            quote_asset=match.quote_asset, precision=match.precision,
+        ))
+
+    @app.delete("/api/instruments/{instrument_id}", status_code=204,
+                dependencies=[Depends(require_auth)])
+    def remove_instrument(instrument_id: int) -> Response:
+        ins = db.get_instrument(instrument_id)
+        if ins is None:
+            raise HTTPException(status_code=404, detail="Инструмент не найден")
+        db.remove_instrument(instrument_id)
+        return Response(status_code=204)
 
     @app.post("/api/instruments/{instrument_id}/toggle", dependencies=[Depends(require_auth)])
     def toggle_instrument(instrument_id: int) -> dict[str, Any]:
         ins = db.get_instrument(instrument_id)
-        if ins is None:
+        if ins is None or ins.removed:
             raise HTTPException(status_code=404, detail="Инструмент не найден")
         db.set_instrument_enabled(instrument_id, not ins.enabled)
         return instrument_to_dict(db.get_instrument(instrument_id))
@@ -817,7 +869,7 @@ def create_app(
         флага сразу.
         """
         ins = db.get_instrument(instrument_id)
-        if ins is None:
+        if ins is None or ins.removed:
             raise HTTPException(status_code=404, detail="Инструмент не найден")
         db.set_instrument_active(instrument_id, payload.active)
         return instrument_to_dict(db.get_instrument(instrument_id))
@@ -830,7 +882,7 @@ def create_app(
         """Галочка «Анализировать» (настройки LTF): наблюдения на подтверждённые
         OB D1/W1 открываются без касания. Снятие не закрывает уже открытые."""
         ins = db.get_instrument(instrument_id)
-        if ins is None:
+        if ins is None or ins.removed:
             raise HTTPException(status_code=404, detail="Инструмент не найден")
         db.set_instrument_ltf_analyze(instrument_id, payload.analyze)
         return instrument_to_dict(db.get_instrument(instrument_id))
