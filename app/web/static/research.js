@@ -368,7 +368,7 @@ window.ResearchUI = (() => {
   }
   document.addEventListener('research-overview',overview);
   if(document.getElementById('now-tbody'))overview();
-  if(document.getElementById('research-page'))page(new URLSearchParams(location.search).get('tab'));
+  if(document.getElementById('research-page'))page(new URLSearchParams(location.search).get('tab')||(location.pathname==='/ideas.html'?'ideas':null));
   if(document.getElementById('research-asset-context')){
     refreshContext(new URLSearchParams(location.search).get('instrument')||document.getElementById('instrument-select')?.value);
     setInterval(()=>{if(!document.hidden&&selectedInstrument)refreshContext(selectedInstrument);},300000);

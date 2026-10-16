@@ -134,7 +134,27 @@ def register_research_routes(app, db, settings, require_auth):
             items=[{**decode(row['payload']),**{k:row[k] for k in ('id','revision_id','available_at','published_at')}} for row in rows[:limit]]
             from ..research.telegram import TelegramFeed
             TelegramFeed(s,settings).attach(items)
+            from ..research.feed_signals import FeedSignals
+            FeedSignals(s).attach(items)
             return result({"items":items,"has_more":len(rows)>limit})
+
+    @router.put('/feed/{material_id}/classification')
+    def classify_post(material_id:str,body:dict=Body(...),key:str|None=Header(None,alias='Idempotency-Key')):
+        from ..research.feed_signals import FeedSignals
+        return mutate('feed-classification:'+material_id,key,body,lambda:FeedSignals(s).save(material_id,body))
+
+    @router.get('/feed/{material_id}')
+    def feed_post(material_id:str):
+        enabled()
+        from ..research.feed_signals import FeedSignals
+        from ..research.telegram import TelegramFeed
+        with db.read_tx():
+            item=s.material(material_id)
+            if item.get('lifecycle')!='active' or item['source_kind'] not in {'telegram','x'}:
+                raise ResearchError('material_not_found','Публикация недоступна',404)
+            TelegramFeed(s,settings).attach([item])
+            FeedSignals(s).attach([item])
+            return result(item)
 
     @router.get("/telegram")
     def telegram_view():

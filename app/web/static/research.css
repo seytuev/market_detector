@@ -1,3 +1,6 @@
+.research-idea-tags{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+.idea-direction.positive{color:var(--lf-positive);background:color-mix(in srgb,var(--lf-positive) 10%,transparent)}
+.idea-direction.negative{color:var(--lf-negative);background:color-mix(in srgb,var(--lf-negative) 10%,transparent)}
 .research-block{border:1px solid var(--lf-border,#ccd3df);border-radius:12px;padding:16px;margin-top:16px;background:var(--lf-surface,#fff);min-width:0}
 .research-block h3,.research-card h3{font-size:16px;margin:0 0 10px}
 .research-muted{font-size:12px;color:var(--lf-text2,#647084);line-height:1.6}

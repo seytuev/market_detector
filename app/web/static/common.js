@@ -829,6 +829,14 @@ window.HTF = (() => {
   };
   const sidebar = document.querySelector('.sidebar');
   if (!sidebar) return;
+  const researchTab=sidebar.querySelector('a[href="/research.html?tab=ideas"]');
+  if(researchTab&&!sidebar.querySelector('a[href="/ideas.html"]')){
+    const ideasTab=document.createElement('a');ideasTab.href='/ideas.html';ideasTab.className='app-tab'+(location.pathname==='/ideas.html'?' current':'');
+    ideasTab.innerHTML='<svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 18h6m-5 3h4M8 14a6 6 0 1 1 8 0l-1 4H9l-1-4Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="nav-full">Идеи</span><span class="nav-short">Идеи</span>';
+    ideasTab.title='Идеи';ideasTab.setAttribute('aria-label','Идеи');if(location.pathname==='/ideas.html')ideasTab.setAttribute('aria-current','page');researchTab.after(ideasTab);
+  }
+  const mobileMore=document.getElementById('nav-more-panel');
+  if(mobileMore&&!mobileMore.querySelector('a[href="/ideas.html"]')){const a=document.createElement('a');a.href='/ideas.html';a.textContent='Идеи';a.setAttribute('role','menuitem');mobileMore.prepend(a);}
   sidebar.querySelectorAll('.app-tab').forEach(tab => {
     const href = tab.getAttribute('href') || (tab.getAttribute('aria-current') ? location.pathname : '');
     const key = Object.keys(paths).find(name => name === 'alt' || name === 'events' || name === 'feed'

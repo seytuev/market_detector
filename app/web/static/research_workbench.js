@@ -64,18 +64,19 @@ window.ResearchWorkbench=(()=>{
       if(tab==='ideas')await renderIdeas(root,seq);else if(tab==='strength')await renderStrength(root,seq);else if(tab==='baskets')await renderBaskets(root,seq);else if(tab==='playbook')await renderPlaybook(root,seq,cfg);else await renderLab(root,seq);
     }catch(e){if(seq===sequence)root.innerHTML='<p class="research-error">'+esc(e.message)+'</p>';}
   }
-  async function ideaForm(value={},prefill={}){
+  async function ideaForm(value={},prefill={},constraints={}){
     const opts=await options();const all={...value,...prefill};let technical=[];
     if(all.instrument_id)technical=(await api('/instruments/'+all.instrument_id+'/research-links')).data.htf_ideas.map(i=>['htf_idea:'+i.id,'HTF-идея №'+i.id]);
-    return form(value.id?'Новая версия исследовательской идеи':'Исследовательская идея',[
+    const d=form(value.id?'Новая версия исследовательской идеи':'Исследовательская идея',[
       {name:'title',label:'Заголовок',value:all.title,required:true,wide:true},
-      {name:'asset',label:'Актив',type:'select',options:[['','Выбрать позже'],...opts.assets.map(a=>[a.asset_uid,a.display_symbol+' · '+a.name])],value:all.primary_asset_uid},
+      {name:'asset',label:'Актив',type:'select',required:!!constraints.feed,options:[['','Выбрать позже'],...(!opts.assets.some(a=>a.asset_uid===all.primary_asset_uid)&&all.primary_asset_uid?[[all.primary_asset_uid, constraints.symbol||all.primary_asset_uid]]:[]),...opts.assets.map(a=>[a.asset_uid,a.display_symbol+' · '+a.name])],value:all.primary_asset_uid},
       {name:'instrument',label:'Расчётный рынок',type:'select',options:[['','Без ценового наблюдения'],...opts.instruments.map(i=>[i.id,i.symbol+' · '+i.venue])],value:all.instrument_id},
       {name:'thesis',label:'Гипотеза',type:'textarea',value:all.thesis,wide:true},
       {name:'mechanism',label:'Почему это может повлиять на актив',type:'textarea',value:all.mechanism,wide:true},
       {name:'confirmation',label:'Что подтвердит тезис — по одному условию в строке',type:'textarea',value:(all.criteria||[]).filter(c=>c.type==='confirmation').map(c=>c.description).join('\n')},
       {name:'invalidation',label:'Что опровергнет тезис — по одному условию в строке',type:'textarea',value:(all.criteria||[]).filter(c=>c.type==='invalidation').map(c=>c.description).join('\n')},
-      {name:'direction',label:'Исследовательское направление',type:'select',options:[['watch','Наблюдать'],['positive','Положительное'],['negative','Отрицательное'],['neutral','Нейтральное']],value:all.direction||'watch'},
+      {name:'direction',label:'Направление идеи',type:'select',options:constraints.feed?[['positive','↗ Bullish'],['negative','↘ Bearish']]:[['watch','Наблюдать'],['positive','↗ Bullish'],['negative','↘ Bearish'],['neutral','Нейтральное']],value:all.direction||'watch'},
+      {name:'horizon_label',label:'Горизонт',type:'select',options:[['','Не определён'],['1–3 дня','1–3 дня'],['1–2 недели','1–2 недели'],['1 месяц и более','1 месяц и более'],...(all.horizon_label&&!['1–3 дня','1–2 недели','1 месяц и более'].includes(all.horizon_label)?[[all.horizon_label,all.horizon_label]]:[])],value:all.horizon_label},
       {name:'due',label:'Следующий пересмотр — местное время браузера',type:'datetime-local',value:localInput(all.review_due_at)},
       {name:'review_condition',label:'Либо условие пересмотра',value:all.review_condition},
       ...(technical.length?[{name:'technical',label:'Приложить техническое основание',type:'select',options:[['','Не добавлять'],...technical]}]:[]),
@@ -85,9 +86,12 @@ window.ResearchWorkbench=(()=>{
       const criteria=[...lines(fd.get('confirmation')).map(description=>({type:'confirmation',description,evaluator:'manual'})),...lines(fd.get('invalidation')).map(description=>({type:'invalidation',description,evaluator:'manual'}))];
       const linked=fd.get('technical');const refs=[...(all.technical_refs||[])];if(linked){const [kind,identifier]=linked.split(':');refs.push({kind,id:Number(identifier)});}
       await send('/ideas'+(value.id?'/'+id(value.id):''),{...all,title:fd.get('title'),primary_asset_uid:fd.get('asset')||null,instrument_id:fd.get('instrument')?Number(fd.get('instrument')):null,
-        thesis:fd.get('thesis'),mechanism:fd.get('mechanism'),criteria,direction:fd.get('direction'),review_due_at:millis(fd.get('due')),review_condition:fd.get('review_condition'),
+        thesis:fd.get('thesis'),mechanism:fd.get('mechanism'),criteria,direction:fd.get('direction'),horizon_label:fd.get('horizon_label'),review_due_at:millis(fd.get('due')),review_condition:fd.get('review_condition'),
         status:value.status||fd.get('status'),source_refs:all.source_refs||[],technical_refs:refs,expected_revision:value.revision_id,reason:fd.get('reason')},value.id?'PATCH':'POST');
+      document.dispatchEvent(new CustomEvent('research:ideas-changed'));
     });
+    if(constraints.feed)d.querySelector('form').insertAdjacentHTML('beforebegin','<p class="research-muted">Черновик из ленты · '+esc(constraints.symbol||'')+' · Источников: '+(all.source_refs||[]).length+(constraints.sourceCount>30?' из '+constraints.sourceCount+' (лимит 30)':'')+'. Исходные публикации сохранятся в зафиксированных версиях.</p>');
+    return d;
   }
   async function renderIdeas(root,seq){
     const [response,opts]=await Promise.all([api('/ideas?limit=50'),options()]);if(seq!==sequence)return;
@@ -98,7 +102,7 @@ window.ResearchWorkbench=(()=>{
     function show(data,append=false){
       cursor=data.next_cursor;body.querySelector('[data-count]').textContent='Найдено: '+data.total;
       const list=body.querySelector('[data-idea-list]');if(!append)list.innerHTML='';
-      list.insertAdjacentHTML('beforeend',data.items.map(v=>'<article class="research-card"><h3>'+esc(v.title)+'</h3><p>'+esc(opts.assets.find(a=>a.asset_uid===v.primary_asset_uid)?.display_symbol||'Актив не выбран')+' · '+esc(statuses[v.status])+'</p><p>'+esc(v.thesis)+'</p><p class="research-muted">Пересмотр: '+esc(date(v.review_due_at))+'</p>'+button('Открыть','idea','data-id="'+v.id+'"')+'</article>').join('')||(!append?'<p>Идей пока нет.</p>':''));
+      list.insertAdjacentHTML('beforeend',data.items.map(v=>'<article class="research-card"><div class="research-idea-tags"><span class="research-badge idea-direction '+esc(v.direction)+'">'+esc({positive:'↗ Bullish',negative:'↘ Bearish',neutral:'Нейтральная',watch:'Наблюдение'}[v.direction]||'Наблюдение')+'</span><span class="research-badge">'+esc(opts.assets.find(a=>a.asset_uid===v.primary_asset_uid)?.display_symbol||'Актив не выбран')+'</span><span class="research-muted">'+esc(statuses[v.status])+'</span></div><h3>'+esc(v.title)+'</h3><p>'+esc(v.thesis)+'</p><p class="research-muted">'+esc(v.horizon_label||'Горизонт не определён')+' · Пересмотр: '+esc(date(v.review_due_at))+'</p>'+button('Открыть','idea','data-id="'+v.id+'"')+'</article>').join('')||(!append?'<p>Идей пока нет.</p>':''));
       body.querySelector('[data-more]')?.remove();if(cursor)list.insertAdjacentHTML('afterend','<button class="btn" data-more>Ещё</button>');
       list.querySelectorAll('[data-wb="idea"]').forEach(b=>b.onclick=()=>ideaDetail(b.dataset.id).catch(fail));
       body.querySelector('[data-more]')?.addEventListener('click',async()=>show((await api('/ideas?limit=50'+filters+'&cursor='+id(cursor))).data,true));
