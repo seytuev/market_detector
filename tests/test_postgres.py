@@ -45,6 +45,28 @@ def test_parameter_literals():
     assert translate("SELECT '?' AS x, ? AS y, 'user' AS z") == "SELECT '?' AS x, %s AS y, 'user' AS z"
 
 
+def test_replay_consumes_candles_while_ingestion_holds_row_lock(pg):
+    """A reviewer must not wait for a writer of an unchanged historical bar."""
+    from app.config import DetectorConfig
+    from app.engine.scanner import Scanner
+    from tests.conftest import make_candle
+
+    iid = pg.upsert_instrument(Instrument(None, "BTC", "binance", "spot", "BTCUSDT", "USDT"))
+    rows = [make_candle(1_780_272_000_000 + i * 86_400_000, 100, 110, 90, 100,
+                        "D1", iid) for i in range(8)]
+    pg.insert_candles(rows)
+    with psycopg.connect(pg.conn._url, autocommit=True) as writer:
+        with writer.transaction():
+            writer.execute(
+                "SELECT 1 FROM candle WHERE instrument_id=%s AND timeframe=%s "
+                "AND open_time=%s FOR UPDATE", (iid, "D1", rows[0].open_time),
+            ).fetchone()
+            with pg.batch_writes():
+                pg.conn.execute("SET LOCAL lock_timeout='250ms'")
+                Scanner(pg, DetectorConfig()).replay_instrument(iid, timeframes={"D1"})
+    assert pg.get_candles(iid, "D1") == rows
+
+
 def test_x_accounts_query_accepts_psycopg_parameters(db,monkeypatch):
     """Use the real driver parser: a literal percent with empty args caused prod HTTP 500."""
     from psycopg._queries import PostgresQuery

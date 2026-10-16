@@ -1,4 +1,5 @@
 """H1 display anchors for D1/W1 liquidity; detection timestamps stay intact."""
+from bisect import bisect_left
 from math import isclose
 
 from ..models import TIMEFRAME_MINUTES, ZoneType
@@ -6,13 +7,24 @@ from ..models import TIMEFRAME_MINUTES, ZoneType
 HOUR = 3_600_000
 
 
-def refresh_liquidity_anchors(db, instrument_id):
+def refresh_liquidity_anchors(db, instrument_id, *, candles=None):
     levels = [z for z in db.get_zones(instrument_id, types=[ZoneType.BSL, ZoneType.SSL])
               if z.timeframe in ("D1", "W1") and z.source != "manual"]
+    if not levels:
+        return
+    # One ordered H1 sample for every level. Replay supplies its immutable
+    # sample across all bars instead of issuing a query per level per bar.
+    if candles is None:
+        candles = db.get_candles(
+            instrument_id, "H1", start_ms=min(z.formed_at for z in levels),
+            end_ms=max(z.formed_at + TIMEFRAME_MINUTES[z.timeframe] * 60_000
+                       for z in levels) - 1,
+        )
+    times = [c.open_time for c in candles]
     anchors = {}
     for z in levels:
         end = z.formed_at + TIMEFRAME_MINUTES[z.timeframe] * 60_000
-        bars = db.get_candles(instrument_id, "H1", start_ms=z.formed_at, end_ms=end - 1)
+        bars = candles[bisect_left(times, z.formed_at):bisect_left(times, end)]
         complete = (len(bars) == (end - z.formed_at) // HOUR
                     and all(c.open_time == z.formed_at + n * HOUR for n, c in enumerate(bars)))
         matches = [c.open_time for c in bars

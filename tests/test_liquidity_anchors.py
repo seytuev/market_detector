@@ -53,3 +53,34 @@ def test_cluster_uses_price_setting_member_and_first_equal_extreme(db, instrumen
     refresh_liquidity_anchors(db, instrument_id)
     for zid in ids:
         assert db.get_zone(zid).evidence["group_extreme_at"] == T + 29 * H1_MS
+
+
+@pytest.mark.parametrize("preloaded", [False, True])
+def test_shared_h1_sample_preserves_individual_windows(db, instrument_id, monkeypatch, preloaded):
+    """An adjacent day's maximum must not supply an anchor for a gapped day."""
+    rows = [make_candle(T + i * H1_MS, 100, 120 if i in (7, 31) else 110,
+                        90, 100, "H1", instrument_id)
+            for i in range(48) if i != 25]
+    # An unfinished bar must not fill the missing hour in the closed sample.
+    db.insert_candles(rows + [make_candle(T + 25 * H1_MS, 100, 120, 90, 100,
+                                         "H1", instrument_id, closed=False)])
+    ids = [db.insert_zone(Zone(
+        id=None, instrument_id=instrument_id, type=ZoneType.BSL,
+        direction=Direction.BEAR, timeframe="D1", lower=120, upper=120,
+        formed_at=T + offset * H1_MS, confirmed_at=T + (offset + 96) * H1_MS,
+        status=ZoneStatus.ACTIVE,
+    )) for offset in (0, 24)]
+    original = db.get_candles
+    reads = []
+
+    def read(*args, **kwargs):
+        reads.append((args, kwargs))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(db, "get_candles", read)
+    refresh_liquidity_anchors(db, instrument_id, **({"candles": rows} if preloaded else {}))
+    assert len(reads) == (0 if preloaded else 1)
+    first, second = map(db.get_zone, ids)
+    assert first.evidence["extreme_at"] == T + 7 * H1_MS
+    assert second.evidence["extreme_at"] is None
+    assert second.display_from == T + 24 * H1_MS

@@ -5,7 +5,7 @@ import pytest
 
 from app.engine.replay import replay_from_db
 from app.engine.scanner import Scanner
-from app.models import EventKind, TIMEFRAME_MINUTES, ZoneType
+from app.models import Direction, EventKind, TIMEFRAME_MINUTES, Zone, ZoneStatus, ZoneType
 
 from .conftest import load_etalon_candles, make_candle
 
@@ -41,6 +41,42 @@ def test_replay_events_delayed(db, cfg, instrument_id):
     assert events, "ожидались исторические события"
     assert all(e.delayed for e in events)
     assert all(e.detected_at > e.occurred_at for e in events)
+
+
+def test_replay_does_not_rewrite_persisted_candles(db, cfg, instrument_id, monkeypatch):
+    """Historical calculation must not lock the candle rows against ingestion."""
+    candles = load_etalon_candles(instrument_id)
+    db.insert_candles(candles)
+
+    def unexpected_write(*args, **kwargs):
+        pytest.fail("replay must consume its persisted snapshot without candle upserts")
+
+    monkeypatch.setattr(db, "insert_candles", unexpected_write)
+    Scanner(db, cfg).replay_instrument(instrument_id)
+    assert db.get_candles(instrument_id, "H4") == candles
+
+
+def test_htf_replay_loads_h1_anchors_once(db, cfg, instrument_id, monkeypatch):
+    rows = [make_candle(T0 + i * 86_400_000, 100, 110, 90, 100,
+                        "D1", instrument_id) for i in range(12)]
+    db.insert_candles(rows)
+    db.insert_zone(Zone(
+        id=None, instrument_id=instrument_id, type=ZoneType.BSL,
+        direction=Direction.BEAR, timeframe="D1", lower=120, upper=120,
+        formed_at=T0, confirmed_at=T0 + 4 * 86_400_000,
+        status=ZoneStatus.ACTIVE,
+    ))
+    original = db.get_candles
+    h1_reads = []
+
+    def read(iid, tf, *args, **kwargs):
+        if tf == "H1":
+            h1_reads.append((args, kwargs))
+        return original(iid, tf, *args, **kwargs)
+
+    monkeypatch.setattr(db, "get_candles", read)
+    Scanner(db, cfg).replay_instrument(instrument_id, timeframes={"D1"})
+    assert len(h1_reads) == 1
 
 
 def _fvg_return_candles(instrument_id):

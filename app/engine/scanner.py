@@ -79,7 +79,9 @@ class Scanner:
     # ------------------------------------------------------------------
 
     def on_closed_candle(
-        self, candle: Candle, candles: Optional[list[Candle]] = None
+        self, candle: Candle, candles: Optional[list[Candle]] = None, *,
+        persist_candle: bool = True,
+        anchor_candles: Optional[list[Candle]] = None,
     ) -> list[Event]:
         """Вставляет свечу и пересчитывает структуру её инструмента/ТФ.
 
@@ -87,8 +89,14 @@ class Scanner:
         candles — необязательный in-memory список закрытых свечей ТФ по
         текущую включительно (replay держит его нарастающим и не перечитывает
         всю историю из БД на каждую свечу); None — читаем из БД (live).
+        persist_candle=False — только для уже сохранённого снимка replay.
+        anchor_candles — общий отсортированный снимок закрытых H1 для
+        отображения экстремумов D1/W1; None — отдельное чтение для live.
         """
-        self.db.insert_candles([candle])
+        # Replay reads persisted candles; upserting them again takes row locks
+        # against live ingestion despite identical OHLC (notably on Postgres).
+        if persist_candle:
+            self.db.insert_candles([candle])
         created: list[Event] = []
         iid, tf = candle.instrument_id, candle.timeframe
         boundary = close_boundary_ms(candle.open_time, tf)
@@ -102,7 +110,7 @@ class Scanner:
         created += self._check_block_transitions(iid, tf, candle, candles, boundary, now)
         created += self._check_source_pass(iid, tf, candle, boundary, now)
         if tf in ("D1", "W1"):
-            self._scan_pivots(iid, tf, candles, now)
+            self._scan_pivots(iid, tf, candles, now, anchor_candles=anchor_candles)
         created += self._check_level_crossings(iid, candle.low, candle.high, boundary, now)
         self._sync_inner_levels(iid, tf, candle, candles, boundary, now)
         if tf == "D1":
@@ -501,7 +509,10 @@ class Scanner:
 
     # ----- SSL/BSL -----
 
-    def _scan_pivots(self, iid: int, tf: str, candles: list[Candle], now: int) -> None:
+    def _scan_pivots(
+        self, iid: int, tf: str, candles: list[Candle], now: int, *,
+        anchor_candles: Optional[list[Candle]] = None,
+    ) -> None:
         pivots = liq.find_pivots(candles, tf, self.cfg)
         for p in pivots:
             z = Zone(
@@ -522,7 +533,7 @@ class Scanner:
         self._recluster_levels(iid)
 
         from ..services.liquidity_anchors import refresh_liquidity_anchors
-        refresh_liquidity_anchors(self.db, iid)
+        refresh_liquidity_anchors(self.db, iid, candles=anchor_candles)
 
     def _recluster_levels(self, iid: int) -> None:
         """Перестраивает группы экстремумов (§7) и обновляет качественный
@@ -810,6 +821,8 @@ class Scanner:
         свечи) — то же содержимое, что давал бы db.get_candles на каждой свече,
         без per-candle N+1. Записи прогона — одним batch (один commit на replay
         вместо commit'а на каждую запись; живой путь вне replay не в батче).
+        Уже сохранённые свечи не переписываются. H1 для отображения
+        экстремумов D1/W1 читается одним снимком на весь replay.
         """
         tf_candles: dict[str, list[Candle]] = {}
         all_candles: list[Candle] = []
@@ -823,6 +836,10 @@ class Scanner:
             else:
                 all_candles += [c for c in full if c.open_time >= start_ms]
         all_candles.sort(key=lambda c: (c.close_time, TIMEFRAME_MINUTES[c.timeframe]))
+        anchor_candles = (
+            self.db.get_candles(instrument_id, "H1")
+            if any(c.timeframe in ("D1", "W1") for c in all_candles) else None
+        )
 
         created: list[Event] = []
         now = now_ms()
@@ -847,7 +864,10 @@ class Scanner:
                     prev_ts=self._last_price_ts.get(instrument_id),
                 )
                 seen[c.timeframe].append(c)
-                created += self.on_closed_candle(c, candles=seen[c.timeframe])
+                created += self.on_closed_candle(
+                    c, candles=seen[c.timeframe], persist_candle=False,
+                    anchor_candles=anchor_candles,
+                )
                 self._last_price[instrument_id] = c.close
                 self._last_price_ts[instrument_id] = boundary
                 last_ts = boundary
