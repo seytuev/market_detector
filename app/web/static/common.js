@@ -824,6 +824,7 @@ window.HTF = (() => {
     journal: 'M5 3h14v18H5zM9 7h6M9 11h6M9 15h4',
     feed: 'M4 4h16v16H4zM8 8h8M8 12h8M8 16h4',
     events: 'm3 15 5-5 4 4 8-9M15 5h5v5M3 21h18',
+    research: 'M16 10a6 6 0 1 1-12 0 6 6 0 0 1 12 0Zm-2 4 6 6',
     help: 'M9 9a3 3 0 1 1 5 2c-2 1-2 2-2 3M12 17h.01M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0',
     settings: 'M4 7h16M4 17h16M9 4v6M15 14v6',
   };
@@ -861,7 +862,7 @@ window.HTF = (() => {
   sidebar.querySelectorAll('.app-tab').forEach(tab => {
     if(tab.closest('.information-nav')) return;
     const href = tab.getAttribute('href') || (tab.getAttribute('aria-current') ? location.pathname : '');
-    const key = Object.keys(paths).find(name => name === 'alt' || name === 'events' || name === 'feed'
+    const key = Object.keys(paths).find(name => name === 'alt' || name === 'events' || name === 'feed' || name === 'research'
       ? href.includes('/' + name + '.html') : href.endsWith('#' + name));
     if (!key) return;
     const label = key === 'now' ? 'Обзор рынка' : (tab.querySelector('.nav-full')?.textContent || tab.textContent).trim();
