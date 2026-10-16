@@ -5,13 +5,9 @@
   const sourceKind = isX ? 'x' : 'telegram';
   $('feed-kind').value = sourceKind;
   $('feed-view').value = isX ? 'posts' : 'stories';
-  if(isX) $('feed-view-label').hidden = true;
-  if(!isX){
-    const overview=document.createElement('section');overview.className='research-card telegram-overview';
-    overview.innerHTML='<h2>Важное сейчас</h2><div id="telegram-priority"></div><div class="feed-section-head telegram-digest-title"><h2>Дайджест</h2><button class="btn small" id="telegram-digest">Собрать дайджест</button></div>';
-    overview.append($('telegram-action'),$('telegram-digest-view'));
-    document.querySelector('.feed-filters').before(overview);
-    document.querySelector('.feed-header-actions').insertAdjacentHTML('afterbegin','<button class="btn" id="telegram-process">Собрать и разобрать</button>');
+  if(isX){
+    $('feed-view-label').hidden = true;
+    $('feed-stars').closest('label').hidden = true;
   }
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const api = (path, options) => HTF.api('/api/research/v1' + path, options);
@@ -19,12 +15,13 @@
   const link = (url,label) => /^https?:\/\//i.test(url || '') ? `<a class="btn small" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(label)} ↗</a>` : '';
   const errors = {model_not_configured:'Модель не настроена',terminal_validation:'Ответ модели не прошёл проверку',model_error:'Ошибка провайдера',disabled:'Обработка выключена'};
   let items = [], more = false, busy = false, selected = null, telegram = null, timer = null;
+  let collection = 'all';
   let stars;
   let assetSearchSeq = 0;
   let classificationDirty = false;
   const classificationKey = item => JSON.stringify(item.classification || {});
   const autoLabel = c => c.origin==='manual'?'Ваш разбор':c.origin==='xai'?'xAI · '+({low:'низкая',medium:'средняя',high:'высокая'}[c.confidence]||'')+' уверенность':c.auto_error?(errors[c.auto_error]||'Ошибка xAI · можно повторить'):c.auto_status==='running'?'xAI обрабатывает':c.auto_status==='queued'?'В очереди xAI':c.origin==='model'?'ИИ-разбор':'Ожидает xAI';
-  const directionName = d => ({bullish:'↗ Bullish',bearish:'↘ Bearish'}[d] || 'Нужна классификация');
+  const directionName = d => ({bullish:'↗ Рост · Bullish',bearish:'↘ Снижение · Bearish'}[d] || 'Направление не определено');
   const signal = item => item.classification || {};
   const badges = item => {
     const c=signal(item),symbols=[...new Set([c.symbol,...(c.candidate_symbols||[])].filter(Boolean))];
@@ -32,7 +29,7 @@
   };
   function metrics(){
     const bullish=items.filter(i=>signal(i).direction==='bullish').length,bearish=items.filter(i=>signal(i).direction==='bearish').length;
-    $('feed-metrics').innerHTML=[['Публикации',items.length,'В загруженной ленте',''],['Bullish',bullish,'Позитивный тезис','bullish'],['Bearish',bearish,'Негативный тезис','bearish'],['Классифицировать',items.filter(i=>!signal(i).direction||!signal(i).primary_asset_uid).length,'Уточнить тикер или направление','']].map(([label,n,note,cls])=>`<div class="feed-metric ${cls}"><span>${label}</span><strong>${n}</strong><small>${note}</small></div>`).join('');
+    $('feed-metrics').innerHTML=[['Загружено',items.length,'Публикации в этой ленте',''],['За рост',bullish,'Позитивный тезис · Bullish','bullish'],['За снижение',bearish,'Негативный тезис · Bearish','bearish'],['Уточнить',items.filter(i=>!signal(i).direction||!signal(i).primary_asset_uid).length,'Не определён актив или направление','']].map(([label,n,note,cls])=>`<div class="feed-metric ${cls}" title="${note}"><span>${label}</span><strong>${n}</strong></div>`).join('');
   }
   async function loadIdeas(){
     try {
@@ -119,7 +116,13 @@
       <details open><summary>Перевод на русский${meta.text_truncated ? ' · первые 6000 символов' : ''}</summary><div class="feed-text">${esc(a.translation_ru)}</div></details>
       <p class="research-muted">Выводы модели требуют проверки. Содержимое ссылок и изображения в этом разборе не анализировались.</p>`;
   }
-  function openPost(item) {
+  function revealDetail() {
+    if(matchMedia('(max-width: 850px)').matches){
+      $('feed-detail').scrollIntoView({block:'start',behavior:'smooth'});
+      $('feed-detail').focus({preventScroll:true});
+    }
+  }
+  function openPost(item, reveal = false) {
     classificationDirty=false;
     selected = {type:'post',id:item.id,classificationKey:classificationKey(item)};
     const result=item.telegram, a=result?.analysis;
@@ -131,8 +134,9 @@
     if($('feed-retry')) $('feed-retry').onclick=()=>action('/telegram/materials/'+encodeURIComponent(item.id)+'/analyze',$('feed-retry'));
     bindClassification(item);
     render();
+    if(reveal)revealDetail();
   }
-  async function openStory(story) {
+  async function openStory(story, reveal = false) {
     selected={type:'story',id:story.id};
     const best=[...story.posts].sort((a,b)=>b.analysis.impact-a.analysis.impact)[0];
     $('feed-detail').innerHTML=`<span class="research-badge">Сюжет · ${story.posts.length} публикаций · ${story.channels.length} каналов</span><h2>${esc(story.title)}</h2><p class="research-muted">${esc(date(story.firstAt))} — ${esc(date(story.lastAt))}</p>${analysisHTML(best.analysis,best)}<h3>Все первоисточники</h3>${story.posts.map(p=>'<div class="feed-story-source"><strong>'+esc(p.post.channel)+'</strong><p>'+esc(p.analysis.summary_ru)+'</p>'+link(p.canonical_url,'Оригинал')+'<button class="btn small" data-source="'+esc(p.id)+'" data-source-revision="'+esc(p.revision_id)+'">Разбор и версии</button><details><summary>Перевод и оригинал</summary><div class="feed-text">'+esc(p.analysis.translation_ru)+'</div><hr><div class="feed-text">'+esc(p.post.text)+'</div></details></div>').join('')}`;
@@ -141,21 +145,30 @@
     if(selected?.type!=='story'||selected.id!==story.id)return;
     if(item&&item.revision_id===best.revision_id){$('feed-detail').insertAdjacentHTML('afterbegin',classificationHTML(item));bindClassification(item,story);}
     $('feed-detail').querySelectorAll('[data-source]').forEach(b=>b.onclick=()=>ResearchUI.material(b.dataset.source,null,b.dataset.sourceRevision).catch(e=>$('feed-status').textContent=e.message));render();
+    if(reveal)revealDetail();
+  }
+  function emptyState(filtered, stories = false) {
+    const title=filtered?'Ничего не найдено':stories?'Сюжетов пока нет':'Публикаций пока нет';
+    const message=filtered?(collection==='starred'?'Отмечайте публикации звездой, чтобы вернуться к ним позже.':collection==='ready'?'Здесь появятся публикации с определённым активом и направлением.':'Измените поисковый запрос или выберите другие фильтры.'):stories?'Сюжеты появятся после разбора публикаций. Можно переключиться на отдельные посты.':'Подключите источники в настройках. Новые публикации появятся здесь после загрузки.';
+    return `<div class="research-card feed-empty"><h2>${title}</h2><p class="research-muted">${message}</p>${!filtered?'<a class="feed-text-link" href="/?section=imports#settings">Настроить источники →</a>':''}</div>`;
   }
   function render() {
     metrics();
+    document.querySelector('.feed-rail').classList.toggle('has-selection',Boolean(selected));
     const q = $('feed-search').value.trim().toLowerCase(), filter = $('feed-kind').value, storyMode=$('feed-view').value==='stories',direction=$('feed-direction').value;
+    $('feed-list-title').textContent=storyMode?'Сюжеты Telegram':isX?'Публикации X':'Публикации Telegram';
     $('telegram-panel').hidden=filter==='x';
     if(storyMode){
       const shown=(telegram?.items || []).filter(s=>filter!=='x' && (!direction||(direction==='pending'?!['bullish','bearish'].includes(s.sentiment):s.sentiment===direction)) && (!$('feed-stars').checked || s.posts.some(p=>stars.has(p.id))) && [s.title,...s.allTickers,...s.channels,...s.posts.map(p=>p.analysis.summary_ru)].join(' ').toLowerCase().includes(q));
       shown.sort((a,b)=>b.priority.score-a.priority.score || b.lastAt-a.lastAt);
       $('feed-count').textContent=`Сюжетов: ${shown.length} · по важности · последние 7 дней${telegram?.capped ? ' · показаны сюжеты из 300 последних постов' : ''}`;
-      $('feed-list').innerHTML=shown.map(s=>`<article class="research-card feed-post"><div class="feed-post-head"><span class="research-badge">${s.channels.length} каналов · ${s.posts.length} постов</span><span>${esc(s.priority.level==='important'?'Важно':s.priority.level==='interesting'?'Интересно':'Сюжет')}</span></div><button class="feed-open" data-story="${esc(s.id)}">${esc(s.title)}</button><p>${esc(s.posts[0].analysis.summary_ru)}</p><p class="research-muted">${s.priority.reasons.map(r=>esc(r.label)).join(' · ')} · ${esc(date(s.lastAt))}</p></article>`).join('') || '<div class="research-card"><h2>Сюжетов пока нет</h2><p class="research-muted">Сюжеты появятся после успешного разбора публикаций. Проверьте фильтры и состояние обработки.</p></div>';
-      $('feed-list').querySelectorAll('[data-story]').forEach(b=>b.onclick=()=>openStory(telegram.items.find(s=>s.id===b.dataset.story)));
+      $('feed-list').innerHTML=shown.map(s=>`<article class="research-card feed-post${selected?.id===s.id?' selected':''}"><div class="feed-post-head"><span class="research-badge">${s.channels.length} каналов · ${s.posts.length} постов</span><span>${esc(s.priority.level==='important'?'Важно':s.priority.level==='interesting'?'Интересно':'Сюжет')}</span></div><button class="feed-open" data-story="${esc(s.id)}">${esc(s.title)}</button><p class="feed-excerpt">${esc(s.posts[0].analysis.summary_ru)}</p><p class="research-muted">${s.priority.reasons.map(r=>esc(r.label)).join(' · ')} · ${esc(date(s.lastAt))}</p></article>`).join('') || emptyState(Boolean(q||direction||$('feed-stars').checked),true);
+      $('feed-list').querySelectorAll('[data-story]').forEach(b=>b.onclick=()=>openStory(telegram.items.find(s=>s.id===b.dataset.story),true));
       $('feed-more').hidden=true;return;
     }
     const shown = items.filter(item => (!filter || (filter === 'x' ? kind(item) === 'X' : kind(item) === 'Telegram')) &&
       (!direction||(direction==='pending'?(!signal(item).direction||!signal(item).primary_asset_uid):signal(item).direction===direction)) &&
+      (collection!=='starred'||stars.has(item.id)) && (collection!=='ready'||(signal(item).direction&&signal(item).primary_asset_uid)) &&
       (!$('feed-stars').checked || stars.has(item.id)) && [item.title,item.original_text,item.author,item.source_id,item.telegram?.analysis?.translation_ru,item.telegram?.analysis?.title_ru,signal(item).symbol,...(signal(item).candidate_symbols||[])].join(' ').toLowerCase().includes(q));
     $('feed-count').textContent = `Показано ${shown.length} · Загружено ${items.length}`;
     const card = item => {
@@ -163,12 +176,7 @@
       const ready=signal(item).direction&&signal(item).primary_asset_uid;
       return `<article class="research-card feed-post${selected?.id === item.id ? ' selected' : ''}" data-bias="${esc(signal(item).direction||'pending')}"><div class="feed-post-head"><span class="feed-source-icon ${kind(item)==='X'?'source-x':''}">${kind(item)==='X'?'𝕏':'↗'}</span><span class="feed-author">${esc(item.author || item.source_id || 'Источник')}<small>${kind(item)} · ${esc(date(item.published_at))}</small></span><button class="btn small feed-star" data-star="${esc(item.id)}" aria-label="Избранное" aria-pressed="${stars.has(item.id)}">${stars.has(item.id) ? '★' : '☆'}</button></div><button class="feed-open" data-open="${esc(item.id)}">${esc(a?.title_ru || item.title || (item.original_text || 'Публикация').slice(0,160))}</button>${a?.summary_ru || item.original_text ? '<p class="feed-excerpt">'+esc(a?.summary_ru || item.original_text.slice(0,360))+'</p>' : ''}${badges(item)}<div class="feed-post-footer"><span class="research-muted">${item.telegram ? esc(a ? 'Разобрано · Важность '+a.impact+'/5' : errors[item.telegram.error_code] || (item.telegram.status==='error' ? 'Ошибка разбора' : 'Ожидает разбора')):'Публикация X'}</span><button class="btn small ${ready?'primary':''}" data-create="${esc(item.id)}">${ready?'+ Создать идею':'Классифицировать →'}</button></div></article>`;
     };
-    const empty = message => '<p class="flow-empty">'+message+'</p>';
-    const column = (title, note, posts, cls, message) => `<section class="flow-column ${cls}"><header><h2>${title}<span>${posts.length}</span></h2><p>${note}</p></header><div>${posts.map(card).join('') || empty(message)}</div></section>`;
-    $('feed-list').innerHTML = isX ? '<div class="x-feed-board">'+
-      column('Общая лента','Все сохранённые X-публикации',shown,'flow-general','Публикаций пока нет. Добавьте аккаунты для наблюдения.')+
-      column('Под звездой','Выбрано вручную',shown.filter(i=>stars.has(i.id)),'flow-starred','Отметьте нужную публикацию звездой.')+
-      column('Ситуативные','Уверенный тезис · проверено вручную или Grok',shown.filter(i=>signal(i).primary_asset_uid&&(signal(i).origin==='manual'||signal(i).confidence==='high')),'flow-situational','Разобранные публикации с уверенным тезисом появятся здесь.')+'</div>' : shown.map(card).join('') || '<div class="research-card"><h2>Публикаций пока нет</h2><p class="research-muted">Проверьте фильтры и подключённые источники.</p></div>';
+    $('feed-list').innerHTML = shown.map(card).join('') || emptyState(Boolean(q||direction||$('feed-stars').checked||collection!=='all'));
     if(isX){const projects=items.filter(i=>signal(i).symbol&&signal(i).reason_ru).slice(0,3);$('feed-projects').innerHTML=projects.length?projects.map(i=>`<p><strong>${esc(signal(i).symbol)}</strong> · ${esc(signal(i).reason_ru)} <button class="btn small" data-project="${esc(i.id)}">Открыть</button></p>`).join(''):'Свежих разобранных тезисов пока нет. Новые публикации подключённых аккаунтов проходят классификацию автоматически.';$('feed-projects').querySelectorAll('[data-project]').forEach(b=>b.onclick=()=>{openPost(items.find(i=>i.id===b.dataset.project));$('feed-detail').scrollIntoView({block:'start',behavior:'smooth'});});}
 
     $('feed-more').hidden = !more;
@@ -177,14 +185,16 @@
       try { localStorage.setItem('stv:feed:stars', JSON.stringify([...stars])); } catch { $('feed-status').textContent = 'Избранное сохранено только до закрытия страницы.'; }
       render();
     });
-    $('feed-list').querySelectorAll('[data-open]').forEach(button => button.onclick = () => openPost(items.find(i=>i.id===button.dataset.open)));
+    $('feed-list').querySelectorAll('[data-open]').forEach(button => button.onclick = () => openPost(items.find(i=>i.id===button.dataset.open),true));
     $('feed-list').querySelectorAll('[data-create]').forEach(b=>b.onclick=()=>{const item=items.find(i=>i.id===b.dataset.create);openPost(item);if(signal(item).direction&&signal(item).primary_asset_uid)createIdea(item).catch(e=>$('feed-status').textContent=e.message);else{$('feed-detail').scrollIntoView({block:'start',behavior:'smooth'});$('feed-asset-search').focus({preventScroll:true});}});
   }
   function renderTelegram() {
     const t=telegram;
     const priority=t.items.filter(s=>s.priority.level==='important').slice(0,3);
-    $('telegram-priority').innerHTML=priority.length?priority.map(s=>`<button class="telegram-priority-story" data-priority="${esc(s.id)}"><strong>${esc(s.title)}</strong><span>${s.channels.length} каналов · ${esc(s.priority.reasons.map(r=>r.label).join(' · '))}</span></button>`).join(''):'<p class="research-muted">Сейчас ничего срочного. Сюжеты ниже отсортированы по важности.</p>';
-    $('telegram-priority').querySelectorAll('[data-priority]').forEach(b=>b.onclick=()=>openStory(t.items.find(s=>s.id===b.dataset.priority)));
+    $('telegram-priority-block').hidden=!priority.length;
+    document.querySelector('.telegram-overview').classList.toggle('has-priority',Boolean(priority.length));
+    $('telegram-priority').innerHTML=priority.map(s=>`<button class="telegram-priority-story" data-priority="${esc(s.id)}"><strong>${esc(s.title)}</strong><span>${s.channels.length} каналов · ${esc(s.priority.reasons.map(r=>r.label).join(' · '))}</span></button>`).join('');
+    $('telegram-priority').querySelectorAll('[data-priority]').forEach(b=>b.onclick=()=>openStory(t.items.find(s=>s.id===b.dataset.priority),true));
     $('telegram-status').textContent=`За 7 дней: ${t.posts_loaded} постов · разобрано ${t.analyzed} · ожидают ${t.pending} · ошибок ${t.errors}${t.capped ? ' · ограничено 300 последними постами' : ''}`;
     $('feed-health').textContent=`Telegram: ${t.analyzed} разобрано · ${t.pending} в очереди${t.errors?' · '+t.errors+' требуют внимания':''}`;
     const m=t.model;
@@ -194,10 +204,11 @@
     $('telegram-digest-view').innerHTML=d ? `<details open><summary>Дайджест за 24 часа · ${esc(date(d.created_at))}${d.superseded ? ' · появились изменения, требуется обновление' : ''}</summary><h3>${esc(d.headline_ru)}</h3><p class="research-muted">Период: ${esc(date(d.from_at))} — ${esc(date(d.to_at))} · разобрано ${d.coverage.analyzed} из ${d.coverage.posts_loaded} постов</p><ul>${d.bullets.map(b=>'<li>'+esc(b.text_ru)+' <button class="btn small" data-digest-story="'+esc(b.story_id)+'">Источники</button></li>').join('')}</ul>${d.funds_ru.length ? '<h4>Фонды</h4>'+list(d.funds_ru) : ''}<h4>Что отслеживать</h4>${list(d.watch_ru)}<p class="research-muted">${d.tickers_heat.map(t=>esc(t.symbol)+': '+t.mentions+' упоминаний / '+t.channels+' каналов').join(' · ')}</p></details>` : '<p class="research-muted">Дайджест ещё не собран. Он создаётся из успешно разобранных сюжетов за последние 24 часа.</p>';
     $('telegram-digest-view').querySelectorAll('[data-digest-story]').forEach(b=>b.onclick=()=>{
       const story=t.items.find(s=>s.id===b.dataset.digestStory);
-      if(story && !d.superseded)openStory(story);else{
+      if(story && !d.superseded)openStory(story,true);else{
         const saved=d.stories.find(s=>s.story_id===b.dataset.digestStory);
         $('feed-detail').innerHTML='<h2>'+esc(saved?.title || 'Сохранённый сюжет')+'</h2><p>'+esc(saved?.summary || '')+'</p><p class="research-muted">Сюжет изменился или вышел из текущего окна. Версии первоисточников сохранены:</p>'+(d.story_sources?.[b.dataset.digestStory] || d.input_revisions).map(([id,rev])=>'<button class="btn small" data-saved-id="'+esc(id)+'" data-revision="'+esc(rev)+'">Источник '+esc(id.slice(-8))+'</button>').join('');
         $('feed-detail').querySelectorAll('[data-saved-id]').forEach(btn=>btn.onclick=()=>ResearchUI.material(btn.dataset.savedId,null,btn.dataset.revision).catch(e=>$('feed-status').textContent=e.message));
+        revealDetail();
       }
     });
     const active=t.jobs.find(j=>['pending','running'].includes(j.status));
@@ -223,16 +234,21 @@
       items = append ? [...items, ...response.data.items] : quiet ? [...response.data.items,...items.filter(i=>!response.data.items.some(n=>n.id===i.id))] : response.data.items;
       if(quiet && previousLast && items.length>50)items.sort((a,b)=>b.published_at-a.published_at || a.id.localeCompare(b.id));
       if(!quiet || !more)more = response.data.has_more;
-      const results=await Promise.allSettled([isX?Promise.resolve(null):api('/telegram'),api('/config'),api('/channels'),loadIdeas(),api('/feed-classifier')]);
-      if(results[4].status==='fulfilled'){const c=results[4].value.data,m=c.model,q=c.queue;$('feed-classifier-status').textContent=!c.enabled?'Автоклассификация выключена':!m.configured?'Автоклассификация: укажите ключ xAI в настройках ИИ':'Автоклассификация xAI · '+m.model+(q?' · готовы: '+q.ready+' · выполняются: '+q.running+' · отложены: '+q.deferred:'')+(m.rate_limit?.retry_after?' · пауза xAI: '+m.rate_limit.retry_after+' сек.':' · обработка в фоне');}
+      const results=await Promise.allSettled([isX?Promise.resolve(null):api('/telegram'),api(isX?'/x-accounts':'/channels'),quiet?Promise.resolve():loadIdeas(),api('/feed-classifier')]);
+      if(results[3].status==='fulfilled'){const c=results[3].value.data,m=c.model,q=c.queue;$('feed-classifier-status').textContent=!c.enabled?'Автоматический разбор выключен':!m.configured?'Для автоматического разбора укажите ключ xAI в настройках ИИ':'Разбор через xAI · '+m.model+(q?' · в очереди: '+q.ready+' · обрабатываются: '+q.running+' · отложены: '+q.deferred:'')+(m.rate_limit?.retry_after?' · пауза: '+m.rate_limit.retry_after+' сек.':' · работает в фоне');}
       else $('feed-classifier-status').textContent='Не удалось проверить состояние xAI. Ручная классификация доступна.';
       if(results[0].status==='fulfilled'&&results[0].value){telegram=results[0].value.data;renderTelegram();}else if(!isX){$('telegram-status').textContent='Не удалось загрузить обработку Telegram: '+results[0].reason.message;}
-      if(results[1].status==='fulfilled' && results[2].status==='fulfilled'){
-        const terminal=results[1].value.data.sources.terminal,channels=results[2].value.data.items;
-        $('feed-sources').textContent=`Импорт STVTerminal: ${terminal.last_success_at ? date(terminal.last_success_at) : 'нет успешных обновлений'} · Telegram: ${channels.filter(c=>c.enabled).length} каналов включено из ${channels.length}`;
+      if(results[1].status==='fulfilled'){
+        const data=results[1].value.data,sources=data.items,enabled=sources.filter(s=>s.enabled);
+        const summary=isX?`Аккаунты X: ${enabled.length} включено из ${sources.length}. ${data.configured?'X API подключён.':'Для загрузки новых постов подключите X API в настройках.'}`:`Каналы Telegram: ${enabled.length} включено из ${sources.length}.`;
+        $('feed-sources').textContent=summary+' '+(enabled.map(s=>'@'+s.handle).join(', ')||'Добавьте источники в настройках.');
+        if(isX)$('feed-health').textContent=data.configured?`X API подключён · активных аккаунтов: ${enabled.length}`:'X API не подключён';
+      }else{
+        $('feed-sources').textContent='Не удалось проверить источники. Откройте настройки или обновите ленту.';
+        if(isX)$('feed-health').textContent='Не удалось проверить подключение';
       }
       if(selected?.type==='post'&&!classificationDirty&&!document.querySelector('dialog[open]')){const item=items.find(i=>i.id===selected.id);if(item&&(!quiet||classificationKey(item)!==selected.classificationKey))openPost(item);}else if(!quiet && selected?.type==='story'){const story=telegram?.items.find(s=>s.id===selected.id);if(story)openStory(story);}render();
-      $('feed-status').textContent = 'Лента обновлена. Избранное хранится в этом браузере.';
+      if(!quiet)$('feed-status').textContent = 'Обновлено в '+new Date().toLocaleTimeString('ru-RU',{timeZone:'Europe/Moscow',hour:'2-digit',minute:'2-digit'})+' МСК · избранное сохраняется в этом браузере';
       const requested=new URLSearchParams(location.search).get('post');if(requested&&!selected){let post=items.find(i=>i.id===requested);if(!post){try{post=(await api('/feed/'+encodeURIComponent(requested))).data;}catch(e){$('feed-status').textContent=e.message;}}if(post&&post.source_kind===sourceKind)openPost(post);}
     } catch (error) { $('feed-status').textContent = error.message || 'Не удалось загрузить ленту.'; }
     finally { busy = false; $('feed-refresh').disabled = $('feed-more').disabled = false;
@@ -243,16 +259,12 @@
   if(!isX){$('telegram-digest').onclick=()=>action('/telegram/digest',$('telegram-digest'));$('telegram-process').onclick=()=>action('/telegram/process',$('telegram-process'));}
   ['feed-kind','feed-stars','feed-view','feed-direction'].forEach(id => $(id).onchange = () => {if(id==='feed-kind' && $('feed-kind').value==='x')$('feed-view').value='posts';render();});
   $('feed-search').oninput = render;
+  document.querySelectorAll('[data-feed-collection]').forEach(button=>button.onclick=()=>{
+    collection=button.dataset.feedCollection;
+    document.querySelectorAll('[data-feed-collection]').forEach(b=>{const active=b===button;b.classList.toggle('active',active);b.setAttribute('aria-pressed',String(active));});
+    render();
+  });
+  $('feed-back').onclick=()=>{document.querySelector('.feed-stream').scrollIntoView({block:'start',behavior:'smooth'});$('feed-search').focus({preventScroll:true});};
   document.addEventListener('research:ideas-changed',()=>{loadIdeas();$('feed-status').textContent='Идея сохранена. Все черновики и наблюдения доступны в разделе «Идеи».';});
-
-
-  async function loadSources(){
-    try{const r=await api(isX?'/x-accounts':'/channels'),sources=r.data.items;
-      $('source-connection').textContent=isX?(r.data.configured?'X API подключён':'X API не подключён'):sources.filter(s=>s.enabled).length+' каналов включено';
-      $('flow-source-list').innerHTML=sources.map(v=>`<div class="flow-source-row"><span>@${esc(v.handle)} <small>${v.enabled?'Наблюдаем':'Отключён'}</small></span><button class="btn small" data-source-toggle="${esc(v.handle)}">${v.enabled?'Отключить':'Включить'}</button></div>`).join('')||'<p class="research-muted">Добавьте первый источник.</p>';
-      $('flow-source-list').querySelectorAll('[data-source-toggle]').forEach(b=>b.onclick=async()=>{b.disabled=true;const source=sources.find(v=>v.handle===b.dataset.sourceToggle);try{await api(isX?'/x-accounts':'/channels',{method:'POST',body:JSON.stringify({...source,enabled:!source.enabled})});await loadSources();}catch(e){$('flow-source-status').textContent=e.message;}finally{b.disabled=false;}});
-    }catch(e){$('flow-source-status').textContent=e.message;}
-  }
-  $('flow-source-form').onsubmit=async e=>{e.preventDefault();const b=e.currentTarget.querySelector('button');b.disabled=true;try{await HTF.ensureToken();await api(isX?'/x-accounts':'/channels',{method:'POST',body:JSON.stringify({handle:$('flow-source-handle').value,enabled:true})});$('flow-source-handle').value='';$('flow-source-status').textContent='Источник добавлен. Публикации будут собираться в фоне.';await loadSources();}catch(e){$('flow-source-status').textContent=e.message;}finally{b.disabled=false;}};
-  HTF.ensureToken().then(()=>{loadSources();load();}).catch(e=>$('feed-status').textContent=e.message);
+  load();
 })();

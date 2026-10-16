@@ -1,4 +1,4 @@
-/* Feed workspace: platform theme tokens, compact source controls and idea actions. */
+/* Feed workspace: reading, filtering and turning publications into ideas. */
 .feed-auto-explanation{padding:12px;border-radius:8px;background:var(--lf-surface);font-size:11px;line-height:1.7;margin:12px 0}.feed-auto-explanation strong{font-weight:500}.feed-auto-explanation p{margin:6px 0;font-size:11px;color:var(--lf-text2)}#feed-classifier-status{margin:0 0 16px}
 #feed-root,.ideas-page{max-width:1640px;margin:auto;padding:30px clamp(16px,2.5vw,40px) 40px}
 #feed-root .market-header{align-items:center;margin-bottom:0;gap:18px}
@@ -58,7 +58,63 @@
 .feed-empty-icon{width:42px;height:42px;border-radius:12px;display:grid;place-items:center;background:var(--lf-selected);color:var(--lf-brand);font-size:23px}.feed-steps{display:flex;flex-wrap:wrap;gap:8px;margin-top:20px}.feed-steps span{font-size:9px;color:var(--lf-text2);background:var(--lf-bg);border-radius:5px;padding:6px}
 .feed-story-source{border-top:1px solid var(--lf-border);padding:16px 0}.feed-story-source>.btn{font-size:10px;margin:8px 6px 0 0}#telegram-panel[hidden],#feed-more[hidden]{display:none}#telegram-digest-view{overflow-wrap:anywhere}#telegram-digest-view li{margin:10px 0}
 .ideas-page .research-block{border-radius:13px;padding:22px}.ideas-page .research-block>h2{font-size:18px;margin-top:0}.ideas-page .research-block>p{font-size:12px;color:var(--lf-text2);line-height:1.7}.ideas-page [data-idea-list]{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.ideas-page [data-idea-list] .research-card{margin:0;padding:20px;border-radius:12px}.ideas-page .research-card h3{font-size:15px;line-height:1.5}.ideas-page .research-card p{font-size:12px}
-@media(min-width:1500px){.feed-detail{position:sticky;top:20px;max-height:calc(100vh - 40px);overflow:auto}}
 @media(max-width:1100px){.feed-metric{padding:14px}.feed-metric strong{font-size:25px}.feed-metric small{font-size:9px}.feed-layout{gap:16px;grid-template-columns:minmax(0,1fr) minmax(285px,.85fr)}.feed-post,.feed-rail .research-card{padding:16px}}
 @media(max-width:850px){.feed-layout{grid-template-columns:1fr}.feed-operations-body{grid-template-columns:1fr}.feed-rail{display:flex;flex-direction:column}.feed-detail{order:-1}.feed-metric{grid-template-columns:1fr}.feed-metric strong{grid-column:1;grid-row:auto}.feed-metric small{display:none}.feed-metrics{gap:8px}.feed-detail{position:static;max-height:none;overflow:visible}.ideas-page [data-idea-list]{grid-template-columns:1fr}}
 @media(max-width:520px){#feed-root,.ideas-page{padding:22px 14px 30px}#feed-root .now-title{font-size:25px}#feed-root .market-header{align-items:start}.feed-header-actions .btn{font-size:10px;padding:8px 10px}.feed-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.feed-metric{grid-template-columns:1fr auto;padding:13px}.feed-metric strong{grid-column:2;grid-row:1}.feed-metric>span{font-size:10px}.feed-filters{gap:10px;padding:12px}.feed-filters>label{flex:1 1 40%}.feed-filters select{width:100%;max-width:none}.feed-filters .feed-search-label{flex-basis:100%}.feed-filters .feed-star-filter{padding:0;flex-basis:100%}.feed-signal-origin{display:none}.feed-existing{align-items:start;flex-direction:column}.feed-operations>summary{gap:5px}.feed-operations>summary .research-muted{font-size:10px}.feed-list-heading h2{font-size:13px}}
+
+/* Shared structure for X and Telegram. Source management lives in settings. */
+#feed-root [hidden]{display:none!important}
+.feed-platform-tabs{display:flex;gap:6px;margin-top:24px;border-bottom:1px solid var(--lf-border)}
+.feed-platform-tabs a{padding:12px 16px;color:var(--lf-text2);font-size:14px;text-decoration:none;border-bottom:2px solid transparent;margin-bottom:-1px}
+.feed-platform-tabs a[aria-current=page]{color:var(--lf-brand);border-bottom-color:var(--lf-brand);font-weight:600}
+.feed-platform-tabs a:hover{background:var(--lf-selected)}
+#feed-status{margin:10px 0 18px;font-size:12px;line-height:1.6;min-height:0}
+#feed-root .feed-metrics{gap:0;border:1px solid var(--lf-border);border-radius:12px;background:var(--lf-surface);overflow:hidden;margin-bottom:14px}
+#feed-root .feed-metric{border:0;border-radius:0;border-right:1px solid var(--lf-border);padding:14px 18px;display:flex;justify-content:space-between;gap:10px}
+#feed-root .feed-metric:last-child{border-right:0}
+#feed-root .feed-metric strong{font-size:23px;letter-spacing:-.5px}
+.feed-operations>summary{font-size:13px;padding:12px 16px}
+.feed-operations>summary .research-muted{font-size:12px;font-weight:400}
+.feed-source-panel p{overflow-wrap:anywhere}
+.feed-text-link{font-size:12px;color:var(--lf-brand);text-decoration:none}
+.feed-text-link:hover{text-decoration:underline}
+.feed-filters{margin-bottom:18px;gap:12px;display:flex;flex-wrap:wrap}
+.feed-filters label{font-size:12px}
+.feed-filters input,.feed-filters select{font-size:13px;min-height:40px}
+.feed-filters .feed-search-label{flex:1 1 180px}
+.feed-filters .feed-star-filter{padding-top:0;align-self:end;min-height:40px;font-size:12px}
+.feed-list-heading h2{font-size:17px}
+.feed-list-heading p{font-size:12px}
+.feed-collection-tabs{margin:0 0 16px;gap:6px}
+.feed-collection-tabs .btn{min-height:36px;font-size:12px}
+.feed-post .feed-excerpt{font-size:13px;line-height:1.7}
+.feed-author{font-size:13px}.feed-author small{font-size:11px}
+.feed-bias,.feed-ticker,.feed-signal-origin,.feed-unmapped{font-size:11px}
+.feed-post-footer>span{font-size:11px}
+.feed-empty{padding:28px!important;line-height:1.7}
+.feed-empty h2{font-size:17px;margin-top:0}
+.feed-back{display:none}
+.feed-rail .feed-detail h2{margin-top:12px}
+.feed-detail p,.feed-detail li{font-size:13px}
+.feed-detail .research-muted{font-size:12px}
+.feed-detail:focus-visible{outline:2px solid var(--lf-brand);outline-offset:3px}
+#feed-root .flow-projects{padding:16px 20px!important;border-radius:12px!important}
+.flow-projects>summary{cursor:pointer;font-size:14px;font-weight:600}
+.flow-projects>summary .research-muted{font-size:12px;font-weight:400;margin-left:12px}
+#feed-projects{font-size:13px;line-height:1.7;margin:16px 0}
+#feed-projects p{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;padding:12px 0;margin:0;border-bottom:1px solid var(--lf-border)}
+#feed-root .telegram-overview{border-radius:12px!important;padding:18px 20px!important}
+.telegram-overview .research-muted{font-size:12px;line-height:1.7}
+.telegram-priority-story{font:inherit;line-height:1.6}
+.telegram-digest{border-top:1px solid var(--lf-border);margin-top:16px;padding-top:14px;font-size:13px;line-height:1.7}
+.telegram-digest>summary{cursor:pointer;font-weight:600}
+.telegram-overview:not(.has-priority)>.telegram-digest{border:0;padding-top:0;margin-top:0}
+#feed-root .telegram-digest-title{border:0;padding-top:0;margin-top:12px!important}
+.telegram-digest-title p{margin:0;flex:1;min-width:180px}
+#telegram-action:empty{display:none}
+#telegram-digest-view>details{font-size:13px}
+@media(min-width:1100px){.feed-rail{position:sticky;top:20px;max-height:calc(100vh - 40px);overflow:auto;scrollbar-width:thin;scroll-padding-top:10px}}
+@media(max-width:1100px){.feed-layout{grid-template-columns:minmax(0,1.2fr) minmax(285px,1fr)}.feed-filters .feed-search-label{flex-basis:100%}}
+@media(max-width:850px){.feed-layout{grid-template-columns:1fr}.feed-rail{display:block}.feed-rail.has-selection .feed-back{display:inline-flex;margin-bottom:12px;min-height:40px}.feed-rail:not(.has-selection) .feed-detail{display:none}.feed-detail{scroll-margin-top:16px}.feed-filters .feed-search-label{flex-basis:180px}}
+@media(max-width:520px){#feed-root .feed-metrics{display:none}.feed-filters .feed-star-filter{min-height:24px}}
+@media(max-width:520px){#feed-root .market-header{flex-direction:column;align-items:stretch}.feed-header-actions{gap:8px}.feed-header-actions .btn{min-height:40px;font-size:12px;flex:1 1 auto;white-space:normal}.feed-platform-tabs{margin-top:20px}.feed-platform-tabs a{flex:1;text-align:center;padding:11px 8px}#feed-root .feed-metric{padding:12px;font-size:12px}#feed-root .feed-metric:nth-child(2){border-right:0}#feed-root .feed-metric:nth-child(-n+2){border-bottom:1px solid var(--lf-border)}.feed-filters>label{flex:1 1 40%}.feed-filters .feed-search-label{flex-basis:100%}.feed-list-heading{align-items:start}.feed-list-heading h2{font-size:16px}.feed-list-heading p{font-size:11px}.feed-collection-tabs .btn{flex:1 1 auto;font-size:11px;min-height:40px}.feed-operations>summary{gap:6px;align-items:start}.feed-operations>summary .research-muted{flex-basis:100%}.feed-operations>summary:after{display:none}.flow-projects>summary .research-muted{display:block;margin:6px 0 0 16px}#feed-root .telegram-overview,#feed-root .flow-projects{padding:16px!important}.telegram-overview .feed-section-head{gap:6px}}
