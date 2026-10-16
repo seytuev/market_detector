@@ -45,6 +45,23 @@ def test_parameter_literals():
     assert translate("SELECT '?' AS x, ? AS y, 'user' AS z") == "SELECT '?' AS x, %s AS y, 'user' AS z"
 
 
+def test_x_accounts_query_accepts_psycopg_parameters(db,monkeypatch):
+    """Use the real driver parser: a literal percent with empty args caused prod HTTP 500."""
+    from psycopg._queries import PostgresQuery
+    from psycopg.adapt import Transformer
+    from app.research.accounts import XAccounts
+    from app.research.store import Store
+    store=Store(db);accounts=XAccounts(store)
+    accounts.save({'handle':'example','enabled':True})
+    store.set_state('private-credential:x',{'value':'private-test-token'})
+    original=store.rows
+    def checked_rows(query,args=()):
+        PostgresQuery(Transformer()).convert(translate(query),args)
+        return original(query,args)
+    monkeypatch.setattr(store,'rows',checked_rows)
+    assert [a['handle'] for a in accounts.list()]==['example']
+
+
 def test_v1_upgrade_creates_w1_event_journal_and_preserves_data(pg):
     from app.alt.engine_v3 import analyze
     from app.alt.store_v3 import persist_result, select_frame

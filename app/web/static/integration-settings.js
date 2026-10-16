@@ -100,7 +100,13 @@
     const root=roots[pane];if(!root || (loaded.has(pane)&&!force))return;
     loaded.add(pane);root.innerHTML='<p role="status">Загружаем настройки…</p>';
     try{await HTF.ensureToken();await (pane==='ai'?ai:imports)(root);}
-    catch(e){loaded.delete(pane);root.textContent=e.message;const retry=document.createElement('button');retry.className='btn';retry.textContent='Повторить';retry.onclick=()=>load(pane);root.append(retry);}
+    catch(e){
+      loaded.delete(pane);root.replaceChildren();
+      const error=document.createElement('p');error.className='form-error';error.setAttribute('role','alert');
+      error.textContent='Не удалось загрузить настройки. '+(e?.message || 'Сервер не ответил. Попробуйте ещё раз.');
+      const retry=document.createElement('button');retry.type='button';retry.className='btn';retry.textContent='Повторить';
+      retry.onclick=()=>load(pane,true);root.append(error,retry);
+    }
   }
   document.getElementById('settings-sections')?.addEventListener('click',e=>{const b=e.target.closest('[data-settings-pane-btn]');if(b)load(b.dataset.settingsPaneBtn);});
   load(new URLSearchParams(location.search).get('section'));

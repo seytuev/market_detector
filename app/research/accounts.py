@@ -35,7 +35,7 @@ class XAccounts:
     def configured(self):return bool(self.token())
 
     def list(self):
-        return [decode(row['payload']) for row in self.s.rows("SELECT payload FROM research_source_state WHERE id LIKE 'x-account:%' ORDER BY id")]
+        return [decode(row['payload']) for row in self.s.rows("SELECT payload FROM research_source_state WHERE id LIKE ? ORDER BY id",('x-account:%',))]
 
     def save(self,body):
         handle=normalize_handle(body.get('handle'),'x')

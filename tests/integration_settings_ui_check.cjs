@@ -12,7 +12,19 @@ const token=process.env.RESEARCH_TEST_TOKEN||'telegram-fixture';
     fs.mkdirSync('tmp/integration-settings',{recursive:true});
     for(const width of [1440,390]) {
       await page.setViewport({width,height:960});
-      await page.goto(base+'/?token='+token+'&section=imports#settings',{waitUntil:'networkidle2'});
+      await page.goto(base+'/?token='+token+'&section=ai#settings',{waitUntil:'networkidle2'});
+      await page.waitForSelector('[data-model]');
+      await page.evaluate(()=>{
+        const original=HTF.api;let failed=false;
+        HTF.api=async(path,options)=>{
+          if(path==='/api/research/v1/x-accounts'&&!failed){failed=true;throw new Error('');}
+          return original(path,options);
+        };
+      });
+      await page.click('[data-settings-pane-btn="imports"]');
+      await page.waitForSelector('#integration-settings [role=alert]');
+      assert.match(await page.$eval('#integration-settings [role=alert]',el=>el.textContent),/Не удалось загрузить настройки/);
+      await page.click('#integration-settings > button');
       await page.waitForSelector('[data-add="x"]');
       async function checkCredential(name) {
         const selector=`[data-credential="${name}"]`,secret='ui-fixture-secret-'+name;

@@ -260,10 +260,10 @@ window.HTF = (() => {
       return api(path, options);
     }
     if (!resp.ok) {
-      let detail = resp.statusText;
+      let detail = resp.statusText || `Ошибка сервера (HTTP ${resp.status}). Попробуйте ещё раз.`;
       try { const payload = await resp.json(); detail = payload.error?.message || payload.detail || detail; } catch (e) { /* не JSON */ }
       if (typeof detail === 'object') detail = detail.fields ? Object.entries(detail.fields).map(([k,v]) => `${k}: ${v}`).join('\n') : JSON.stringify(detail);
-      throw new Error(detail);
+      throw new Error(detail || `Ошибка сервера (HTTP ${resp.status}). Попробуйте ещё раз.`);
     }
     return resp.status === 204 ? null : resp.json();
   }
