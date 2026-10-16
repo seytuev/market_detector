@@ -12,8 +12,8 @@
     $('title').textContent = snapshot.title;
     $('subtitle').textContent = snapshot.subtitle;
     const theme = HTF.chartTheme();
-    const minPrice = Math.min(...bars.flatMap(bar => [bar.low, bar.close]).filter(value => value > 0));
-    const precision = Math.min(12, Math.max(2, 4 - Math.floor(Math.log10(minPrice))));
+    const priceFormat = HTF.chartPriceFormat(bars);
+    const precision = priceFormat.precision;
     const fmtPrice = value => Number(value).toLocaleString('ru-RU', { maximumFractionDigits: precision });
     const fmtTime = value => new Date(value).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' });
     const chart = LightweightCharts.createChart($('chart'), {
@@ -26,7 +26,7 @@
     });
     const series = chart.addCandlestickSeries({
       ...HTF.candleOptions(theme),
-      priceFormat: { type: 'price', precision, minMove: 10 ** -precision },
+      priceFormat,
       ...(snapshot.quote || snapshot.price_bounds ? {
         ...(snapshot.quote ? { lastValueVisible: false, priceLineVisible: false } : {}),
         autoscaleInfoProvider: original => {
@@ -124,6 +124,7 @@
           div.style.height = box.height + 'px';
           div.style.background = zone.muted ? 'rgba(139,149,163,.12)'
             : zone.fill || (direction === 'bull' ? 'rgba(var(--zone-bull-rgb),.12)' : 'rgba(var(--zone-bear-rgb),.12)');
+          HTF.zoneDisplay.appendFill(div, { ...zone, display_until: zone.to }, price => series.priceToCoordinate(price));
           const mid = series.priceToCoordinate(zone.mid ?? (zone.lower + zone.upper) / 2);
           if (mid > box.top && mid < box.top + box.height) {
             const line = document.createElement('span');

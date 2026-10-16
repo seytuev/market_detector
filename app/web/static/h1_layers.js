@@ -88,11 +88,12 @@
   }
 
   function zonePlan(zone) {
-    const level = !!(zone.is_level || zone.type === 'BSL' || zone.type === 'SSL'
+    const type = String(zone.type || '').toUpperCase();
+    const level = !!(zone.is_level || type === 'BSL' || type === 'SSL'
       || zone.lower === zone.upper);
     return {
       shape: level ? 'line' : 'rect',
-      label: (zone.type || 'Зона') + ' H1',
+      label: (type || 'Зона') + ' H1',
     };
   }
 
@@ -248,7 +249,7 @@
   function passesFilters(zone, settings) {
     if (!settings.zones || !typeOn(settings, zone)) return false;
     if ((zone.candidate || zone.lifecycle === 'candidate') && !settings.candidates) return false;
-    if (zone.lifecycle === 'ended' && !settings.historicalZones) return false;
+    if ((zone.lifecycle === 'ended' || zone.display_until != null) && !settings.historicalZones) return false;
     return true;
   }
 
@@ -295,17 +296,17 @@
           || !['ok', 'eligible_provisional', undefined].includes(region.reason)) return;
       const admitted = region.admitted;
       if (!admitted || admitted[0] > admitted[1]) return;
-      const same = z => z.type === region.type && z.direction === (region.direction || setup.direction)
+      const same = z => String(z.type).toLowerCase() === String(region.type).toLowerCase() && z.direction === (region.direction || setup.direction)
         && z.lower === region.lower && z.upper === region.upper
         && (region.formed_at == null || z.formed_at === region.formed_at);
       const zone = zones.find(z => same(z) && z.lifecycle !== 'ended' && !z.candidate
         && (!z.relevance || z.relevance.relevant));
       // Текущий расчёт может ещё не иметь отдельной записи в архиве.
       const source = zone || region;
-      if (source.lifecycle === 'ended' || source.lifecycle === 'candidate' || source.candidate
+      if (source.lifecycle === 'ended' || source.display_until != null || source.lifecycle === 'candidate' || source.candidate
           || source.confirmed_at == null
           || source.relevance && !source.relevance.relevant
-          || source.type === 'FVG' && source.max_test_depth >= 1) return;
+          || String(source.type).toLowerCase() === 'fvg' && source.max_test_depth >= 1) return;
       const key = [source.type, admitted[0], admitted[1]].join(':');
       if (seen.has(key)) return;
       seen.add(key);
@@ -703,7 +704,8 @@
         let x2 = paneRight;
         if (zone.display_until != null) {
           const end = xOf(zone.display_until);
-          if (end != null) x2 = Math.min(paneRight, end);
+          if (end == null) return;
+          x2 = Math.min(paneRight, end);
         }
         if (x2 <= x1) return;
         const adm = admissionOf(layers, zone);
@@ -766,7 +768,7 @@
             const bear = rgb('--zone-bear-rgb', '214, 69, 77');
             const alpha = String(zone.type || '').toLowerCase() === 'fvg' ? 0.22 : 0.28;
             // BSL/SSL: цвет инвертирован относительно направления движения
-            const colorDir = (zone.type === 'BSL' || zone.type === 'SSL')
+            const colorDir = (['bsl', 'ssl'].includes(String(zone.type).toLowerCase()))
               ? (zone.direction === 'bear' ? bull : bear)
               : (zone.direction === 'bear' ? bear : bull);
             const color = `rgba(${colorDir},${alpha})`;

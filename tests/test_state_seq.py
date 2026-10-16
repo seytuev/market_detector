@@ -66,11 +66,17 @@ def _zone(db: Database, instrument_id: int) -> int:
     ))
 
 
-def test_state_seq_grows_on_writes(db: Database, instrument_id: int):
+def test_empty_database_starts_at_zero(db: Database):
     assert db.get_state_seq() == 0
+
+
+def test_state_seq_grows_on_writes(db: Database, instrument_id: int):
+    # The instrument fixture has already performed a domain write.
+    initial = db.get_state_seq()
+    assert initial > 0
     db.insert_candles([make_candle(T0, 100, 101, 99, 100.5, timeframe="H1", instrument_id=instrument_id)])
     s1 = db.get_state_seq()
-    assert s1 > 0
+    assert s1 > initial
     zid = _zone(db, instrument_id)
     s2 = db.get_state_seq()
     assert s2 > s1

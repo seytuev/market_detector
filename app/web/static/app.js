@@ -17,7 +17,6 @@ const state = {
   chartMode: 'context',
   savedTimeframe: 'D1',
   zones: [],
-  groups: [],
   candles: [],
   lastPrice: null,
   chart: null,
@@ -88,16 +87,10 @@ const reviewState = {
   boundsDrafts: new Map(),
 };
 
-// Статусы, видимые на графике по умолчанию
-const CHART_STATUSES = new Set(['candidate', 'active', 'weakened', 'worked']);
-// Снятый HTF BSL/SSL остаётся на графике 7 суток. Линия кончается в display_until.
-const SWEPT_LEVEL_KEEP_MS = 7 * 86_400_000;
-
+// Canonical relevance is independent of review status. Completed objects
+// belong to history; the recent-sweep layer is an explicit display option.
 function sweptLevelVisible(z, now = Date.now()) {
-  if (!z || (z.type !== 'ssl' && z.type !== 'bsl')) return false;
-  if (z.status !== 'taken' || !z.display_until) return false;
-  const age = now - z.display_until;
-  return age >= 0 && age <= SWEPT_LEVEL_KEEP_MS;
+  return HTF.zoneDisplay.recentSweep(z, now);
 }
 
 function structurePointColor(role) {
@@ -272,7 +265,7 @@ function initChart() {
       const hi = Math.max(Number(focus.lower), Number(focus.upper));
       if (!Number.isFinite(lo) || !Number.isFinite(hi)) return original ? original() : null;
       const mid = (lo + hi) / 2;
-      const span = Math.max(Math.abs(hi - lo) / 2, Math.abs(mid) * 0.012, 1);
+      const span = Math.max(Math.abs(hi - lo) / 2, Math.abs(mid) * 0.012, 1e-12);
       return { priceRange: { minValue: mid - span * 1.6, maxValue: mid + span * 1.6 } };
     },
   });
@@ -377,6 +370,7 @@ async function loadCandles() {
   }
   state.loadedCandleTf = tf;
   state.loadedCandleInstrument = id;
+  state.candleSeries.applyOptions({ priceFormat: HTF.chartPriceFormat(state.candles) });
   state.candleSeries.setData(state.candles);
   if (state.candles.length) {
     state.lastPrice = state.candles[state.candles.length - 1].close;
@@ -422,20 +416,14 @@ async function loadZones() {
   if (!state.instrumentId) return;
   const id = state.instrumentId;
   const req = ++state.zoneReq;
-  // §13 (этап 6b): opt-in конверт {zones, versions}; сгруппированный ответ
-  // несёт ту же версию домена зон
-  const [zonesRes, grouped] = await Promise.all([
-    analysisApi(`/api/zones?instrument_id=${id}&with_version=true`),
-    analysisApi(`/api/zones/grouped?instrument_id=${id}`),
-  ]);
+  const zonesRes = await analysisApi(`/api/zones?instrument_id=${id}&with_version=true`);
   if (id !== state.instrumentId || req !== state.zoneReq) return;
   const zones = Array.isArray(zonesRes) ? zonesRes : (zonesRes && zonesRes.zones) || [];
   const zonesVersion = (!Array.isArray(zonesRes) && zonesRes && zonesRes.versions)
     ? zonesRes.versions.zones
-    : (grouped && grouped.versions ? grouped.versions.zones : null);
+    : null;
   if (zonesVersion != null) domainSync.adopt('zones', zonesVersion);
   state.zones = zones;
-  state.groups = grouped.groups.filter((g) => g.zones.length > 1);
   drawZones();
   renderZonesTable();
 }
@@ -444,7 +432,7 @@ async function loadZones() {
 // (BSL — зелёная, SSL — красная), совпадает с графиком и тегами.
 function swatchDirClass(z) {
   const bear = z.direction === 'bear';
-  const invert = z.type === 'BSL' || z.type === 'SSL';
+  const invert = ['bsl', 'ssl'].includes(HTF.zoneDisplay.type(z));
   return (bear !== invert) ? 'dir-bear' : 'dir-bull';
 }
 window.swatchDirClass = swatchDirClass;
@@ -465,6 +453,7 @@ function drawZones() {
   const chartEl = $('chart');
   const width = chartEl.clientWidth;
   const height = chartEl.clientHeight;
+  const paneHeight = h1PaneHeight(height);
   // правый край зон — граница области графика, без налезания на шкалу цен
   const paneRight = width - state.chart.priceScale('right').width();
   const ts = state.chart.timeScale();
@@ -481,52 +470,19 @@ function drawZones() {
   };
   const tfMatch = (z) => isHtf(z) && tfOn(z.timeframe);
 
-  // Полоса по ценовому диапазону с обрезкой по видимой области графика.
-  // Координаты за пределами панели обрезаем — иначе зоны вне видимого
-  // ценового диапазона «сваливаются» на край контейнера.
-  // FVG: перекрытая движением часть не заливается, линии границ остаются
-  // на всю длину. Глубина — max_test_depth от стороны входа (0..1).
-  const appendPartialFill = (div, z, completed) => {
-    if (z.type !== 'FVG' || completed || z.is_level) return;
-    const depth = Math.max(0, Math.min(1, Number(z.max_test_depth) || 0));
-    if (depth <= 0) return; // нетронутая зона заливается целиком
-    div.classList.add('fvg-partial');
-    const fill = document.createElement('span');
-    fill.className = 'zone-fill';
-    if (z.direction === 'bull') {
-      fill.style.top = (depth * 100).toFixed(2) + '%';
-      fill.style.bottom = '0';
-    } else {
-      fill.style.top = '0';
-      fill.style.bottom = (depth * 100).toFixed(2) + '%';
-    }
-    div.appendChild(fill);
-  };
-
-  const makeBand = (upper, lower, cls) => {
-    const y1 = state.candleSeries.priceToCoordinate(upper);
-    const y2 = state.candleSeries.priceToCoordinate(lower);
-    if (y1 === null || y2 === null) return null;
-    let top = Math.min(y1, y2);
-    let bottom = Math.max(y1, y2);
-    if (bottom < 0 || top > height) return null; // целиком вне видимых цен
-    top = Math.max(0, top);
-    bottom = Math.min(height, bottom);
+  const yOf = price => state.candleSeries.priceToCoordinate(price);
+  const makeBand = (upper, lower, cls, level) => {
+    const y = yOf(upper);
+    const box = level
+      ? (y != null && y >= 0 && y <= paneHeight ? { top: y, height: 1 } : null)
+      : HTF.zoneDisplay.clipBand(y, yOf(lower), paneHeight);
+    if (!box) return null;
     const div = document.createElement('div');
-    div.className = cls;
-    div.style.top = top + 'px';
-    div.style.height = Math.max(2, bottom - top) + 'px';
+    div.className = cls + (level ? ' zone-level' : '');
+    div.style.top = box.top + 'px';
+    div.style.height = box.height + 'px';
     return div;
   };
-
-  // §10: пересекающиеся ОДНОТИПНЫЕ зоны не накладываются друг на друга —
-  // для визуальной группы рисуется ОДНА объединённая полоса (состав — в
-  // бейдже и tooltip); разнотипные полосы обрезают друг друга (ниже).
-  // Исходные зоны, границы, середины и правила уведомлений не меняются.
-  const groupByZone = new Map();
-  for (const g of state.groups) {
-    for (const zid of g.zone_ids) groupByZone.set(zid, g);
-  }
 
   // пул зон для отрисовки: статус + ТФ + переключатель кандидатов;
   // при переполнении — ближайшие к текущей цене (выбранная зона — всегда).
@@ -539,15 +495,25 @@ function drawZones() {
     // ТЗ 07.10.2026 §3: актуальные зоны (relevant — canonical state с
     // сервера) рисуются СРАЗУ, без ожидания ручного ревью; статус candidate
     // скрывает только неподтверждённые объекты очереди проверки
-    pool = state.zones.filter((z) => {
-      if (!tfMatch(z)) return false;
-      if (sweptLevelVisible(z)) return true;
-      return CHART_STATUSES.has(z.status) &&
-        (z.relevant || z.status !== 'candidate' || state.showCandidates);
+    const display = {
+      history: !!$('layer-history')?.checked,
+      swept: !!$('layer-swept')?.checked,
+      candidates: state.showCandidates,
+    };
+    pool = state.zones.filter(z => {
+      if (!tfMatch(z) || !HTF.zoneDisplay.visible(z, display)) return false;
+      if (!HTF.zoneDisplay.timeSpan(z, {
+        xOf: ms => barCoordinate(ts, ms), firstTime: state.candles[0].time * 1000, paneRight,
+      })) return false;
+      const y = yOf(z.upper);
+      return HTF.zoneDisplay.isLevel(z)
+        ? y != null && y >= 0 && y <= paneHeight
+        : !!HTF.zoneDisplay.clipBand(y, yOf(z.lower), paneHeight);
     });
     if (pool.length > state.maxChartZones) {
       const price = state.lastPrice || 0;
-      pool.sort((a, b) => distanceToZone(a, price) - distanceToZone(b, price));
+      pool.sort((a, b) => Number(HTF.zoneDisplay.current(b)) - Number(HTF.zoneDisplay.current(a))
+        || distanceToZone(a, price) - distanceToZone(b, price));
       pool = pool.slice(0, state.maxChartZones);
     }
   }
@@ -556,104 +522,24 @@ function drawZones() {
     pool = [];
   }
 
-  // Группы с 2+ участниками одного ТФ в пуле рисуются одной полосой.
-  // D1 и W1 не смешиваются, даже если сервер когда-то отдал их одной группой.
-  // При выбранной зоне (клик) показываем только её, без объединения.
   const nativeTf = state.chartMode === 'h1' ? 'H1' : state.timeframe;
-  const foreignTf = (z) => z.timeframe !== nativeTf;
-  const mergedGroups = new Map(); // `${group.id}:${tf}` -> [zones from pool]
-  if (!state.selectedZoneId) {
-    for (const z of pool) {
-      // У каждого SSL/BSL свой экстремум и момент снятия.
-      if (z.is_level) continue;
-      const g = groupByZone.get(z.id);
-      if (!g) continue;
-      const key = `${g.id}:${z.timeframe}`;
-      if (!mergedGroups.has(key)) mergedGroups.set(key, []);
-      mergedGroups.get(key).push(z);
-    }
-    for (const [key, members] of mergedGroups) {
-      if (members.length < 2) mergedGroups.delete(key);
-    }
-  }
-  const mergedIds = new Set();
-  for (const members of mergedGroups.values()) {
-    for (const z of members) mergedIds.add(z.id);
-  }
+  const foreignTf = z => z.timeframe !== nativeTf;
+  // Preserve every zone's own price/time bounds. Wider bands are painted first;
+  // nearby bands and historical objects never cut holes in current zones.
+  pool.sort((a, b) => Number(HTF.zoneDisplay.finished(b)) - Number(HTF.zoneDisplay.finished(a))
+    || Number(HTF.zoneDisplay.isLevel(a)) - Number(HTF.zoneDisplay.isLevel(b))
+    || (b.upper - b.lower) - (a.upper - a.lower));
 
-  // Разнотипные зоны не сливаются и не закрашивают друг друга: в месте
-  // пересечения более широкая полоса обрезается более узкой (узкие «режут»
-  // широкие). Каждая полоса рисуется оставшимися сегментами [lo, hi].
-  // Уровни (SSL/BSL) — тонкие линии, в обрезке не участвуют.
-  const subtractSegs = (segs, lo, hi) => {
-    const out = [];
-    for (const [a, b] of segs) {
-      if (hi <= a || lo >= b) { out.push([a, b]); continue; }
-      if (lo > a) out.push([a, Math.min(lo, b)]);
-      if (hi < b) out.push([Math.max(hi, a), b]);
-    }
-    return out;
-  };
-  const clipItems = []; // {key, lower, upper, tf}
   for (const z of pool) {
-    if (mergedIds.has(z.id) || z.is_level) continue;
-    clipItems.push({ key: z.id, lower: z.lower, upper: z.upper, tf: z.timeframe });
-  }
-  for (const [key, members] of mergedGroups) {
-    clipItems.push({
-      key,
-      tf: members[0].timeframe,
-      lower: Math.min(...members.map((z) => z.lower)),
-      upper: Math.max(...members.map((z) => z.upper)),
+    const span = HTF.zoneDisplay.timeSpan(z, {
+      xOf: ms => barCoordinate(ts, ms),
+      firstTime: state.candles[0].time * 1000, paneRight,
     });
-  }
-  // Обрезка только внутри одного ТФ: D1 не вырезает W1 и наоборот.
-  // Внутри ТФ приоритет у более узкой полосы — она остаётся целой.
-  const segsByKey = new Map();
-  const byTf = new Map();
-  for (const it of clipItems) {
-    if (!byTf.has(it.tf)) byTf.set(it.tf, []);
-    byTf.get(it.tf).push(it);
-  }
-  for (const items of byTf.values()) {
-    items.sort((a, b) => (a.upper - a.lower) - (b.upper - b.lower));
-    const taken = [];
-    for (const it of items) {
-      let segs = [[it.lower, it.upper]];
-      for (const [lo, hi] of taken) segs = subtractSegs(segs, lo, hi);
-      segsByKey.set(it.key, segs);
-      taken.push([it.lower, it.upper]);
-    }
-  }
-
-  for (const z of pool) {
-    if (mergedIds.has(z.id)) continue; // входит в объединённую полосу ниже
-    // §15.1.7: рисунок начинается от display_from (для FVG — средняя свеча
-    // исходной тройки); formed_at — запасной вариант
-    const fromMs = (z.is_level && z.extreme_at) || z.display_from || z.formed_at;
-    let x1 = z.is_level ? barCoordinate(ts, fromMs)
-      : ts.timeToCoordinate(Math.floor(fromMs / 1000));
-    // ТЗ §7: ручная зона начинается строго от якоря пользователя. Якорь левее
-    // видимой области даёт отрицательную координату — рисуем от неё (overlay
-    // обрезается контейнером), а не продлеваем зону влево клампингом в x1=0
-    if (z.source === 'manual') {
-      if (x1 === null) continue; // времени якоря нет в загруженных данных
-    } else if (x1 === null || x1 < 0) {
-      x1 = 0; // зона старше/левее видимой области
-    }
-    if (x1 > paneRight) continue; // формирование правее видимой области
-    // §15.1.3: завершённая зона заканчивается в display_until и НЕ
-    // продлевается вправо до текущей цены
-    const completed = !!z.display_until;
+    if (!span) continue;
+    const x1 = span.left, x2 = span.right;
+    const completed = HTF.zoneDisplay.finished(z);
     const keptLevel = sweptLevelVisible(z);
-    let x2 = paneRight;
-    if (completed) {
-      const xc = barCoordinate(ts, z.display_until);
-      if (xc !== null) x2 = Math.min(paneRight, xc);
-      else if (z.is_level) continue; // снятие вне данных — линию вправо не тянем
-    }
-    if (x2 <= x1) continue; // завершилась левее видимой области
-    const cls = `zone-rect z-${z.type} dir-${z.direction === 'bear' ? 'bear' : 'bull'}` +
+    const cls = `zone-rect z-${HTF.zoneDisplay.type(z)} dir-${z.direction === 'bear' ? 'bear' : 'bull'}` +
       ` tf-${isHtf(z) ? 'htf' : 'ltf'} status-${z.status}` +
       (completed ? ' status-completed' : '') +
       (keptLevel ? ' level-kept' : '') +
@@ -662,85 +548,35 @@ function drawZones() {
     const labelText =
       `${z.type.toUpperCase()} ${z.timeframe} · ${STATUS_RU[z.status] || z.status}` +
       (z.name ? ` · ${z.name}` : '');
-    // уровни рисуются целиком; полосы — сегментами после обрезки соседями
-    const segs = z.is_level ? [[z.lower, z.upper]] : (segsByKey.get(z.id) || []);
-    let labelPlaced = false;
-    for (const [lo, hi] of segs) {
-      const div = makeBand(hi, lo, cls);
-      if (!div) continue;
-      div.dataset.zoneId = z.id;
-      appendPartialFill(div, z, completed);
-      div.style.left = x1 + 'px';
-      div.style.width = (z.is_level ? x2 - x1 : Math.max(8, x2 - x1)) + 'px';
-      div.onclick = () => openZoneDetail(z.id);
+    const level = HTF.zoneDisplay.isLevel(z);
+    const div = makeBand(z.upper, z.lower, cls, level);
+    if (!div) continue;
+    div.dataset.zoneId = z.id;
+    HTF.zoneDisplay.appendFill(div, z, yOf);
+    div.style.left = x1 + 'px';
+    div.style.width = (x2 - x1) + 'px';
+    div.onclick = () => openZoneDetail(z.id);
 
-      if (!z.is_level && z.mid >= lo && z.mid <= hi) {
-        const midY = state.candleSeries.priceToCoordinate(z.mid);
-        if (midY !== null && midY >= 0 && midY <= height) {
-          const mid = document.createElement('div');
-          mid.className = 'zone-mid';
-          mid.style.top = (midY - parseFloat(div.style.top)) + 'px';
-          div.appendChild(mid);
-        }
+    if (!level && z.mid >= z.lower && z.mid <= z.upper && (!$('layer-mids') || $('layer-mids').checked)) {
+      const midY = state.candleSeries.priceToCoordinate(z.mid);
+      if (midY !== null && midY >= 0 && midY <= paneHeight) {
+        const mid = document.createElement('div');
+        mid.className = 'zone-mid';
+        mid.style.top = (midY - parseFloat(div.style.top)) + 'px';
+        div.appendChild(mid);
       }
+    }
 
-      // подписи только у некандидатов — иначе подписи кандидатов превращают
-      // график в кашу; текст кандидата доступен в tooltip (div.title);
-      // подпись — на первом отрисованном сегменте
-      if (!labelPlaced && z.status !== 'candidate') {
-        const label = document.createElement('span');
-        label.className = 'zone-label';
-        label.textContent = labelText;
-        div.appendChild(label);
-        labelPlaced = true;
-      }
-      div.title = labelText;
-      overlay.appendChild(div);
+    // подписи только у некандидатов — иначе подписи кандидатов превращают
+    // график в кашу; текст кандидата доступен в tooltip (div.title);
+    if (z.status !== 'candidate' && (!$('layer-labels') || $('layer-labels').checked)) {
+      const label = document.createElement('span');
+      label.className = 'zone-label';
+      label.textContent = labelText;
+      div.appendChild(label);
     }
-  }
-
-  // §10: объединённые полосы визуальных групп (только однотипные зоны) —
-  // вместо наложения зон друг на друга. Состав группы — в бейдже и tooltip;
-  // клик открывает первую зону группы (исходные зоны доступны и в таблице
-  // ниже). Границы — по видимым участникам; полоса тоже обрезается более
-  // узкими разнотипными соседями (сегменты из segsByKey).
-  for (const [key, members] of mergedGroups) {
-    // начало полосы — самое раннее формирование участников
-    let x1 = null;
-    for (const z of members) {
-      const fromMs = z.display_from || z.formed_at;
-      let zx = ts.timeToCoordinate(Math.floor(fromMs / 1000));
-      if (zx === null || zx < 0) zx = 0;
-      if (x1 === null || zx < x1) x1 = zx;
-    }
-    if (x1 === null || x1 > paneRight) continue;
-    const ordered = members.slice().sort((a, b) => a.id - b.id);
-    const badgeText = `⧉ ${ordered.map((z) => `${z.type.toUpperCase()} ${z.timeframe}`).join(' + ')}`;
-    const title = ordered.map((z) =>
-      `${z.type.toUpperCase()} ${z.timeframe} · ${fmtPrice(z.lower)}–${fmtPrice(z.upper)}` +
-      ` · ${STATUS_RU[z.status] || z.status}`).join('\n');
-    const lead = ordered[0] || members[0] || {};
-    const groupCls = 'zone-group' +
-      (lead.direction === 'bear' ? ' dir-bear' : lead.direction === 'bull' ? ' dir-bull' : '') +
-      ` tf-${isHtf(lead) ? 'htf' : 'ltf'}` +
-      (members.every(foreignTf) ? ' tf-context' : '');
-    let badgePlaced = false;
-    for (const [lo, hi] of (segsByKey.get(key) || [])) {
-      const div = makeBand(hi, lo, groupCls);
-      if (!div) continue;
-      div.style.left = x1 + 'px';
-      div.style.width = Math.max(8, paneRight - x1) + 'px';
-      if (!badgePlaced) {
-        const badge = document.createElement('span');
-        badge.className = 'zone-group-badge';
-        badge.textContent = badgeText;
-        div.appendChild(badge);
-        badgePlaced = true;
-      }
-      div.title = title;
-      div.onclick = () => openZoneDetail(ordered[0].id);
-      overlay.appendChild(div);
-    }
+    div.title = labelText;
+    overlay.appendChild(div);
   }
 
   // ТЗ §5: внутренние уровни ликвидности выбранной зоны — тонкие линии
@@ -1106,14 +942,13 @@ function filteredZones() {
   if (bucket === 'live') {
     // ТЗ 07.10.2026 §11: «Актуальные» — canonical relevant (подтверждённые,
     // непробитые, незавершённые), а не просто status=active.
-    // Снятый BSL/SSL остаётся в этом списке 7 суток после снятия.
-    zones = zones.filter((z) => z.relevant || sweptLevelVisible(z));
+    // Снятые уровни доступны в архиве и отдельном слое графика.
+    zones = zones.filter(z => HTF.zoneDisplay.current(z));
   } else if (bucket === 'candidate') {
     zones = zones.filter((z) => z.status === 'candidate' && !z.display_until);
   } else if (bucket === 'archive') {
     zones = zones.filter((z) =>
-      !sweptLevelVisible(z) &&
-      (z.display_until || ['rejected', 'archived', 'taken', 'converted'].includes(z.status)));
+      HTF.zoneDisplay.finished(z));
   }
   const f = state.zoneStatusFilter;
   if (f && f !== '' && f !== 'all' && bucket === 'live') {
@@ -1144,10 +979,9 @@ function filteredZones() {
 function zoneBucketCounts() {
   const htf = state.zones.filter(isHtf);
   return {
-    live: htf.filter((z) => z.relevant || sweptLevelVisible(z)).length,
+    live: htf.filter(z => HTF.zoneDisplay.current(z)).length,
     archive: htf.filter((z) =>
-      !sweptLevelVisible(z) &&
-      (z.display_until || ['rejected', 'archived', 'taken', 'converted'].includes(z.status))).length,
+      HTF.zoneDisplay.finished(z)).length,
   };
 }
 
@@ -1277,16 +1111,16 @@ function renderHeaderStats() {
   const el = $('header-stats');
   if (!el || !state.instrumentId) return;
   const zones = state.zones.filter(isHtf); // статистика по HTF-зонам
-  const live = zones.filter((z) => !z.display_until);
+  const live = zones.filter(z => !HTF.zoneDisplay.finished(z));
   const by = (pred) => zones.filter(pred).length;
   const inside = zones.filter((z) =>
-    state.lastPrice !== null && !z.display_until &&
+    state.lastPrice !== null && HTF.zoneDisplay.current(z) &&
     state.lastPrice >= z.lower && state.lastPrice <= z.upper).length;
-  const ssl = by((z) => z.type === 'ssl' && z.status === 'active');
-  const bsl = by((z) => z.type === 'bsl' && z.status === 'active');
+  const ssl = by((z) => z.type === 'ssl' && HTF.zoneDisplay.current(z));
+  const bsl = by((z) => z.type === 'bsl' && HTF.zoneDisplay.current(z));
   const items = [
     // ТЗ 07.10.2026 §11/§13: счётчики тех же выборок, что и таблица/график
-    ['Актуальные', by((z) => z.relevant || sweptLevelVisible(z))],
+    ['Актуальные', by(z => HTF.zoneDisplay.current(z))],
     ['Кандидаты (неподтверждённые)', by((z) =>
       z.status === 'candidate' && !z.display_until && !z.relevant)],
     ['Цена внутри', inside],
@@ -2080,6 +1914,7 @@ async function openReviewCandidate(c) {
   if (reviewState.currentId !== c.id) return; // пользователь выбрал другого
   reviewState.zone = detail.zone;
   reviewState.candles = candles;
+  reviewState.candleSeries.applyOptions({ priceFormat: HTF.chartPriceFormat(candles) });
   reviewState.candleSeries.setData(candles);
   // окно: от display_from/formed_at с запасом до текущего момента
   const z = detail.zone;
@@ -2107,39 +1942,31 @@ function drawReviewZone() {
   if (!z || !reviewState.candleSeries || !reviewState.candles.length) return;
   const chartEl = $('review-chart');
   const width = chartEl.clientWidth;
-  const height = chartEl.clientHeight;
-  const paneRight = width - reviewState.chart.priceScale('right').width();
   const ts = reviewState.chart.timeScale();
-  const y1 = reviewState.candleSeries.priceToCoordinate(z.upper);
-  const y2 = reviewState.candleSeries.priceToCoordinate(z.lower);
-  if (y1 === null || y2 === null) return;
-  let top = Math.min(y1, y2);
-  let bottom = Math.max(y1, y2);
-  if (bottom < 0 || top > height) return;
-  top = Math.max(0, top);
-  bottom = Math.min(height, bottom);
-  const fromMs = (z.is_level && z.extreme_at) || z.display_from || z.formed_at;
-  let x1 = z.is_level
-    ? barCoordinate(ts, fromMs, reviewState.candles, z.timeframe)
-    : ts.timeToCoordinate(Math.floor(fromMs / 1000));
-  if (x1 === null || x1 < 0) x1 = 0;
-  if (x1 > paneRight) return;
-  let x2 = paneRight;
-  if (z.display_until) {
-    const xc = barCoordinate(ts, z.display_until, reviewState.candles, z.timeframe);
-    if (xc !== null) x2 = Math.min(paneRight, xc);
-    else if (z.is_level) return;
-  }
-  if (x2 <= x1) return;
+  const height = chartEl.clientHeight - (ts.height?.() || 0);
+  const paneRight = width - reviewState.chart.priceScale('right').width();
+  const level = HTF.zoneDisplay.isLevel(z);
+  const yOf = price => reviewState.candleSeries.priceToCoordinate(price);
+  const y = yOf(z.upper);
+  const box = level
+    ? (y != null && y >= 0 && y <= height ? { top: y, height: 1 } : null)
+    : HTF.zoneDisplay.clipBand(y, yOf(z.lower), height);
+  const span = HTF.zoneDisplay.timeSpan(z, {
+    xOf: ms => barCoordinate(ts, ms, reviewState.candles, z.timeframe),
+    firstTime: reviewState.candles[0].time * 1000, paneRight,
+  });
+  if (!box || !span) return;
+  const top = box.top;
   const div = document.createElement('div');
-  div.className = `zone-rect z-${z.type} dir-${z.direction === 'bear' ? 'bear' : 'bull'}` +
-    ` tf-${isHtf(z) ? 'htf' : 'ltf'} status-${z.status}` +
-    (z.display_until ? ' status-completed' : '') + ' selected';
+  div.className = `zone-rect z-${HTF.zoneDisplay.type(z)} dir-${z.direction === 'bear' ? 'bear' : 'bull'}` +
+    ` tf-${isHtf(z) ? 'htf' : 'ltf'}` + (level ? ' zone-level' : '') + ` status-${z.status}` +
+    (HTF.zoneDisplay.finished(z) ? ' status-completed' : '') + ' selected';
   div.style.top = top + 'px';
-  div.style.height = Math.max(2, bottom - top) + 'px';
-  div.style.left = x1 + 'px';
-  div.style.width = (z.is_level ? x2 - x1 : Math.max(8, x2 - x1)) + 'px';
-  if (!z.is_level) {
+  div.style.height = box.height + 'px';
+  div.style.left = span.left + 'px';
+  div.style.width = (span.right - span.left) + 'px';
+  HTF.zoneDisplay.appendFill(div, z, yOf);
+  if (!level) {
     const midY = reviewState.candleSeries.priceToCoordinate(z.mid);
     if (midY !== null && midY >= 0 && midY <= height) {
       const mid = document.createElement('div');
@@ -3477,7 +3304,6 @@ function selectAnalysisInstrument(id) {
   state.lastPrice = null;
   state.candles = [];
   state.zones = [];
-  state.groups = [];
   state.dailyStructure = null;
   state.h1Layers = null;
   state.h1Pending = null;
@@ -4459,14 +4285,15 @@ async function main() {
     ['layer-tf-d1', 'layer-tf-w1'].forEach((id) => {
       if ($(id)) $(id).disabled = !state.showAllTf;
     });
-    const labels = [state.showAllTf && 'Все таймфреймы', state.showCandidates && 'Кандидаты'].filter(Boolean);
+    const labels = [state.showAllTf && 'Все таймфреймы', state.showCandidates && 'Кандидаты',
+      $('layer-history')?.checked && 'История HTF', $('layer-swept')?.checked && 'Снятые уровни · 7 дней'].filter(Boolean);
     if ($('layer-count')) $('layer-count').textContent = labels.length ? '· ' + labels.join(' · ') : '';
     drawZones();
   };
   refreshLayers = updateLayers;
   $('tf-all').onchange = updateLayers;
   $('show-candidates').onchange = updateLayers;
-  ['layer-tf-d1', 'layer-tf-w1', 'layer-structure-d1', 'layer-history', 'layer-mids', 'layer-labels'].forEach((id) => {
+  ['layer-tf-d1', 'layer-tf-w1', 'layer-structure-d1', 'layer-history', 'layer-swept', 'layer-mids', 'layer-labels'].forEach((id) => {
     if ($(id)) $(id).onchange = updateLayers;
   });
   updateLayers();

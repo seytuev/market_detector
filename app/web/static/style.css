@@ -219,7 +219,9 @@ select, input, textarea {
   border-radius: 2px;
   background: rgba(var(--zc), var(--za));
   border-color: rgba(var(--zc), var(--zb));
+  box-sizing: border-box;
 }
+.zone-rect.zone-level { border: 0; border-top: 1px solid rgba(var(--zc), var(--zb)); border-radius: 0; background: transparent; }
 .zone-rect.dir-bull { --zc: var(--zone-bull-rgb); }
 .zone-rect.dir-bear { --zc: var(--zone-bear-rgb); }
 .zone-rect.tf-ltf   { --za: .07; --zb: .38; }

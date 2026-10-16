@@ -1307,6 +1307,7 @@ function defaultVisibleLogicalRange(days) {
 }
 
 function setCandles(opts = {}) {
+  state.candleSeries.applyOptions({ priceFormat: HTF.chartPriceFormat(state.candles) });
   state.candleSeries.setData(state.candles);
   $('ltf-chart-empty').classList.toggle('hidden', state.candles.length > 0);
   if (!state.candles.length) {
@@ -1376,7 +1377,7 @@ function applyLtfPriceScale(focus) {
         const hi = Number(state.priceFocus.upper ?? state.priceFocus.lower);
         if (Number.isFinite(lo) && Number.isFinite(hi)) {
           const mid = (lo + hi) / 2;
-          const span = Math.max(Math.abs(hi - lo) / 2, Math.abs(mid) * 0.015, 80);
+          const span = Math.max(Math.abs(hi - lo) / 2, Math.abs(mid) * 0.015, 1e-12);
           return { priceRange: { minValue: mid - span, maxValue: mid + span } };
         }
       }
@@ -1570,26 +1571,21 @@ function drawLtfLayers() {
   };
   // горизонтальная полоса по ценам, обрезанная по видимой области
   const band = (upper, lower, cls, title) => {
-    const y1 = yOf(upper);
-    const y2 = yOf(lower);
-    if (y1 === null && y2 === null) return null;
-    const ya = y1 === null ? (upper > lower ? 0 : height) : y1;
-    const yb = y2 === null ? (lower < upper ? height : 0) : y2;
-    let top = Math.max(0, Math.min(ya, yb));
-    let bottom = Math.min(height, Math.max(ya, yb));
-    if (bottom < 0 || top > height) return null;
+    const box = HTF.zoneDisplay.clipBand(yOf(upper), yOf(lower), height);
+    if (!box) return null;
     const div = addDiv(cls, title);
-    div.style.top = top + 'px';
-    div.style.height = Math.max(6, bottom - top) + 'px';
+    div.style.top = box.top + 'px';
+    div.style.height = box.height + 'px';
     return div;
   };
   const hline = (price, x1, x2, cls, title) => {
     const y = yOf(price);
     if (y === null || y < -4 || y > height + 4) return null;
+    if (Math.min(paneRight, x2) <= Math.max(0, x1)) return null;
     const div = addDiv(cls, title);
     div.style.top = y + 'px';
     div.style.left = Math.max(0, x1) + 'px';
-    div.style.width = Math.max(4, Math.min(paneRight, x2) - Math.max(0, x1)) + 'px';
+    div.style.width = (Math.min(paneRight, x2) - Math.max(0, x1)) + 'px';
     return div;
   };
 
@@ -1601,9 +1597,9 @@ function drawLtfLayers() {
     let x1 = fromMs ? xOf(fromMs) : 0;
     if (x1 === null || x1 < 0) x1 = 0;
     let x2 = paneRight;
-    if (parent.display_until) {
+    if (parent.display_until != null) {
       const xc = xOf(parent.display_until);
-      if (xc !== null) x2 = Math.min(paneRight, xc);
+      x2 = xc === null ? 0 : Math.min(paneRight, xc);
     }
     const label = ctxLabel(parent.type, parent.timeframe, parent.direction);
     for (const price of [parent.upper, parent.lower]) {

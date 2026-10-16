@@ -8,11 +8,26 @@ from PIL import Image
 from app.config import Settings
 from app.models_ltf import LtfEvent
 from app.models import Direction, Zone, ZoneStatus, ZoneType, TIMEFRAME_MINUTES
-from app.notify.h1_image import event_snapshot, render_snapshot, snapshot_html, render_zone_notification
+from app.notify.h1_image import event_snapshot, render_snapshot, snapshot_html, render_zone_notification, zone_snapshot
 from tests.conftest import make_candle
 from tests.test_ltf_notify import T0, _setup
 
 H1 = 3_600_000
+
+
+def test_htf_snapshot_keeps_fill_depth_and_completion_boundary():
+    candles = [make_candle(T0 + i * H1, .05, .06, .04, .055) for i in range(10)]
+    zone = Zone(id=1, instrument_id=1, type=ZoneType.FVG, direction=Direction.BULL,
+                timeframe="D1", lower=.0492, upper=.05532, formed_at=T0,
+                confirmed_at=T0, max_test_depth=.6, status=ZoneStatus.WEAKENED)
+    partial = zone_snapshot(candles, zone, "SUSDT")
+    assert partial["overlays"][0]["max_test_depth"] == .6
+    assert partial["overlays"][0]["to"] is None
+    zone.display_until = candles[5].close_time
+    ended = zone_snapshot(candles, zone, "SUSDT")
+    assert ended["overlays"][0]["to"] == zone.display_until
+    earlier = zone_snapshot(candles[:3], zone, "SUSDT", event_at=candles[2].close_time)
+    assert earlier["overlays"][0]["to"] is None
 
 
 def test_event_keeps_context_before_leg_and_excludes_future(db, instrument_id, monkeypatch):

@@ -191,7 +191,9 @@ def zone_snapshot(candles, zone, source_label, *, event_at=None, event_price=Non
         "timeframe": zone.timeframe, "as_of": moment,
         "candles": candle_rows(candles),
         "overlays": [{"from": zone.display_from if zone.display_from is not None else zone.formed_at,
+                      "to": zone.display_until if zone.display_until is not None and zone.display_until <= moment else None,
                       "lower": zone.lower, "upper": zone.upper, "mid": zone.mid,
+                      "max_test_depth": zone.max_test_depth,
                       "type": kind, "direction": zone.direction.value, "label": label,
                       "muted": not zone.is_currently_relevant()}],
         "levels": ([{"price": event_price, "label": "Цена события", "from": candles[0].open_time}]

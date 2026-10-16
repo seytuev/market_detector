@@ -114,6 +114,91 @@ window.HTF = (() => {
     };
   }
 
+  // Shared by the desk, review, LTF, ALTs and exported chart surfaces.
+  function chartPriceFormat(bars = []) {
+    let min = Infinity;
+    for (const bar of bars) {
+      for (const key of ['open', 'high', 'low', 'close']) {
+        const value = Number(bar[key]);
+        if (Number.isFinite(value) && value > 0) min = Math.min(min, value);
+      }
+    }
+    const precision = Number.isFinite(min)
+      ? Math.min(12, Math.max(2, 4 - Math.floor(Math.log10(min)))) : 2;
+    return { type: 'price', precision, minMove: 10 ** -precision };
+  }
+
+  const zoneDisplay = {
+    type: z => String(z?.type || '').toLowerCase(),
+    isLevel(z) {
+      return !!z && (z.is_level || ['ssl', 'bsl'].includes(this.type(z)) || z.lower === z.upper);
+    },
+    finished(z) {
+      return !!z && (z.display_until != null ||
+        ['taken', 'converted', 'archived', 'rejected'].includes(z.status));
+    },
+    current(z) {
+      return !!z?.relevant && !this.finished(z);
+    },
+    recentSweep(z, now = Date.now()) {
+      if (!['ssl', 'bsl'].includes(this.type(z)) || z.status !== 'taken' || z.display_until == null) return false;
+      const age = now - z.display_until;
+      return age >= 0 && age <= 7 * 86400000;
+    },
+    visible(z, { history = false, swept = false, candidates = false, now = Date.now() } = {}) {
+      if (!z || z.status === 'rejected') return false;
+      if (this.finished(z)) return history || (swept && this.recentSweep(z, now));
+      return this.current(z) || (candidates && z.status === 'candidate');
+    },
+    // Clip only to the viewport, never to another zone or a PD half.
+    clipBand(y1, y2, height) {
+      if (y1 == null || y2 == null || !Number.isFinite(y1) || !Number.isFinite(y2) || !(height > 0)) return null;
+      const rawTop = Math.min(y1, y2), rawBottom = Math.max(y1, y2);
+      if (rawBottom <= 0 || rawTop >= height) return null;
+      const top = Math.max(0, rawTop), bottom = Math.min(height, rawBottom);
+      return { top, height: Math.max(1, bottom - top) };
+    },
+    timeSpan(z, { xOf, firstTime, paneRight }) {
+      const from = (this.isLevel(z) ? z.extreme_at : null) ?? z.display_from ?? z.formed_at;
+      if (from == null || (this.finished(z) && z.display_until == null)) return null;
+      if (z.display_until != null && (z.display_until < firstTime || z.display_until <= from)) return null;
+      let left = xOf(from);
+      if (left == null) {
+        if (from >= firstTime || z.source === 'manual') return null;
+        left = 0;
+      }
+      if (z.source !== 'manual') left = Math.max(0, left);
+      let right = paneRight;
+      if (z.display_until != null) {
+        const end = xOf(z.display_until);
+        if (end == null) return null;
+        right = Math.min(right, end);
+      }
+      return right > left ? { left, right } : null;
+    },
+    appendFill(div, z, yOf) {
+      if (this.type(z) !== 'fvg' || this.isLevel(z) || this.finished(z)) return;
+      const depth = Math.max(0, Math.min(1, Number(z.max_test_depth) || 0));
+      if (!depth) return;
+      div.classList.add('fvg-partial');
+      div.style.background = 'transparent';
+      const size = (z.upper - z.lower) * (1 - depth);
+      if (!(size > 0)) return;
+      const lo = z.direction === 'bull' ? z.lower : z.upper - size;
+      const hi = z.direction === 'bull' ? z.lower + size : z.upper;
+      const top = parseFloat(div.style.top), height = parseFloat(div.style.height);
+      const a = yOf(hi), b = yOf(lo);
+      if (a == null || b == null) return;
+      const box = this.clipBand(a - top, b - top, height);
+      if (!box) return;
+      const fill = div.ownerDocument.createElement('span');
+      fill.className = 'zone-fill';
+      fill.style.top = box.top + 'px';
+      fill.style.height = box.height + 'px';
+      div.appendChild(fill);
+    },
+  };
+
   // Форматируем только подписи: время свечей и координаты остаются UTC.
   const chartTickFormats = [
     { year: 'numeric' },
@@ -560,7 +645,7 @@ window.HTF = (() => {
     getToken, ensureToken, api, connectWs, isWsConnected: () => !!currentSocket && currentSocket.readyState === 1,
     fmtPrice, fmtTime, parseMskLocal, esc, tradingviewUrl,
     captureChartRange, restoreChartRange, bindChartOverlayCrosshair,
-    chartTheme, candleOptions, chartTimeOptions, openModal, closeModal, setConnectionState,
+    chartTheme, candleOptions, chartPriceFormat, zoneDisplay, chartTimeOptions, openModal, closeModal, setConnectionState,
     theme: { get: themeGet, set: themeSet, apply: themeApply },
     candlePalette: { get: candlePaletteGet, set: candlePaletteSet },
     DomainSync,

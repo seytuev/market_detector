@@ -1172,6 +1172,7 @@ function renderChart() {
   const pending = state.pendingViewport;
   state.pendingViewport = null;
   state.suspendPrice = true;
+  state.candleSeries.applyOptions({ priceFormat: HTF.chartPriceFormat(state.candles) });
   state.candleSeries.setData(state.candles);
   state.candleSeries.setMarkers([]);
   try {
