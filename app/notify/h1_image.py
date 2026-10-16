@@ -173,7 +173,7 @@ def candle_rows(candles):
              "low": c.low, "close": c.close} for c in candles]
 
 
-def zone_snapshot(candles, zone, source_label, *, event_at=None, event_price=None):
+def zone_snapshot(candles, zone, source_label, *, event_at=None, event_price=None, display_fill_depth=None):
     """HTF notification scene; the dispatcher owns live/event candle selection."""
     if not candles:
         raise ValueError("Нужны свечи для снимка зоны")
@@ -194,6 +194,7 @@ def zone_snapshot(candles, zone, source_label, *, event_at=None, event_price=Non
                       "to": zone.display_until if zone.display_until is not None and zone.display_until <= moment else None,
                       "lower": zone.lower, "upper": zone.upper, "mid": zone.mid,
                       "max_test_depth": zone.max_test_depth,
+                      "fill_depth": display_fill_depth if display_fill_depth is not None else zone.max_test_depth,
                       "type": kind, "direction": zone.direction.value, "label": label,
                       "muted": not zone.is_currently_relevant()}],
         "levels": ([{"price": event_price, "label": "Цена события", "from": candles[0].open_time}]
@@ -204,6 +205,7 @@ def zone_snapshot(candles, zone, source_label, *, event_at=None, event_price=Non
     }
 
 
-def render_zone_notification(candles, zone, out_path, source_label, *, event_at=None, event_price=None):
+def render_zone_notification(candles, zone, out_path, source_label, *, event_at=None, event_price=None, display_fill_depth=None):
     return render_snapshot(zone_snapshot(candles, zone, source_label,
-                           event_at=event_at, event_price=event_price), out_path)
+                                         event_at=event_at, event_price=event_price,
+                                         display_fill_depth=display_fill_depth), out_path)

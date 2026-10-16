@@ -1644,6 +1644,9 @@ class Database:
     def _bump_visit_version(self, zone_id: int) -> None:
         with self._read_cache_lock:
             self._visit_versions[zone_id] = self._visit_versions.get(zone_id, 0) + 1
+        # The chart's fill projection includes visit depth. Refresh its domain
+        # without invalidating structural calculations or changing eligibility.
+        self.bump_domain("seq:zones", structural=False)
 
     def _inner_version(self, parent_ob_id: int) -> int:
         with self._read_cache_lock:

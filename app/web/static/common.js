@@ -178,7 +178,7 @@ window.HTF = (() => {
     },
     appendFill(div, z, yOf) {
       if (this.type(z) !== 'fvg' || this.isLevel(z) || this.finished(z)) return;
-      const depth = Math.max(0, Math.min(1, Number(z.max_test_depth) || 0));
+      const depth = Math.max(0, Math.min(1, Number(z.fill_depth ?? z.max_test_depth) || 0));
       if (!depth) return;
       div.classList.add('fvg-partial');
       div.style.background = 'transparent';

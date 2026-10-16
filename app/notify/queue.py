@@ -264,10 +264,16 @@ class EventDispatcher:
         source = f"{ins.venue} {ins.market_type} / {ins.symbol}"
         try:
             from .h1_image import render_zone_notification
+            from ..services.zone_display import fvg_fill_depths
+
+            # Use current visit facts only for a current snapshot. A delayed
+            # event must not borrow fill statistics from later visits.
+            display_fill_depth = fvg_fill_depths(self.db, [zone]).get(zone.id) if live else None
 
             payload.image_path = await asyncio.to_thread(
                 render_zone_notification, candles, zone, out, source,
                 event_at=view.event.occurred_at, event_price=view.event.price,
+                display_fill_depth=display_fill_depth,
             )
         except Exception:
             log.warning(

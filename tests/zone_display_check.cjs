@@ -70,6 +70,9 @@ const clipped = band(0, 50); clipped.classList.owner = clipped;
 d.appendFill(clipped, { ...live, lower: 0, upper: 100, max_test_depth: .75 }, price => 50 - price);
 assert.equal(clipped.children[0].style.top, '25px');
 assert.equal(clipped.children[0].style.height, '25px', 'Clipping does not change fill depth');
+const legacy = band(); legacy.classList.owner = legacy;
+d.appendFill(legacy, { ...live, lower: 0, upper: 100, max_test_depth: 0, fill_depth: .6 }, price => 100 - price);
+assert.equal(legacy.children[0].style.height, '40px', 'FVG visit facts override missing OB statistics');
 for (const [price, precision] of [[81704, 2], [.05444, 6], [.000004321, 10], [1e-12, 12]]) {
   const f = sandbox.priceFormat([{ open: price, high: price, low: price, close: price }]);
   assert.equal(f.precision, precision);

@@ -51,7 +51,7 @@ const part = (start, end) => app.slice(app.indexOf(start), app.indexOf(end, app.
       state.chart.timeScale().fitContent();
       const zone = { id: 1, type: 'fvg', direction: 'bull', timeframe: 'D1',
         lower: .0492, upper: .05532, mid: .05226, formed_at: (start + 20 * 86400) * 1000,
-        status: 'weakened', relevant: true, max_test_depth: .5, display_until: null };
+        status: 'weakened', relevant: true, max_test_depth: 0, fill_depth: .5, display_until: null };
       state.zones = [zone,
         { ...zone, id: 2, type: 'breaker', lower: .04764, upper: .05219, mid: .049915 },
         { ...zone, id: 3, lower: .050, upper: .051, display_until: (start + 30 * 86400) * 1000, relevant: false },

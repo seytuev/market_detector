@@ -37,6 +37,7 @@ from ..engine import Scanner
 from ..engine.scanner import review_replay_start_ms
 from ..services.journal import JOURNAL_KINDS, collect_journal, journal_page
 from ..services.zone_groups import union_find_groups
+from ..services.zone_display import fill_depth, fvg_fill_depths
 from ..models import (
     TIMEFRAME_MINUTES,
     BoundaryCorrection,
@@ -138,13 +139,15 @@ def _unconfirmed_reason(z: Zone) -> Optional[str]:
     return "no_external_fvg"
 
 
-def zone_to_dict(z: Zone) -> dict[str, Any]:
+def zone_to_dict(z: Zone, *, db=None, display_fill_depth=None) -> dict[str, Any]:
     """Зона для API: середина, возраст, evidence (объяснение обнаружения, §13).
 
     display-поля (§15.1.3, §15.1.7): рисунок начинается от display_from
     (для FVG — средняя свеча тройки) и заканчивается в display_until
     (момент завершения состояния), не тянется до текущей цены.
     """
+    if display_fill_depth is None and db is not None and z.type == ZoneType.FVG:
+        display_fill_depth = fvg_fill_depths(db, [z]).get(z.id)
     return {
         "id": z.id,
         "instrument_id": z.instrument_id,
@@ -185,6 +188,7 @@ def zone_to_dict(z: Zone) -> dict[str, Any]:
         "boundary_version": z.evidence.get("boundary_version", 1),
         # глубина проникновения цены в зону — для заливки нетронутой части FVG
         "max_test_depth": z.max_test_depth,
+        "fill_depth": fill_depth(z) if display_fill_depth is None else display_fill_depth,
         "test_extreme": z.test_extreme,
         # ТЗ 06.10.2026 §4 (T09): основание подтверждения — FVG, только
         # ручное одобрение владельца или отсутствует
@@ -210,6 +214,11 @@ def zone_to_dict(z: Zone) -> dict[str, Any]:
         "evidence": z.evidence,
         "rule_version": z.rule_version,
     }
+
+
+def zones_to_dict(db, zones):
+    depths = fvg_fill_depths(db, zones)
+    return [zone_to_dict(z, display_fill_depth=depths.get(z.id)) for z in zones]
 
 
 def inner_level_to_dict(lv: InnerLevel) -> dict[str, Any]:
@@ -315,7 +324,7 @@ def export_label(db: Database, zone: Zone, decision: str, text: str,
         if rel.confirming_fvg_id:
             fvg = db.get_zone(rel.confirming_fvg_id)
             if fvg:
-                relation["confirming_fvg"] = zone_to_dict(fvg)
+                relation["confirming_fvg"] = zone_to_dict(fvg, db=db)
 
     source_ohlc = []
     if zone.source_candles:
@@ -342,7 +351,7 @@ def export_label(db: Database, zone: Zone, decision: str, text: str,
         "comment": text,
         "author": "owner",
         "instrument": instrument_to_dict(ins) if ins else None,
-        "zone": zone_to_dict(zone),
+        "zone": zone_to_dict(zone, db=db),
         "relation": relation,
         "source_candles_ohlc": source_ohlc,
         # §15.3: раздельная оценка и контекст ревью
@@ -900,12 +909,12 @@ def create_app(
         types = _parse_enum_list(type, ZoneType, "type")
         if not with_version:
             zones = db.get_zones(instrument_id=instrument_id, statuses=statuses, types=types)
-            return [zone_to_dict(z) for z in zones]
+            return zones_to_dict(db, zones)
         # §13 (этап 6a): opt-in конверт (список — прежний контракт app.js);
         # данные и версия домена — из одной read-транзакции
         with db.read_tx():
-            zones = [zone_to_dict(z) for z in db.get_zones(
-                instrument_id=instrument_id, statuses=statuses, types=types)]
+            zones = zones_to_dict(db, db.get_zones(
+                instrument_id=instrument_id, statuses=statuses, types=types))
             versions = {"zones": db.get_domain("seq:zones")}
         return {"zones": zones, "versions": versions}
 
@@ -921,6 +930,7 @@ def create_app(
                                              statuses=[ZoneStatus.ACTIVE])
                      if z.is_currently_relevant()]  # ТЗ 06.10.2026 §13 (T21)
             groups = union_find_groups(zones)
+            display_zones = {z['id']: z for z in zones_to_dict(db, zones)}
             zones_version = db.get_domain("seq:zones")
         return {
             "instrument_id": instrument_id,
@@ -933,7 +943,7 @@ def create_app(
                     "upper": max(z.upper for z in members),
                     "mid": (min(z.lower for z in members) + max(z.upper for z in members)) / 2,
                     "zone_ids": [z.id for z in members],
-                    "zones": [zone_to_dict(z) for z in members],
+                    "zones": [display_zones[z.id] for z in members],
                 }
                 for members in groups
             ],
@@ -980,8 +990,8 @@ def create_app(
         )
         zone_id = db.insert_zone(zone)
         created = db.get_zone(zone_id)
-        hub.broadcast({"type": "zone", "action": "created", "zone": zone_to_dict(created)})
-        return zone_to_dict(created)
+        hub.broadcast({"type": "zone", "action": "created", "zone": zone_to_dict(created, db=db)})
+        return zone_to_dict(created, db=db)
 
     @app.get("/api/zones/{zone_id}", dependencies=[Depends(require_auth)])
     def zone_detail(zone_id: int) -> dict[str, Any]:
@@ -1013,7 +1023,8 @@ def create_app(
             ).fetchall()
         ]
         return {
-            "zone": zone_to_dict(zone),
+            "zone": zone_to_dict(zone, display_fill_depth=fill_depth(zone, max(
+                (v['max_depth'] for v in visits if v['cycle_id'] == zone.cycle_id), default=0))),
             "instrument": instrument_to_dict(db.get_instrument(zone.instrument_id))
             if db.get_instrument(zone.instrument_id) else None,
             "relation": relation,
@@ -1068,8 +1079,8 @@ def create_app(
                 evidence["comment"] = body.comment
             _update_evidence(db, zone, evidence)
         updated = db.get_zone(zone_id)
-        hub.broadcast({"type": "zone", "action": "updated", "zone": zone_to_dict(updated)})
-        return zone_to_dict(updated)
+        hub.broadcast({"type": "zone", "action": "updated", "zone": zone_to_dict(updated, db=db)})
+        return zone_to_dict(updated, db=db)
 
     # ------------------------- review кандидатов (§10, §15.3) -------------------------
 
@@ -1220,8 +1231,8 @@ def create_app(
         labels_file = export_label(db, updated, body.decision, body.text or "",
                                    settings, assessment=assessment,
                                    correction=correction)
-        hub.broadcast({"type": "zone", "action": "reviewed", "zone": zone_to_dict(updated)})
-        return {"zone": zone_to_dict(updated),
+        hub.broadcast({"type": "zone", "action": "reviewed", "zone": zone_to_dict(updated, db=db)})
+        return {"zone": zone_to_dict(updated, db=db),
                 "labels_file": labels_file,
                 "assessment": assessment_to_dict(assessment),
                 "boundary_correction": (
@@ -1275,8 +1286,8 @@ def create_app(
                 _update_evidence(db, prev, prev_ev)
         updated = db.get_zone(zone_id)
         hub.broadcast({"type": "zone", "action": "updated",
-                       "zone": zone_to_dict(updated)})
-        return zone_to_dict(updated)
+                       "zone": zone_to_dict(updated, db=db)})
+        return zone_to_dict(updated, db=db)
 
     @app.post("/api/zones/{zone_id}/reconcile", dependencies=[Depends(require_auth)])
     def reconcile(zone_id: int) -> dict[str, Any]:
@@ -1292,7 +1303,7 @@ def create_app(
         zone = db.get_zone(zone_id)
         if zone is not None:
             hub.broadcast({
-                "type": "zone", "action": "updated", "zone": zone_to_dict(zone),
+                "type": "zone", "action": "updated", "zone": zone_to_dict(zone, db=db),
             })
         return result
 
@@ -1912,7 +1923,7 @@ def _zone_brief(db: Database, zone_id: Optional[int]) -> Optional[dict[str, Any]
     if zone_id is None:
         return None
     zone = db.get_zone(zone_id)
-    return zone_to_dict(zone) if zone else None
+    return zone_to_dict(zone, db=db) if zone else None
 
 
 def _update_evidence(db: Database, zone: Zone, evidence: dict[str, Any]) -> None:

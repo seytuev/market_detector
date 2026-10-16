@@ -28,6 +28,10 @@ def test_htf_snapshot_keeps_fill_depth_and_completion_boundary():
     assert ended["overlays"][0]["to"] == zone.display_until
     earlier = zone_snapshot(candles[:3], zone, "SUSDT", event_at=candles[2].close_time)
     assert earlier["overlays"][0]["to"] is None
+    zone.max_test_depth = 0
+    projected = zone_snapshot(candles, zone, "SUSDT", display_fill_depth=.6)
+    assert projected["overlays"][0]["fill_depth"] == .6
+    assert projected["overlays"][0]["max_test_depth"] == 0
 
 
 def test_event_keeps_context_before_leg_and_excludes_future(db, instrument_id, monkeypatch):
