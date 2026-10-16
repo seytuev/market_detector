@@ -94,6 +94,25 @@ def register_research_routes(app, db, settings, require_auth):
         with db.read_tx():
             return result(s.materials(asset_uid,after=cursor,limit=limit,from_at=from_at,to_at=to_at,kind=kind))
 
+    @router.get("/feed")
+    def feed(before:int|None=None,before_id:str="",limit:int=Query(50,ge=1,le=100)):
+        enabled()
+        with db.read_tx():
+            moment=s.clock()
+            rows=s.rows("SELECT r.material_id AS id,r.revision_id,r.payload,r.available_at,"
+                "COALESCE(r.published_at,r.available_at) AS published_at FROM research_material_revision r "
+                "WHERE r.available_at<=? AND r.lifecycle='active' "
+                "AND NOT EXISTS(SELECT 1 FROM research_material_revision n WHERE n.material_id=r.material_id "
+                "AND n.available_at<=? AND (n.available_at>r.available_at OR "
+                "(n.available_at=r.available_at AND (n.change_seq>r.change_seq OR "
+                "(n.change_seq=r.change_seq AND n.revision_id>r.revision_id))))) "
+                "AND (? IS NULL OR COALESCE(r.published_at,r.available_at)<? OR "
+                "(COALESCE(r.published_at,r.available_at)=? AND r.material_id>?)) "
+                "AND r.source_kind IN ('telegram','x','twitter') "
+                "ORDER BY published_at DESC,r.material_id LIMIT ?",(moment,moment,before,before,before,before_id,limit+1))
+            items=[{**decode(row['payload']),**{k:row[k] for k in ('id','revision_id','available_at','published_at')}} for row in rows[:limit]]
+            return result({"items":items,"has_more":len(rows)>limit})
+
     @router.get("/materials/{material_id}")
     def material(material_id:str,as_of:int|None=None,revision_id:str|None=None):
         with db.read_tx():

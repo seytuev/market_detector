@@ -1,0 +1,17 @@
+.feed-filters { margin: 20px 0; gap: 18px; flex-wrap: wrap; }
+.feed-filters label { display: flex; align-items: center; gap: 8px; }
+.feed-filters input[type="search"] { min-width: 220px; }
+.feed-layout { display: grid; grid-template-columns: minmax(0,1fr) minmax(280px,.85fr); gap: 20px; align-items: start; }
+.feed-post { margin-bottom: 12px; }
+.feed-post.selected { border-color: var(--lf-brand); }
+.feed-post-head { display: flex; gap: 10px; align-items: center; color: var(--lf-text2); }
+.feed-post-head button { margin-left: auto; }
+.feed-open { display: block; border: 0; background: none; color: var(--lf-text); padding: 14px 0 4px; text-align: left; cursor: pointer; font: inherit; font-weight: 600; width: 100%; overflow-wrap: anywhere; }
+.feed-open:hover { color: var(--lf-brand); }
+.feed-detail { position: sticky; top: 20px; overflow-wrap: anywhere; }
+.feed-detail .btn { margin: 14px 8px 0 0; }
+.feed-text { white-space: pre-wrap; line-height: 1.7; margin-top: 20px; }
+@media(max-width:850px) { .feed-layout { grid-template-columns: 1fr; } .feed-detail { position: static; } }
+#feed-more[hidden] { display: none; }
+.feed-filters input[type="checkbox"] { width: auto; margin: 0; }
+.feed-filters label:last-child { flex: none; }

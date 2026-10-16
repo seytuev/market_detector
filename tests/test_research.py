@@ -348,3 +348,23 @@ def test_research_migration_from_v2_preserves_data_and_repeats(research):
     assert s.require_asset(asset)["display_symbol"]=="BTC"
     assert s.one("SELECT MAX(version) AS version FROM research_schema_version")["version"]==4
     assert s.rows("SELECT change_seq FROM research_analysis")==[]
+
+def test_combined_feed_unlinked_posts_pagination_and_latest_revision(research):
+    s,_,_=research
+    for n,kind in enumerate(['telegram','x','telegram']):
+        s.ingest('feed-test',item('materials',str(n),{'source_kind':kind,'original_text':'post '+str(n),'published_at':NOW-1}))
+    client=TestClient(create_app(s.db,Settings(auth_token='test',research_enabled=True)))
+    headers={'Authorization':'Bearer test'}
+    assert client.get('/api/research/v1/feed').status_code==401
+    first=client.get('/api/research/v1/feed?limit=2',headers=headers)
+    assert first.status_code==200,first.text
+    data=first.json()['data']
+    assert len(data['items'])==2 and data['has_more']
+    last=data['items'][-1]
+    second=client.get('/api/research/v1/feed',params={'limit':2,'before':last['published_at'],'before_id':last['id']},headers=headers).json()['data']
+    assert len(second['items'])==1 and not second['has_more']
+    assert len({r['id'] for r in data['items']+second['items']})==3
+    s.ingest('feed-test',item('materials','0',{'source_kind':'telegram','original_text':'edited','published_at':NOW-1},seq=2))
+    posts=client.get('/api/research/v1/feed',headers=headers).json()['data']['items']
+    assert len(posts)==3
+    assert any(p['original_text']=='edited' for p in posts)
