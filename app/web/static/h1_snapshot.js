@@ -53,8 +53,9 @@
       .sort((a, b) => a.time - b.time));
     const ts = chart.timeScale();
     const paneWidth = () => $('frame').clientWidth - chart.priceScale('right').width();
+    // Current-request charts reserve 2.5 times the original space after the last candle.
     ts.setVisibleLogicalRange(snapshot.fit_content
-      ? { from: -1, to: bars.length - 1 + Math.max(2, Math.ceil(bars.length * .06)) }
+      ? { from: -1, to: bars.length - 1 + 2.5 * Math.max(2, Math.ceil(bars.length * .06)) }
       : H1Layers.currentFrame(bars.length, paneWidth()));
     // Wait for the chart's own canvas layout before projecting DOM overlays.
     await new Promise(resolve => setTimeout(resolve, 200));
