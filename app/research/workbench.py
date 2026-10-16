@@ -51,6 +51,11 @@ def dispatch(runner,kind,payload):
 
 def maintenance(runner):
     s=runner.s;cfg=runner.settings;now=s.clock()
+    from .feed_classifier import FeedClassifier
+    try:
+        FeedClassifier(s,cfg).maintenance(runner)
+    except ResearchError:
+        __import__('logging').getLogger(__name__).exception('Feed classification scheduling failed')
     from .telegram import TelegramFeed
     try:
         TelegramFeed(s,cfg).maintenance(runner)

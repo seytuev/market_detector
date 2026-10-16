@@ -20,6 +20,9 @@ class FeedSignals:
                             'LEFT JOIN research_asset a ON a.asset_uid=o.asset_uid WHERE o.kind=? AND o.id IN (' + marks + ')',
                             ('feed_classification', *(self.identifier(i['id'], i['revision_id']) for i in items)))
         by_id = {r['id']: {**decode(r['payload']), 'symbol': r['display_symbol']} for r in saved}
+        automatic = self.s.rows('SELECT object_id,status,updated_at,payload FROM research_result '
+            'WHERE kind=\'feed_classification\' AND object_id IN (' + marks + ')', tuple(i['revision_id'] for i in items))
+        auto_by_revision = {r['object_id']: r for r in automatic}
         symbols = {t.get('symbol', '').upper() for i in items for t in
                    (i.get('telegram', {}).get('analysis') or {}).get('tickers', []) if t.get('symbol')}
         symbol_assets = self.s.rows('SELECT asset_uid,display_symbol FROM research_asset WHERE status!=\'archived\' '
@@ -31,6 +34,8 @@ class FeedSignals:
                              tuple(i['revision_id'] for i in items))
         for item in items:
             manual = by_id.get(self.identifier(item['id'], item['revision_id']))
+            auto = auto_by_revision.get(item['revision_id'])
+            auto_payload = decode(auto['payload']) if auto else {}
             analysis = item.get('telegram', {}).get('analysis') or {}
             candidates = list(dict.fromkeys(t['symbol'] for t in analysis.get('tickers', []) if t.get('symbol')))
             assets = [{'asset_uid': r['asset_uid'], 'symbol': r['display_symbol']} for r in linked
@@ -41,6 +46,9 @@ class FeedSignals:
             if manual:
                 item['classification'] = {**manual, 'origin': 'manual',
                                           'assets': assets, 'candidate_symbols': candidates}
+            elif auto and auto['status'] == 'succeeded':
+                item['classification'] = {**auto_payload, 'assets': assets,
+                    'candidate_symbols': [auto_payload['symbol']] if auto_payload.get('symbol') else []}
             else:
                 main = [t['symbol'] for t in analysis.get('tickers', []) if t.get('role') == 'главный']
                 primary_symbol = main[0] if len(main) == 1 else candidates[0] if len(candidates) == 1 else None
@@ -53,6 +61,8 @@ class FeedSignals:
                                           'primary_asset_uid': primary.get('asset_uid'),
                                           'symbol': primary.get('symbol'),
                                           'assets': assets, 'candidate_symbols': candidates}
+            item['classification'].update({'auto_status': auto['status'] if auto else 'pending',
+                'auto_error': auto_payload.get('error_code'), 'auto_updated_at': auto['updated_at'] if auto else None})
         return items
 
     def save(self, material_id, body):

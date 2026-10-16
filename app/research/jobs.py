@@ -34,7 +34,7 @@ class ResearchRunner:
         if not self.settings.research_enabled:
             raise ResearchError("disabled","Исследовательский модуль выключен",503)
         from .workbench import KINDS
-        if kind not in {"sync","collect","quarantine","channel","x_account","telegram_analysis","telegram_digest"}|KINDS:
+        if kind not in {"sync","collect","quarantine","channel","x_account","telegram_analysis","telegram_digest","feed_classification"}|KINDS:
             raise ResearchError("unknown_job","Неизвестная задача")
         stamp = self.s.clock()
         with self.s.db.batch_writes():
@@ -109,7 +109,7 @@ class ResearchRunner:
                 self.s.execute("SELECT pg_advisory_xact_lock(741852968)")
             row = self.s.one("SELECT * FROM research_job WHERE (status='pending' AND next_attempt_at<=?) "
                              "OR (status='running' AND lease_until<?) ORDER BY CASE WHEN kind IN ('channel','sync','model_probe','collect') THEN 0 "
-                             "WHEN kind='playbook_backfill' AND json_extract(payload,'$.mode')='live' THEN 1 ELSE 2 END,updated_at,id LIMIT 1",(now,now))
+                             "WHEN kind='feed_classification' OR (kind='playbook_backfill' AND json_extract(payload,'$.mode')='live') THEN 1 ELSE 2 END,updated_at,id LIMIT 1",(now,now))
             if not row:
                 return
             changed = self.s.execute("UPDATE research_job SET status='running',attempts=attempts+1,lease_owner=?,lease_until=?,updated_at=? "
@@ -129,6 +129,9 @@ class ResearchRunner:
                     self.s.execute("UPDATE research_job SET status='pending',attempts=0,progress=?,lease_until=0,next_attempt_at=?,payload=? WHERE id=? AND lease_owner=?",
                         (outcome.get("progress",0),self.s.clock()+1000,encode({**payload,"result":outcome}),row["id"],self.owner))
                     return self.job(row["id"])
+            elif row["kind"] == 'feed_classification':
+                from .feed_classifier import FeedClassifier
+                outcome=FeedClassifier(self.s,self.settings).classify(payload['material_id'],payload['revision_id'])
             elif row["kind"] in {"telegram_analysis","telegram_digest"}:
                 from .telegram import TelegramFeed
                 feed=TelegramFeed(self.s,self.settings)
@@ -160,7 +163,7 @@ class ResearchRunner:
         except (ResearchError,httpx.HTTPError,ValueError,KeyError) as error:
             code = getattr(error,"code","source_unavailable")
             delay = getattr(error,"retry_after",min(1800,30*2**min(row["attempts"],5))+random.randint(0,15))
-            deferred = row["kind"] in {"telegram_analysis","telegram_digest"} and code in {"budget_blocked","model_rate_limited","model_not_configured"}
+            deferred = row["kind"] in {"telegram_analysis","telegram_digest","feed_classification"} and code in {"budget_blocked","model_rate_limited","model_not_configured"}
             if deferred:delay=900
             terminal = not deferred and (code=="auth_error" or row["attempts"]>=4)
             with self.s.db.batch_writes():

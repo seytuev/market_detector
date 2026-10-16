@@ -138,6 +138,18 @@ def register_research_routes(app, db, settings, require_auth):
             FeedSignals(s).attach(items)
             return result({"items":items,"has_more":len(rows)>limit})
 
+    @router.get('/feed-classifier')
+    def classifier_status():
+        from ..research.feed_classifier import FeedClassifier
+        return result(FeedClassifier(s,settings).status())
+
+    @router.post('/feed/{material_id}/classify',status_code=202)
+    def classify_automatically(material_id:str):
+        enabled()
+        from ..research.feed_classifier import FeedClassifier
+        job=FeedClassifier(s,settings).queue(runner,material_id)
+        return result({'job_id':job['id'] if job else None,'cached':job is None})
+
     @router.put('/feed/{material_id}/classification')
     def classify_post(material_id:str,body:dict=Body(...),key:str|None=Header(None,alias='Idempotency-Key')):
         from ..research.feed_signals import FeedSignals

@@ -568,6 +568,7 @@ class Settings:
         default_factory=lambda: int(_env("EVENTS_PRICE_MAX_AGE_SECONDS", "7200")))
     research_enabled: bool = field(default_factory=lambda: parse_bool(_env("RESEARCH_ENABLED", "0")))
     research_telegram_analysis_enabled: bool = field(default_factory=lambda: parse_bool(_env("RESEARCH_TELEGRAM_ANALYSIS_ENABLED", "1")))
+    research_feed_classification_enabled: bool = field(default_factory=lambda: parse_bool(_env("RESEARCH_FEED_CLASSIFICATION_ENABLED", "1")))
     research_telegram_digest_enabled: bool = field(default_factory=lambda: parse_bool(_env("RESEARCH_TELEGRAM_DIGEST_ENABLED", "1")))
     research_context_ui_enabled: bool = field(default_factory=lambda: parse_bool(_env("RESEARCH_CONTEXT_UI_ENABLED", "1")))
     research_terminal_url: str = field(default_factory=lambda: _env("RESEARCH_TERMINAL_URL", ""))

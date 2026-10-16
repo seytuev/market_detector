@@ -9,11 +9,14 @@
   let items = [], more = false, busy = false, selected = null, telegram = null, timer = null;
   let stars;
   let assetSearchSeq = 0;
+  let classificationDirty = false;
+  const classificationKey = item => JSON.stringify(item.classification || {});
+  const autoLabel = c => c.origin==='manual'?'Ваш разбор':c.origin==='xai'?'xAI · '+({low:'низкая',medium:'средняя',high:'высокая'}[c.confidence]||'')+' уверенность':c.auto_error?(errors[c.auto_error]||'Ошибка xAI · можно повторить'):c.auto_status==='running'?'xAI обрабатывает':c.auto_status==='queued'?'В очереди xAI':c.origin==='model'?'ИИ-разбор':'Ожидает xAI';
   const directionName = d => ({bullish:'↗ Bullish',bearish:'↘ Bearish'}[d] || 'Нужна классификация');
   const signal = item => item.classification || {};
   const badges = item => {
     const c=signal(item),symbols=[...new Set([c.symbol,...(c.candidate_symbols||[])].filter(Boolean))];
-    return `<div class="feed-signal-tags"><span class="feed-bias ${esc(c.direction || 'pending')}">${directionName(c.direction)}</span>${symbols.slice(0,5).map(t=>`<span class="feed-ticker">${esc(t)}</span>`).join('')}${!symbols.length?'<span class="feed-unmapped">Тикер не выбран</span>':''}<span class="feed-signal-origin">${c.origin==='manual'?'Ваш разбор':c.origin==='model'?'ИИ-разбор':''}</span></div>`;
+    return `<div class="feed-signal-tags"><span class="feed-bias ${esc(c.direction || 'pending')}">${directionName(c.direction)}</span>${symbols.slice(0,5).map(t=>`<span class="feed-ticker">${esc(t)}</span>`).join('')}${!symbols.length?'<span class="feed-unmapped">Тикер не определён</span>':''}<span class="feed-signal-origin">${esc(autoLabel(c))}</span></div>`;
   };
   function metrics(){
     const bullish=items.filter(i=>signal(i).direction==='bullish').length,bearish=items.filter(i=>signal(i).direction==='bearish').length;
@@ -34,12 +37,13 @@
     const c=signal(item),a=item.telegram?.analysis;
     if(!c.direction||!c.primary_asset_uid){openPost(item);$('feed-classification')?.scrollIntoView({block:'center',behavior:'smooth'});$('feed-classify-note').textContent='Сначала выберите тикер и Bullish / Bearish.';return;}
     await ResearchWorkbench.ideaForm({}, {title:(a?.title_ru||item.title||item.original_text||'Идея').slice(0,200),primary_asset_uid:c.primary_asset_uid,
-      direction:c.direction==='bullish'?'positive':'negative',thesis:(a?.what_happened_ru||a?.summary_ru||item.original_text||'').slice(0,8000),mechanism:(a?.why_matters_ru||'').slice(0,4000),
+      direction:c.direction==='bullish'?'positive':'negative',thesis:(a?.what_happened_ru||a?.summary_ru||item.original_text||'').slice(0,8000),mechanism:(a?.why_matters_ru||c.reason_ru||'').slice(0,4000),
       criteria:(a?.check_ru||[]).filter(t=>t.length>=5).slice(0,20).map(description=>({type:'confirmation',description,evaluator:'manual'})),source_refs:sourceRefs(item,story)}, {feed:true,symbol:c.symbol,sourceCount:story?.posts.length||1});
   }
   function classificationHTML(item){
     const c=signal(item);
-    return `<section class="feed-classification" id="feed-classification"><div class="feed-section-head"><h3>Основа идеи</h3><span class="research-muted">Тикер + направление</span></div><label>Найти актив<input type="search" id="feed-asset-search" placeholder="Например, SOL или Solana" autocomplete="off"></label><label>Тикер<select id="feed-asset"><option value="">Выберите актив</option>${c.primary_asset_uid?`<option selected value="${esc(c.primary_asset_uid)}">${esc(c.symbol)}</option>`:''}</select></label><fieldset class="feed-direction-choice"><legend>Направление публикации</legend><label class="bullish"><input type="radio" name="post-direction" value="bullish" ${c.direction==='bullish'?'checked':''}>↗ Bullish</label><label class="bearish"><input type="radio" name="post-direction" value="bearish" ${c.direction==='bearish'?'checked':''}>↘ Bearish</label></fieldset><p class="research-muted" id="feed-classify-note">${c.candidate_symbols?.length?'Тикеры из разбора: '+esc(c.candidate_symbols.join(', '))+'. Проверьте соответствие активу.':'Укажите актив, к которому относится тезис публикации.'}</p><div class="feed-compose-actions"><button class="btn" id="feed-classify-save">Сохранить разбор</button><button class="btn primary" id="feed-create-idea">+ Создать идею</button></div><div id="feed-existing-ideas"></div></section>`;
+    const auto=`<div class="feed-auto-explanation"><strong>${esc(autoLabel(c))}</strong>${c.origin==='xai'?'<p>'+esc(c.reason_ru)+'</p>':''}${c.text_truncated?'<p class="research-muted">Разобраны первые 16 000 символов публикации.</p>':''}${c.origin==='manual'?'<p>Ручная правка имеет приоритет. xAI её не перезапишет.</p>':''}${c.origin!=='manual'&&c.auto_status!=='succeeded'?'<button class="btn small" id="feed-classify-retry" '+(['running','queued'].includes(c.auto_status)?'disabled':'')+'>'+(['running','queued'].includes(c.auto_status)?'Обрабатывается в фоне':'Определить через xAI')+'</button>':''}</div>`;
+    return `<section class="feed-classification" id="feed-classification"><div class="feed-section-head"><h3>Основа идеи</h3><span class="research-muted">Тикер + направление</span></div>${auto}<label>Найти актив<input type="search" id="feed-asset-search" placeholder="Например, SOL или Solana" autocomplete="off"></label><label>Тикер<select id="feed-asset"><option value="">Выберите актив</option>${c.primary_asset_uid?`<option selected value="${esc(c.primary_asset_uid)}">${esc(c.symbol)}</option>`:''}</select></label><fieldset class="feed-direction-choice"><legend>Направление публикации</legend><label class="bullish"><input type="radio" name="post-direction" value="bullish" ${c.direction==='bullish'?'checked':''}>↗ Bullish</label><label class="bearish"><input type="radio" name="post-direction" value="bearish" ${c.direction==='bearish'?'checked':''}>↘ Bearish</label></fieldset><p class="research-muted" id="feed-classify-note" role="status" aria-live="polite">${c.candidate_symbols?.length?'Тикеры из разбора: '+esc(c.candidate_symbols.join(', '))+'. Проверьте соответствие активу.':'Укажите актив, к которому относится тезис публикации.'}</p><div class="feed-compose-actions"><button class="btn" id="feed-classify-save">Сохранить правку</button><button class="btn primary" id="feed-create-idea">+ Создать идею</button></div><div id="feed-existing-ideas"></div></section>`;
   }
   function bindClassification(item,story){
     const c=signal(item),asset=$('feed-asset'),search=$('feed-asset-search'),note=$('feed-classify-note');
@@ -59,13 +63,16 @@
         asset.innerHTML='<option value="">Выберите актив</option>'+(previous&&!r.data.items.some(a=>a.asset_uid===previous)?`<option value="${esc(previous)}">${esc(previousLabel)}</option>`:'')+r.data.items.map(a=>`<option value="${esc(a.asset_uid)}">${esc(a.display_symbol)} · ${esc(a.name)}</option>`).join('');asset.value=previous;
       }catch(e){if(asset.isConnected)note.textContent=e.message;}
     }
-    search.oninput=()=>{clearTimeout(searchTimer);assetSearchSeq++;searchTimer=setTimeout(findAssets,250);};asset.onchange=showExisting;
+    search.oninput=()=>{classificationDirty=true;clearTimeout(searchTimer);assetSearchSeq++;searchTimer=setTimeout(findAssets,250);};asset.onchange=()=>{classificationDirty=true;showExisting();};
+    $('feed-classification').querySelectorAll('[name="post-direction"]').forEach(r=>r.onchange=()=>classificationDirty=true);
+    if($('feed-classify-retry'))$('feed-classify-retry').onclick=async()=>{const b=$('feed-classify-retry');b.disabled=true;try{await api('/feed/'+encodeURIComponent(item.id)+'/classify',{method:'POST',body:'{}'});note.textContent='Классификация поставлена в очередь xAI.';await load(false,true);}catch(e){note.textContent=e.message;}finally{if(b.isConnected)b.disabled=false;}};
     async function save(andCreate){
       const direction=$('feed-classification').querySelector('[name="post-direction"]:checked')?.value;
       if(!asset.value||!direction){note.textContent='Выберите тикер и направление Bullish или Bearish.';return;}
       const saveButton=$('feed-classify-save'),createButton=$('feed-create-idea');saveButton.disabled=createButton.disabled=true;
       try{const r=await api('/feed/'+encodeURIComponent(item.id)+'/classification',{method:'PUT',headers:{'Idempotency-Key':crypto.randomUUID()},body:JSON.stringify({primary_asset_uid:asset.value,direction,source_revision_id:item.revision_id,expected_revision:item.classification?.revision_id})});
         item.classification={...item.classification,...r.data,origin:'manual',symbol:asset.selectedOptions[0].textContent.split(' · ')[0]};
+        classificationDirty=false;const current=items.find(i=>i.id===item.id&&i.revision_id===item.revision_id);if(current)current.classification=item.classification;
         note.textContent='Тикер и направление сохранены.';render();if(andCreate)await createIdea(item,story);
       }catch(e){note.textContent=e.message;}finally{saveButton.disabled=createButton.disabled=false;}
     }
@@ -87,7 +94,8 @@
       <p class="research-muted">Выводы модели требуют проверки. Содержимое ссылок и изображения в этом разборе не анализировались.</p>`;
   }
   function openPost(item) {
-    selected = {type:'post',id:item.id};
+    classificationDirty=false;
+    selected = {type:'post',id:item.id,classificationKey:classificationKey(item)};
     const result=item.telegram, a=result?.analysis;
     $('feed-detail').innerHTML = `<span class="feed-eyebrow">Разбор публикации · ${kind(item)}</span><h2>${esc(a?.title_ru || item.title || item.author || 'Публикация')}</h2><p class="research-muted">${esc(item.author || item.source_id || 'Источник')} · ${esc(date(item.published_at))}</p>${badges(item)}${classificationHTML(item)}
       ${a ? analysisHTML(a,result) : item.source_kind==='telegram' ? '<p class="research-muted">'+esc(errors[result?.error_code] || (result?.status==='error' ? 'Разбор не выполнен. Можно повторить.' : 'Публикация ожидает ИИ-разбора.'))+'</p>' : ''}
@@ -178,13 +186,15 @@
       items = append ? [...items, ...response.data.items] : quiet ? [...response.data.items,...items.filter(i=>!response.data.items.some(n=>n.id===i.id))] : response.data.items;
       if(quiet && previousLast && items.length>50)items.sort((a,b)=>b.published_at-a.published_at || a.id.localeCompare(b.id));
       if(!quiet || !more)more = response.data.has_more;
-      const results=await Promise.allSettled([api('/telegram'),api('/config'),api('/channels'),loadIdeas()]);
+      const results=await Promise.allSettled([api('/telegram'),api('/config'),api('/channels'),loadIdeas(),api('/feed-classifier')]);
+      if(results[4].status==='fulfilled'){const c=results[4].value.data,m=c.model;$('feed-classifier-status').textContent=!c.enabled?'Автоклассификация выключена':!m.configured?'Автоклассификация: укажите ключ xAI в настройках ИИ':!m.automatic_spending_enabled||Number(m.remaining_usd)<Number(m.max_call_usd)?'xAI · ожидает доступного бюджета. Ручная классификация доступна.':'Автоклассификация xAI · '+m.model+' · новые посты обрабатываются в фоне · остаток общего бюджета $'+m.remaining_usd;}
+      else $('feed-classifier-status').textContent='Не удалось проверить состояние xAI. Ручная классификация доступна.';
       if(results[0].status==='fulfilled'){telegram=results[0].value.data;renderTelegram();}else{$('telegram-status').textContent='Не удалось загрузить обработку Telegram: '+results[0].reason.message;}
       if(results[1].status==='fulfilled' && results[2].status==='fulfilled'){
         const terminal=results[1].value.data.sources.terminal,channels=results[2].value.data.items;
         $('feed-sources').textContent=`Импорт STVTerminal: ${terminal.last_success_at ? date(terminal.last_success_at) : 'нет успешных обновлений'} · Telegram: ${channels.filter(c=>c.enabled).length} каналов включено из ${channels.length}`;
       }
-      if(!quiet && selected?.type==='post'){const item=items.find(i=>i.id===selected.id);if(item)openPost(item);}else if(!quiet && selected?.type==='story'){const story=telegram?.items.find(s=>s.id===selected.id);if(story)openStory(story);}render();
+      if(selected?.type==='post'&&!classificationDirty&&!document.querySelector('dialog[open]')){const item=items.find(i=>i.id===selected.id);if(item&&(!quiet||classificationKey(item)!==selected.classificationKey))openPost(item);}else if(!quiet && selected?.type==='story'){const story=telegram?.items.find(s=>s.id===selected.id);if(story)openStory(story);}render();
       $('feed-status').textContent = 'Лента обновлена. Избранное хранится в этом браузере.';
     } catch (error) { $('feed-status').textContent = error.message || 'Не удалось загрузить ленту.'; }
     finally { busy = false; $('feed-refresh').disabled = $('feed-more').disabled = false;

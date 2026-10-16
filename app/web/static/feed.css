@@ -1,4 +1,5 @@
 /* Feed workspace: platform theme tokens, compact source controls and idea actions. */
+.feed-auto-explanation{padding:12px;border-radius:8px;background:var(--lf-surface);font-size:11px;line-height:1.7;margin:12px 0}.feed-auto-explanation strong{font-weight:500}.feed-auto-explanation p{margin:6px 0;font-size:11px;color:var(--lf-text2)}#feed-classifier-status{margin:0 0 16px}
 #feed-root,.ideas-page{max-width:1640px;margin:auto;padding:30px clamp(16px,2.5vw,40px) 40px}
 #feed-root .market-header{align-items:center;margin-bottom:0;gap:18px}
 #feed-root .now-title{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
