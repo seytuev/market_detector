@@ -37,6 +37,11 @@ log = logging.getLogger(__name__)
 # не рассылает месяцы старых событий — только одна сводка после запуска)
 BACKFILL_SUMMARY_META = "alt:backfill_summary_sent"
 
+# Limit touch notifications per asset, across its bases and zones. Use durable
+# successful delivery times, so restarts and suppressed observations cannot
+# reset or extend the interval.
+W1_TOUCH_COOLDOWN_MS = 4 * 60 * 60 * 1000
+
 
 class AltDispatcher:
     """Фильтрация и доставка AltEvent через sender.send_alt."""
@@ -136,6 +141,8 @@ class AltDispatcher:
         if not rows:
             return "missing W1 event"
         chat = self._chat_id(None)
+        touch_cutoff = now_ms() - W1_TOUCH_COOLDOWN_MS
+        recent_touches = {}
         for e in rows:
             structure = self.db.conn.execute(
                 "SELECT id FROM alt_structure WHERE source_id=? AND structure_key=? AND rules_version=?",
@@ -146,8 +153,22 @@ class AltDispatcher:
             if blocked:
                 self.db.conn.execute("UPDATE notification_member SET reason='muted or disabled' WHERE packet_id=? AND event_id=?",
                                      (row["id"], e["id"]))
+            elif e["event_type"] == "retest" and row["status"] != "sent":
+                if e["asset_id"] not in recent_touches:
+                    recent_touches[e["asset_id"]] = self.db.conn.execute(
+                        "SELECT 1 FROM notification_packet p "
+                        "JOIN notification_member m ON m.packet_id=p.id AND m.channel='alt_v3' "
+                        "JOIN alt_v3_event e ON e.id=m.event_id "
+                        "WHERE p.destination=? AND p.channel='alt_v3' AND p.status='sent' "
+                        "AND p.id<>? AND p.sent_at>? AND m.reason IS NULL "
+                        "AND e.asset_id=? AND e.event_type='retest' LIMIT 1",
+                        (row["destination"], row["id"], touch_cutoff, e["asset_id"])).fetchone() is not None
+                if recent_touches[e["asset_id"]]:
+                    self.db.conn.execute(
+                        "UPDATE notification_member SET reason='touch cooldown: 4 hours' WHERE packet_id=? AND event_id=?",
+                        (row["id"], e["id"]))
         self.db.conn.commit()
-        return None if self._v3_rows(self.outbox.members(row["id"])) else "muted or disabled"
+        return None if self._v3_rows(self.outbox.members(row["id"])) else "muted, disabled or touch cooldown"
 
     def _finish_v3(self, event_id, status):
         self.db.conn.execute("UPDATE alt_v3_event SET delivered=1 WHERE id=?", (event_id,))
