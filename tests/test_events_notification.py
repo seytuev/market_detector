@@ -114,7 +114,7 @@ async def test_image_failure_keeps_caption_details_and_correct_snapshot(db, monk
 
 def test_failed_render_never_publishes_an_incomplete_png(tmp_path, monkeypatch):
     monkeypatch.setattr(notification_image, "chromium_path", lambda: "chrome")
-    monkeypatch.setattr(notification_image.subprocess, "run", lambda *a, **k: SimpleNamespace(
+    monkeypatch.setattr(notification_image, "_run_chromium", lambda *a, **k: SimpleNamespace(
         returncode=0, stdout='<html data-rendered="false">'))
     with pytest.raises(RuntimeError, match="отрисовать карточку"):
         notification_image.render_notice_image(example(), tmp_path)

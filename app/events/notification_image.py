@@ -6,11 +6,10 @@ import hashlib
 from html import escape
 from pathlib import Path
 import re
-import subprocess
 import tempfile
 from threading import Lock
 
-from ..notify.h1_image import chromium_path
+from ..notify.h1_image import chromium_path, _run_chromium
 
 STATIC = Path(__file__).resolve().parents[1] / "web" / "static"
 WIDTH, HEIGHT = 1080, 1080
@@ -55,7 +54,7 @@ def render_notice_image(notice: dict, directory) -> str:
             work = Path(folder)
             page, png = work / "market.html", work / "market.png"
             page.write_text(html, encoding="utf-8")
-            result = subprocess.run([
+            result = _run_chromium([
                 chromium_path(), "--headless", "--no-sandbox", "--disable-gpu",
                 "--disable-dev-shm-usage", "--disable-background-networking",
                 "--no-first-run", "--no-default-browser-check", "--hide-scrollbars",
@@ -63,8 +62,7 @@ def render_notice_image(notice: dict, directory) -> str:
                 "--virtual-time-budget=2000", "--timeout=15000",
                 f"--user-data-dir={work / 'profile'}", f"--screenshot={png}",
                 "--dump-dom", page.as_uri(),
-            ], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=25,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            ], timeout=25)
             ready = re.search(r'<html\b[^>]*\bdata-rendered="true"', result.stdout)
             if result.returncode or not ready or not png.is_file() or png.read_bytes()[:8] != b"\x89PNG\r\n\x1a\n":
                 raise RuntimeError("Не удалось отрисовать карточку рынка: логотип не загружен или текст не помещается")

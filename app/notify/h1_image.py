@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import shutil
 import re
+import signal
 import subprocess
 import tempfile
 from threading import Lock
@@ -103,6 +104,31 @@ def snapshot_html(snapshot: dict) -> str:
             .replace("/* SNAPSHOT_DATA */", data))
 
 
+def _run_chromium(command, *, timeout=30):
+    # Own a separate process group: killing only the browser parent on timeout
+    # leaves renderers alive. The container init reaps any orphaned descendants.
+    grouped = os.name == "posix"
+    process = subprocess.Popen(
+        command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding="utf-8", errors="replace",
+        start_new_session=grouped,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+        return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+    finally:
+        if grouped:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        elif process.poll() is None:
+            process.kill()
+        # Close pipes and reap the direct child on every exit, including timeout.
+        process.communicate()
+
+
 def render_snapshot(snapshot: dict, out_path) -> str:
     """One bounded Chromium process; failed renders never overwrite a valid PNG."""
     out = Path(out_path).resolve()
@@ -122,10 +148,7 @@ def render_snapshot(snapshot: dict, out_path) -> str:
             f"--user-data-dir={work / 'profile'}", f"--screenshot={png}",
             "--dump-dom", html.as_uri(),
         ]
-        result = subprocess.run(
-            command, capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=30, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
+        result = _run_chromium(command)
         ready = re.search(r'<html\b[^>]*\bdata-rendered="true"', result.stdout)
         if result.returncode or not ready or not png.is_file():
             error = re.search(r'<html\b[^>]*\bdata-render-error="([^"]*)"', result.stdout)

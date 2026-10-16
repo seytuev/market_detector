@@ -1,7 +1,7 @@
 FROM python:3.11.14-slim
 
 WORKDIR /srv
-RUN apt-get update && apt-get install -y --no-install-recommends chromium fonts-dejavu-core nodejs \
+RUN apt-get update && apt-get install -y --no-install-recommends chromium fonts-dejavu-core nodejs tini \
     && rm -rf /var/lib/apt/lists/*
 ENV HTF_CHROMIUM_PATH=/usr/bin/chromium
 COPY pyproject.toml ./
@@ -19,7 +19,9 @@ ENV HTF_HOST=0.0.0.0
 # USER здесь нельзя: процесс не смог бы создать WAL рядом с существующей базой.
 COPY tools/docker_entrypoint.py /srv/tools/docker_entrypoint.py
 COPY tools/restore_postgres_backup.py /srv/tools/restore_postgres_backup.py
-ENTRYPOINT ["python", "/srv/tools/docker_entrypoint.py"]
+# Chromium can orphan children even after a successful screenshot. PID 1 must
+# reap them so repeated notifications cannot exhaust the container's PID limit.
+ENTRYPOINT ["/usr/bin/tini", "-g", "--", "python", "/srv/tools/docker_entrypoint.py"]
 
 EXPOSE 8000
 CMD ["python", "-m", "app.main"]

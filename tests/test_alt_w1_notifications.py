@@ -234,7 +234,7 @@ async def test_telegram_replaces_image_when_packet_gains_a_zone(tmp_path):
 def test_w1_png_uses_website_style_and_full_zone_bounds(hbar, tmp_path, monkeypatch):
     db, ctx, _ = hbar
     from app.notify import h1_image
-    real_run = h1_image.subprocess.run
+    real_run = h1_image._run_chromium
     dom = []
 
     def capture(*args, **kwargs):
@@ -242,7 +242,7 @@ def test_w1_png_uses_website_style_and_full_zone_bounds(hbar, tmp_path, monkeypa
         dom.append(result.stdout)
         return result
 
-    monkeypatch.setattr(h1_image.subprocess, "run", capture)
+    monkeypatch.setattr(h1_image, "_run_chromium", capture)
     path = alt_w1.render_chart(db, ctx, tmp_path/"hbar.png")
     with Image.open(path) as image:
         assert image.size == (1920, 960)

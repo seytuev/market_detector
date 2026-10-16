@@ -59,7 +59,7 @@ def sample_snapshot():
 
 def test_website_image_contains_candles_and_shared_zone_labels(tmp_path, monkeypatch):
     from app.notify import h1_image
-    real_run = h1_image.subprocess.run
+    real_run = h1_image._run_chromium
     dom = []
 
     def capture(*args, **kwargs):
@@ -67,7 +67,7 @@ def test_website_image_contains_candles_and_shared_zone_labels(tmp_path, monkeyp
         dom.append(result.stdout)
         return result
 
-    monkeypatch.setattr(h1_image.subprocess, "run", capture)
+    monkeypatch.setattr(h1_image, "_run_chromium", capture)
     path = render_snapshot(sample_snapshot(), tmp_path / "h1.png")
     with Image.open(path) as image:
         assert image.size == (1920, 960)
@@ -84,7 +84,7 @@ def test_incomplete_browser_render_does_not_replace_saved_image(tmp_path, monkey
     path = tmp_path / "saved.png"
     path.write_bytes(b"saved-event-image")
     monkeypatch.setattr(h1_image, "chromium_path", lambda: "chromium")
-    monkeypatch.setattr(h1_image.subprocess, "run", lambda *a, **k: SimpleNamespace(
+    monkeypatch.setattr(h1_image, "_run_chromium", lambda *a, **k: SimpleNamespace(
         returncode=0, stdout='<html data-render-error="Error: missing canvas"></html>',
     ))
     with pytest.raises(RuntimeError, match="missing canvas"):
@@ -105,7 +105,7 @@ def test_payload_cannot_close_inline_data_script():
                                            ("D1", ZoneType.BSL), ("W1", ZoneType.SSL)])
 def test_htf_notifications_use_website_format_on_native_timeframe(tmp_path, monkeypatch, timeframe, kind):
     from app.notify import h1_image
-    real_run = h1_image.subprocess.run
+    real_run = h1_image._run_chromium
     dom = []
 
     def capture(*args, **kwargs):
@@ -113,7 +113,7 @@ def test_htf_notifications_use_website_format_on_native_timeframe(tmp_path, monk
         dom.append(result.stdout)
         return result
 
-    monkeypatch.setattr(h1_image.subprocess, "run", capture)
+    monkeypatch.setattr(h1_image, "_run_chromium", capture)
     step = TIMEFRAME_MINUTES[timeframe] * 60_000
     candles = [make_candle(T0 + i * step, 100, 105, 95, 102, timeframe=timeframe) for i in range(120)]
     zone = Zone(id=1, instrument_id=1, type=kind, direction=Direction.BULL,
@@ -154,7 +154,7 @@ def test_alt_snapshot_never_imports_later_candles_or_setup_state(db):
 
 def test_alt_small_prices_render_without_rounding_to_zero(tmp_path, monkeypatch):
     from app.notify import h1_image
-    real_run = h1_image.subprocess.run
+    real_run = h1_image._run_chromium
     dom = []
 
     def capture(*args, **kwargs):
@@ -162,7 +162,7 @@ def test_alt_small_prices_render_without_rounding_to_zero(tmp_path, monkeypatch)
         dom.append(result.stdout)
         return result
 
-    monkeypatch.setattr(h1_image.subprocess, "run", capture)
+    monkeypatch.setattr(h1_image, "_run_chromium", capture)
     snapshot = sample_snapshot()
     snapshot.pop('layers')
     snapshot['timeframe'] = 'D1'
