@@ -116,7 +116,7 @@ def register_research_routes(app, db, settings, require_auth):
             return result(s.materials(asset_uid,after=cursor,limit=limit,from_at=from_at,to_at=to_at,kind=kind))
 
     @router.get("/feed")
-    def feed(before:int|None=None,before_id:str="",limit:int=Query(50,ge=1,le=100)):
+    def feed(before:int|None=None,before_id:str="",limit:int=Query(50,ge=1,le=100),source_kind:str|None=Query(None,pattern='^(x|telegram)$')):
         enabled()
         with db.read_tx():
             moment=s.clock()
@@ -130,7 +130,8 @@ def register_research_routes(app, db, settings, require_auth):
                 "AND (CAST(? AS BIGINT) IS NULL OR COALESCE(r.published_at,r.available_at)<? OR "
                 "(COALESCE(r.published_at,r.available_at)=? AND r.material_id>?)) "
                 "AND r.source_kind IN ('telegram','x','twitter') "
-                "ORDER BY published_at DESC,r.material_id LIMIT ?",(moment,moment,before,before,before,before_id,limit+1))
+                "AND (CAST(? AS TEXT) IS NULL OR r.source_kind=? OR (?='x' AND r.source_kind='twitter')) "
+                "ORDER BY published_at DESC,r.material_id LIMIT ?",(moment,moment,before,before,before,before_id,source_kind,source_kind,source_kind,limit+1))
             items=[{**decode(row['payload']),**{k:row[k] for k in ('id','revision_id','available_at','published_at')}} for row in rows[:limit]]
             from ..research.telegram import TelegramFeed
             TelegramFeed(s,settings).attach(items)
@@ -401,5 +402,71 @@ def register_research_routes(app, db, settings, require_auth):
 
     from .research_workbench_api import register as register_workbench
     register_workbench(router,runner,settings,result,mutate)
+    @router.get('/feed-tickers')
+    def feed_tickers():
+        enabled()
+        from ..research.feed_signals import FeedSignals
+        with db.read_tx():
+            rows=s.rows("SELECT m.id,r.revision_id,r.payload,COALESCE(r.published_at,r.available_at) AS published_at "
+                "FROM research_material m JOIN research_material_revision r ON r.revision_id=m.current_revision_id "
+                "WHERE r.lifecycle='active' AND r.available_at<=? AND r.source_kind IN ('x','telegram','twitter') "
+                "ORDER BY published_at DESC,m.id LIMIT 1001",(s.clock(),))
+            items=[{**decode(row['payload']),**{k:row[k] for k in ('id','revision_id','published_at')}} for row in rows[:1000]]
+            from ..research.telegram import TelegramFeed
+            TelegramFeed(s,settings).attach(items)
+            FeedSignals(s).attach(items)
+            groups={}
+            for item in items:
+                c=item.get('classification') or {}
+                for symbol in dict.fromkeys([c.get('symbol'),*c.get('candidate_symbols',[])]):
+                    if not symbol:continue
+                    asset=c.get('primary_asset_uid') if symbol==c.get('symbol') else None
+                    key=asset or 'unresolved:'+symbol
+                    group=groups.setdefault(key,{'id':key,'asset_uid':asset,'symbol':symbol,'mentions':0,'sources':[],
+                        'bullish':0,'bearish':0,'latest_at':item['published_at'],'posts':[]})
+                    group['mentions']+=1
+                    source='telegram' if item['source_kind']=='telegram' else 'x'
+                    if source not in group['sources']:group['sources'].append(source)
+                    direction=c.get('direction') if symbol==c.get('symbol') else None
+                    if direction in ('bullish','bearish'):group[direction]+=1
+                    group['posts'].append({'id':item['id'],'title':item.get('title') or item['original_text'][:160],
+                        'author':item.get('author') or item.get('source_id'),'source_kind':source,'published_at':item['published_at'],
+                        'direction':direction,'url':item.get('canonical_url')})
+            return result({'items':list(groups.values()),'posts_loaded':len(items),'capped':len(rows)>1000})
+
+    @router.get('/library')
+    def library(status:str|None=None,q:str='',cursor:str|None=None,limit:int=Query(50,ge=1,le=100)):
+        enabled()
+        from ..research.library import Library
+        return result(Library(s).list(status=status,text_query=q,after=cursor,limit=limit))
+
+    @router.get('/library/{identifier}')
+    def library_article(identifier:str):
+        enabled()
+        from ..research.library import Library
+        return result(Library(s).r.get('article',identifier))
+
+    @router.post('/library',status_code=201)
+    def create_article(body:dict=Body(...),key:str|None=Header(None,alias='Idempotency-Key')):
+        from ..research.library import Library
+        def create():
+            article=Library(s).save(body)
+            runner.enqueue('article_analysis',{'id':article['id']},key=article['id'])
+            return article
+        return mutate('create_article',key,body,create)
+
+    @router.put('/library/{identifier}')
+    def update_article(identifier:str,body:dict=Body(...),key:str|None=Header(None,alias='Idempotency-Key')):
+        from ..research.library import Library
+        return mutate('update_article:'+identifier,key,body,lambda:Library(s).save(body,identifier))
+
+    @router.post('/library/{identifier}/analyze',status_code=202)
+    def analyze_article(identifier:str):
+        enabled()
+        from ..research.library import Library
+        article=Library(s).r.get('article',identifier)
+        if article.get('brief'):return result({'cached':True})
+        return result({'job_id':runner.enqueue('article_analysis',{'id':identifier},key=identifier)['id']})
+
     app.include_router(router)
     return runner

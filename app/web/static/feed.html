@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>STV Market Researcher · X / Telegram Feed</title>
+  <title>STV Market Researcher · X Feed</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="apple-touch-icon" href="/brand/stv-bot-avatar-v2.png">
   <meta name="application-name" content="STV Market Researcher">
@@ -51,10 +51,12 @@
   </aside>
   <div class="shell">
     <div class="shell-main" id="main">
-  <div class="events-page" id="feed-root">
-    <header class="market-header"><div><p class="now-over">Источники → сигналы → идеи</p><h1 class="now-title">X / Telegram Feed<span class="feed-live">Лента</span></h1><p class="market-intro">Находите тезис в потоке. Связывайте с активом. Сохраняйте идею.</p></div><div class="feed-header-actions"><a class="btn" href="/ideas.html">Мои идеи ↗</a><button class="btn" id="feed-refresh">↻ Обновить</button></div></header>
+  <div class="events-page feed-page-x" id="feed-root">
+    <header class="market-header"><div><p class="now-over">Информационный поток</p><h1 class="now-title">X Feed</h1><p class="market-intro">Публикации проектов и авторов. Важное — в наблюдение, сильный тезис — в идею.</p></div><div class="feed-header-actions"><a class="btn" href="/ideas.html">Мои идеи ↗</a><button class="btn" id="feed-refresh">↻ Обновить</button></div></header>
     <p id="feed-status" class="market-status" role="status" aria-live="polite"></p>
     <p class="research-muted" id="feed-classifier-status" role="status" aria-live="polite">Автоклассификация xAI · проверяем подключение…</p>
+    <section class="research-card flow-projects"><div class="feed-section-head"><div><h2>Новое в проектах</h2><p class="research-muted">Свежие тезисы из публикаций X и связанные тикеры</p></div><a href="/tickers.html">Все тикеры ↗</a></div><div id="feed-projects" class="research-muted">Загружаем публикации…</div></section>
+    <section class="research-card flow-sources"><div class="feed-section-head"><h2 id="source-heading">Аккаунты X для наблюдения</h2><span id="source-connection" class="research-muted"></span></div><p class="research-muted" id="source-intro">Добавьте официальные аккаунты проектов или выбранных авторов.</p><form id="flow-source-form" class="flow-source-form"><input id="flow-source-handle" aria-label="Аккаунт X" placeholder="@project" required><button class="btn primary">Добавить</button><a class="btn" href="/?section=imports#settings">Настройки</a></form><p id="flow-source-status" role="status" class="research-muted"></p><div id="flow-source-list"></div></section>
     <div class="feed-metrics" id="feed-metrics" aria-label="Классификация загруженных публикаций"></div>
     <details class="feed-operations"><summary><span>Источники и обработка</span><span class="research-muted" id="feed-health">Загружаем состояние…</span></summary><div class="feed-operations-body">
     <section class="feed-source-panel"><h2>Источники</h2><p id="feed-sources">Загружаем состояние источников…</p><a class="btn small" href="/?section=imports#settings">Настроить источники</a></section>
@@ -63,8 +65,8 @@
       <p class="research-muted" id="telegram-budget"></p><p class="research-status" id="telegram-action" role="status" aria-live="polite"></p>
       <div id="telegram-digest-view"></div>
     </section></div></details>
-    <div class="research-toolbar feed-filters"><label>Вид<select id="feed-view"><option value="posts">Публикации</option><option value="stories">Сюжеты Telegram</option></select></label><label>Источник<select id="feed-kind"><option value="">X + Telegram</option><option value="x">X Feed</option><option value="telegram">Telegram Feed</option></select></label><label>Направление<select id="feed-direction"><option value="">Все направления</option><option value="bullish">↗ Bullish</option><option value="bearish">↘ Bearish</option><option value="pending">Нужна классификация</option></select></label><label class="feed-search-label">Поиск<input id="feed-search" type="search" placeholder="Тикер, текст или автор"></label><label class="feed-star-filter"><input type="checkbox" id="feed-stars"> Избранные</label></div>
-    <div class="feed-layout"><section aria-label="Публикации"><div class="feed-list-heading"><h2>Поток публикаций</h2><p id="feed-count" class="research-muted"></p></div><div id="feed-list" aria-live="polite"></div><button class="btn" id="feed-more" hidden>Загрузить ещё</button></section><aside class="feed-rail"><section class="research-card feed-ideas"><div class="feed-section-head"><h2>Мои идеи <span id="feed-ideas-count"></span></h2><a href="/ideas.html">Все идеи ↗</a></div><div id="feed-ideas-list"><p class="research-muted">Загружаем идеи…</p></div></section><section class="research-card feed-detail" id="feed-detail"><div class="feed-empty-icon">↗</div><h2>От публикации к идее</h2><p class="research-muted">Выберите пост, проверьте тикер и направление. Источник и его версия сохранятся вместе с идеей.</p><div class="feed-steps"><span>01 · Тикер</span><span>02 · Bullish / Bearish</span><span>03 · Идея</span></div></section></aside></div>
+    <div class="research-toolbar feed-filters"><label id="feed-view-label">Вид<select id="feed-view"><option value="posts">Публикации</option><option value="stories">Сюжеты Telegram</option></select></label><label hidden>Источник<select id="feed-kind"><option value="">X + Telegram</option><option value="x">X Feed</option><option value="telegram">Telegram Feed</option></select></label><label>Направление<select id="feed-direction"><option value="">Все направления</option><option value="bullish">↗ Bullish</option><option value="bearish">↘ Bearish</option><option value="pending">Нужна классификация</option></select></label><label class="feed-search-label">Поиск<input id="feed-search" type="search" placeholder="Тикер, текст или автор"></label><label class="feed-star-filter"><input type="checkbox" id="feed-stars"> Избранные</label></div>
+    <div class="feed-layout"><section aria-label="Публикации"><div class="feed-list-heading"><h2>Публикации X</h2><p id="feed-count" class="research-muted"></p></div><div id="feed-list" aria-live="polite"></div><button class="btn" id="feed-more" hidden>Загрузить ещё</button></section><aside class="feed-rail"><section class="research-card feed-ideas"><div class="feed-section-head"><h2>Мои идеи <span id="feed-ideas-count"></span></h2><a href="/ideas.html">Все идеи ↗</a></div><div id="feed-ideas-list"><p class="research-muted">Загружаем идеи…</p></div></section><section class="research-card feed-detail" id="feed-detail"><div class="feed-empty-icon">↗</div><h2>От публикации к идее</h2><p class="research-muted">Выберите пост, проверьте тикер и направление. Источник и его версия сохранятся вместе с идеей.</p><div class="feed-steps"><span>01 · Тикер</span><span>02 · Bullish / Bearish</span><span>03 · Идея</span></div></section></aside></div>
   </div>
     </div>
     <footer class="app-footer">
@@ -91,7 +93,7 @@
   <script src="/ui.js"></script>
   <link rel="stylesheet" href="/research.css">
   <script src="/research_workbench.js"></script><script src="/research.js"></script>
-  <link rel="stylesheet" href="/feed.css">
+  <link rel="stylesheet" href="/feed.css"><link rel="stylesheet" href="/information-flow.css">
   <script src="/feed.js"></script>
 </body>
 </html>

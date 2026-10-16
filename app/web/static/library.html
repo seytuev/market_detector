@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>STV Market Researcher · Библиотека</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="apple-touch-icon" href="/brand/stv-bot-avatar-v2.png">
+  <meta name="application-name" content="STV Market Researcher">
+  <script>(function(){try{var c=localStorage.getItem('lf:theme');var l=window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches;var t=(c==='dark'||c==='light')?c:(c==='system'?(l?'light':'dark'):'light');document.documentElement.dataset.theme=t;var sb=localStorage.getItem('lf:sidebar');if(sb==='collapsed'||sb==='expanded')document.documentElement.dataset.sidebar=sb;}catch(e){document.documentElement.dataset.theme='light';}})();</script>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/market-context.css">
+  <link rel="stylesheet" href="/redesign.css">
+  <link rel="stylesheet" href="/mobile-analysis.css">
+  <link rel="stylesheet" href="/mobile-pages.css">
+  <link rel="stylesheet" href="/workspace.css">
+  <link rel="stylesheet" href="/brand/brand.css">
+</head>
+<body class="app-body">
+  <a class="skip" href="#main">К содержимому</a>
+  <aside class="sidebar">
+    <div class="sidebar-head">
+    <a class="brand" href="/#now">
+      <img class="brand-lockup" src="/brand/stv-logo-v2.png" width="1536" height="1024" alt="STV Market Researcher">
+      <img class="brand-avatar" src="/brand/stv-bot-avatar-v2.png" width="44" height="44" alt="STV Market Researcher">
+    </a>
+    <button type="button" id="sidebar-toggle" class="sidebar-toggle" aria-label="Свернуть меню" aria-expanded="true" title="Свернуть меню">
+      <svg class="ico-collapse" width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+        <path d="M8 4v12M14 7l-3 3 3 3M4 3.5h12A.5.5 0 0 1 16.5 4v12a.5.5 0 0 1-.5.5H4a.5.5 0 0 1-.5-.5V4a.5.5 0 0 1 .5-.5Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <svg class="ico-expand" width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+        <path d="M8 4v12M11 7l3 3-3 3M4 3.5h12A.5.5 0 0 1 16.5 4v12a.5.5 0 0 1-.5.5H4a.5.5 0 0 1-.5-.5V4a.5.5 0 0 1 .5-.5Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
+    </div>
+    <div class="nav-label">Анализ</div>
+    <nav class="app-tabs" aria-label="Основная навигация">
+      <a href="/#now" class="app-tab"><span class="nav-full">Общая картина</span><span class="nav-short">Общая картина</span></a>
+      <a href="/#desk" class="app-tab"><span class="nav-full">Анализ</span><span class="nav-short">Анализ</span></a>
+      <a href="/#review" class="app-tab"><span class="nav-full">Проверка зон</span><span class="nav-short">Проверка зон</span></a>
+      <a href="/alt.html" class="app-tab"><span class="nav-full">Скринер ALTs</span><span class="nav-short">Скринер ALTs</span></a>
+      <a href="/events.html" class="app-tab"><span class="nav-full">Контекст рынка</span><span class="nav-short">Контекст рынка</span></a>
+      <a href="/research.html?tab=ideas" class="app-tab"><span class="nav-full">Исследования</span><span class="nav-short">Исследования</span></a>
+      <a href="/feed.html" class="app-tab current" aria-current="page"><span class="nav-full">X / Telegram Feed</span><span class="nav-short">Feed</span></a>
+    </nav>
+    <div class="sidebar-bottom">
+      <a href="/#journal" class="app-tab"><span class="nav-full">Журнал</span><span class="nav-short">Журнал</span></a>
+      <a href="/#help" class="app-tab"><span class="nav-full">Справка</span><span class="nav-short">Справка</span></a>
+      <a href="/#settings" class="app-tab"><span class="nav-full">Настройки</span><span class="nav-short">Настр.</span></a>
+    </div>
+  </aside>
+  <div class="shell">
+    <div class="shell-main" id="main">
+  <main class="flow-page" id="library-root"><header class="market-header"><div><p class="now-over">Информационный поток</p><h1 class="now-title">Библиотека</h1><p class="market-intro">Статьи, которые превращаются в тезисы и наблюдения.</p></div><div class="feed-header-actions"><a class="btn" href="/?section=ai#settings">Настройки Grok</a><button class="btn primary" id="library-add">+ Добавить статью</button></div></header><p class="research-muted" id="flow-status" role="status" aria-live="polite"></p><div class="flow-summary" id="library-summary"></div><div class="flow-toolbar"><div class="flow-tabs" role="group" aria-label="Статус материалов"><button class="btn active" data-library-filter="all" aria-pressed="true">Все</button><button class="btn" data-library-filter="unread" aria-pressed="false">Не прочитано</button><button class="btn" data-library-filter="reread" aria-pressed="false">Перечитать</button><button class="btn" data-library-filter="pinned" aria-pressed="false">Закреплённые</button><button class="btn" data-library-filter="archived" aria-pressed="false">Архив</button></div><input id="library-search" type="search" aria-label="Поиск материалов" placeholder="Поиск материалов"></div><div class="library-layout"><section id="library-list" aria-label="Статьи"></section><aside class="research-card library-detail" id="library-detail"><p class="now-over">Прочитать. Понять. Применить.</p><h2>От материала — к идее</h2><p>Grok выделит суть, аргументы и практическую пользу для нашего исследования рынка.</p><ol class="library-steps"><li><strong>Сохраните источник</strong><span>Ссылка, текст статьи или файл TXT / Markdown / HTML</span></li><li><strong>Прочитайте разбор</strong><span>Тезисы, применение, риски и вопросы</span></li><li><strong>Вернитесь к важному</strong><span>Закрепите статью или отметьте для повторного чтения</span></li></ol><button class="btn" id="library-first">Добавить первый материал</button></aside></div><button class="btn" id="library-more" hidden>Загрузить ещё</button></main>
+    </div>
+    <footer class="app-footer">
+      <span>STV Market Researcher</span>
+      <span>Наблюдение без размещения заявок</span>
+    </footer>
+  </div>
+  <nav class="mobile-nav" aria-label="Мобильная навигация">
+    <a href="/#now">Общая картина</a>
+    <a href="/#desk">Анализ</a>
+    <a href="/#review">Проверка зон</a>
+    <a href="/alt.html">Скринер ALTs</a>
+    <button type="button" id="nav-more" class="active" aria-expanded="false" aria-controls="nav-more-panel" aria-current="page">Ещё</button>
+  </nav>
+  <div id="nav-more-panel" class="nav-more-panel hidden" role="menu">
+    <a href="/research.html?tab=ideas" role="menuitem">Исследования</a>
+    <a href="/events.html" role="menuitem">Контекст рынка</a>
+    <a href="/#journal" role="menuitem">Журнал</a>
+    <a href="/#help" role="menuitem">Справка</a>
+    <a href="/#settings" role="menuitem">Настройки</a>
+      <a href="/feed.html" role="menuitem">X / Telegram Feed</a>
+  </div>
+  <script src="/common.js"></script>
+  <script src="/ui.js"></script>
+  <link rel="stylesheet" href="/research.css">
+  <script src="/research_workbench.js"></script><script src="/research.js"></script>
+  <link rel="stylesheet" href="/feed.css">
+  <link rel="stylesheet" href="/information-flow.css"><script src="/information-flow.js"></script>
+</body>
+</html>

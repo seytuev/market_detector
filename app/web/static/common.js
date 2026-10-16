@@ -829,6 +829,21 @@ window.HTF = (() => {
   };
   const sidebar = document.querySelector('.sidebar');
   if (!sidebar) return;
+  const flowPages = [
+    ['/feed.html', 'X Feed', 'M5 4l14 16M19 4L5 20'],
+    ['/telegram-feed.html', 'Telegram Feed', 'm3 11 18-7-5 17-5-7-8-3Zm8 3 10-10'],
+    ['/tickers.html', 'Тикеры', 'M4 19V9m5 10V5m5 14v-7m5 7V3'],
+    ['/library.html', 'Библиотека', 'M3 4h7l2 2 2-2h7v16h-7l-2 2-2-2H3V4Zm9 2v16'],
+  ];
+  sidebar.querySelectorAll('a[href="/feed.html"]').forEach(a => a.remove());
+  const flow = document.createElement('nav');
+  flow.className = 'app-tabs information-nav';
+  flow.setAttribute('aria-label', 'Информационный поток');
+  flow.innerHTML = '<div class="nav-label">Информационный поток</div>' + flowPages.map(([href,label,path]) => {
+    const active = location.pathname === href;
+    return `<a href="${href}" class="app-tab${active?' current':''}" title="${label}" aria-label="${label}"${active?' aria-current="page"':''}><svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="${path}" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="nav-full">${label}</span><span class="nav-short">${label}</span></a>`;
+  }).join('');
+  sidebar.querySelector('.app-tabs')?.after(flow);
   const researchTab=sidebar.querySelector('a[href="/research.html?tab=ideas"]');
   if(researchTab&&!sidebar.querySelector('a[href="/ideas.html"]')){
     const ideasTab=document.createElement('a');ideasTab.href='/ideas.html';ideasTab.className='app-tab'+(location.pathname==='/ideas.html'?' current':'');
@@ -836,8 +851,15 @@ window.HTF = (() => {
     ideasTab.title='Идеи';ideasTab.setAttribute('aria-label','Идеи');if(location.pathname==='/ideas.html')ideasTab.setAttribute('aria-current','page');researchTab.after(ideasTab);
   }
   const mobileMore=document.getElementById('nav-more-panel');
+  if(mobileMore){
+    mobileMore.querySelectorAll('a[href="/feed.html"]').forEach(a=>a.remove());
+    const group=document.createElement('div');group.className='information-mobile';group.setAttribute('role','group');group.setAttribute('aria-label','Информационный поток');
+    group.innerHTML='<span class="nav-label">Информационный поток</span>'+flowPages.map(([href,label])=>`<a href="${href}" role="menuitem"${location.pathname===href?' aria-current="page"':''}>${label}</a>`).join('');
+    mobileMore.append(group);
+  }
   if(mobileMore&&!mobileMore.querySelector('a[href="/ideas.html"]')){const a=document.createElement('a');a.href='/ideas.html';a.textContent='Идеи';a.setAttribute('role','menuitem');mobileMore.prepend(a);}
   sidebar.querySelectorAll('.app-tab').forEach(tab => {
+    if(tab.closest('.information-nav')) return;
     const href = tab.getAttribute('href') || (tab.getAttribute('aria-current') ? location.pathname : '');
     const key = Object.keys(paths).find(name => name === 'alt' || name === 'events' || name === 'feed'
       ? href.includes('/' + name + '.html') : href.endsWith('#' + name));

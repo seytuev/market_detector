@@ -14,6 +14,14 @@
 .sidebar .sidebar-bottom { gap: 5px; padding-top: 16px; border-top: 1px solid var(--lf-border); }
 .sidebar .conn-status { margin-top: 10px; gap: 8px; font-size: 10px; flex-wrap: wrap; }
 .sidebar #warmup-indicator { flex-basis: 100%; max-width: 100%; font-size: 9px; white-space: normal; overflow-wrap: anywhere; }
+.sidebar { overflow-y: auto; overflow-x: hidden; }
+.sidebar .sidebar-toggle { right: 6px; top: 8px; }
+html[data-sidebar="collapsed"] .sidebar-head { padding-top: 26px; }
+.sidebar .app-tabs { flex: none; }
+.sidebar .information-nav .nav-label { padding: 22px 10px 10px; margin: 0; font-size: 9px; letter-spacing: .08em; white-space: normal; }
+.information-mobile { border-top: 1px solid var(--lf-border); margin-top: 8px; padding-top: 8px; }
+.information-mobile .nav-label { display: block; padding: 6px 14px; font-size: 10px; color: var(--lf-text2); }
+.information-mobile a { display: block; }
 .sidebar-head { gap: 0; }
 @media (min-width: 768px) {
   html[data-sidebar="collapsed"] .sidebar .app-tab { min-height: 46px; padding: 12px; justify-content: center; }

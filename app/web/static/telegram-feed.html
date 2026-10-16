@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>STV Market Researcher · Telegram Feed</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="apple-touch-icon" href="/brand/stv-bot-avatar-v2.png">
+  <meta name="application-name" content="STV Market Researcher">
+  <script>(function(){try{var c=localStorage.getItem('lf:theme');var l=window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches;var t=(c==='dark'||c==='light')?c:(c==='system'?(l?'light':'dark'):'light');document.documentElement.dataset.theme=t;var sb=localStorage.getItem('lf:sidebar');if(sb==='collapsed'||sb==='expanded')document.documentElement.dataset.sidebar=sb;}catch(e){document.documentElement.dataset.theme='light';}})();</script>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/market-context.css">
+  <link rel="stylesheet" href="/redesign.css">
+  <link rel="stylesheet" href="/mobile-analysis.css">
+  <link rel="stylesheet" href="/mobile-pages.css">
+  <link rel="stylesheet" href="/workspace.css">
+  <link rel="stylesheet" href="/brand/brand.css">
+</head>
+<body class="app-body">
+  <a class="skip" href="#main">К содержимому</a>
+  <aside class="sidebar">
+    <div class="sidebar-head">
+    <a class="brand" href="/#now">
+      <img class="brand-lockup" src="/brand/stv-logo-v2.png" width="1536" height="1024" alt="STV Market Researcher">
+      <img class="brand-avatar" src="/brand/stv-bot-avatar-v2.png" width="44" height="44" alt="STV Market Researcher">
+    </a>
+    <button type="button" id="sidebar-toggle" class="sidebar-toggle" aria-label="Свернуть меню" aria-expanded="true" title="Свернуть меню">
+      <svg class="ico-collapse" width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+        <path d="M8 4v12M14 7l-3 3 3 3M4 3.5h12A.5.5 0 0 1 16.5 4v12a.5.5 0 0 1-.5.5H4a.5.5 0 0 1-.5-.5V4a.5.5 0 0 1 .5-.5Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <svg class="ico-expand" width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+        <path d="M8 4v12M11 7l3 3-3 3M4 3.5h12A.5.5 0 0 1 16.5 4v12a.5.5 0 0 1-.5.5H4a.5.5 0 0 1-.5-.5V4a.5.5 0 0 1 .5-.5Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
+    </div>
+    <div class="nav-label">Анализ</div>
+    <nav class="app-tabs" aria-label="Основная навигация">
+      <a href="/#now" class="app-tab"><span class="nav-full">Общая картина</span><span class="nav-short">Общая картина</span></a>
+      <a href="/#desk" class="app-tab"><span class="nav-full">Анализ</span><span class="nav-short">Анализ</span></a>
+      <a href="/#review" class="app-tab"><span class="nav-full">Проверка зон</span><span class="nav-short">Проверка зон</span></a>
+      <a href="/alt.html" class="app-tab"><span class="nav-full">Скринер ALTs</span><span class="nav-short">Скринер ALTs</span></a>
+      <a href="/events.html" class="app-tab"><span class="nav-full">Контекст рынка</span><span class="nav-short">Контекст рынка</span></a>
+      <a href="/research.html?tab=ideas" class="app-tab"><span class="nav-full">Исследования</span><span class="nav-short">Исследования</span></a>
+      <a href="/feed.html" class="app-tab current" aria-current="page"><span class="nav-full">X / Telegram Feed</span><span class="nav-short">Feed</span></a>
+    </nav>
+    <div class="sidebar-bottom">
+      <a href="/#journal" class="app-tab"><span class="nav-full">Журнал</span><span class="nav-short">Журнал</span></a>
+      <a href="/#help" class="app-tab"><span class="nav-full">Справка</span><span class="nav-short">Справка</span></a>
+      <a href="/#settings" class="app-tab"><span class="nav-full">Настройки</span><span class="nav-short">Настр.</span></a>
+    </div>
+  </aside>
+  <div class="shell">
+    <div class="shell-main" id="main">
+  <div class="events-page feed-page-telegram" id="feed-root">
+    <header class="market-header"><div><p class="now-over">Информационный поток</p><h1 class="now-title">Telegram Feed</h1><p class="market-intro">Посты каналов → перевод, тикеры и разбор. Одна новость из нескольких каналов — один сюжет.</p></div><div class="feed-header-actions"><a class="btn" href="/ideas.html">Мои идеи ↗</a><button class="btn" id="feed-refresh">↻ Обновить</button></div></header>
+    <p id="feed-status" class="market-status" role="status" aria-live="polite"></p>
+    <p class="research-muted" id="feed-classifier-status" role="status" aria-live="polite">Автоклассификация xAI · проверяем подключение…</p>
+    <section class="research-card flow-sources"><div class="feed-section-head"><h2 id="source-heading">Каналы Telegram</h2><span id="source-connection" class="research-muted"></span></div><p class="research-muted" id="source-intro">Добавьте публичные каналы. Новые публикации и сюжеты обрабатываются в фоне.</p><form id="flow-source-form" class="flow-source-form"><input id="flow-source-handle" aria-label="Канал Telegram" placeholder="@channel" required><button class="btn primary">Добавить</button><a class="btn" href="/?section=imports#settings">Настройки</a></form><p id="flow-source-status" role="status" class="research-muted"></p><div id="flow-source-list"></div></section>
+    <div class="feed-metrics" id="feed-metrics" aria-label="Классификация загруженных публикаций"></div>
+    <details class="feed-operations"><summary><span>Источники и обработка</span><span class="research-muted" id="feed-health">Загружаем состояние…</span></summary><div class="feed-operations-body">
+    <section class="feed-source-panel"><h2>Источники</h2><p id="feed-sources">Загружаем состояние источников…</p><a class="btn small" href="/?section=imports#settings">Настроить источники</a></section>
+    <section id="telegram-panel" aria-label="Обработка Telegram">
+      <div class="feed-section-head"><div><h2>Telegram · разбор и сюжеты</h2><p class="research-muted" id="telegram-status">Загружаем состояние обработки…</p></div><div class="research-toolbar"><a class="btn small" href="/?section=ai#settings">Настройки ИИ и обработка</a></div></div>
+      <p class="research-muted" id="telegram-budget"></p><p class="research-status" id="telegram-action" role="status" aria-live="polite"></p>
+      <div id="telegram-digest-view"></div>
+    </section></div></details>
+    <div class="research-toolbar feed-filters"><label id="feed-view-label">Вид<select id="feed-view"><option value="posts">Публикации</option><option value="stories">Сюжеты Telegram</option></select></label><label hidden>Источник<select id="feed-kind"><option value="">X + Telegram</option><option value="x">X Feed</option><option value="telegram">Telegram Feed</option></select></label><label>Направление<select id="feed-direction"><option value="">Все направления</option><option value="bullish">↗ Bullish</option><option value="bearish">↘ Bearish</option><option value="pending">Нужна классификация</option></select></label><label class="feed-search-label">Поиск<input id="feed-search" type="search" placeholder="Тикер, текст или автор"></label><label class="feed-star-filter"><input type="checkbox" id="feed-stars"> Избранные</label></div>
+    <div class="feed-layout"><section aria-label="Публикации"><div class="feed-list-heading"><h2>Сюжеты Telegram</h2><p id="feed-count" class="research-muted"></p></div><div id="feed-list" aria-live="polite"></div><button class="btn" id="feed-more" hidden>Загрузить ещё</button></section><aside class="feed-rail"><section class="research-card feed-ideas"><div class="feed-section-head"><h2>Мои идеи <span id="feed-ideas-count"></span></h2><a href="/ideas.html">Все идеи ↗</a></div><div id="feed-ideas-list"><p class="research-muted">Загружаем идеи…</p></div></section><section class="research-card feed-detail" id="feed-detail"><div class="feed-empty-icon">↗</div><h2>От публикации к идее</h2><p class="research-muted">Выберите пост, проверьте тикер и направление. Источник и его версия сохранятся вместе с идеей.</p><div class="feed-steps"><span>01 · Тикер</span><span>02 · Bullish / Bearish</span><span>03 · Идея</span></div></section></aside></div>
+  </div>
+    </div>
+    <footer class="app-footer">
+      <span>STV Market Researcher</span>
+      <span>Наблюдение без размещения заявок</span>
+    </footer>
+  </div>
+  <nav class="mobile-nav" aria-label="Мобильная навигация">
+    <a href="/#now">Общая картина</a>
+    <a href="/#desk">Анализ</a>
+    <a href="/#review">Проверка зон</a>
+    <a href="/alt.html">Скринер ALTs</a>
+    <button type="button" id="nav-more" class="active" aria-expanded="false" aria-controls="nav-more-panel" aria-current="page">Ещё</button>
+  </nav>
+  <div id="nav-more-panel" class="nav-more-panel hidden" role="menu">
+    <a href="/research.html?tab=ideas" role="menuitem">Исследования</a>
+    <a href="/events.html" role="menuitem">Контекст рынка</a>
+    <a href="/#journal" role="menuitem">Журнал</a>
+    <a href="/#help" role="menuitem">Справка</a>
+    <a href="/#settings" role="menuitem">Настройки</a>
+      <a href="/feed.html" role="menuitem">X / Telegram Feed</a>
+  </div>
+  <script src="/common.js"></script>
+  <script src="/ui.js"></script>
+  <link rel="stylesheet" href="/research.css">
+  <script src="/research_workbench.js"></script><script src="/research.js"></script>
+  <link rel="stylesheet" href="/feed.css"><link rel="stylesheet" href="/information-flow.css">
+  <script src="/feed.js"></script>
+</body>
+</html>

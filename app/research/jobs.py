@@ -38,7 +38,7 @@ class ResearchRunner:
         if not self.settings.research_enabled:
             raise ResearchError("disabled","Исследовательский модуль выключен",503)
         from .workbench import KINDS
-        if kind not in {"sync","collect","quarantine","channel","x_account","telegram_analysis","telegram_digest","feed_classification"}|KINDS:
+        if kind not in {"sync","collect","quarantine","channel","x_account","telegram_analysis","telegram_digest","feed_classification","article_analysis"}|KINDS:
             raise ResearchError("unknown_job","Неизвестная задача")
         stamp = self.s.clock()
         with self.s.db.batch_writes():
@@ -158,6 +158,9 @@ class ResearchRunner:
                     self.s.execute("UPDATE research_job SET status='pending',attempts=0,progress=?,lease_until=0,next_attempt_at=?,payload=? WHERE id=? AND lease_owner=?",
                         (outcome.get("progress",0),self.s.clock()+1000,encode({**payload,"result":outcome}),row["id"],self.owner))
                     return self.job(row["id"])
+            elif row["kind"] == 'article_analysis':
+                from .library import Library
+                outcome=Library(self.s).analyze(payload['id'],self.settings)
                 if outcome.get('superseded'):
                     self.s.execute("UPDATE research_job SET status='pending',attempts=0,lease_until=0,next_attempt_at=? "
                         "WHERE id=? AND status='running' AND lease_owner=?",(self.s.clock()+1000,row['id'],self.owner))
@@ -197,7 +200,7 @@ class ResearchRunner:
             code = getattr(error,"code","source_unavailable")
             delay = getattr(error,"retry_after",min(1800,30*2**min(row["attempts"],5))+random.randint(0,15))
             provider_wait = code=='model_rate_limited' and getattr(error,'rate_limit_source',None)=='provider'
-            deferred = row["kind"] in {"telegram_analysis","telegram_digest","feed_classification"} and (code=="model_not_configured" or provider_wait)
+            deferred = row["kind"] in {"telegram_analysis","telegram_digest","feed_classification","article_analysis"} and (code=="model_not_configured" or provider_wait)
             if deferred and not provider_wait:delay=900
             terminal = not deferred and (code=="auth_error" or row["attempts"]>=4)
             with self.s.db.batch_writes():
