@@ -43,11 +43,11 @@
   function classificationHTML(item){
     const c=signal(item);
     const auto=`<div class="feed-auto-explanation"><strong>${esc(autoLabel(c))}</strong>${c.origin==='xai'?'<p>'+esc(c.reason_ru)+'</p>':''}${c.text_truncated?'<p class="research-muted">Разобраны первые 16 000 символов публикации.</p>':''}${c.origin==='manual'?'<p>Ручная правка имеет приоритет. xAI её не перезапишет.</p>':''}${c.origin!=='manual'&&c.auto_status!=='succeeded'?'<button class="btn small" id="feed-classify-retry" '+(['running','queued'].includes(c.auto_status)?'disabled':'')+'>'+(['running','queued'].includes(c.auto_status)?'Обрабатывается в фоне':'Определить через xAI')+'</button>':''}</div>`;
-    return `<section class="feed-classification" id="feed-classification"><div class="feed-section-head"><h3>Основа идеи</h3><span class="research-muted">Тикер + направление</span></div>${auto}<label>Найти актив<input type="search" id="feed-asset-search" placeholder="Например, SOL или Solana" autocomplete="off"></label><label>Тикер<select id="feed-asset"><option value="">Выберите актив</option>${c.primary_asset_uid?`<option selected value="${esc(c.primary_asset_uid)}">${esc(c.symbol)}</option>`:''}</select></label><fieldset class="feed-direction-choice"><legend>Направление публикации</legend><label class="bullish"><input type="radio" name="post-direction" value="bullish" ${c.direction==='bullish'?'checked':''}>↗ Bullish</label><label class="bearish"><input type="radio" name="post-direction" value="bearish" ${c.direction==='bearish'?'checked':''}>↘ Bearish</label></fieldset><p class="research-muted" id="feed-classify-note" role="status" aria-live="polite">${c.candidate_symbols?.length?'Тикеры из разбора: '+esc(c.candidate_symbols.join(', '))+'. Проверьте соответствие активу.':'Укажите актив, к которому относится тезис публикации.'}</p><div class="feed-compose-actions"><button class="btn" id="feed-classify-save">Сохранить правку</button><button class="btn primary" id="feed-create-idea">+ Создать идею</button></div><div id="feed-existing-ideas"></div></section>`;
+    return `<section class="feed-classification" id="feed-classification"><div class="feed-section-head"><h3>Основа идеи</h3><span class="research-muted">Тикер + направление</span></div>${auto}<label>Актив<input type="search" id="feed-asset-search" placeholder="Например, SOL или Solana" autocomplete="off" value="${esc(c.asset_name || c.symbol || (c.candidate_symbols?.length===1?c.candidate_symbols[0]:''))}"></label><label>Тикер<select id="feed-asset"><option value="">Выберите актив</option>${c.primary_asset_uid?`<option selected value="${esc(c.primary_asset_uid)}">${esc(c.symbol+(c.asset_name&&c.asset_name!==c.symbol?' · '+c.asset_name:''))}</option>`:''}</select></label><fieldset class="feed-direction-choice"><legend>Направление публикации</legend><label class="bullish"><input type="radio" name="post-direction" value="bullish" ${c.direction==='bullish'?'checked':''}>↗ Bullish</label><label class="bearish"><input type="radio" name="post-direction" value="bearish" ${c.direction==='bearish'?'checked':''}>↘ Bearish</label></fieldset><p class="research-muted" id="feed-classify-note" role="status" aria-live="polite">${c.candidate_symbols?.length?'Тикеры из разбора: '+esc(c.candidate_symbols.join(', '))+'. Проверьте соответствие активу.':'Укажите актив, к которому относится тезис публикации.'}</p><div class="feed-compose-actions"><button class="btn" id="feed-classify-save">Сохранить правку</button><button class="btn primary" id="feed-create-idea">+ Создать идею</button></div><div id="feed-existing-ideas"></div></section>`;
   }
   function bindClassification(item,story){
     const c=signal(item),asset=$('feed-asset'),search=$('feed-asset-search'),note=$('feed-classify-note');
-    let searchTimer;
+    let searchTimer,assetTouched=false;
     const showExisting=async()=>{
       const selectedAsset=asset.value;if(!selectedAsset){$('feed-existing-ideas').innerHTML='';return;}
       try{const r=await api('/ideas?limit=20&asset_uid='+encodeURIComponent(selectedAsset));r.data.items=r.data.items.filter(v=>['draft','watching','supported','disputed'].includes(v.status));
@@ -60,10 +60,10 @@
       const seq=++assetSearchSeq,q=search.value.trim()||c.candidate_symbols?.[0]||c.symbol||'';
       try{const r=await api('/assets?limit=30&q='+encodeURIComponent(q));if(seq!==assetSearchSeq||!asset.isConnected)return;
         const previous=asset.value,previousLabel=asset.selectedOptions[0]?.textContent;
-        asset.innerHTML='<option value="">Выберите актив</option>'+(previous&&!r.data.items.some(a=>a.asset_uid===previous)?`<option value="${esc(previous)}">${esc(previousLabel)}</option>`:'')+r.data.items.map(a=>`<option value="${esc(a.asset_uid)}">${esc(a.display_symbol)} · ${esc(a.name)}</option>`).join('');asset.value=previous;
+        asset.innerHTML='<option value="">Выберите актив</option>'+(previous&&!r.data.items.some(a=>a.asset_uid===previous)?`<option value="${esc(previous)}">${esc(previousLabel)}</option>`:'')+r.data.items.map(a=>`<option value="${esc(a.asset_uid)}">${esc(a.display_symbol+(a.name&&a.name!==a.display_symbol?' · '+a.name:''))}</option>`).join('');asset.value=previous;
       }catch(e){if(asset.isConnected)note.textContent=e.message;}
     }
-    search.oninput=()=>{classificationDirty=true;clearTimeout(searchTimer);assetSearchSeq++;searchTimer=setTimeout(findAssets,250);};asset.onchange=()=>{classificationDirty=true;showExisting();};
+    search.oninput=()=>{assetTouched=true;classificationDirty=true;clearTimeout(searchTimer);assetSearchSeq++;searchTimer=setTimeout(findAssets,250);};asset.onchange=()=>{assetTouched=true;classificationDirty=true;const label=asset.selectedOptions[0]?.textContent;if(asset.value&&label)search.value=label.split(' · ')[1]||label;showExisting();};
     $('feed-classification').querySelectorAll('[name="post-direction"]').forEach(r=>r.onchange=()=>classificationDirty=true);
     if($('feed-classify-retry'))$('feed-classify-retry').onclick=async()=>{const b=$('feed-classify-retry');b.disabled=true;try{await api('/feed/'+encodeURIComponent(item.id)+'/classify',{method:'POST',body:'{}'});note.textContent='Классификация поставлена в очередь xAI.';await load(false,true);}catch(e){note.textContent=e.message;}finally{if(b.isConnected)b.disabled=false;}};
     async function save(andCreate){
@@ -71,13 +71,27 @@
       if(!asset.value||!direction){note.textContent='Выберите тикер и направление Bullish или Bearish.';return;}
       const saveButton=$('feed-classify-save'),createButton=$('feed-create-idea');saveButton.disabled=createButton.disabled=true;
       try{const r=await api('/feed/'+encodeURIComponent(item.id)+'/classification',{method:'PUT',headers:{'Idempotency-Key':crypto.randomUUID()},body:JSON.stringify({primary_asset_uid:asset.value,direction,source_revision_id:item.revision_id,expected_revision:item.classification?.revision_id})});
-        item.classification={...item.classification,...r.data,origin:'manual',symbol:asset.selectedOptions[0].textContent.split(' · ')[0]};
+        item.classification={...item.classification,...r.data,origin:'manual',symbol:asset.selectedOptions[0].textContent.split(' · ')[0],asset_name:asset.selectedOptions[0].textContent.split(' · ')[1]||asset.selectedOptions[0].textContent};
         classificationDirty=false;const current=items.find(i=>i.id===item.id&&i.revision_id===item.revision_id);if(current)current.classification=item.classification;
         note.textContent='Тикер и направление сохранены.';render();if(andCreate)await createIdea(item,story);
       }catch(e){note.textContent=e.message;}finally{saveButton.disabled=createButton.disabled=false;}
     }
     $('feed-classify-save').onclick=()=>save(false);$('feed-create-idea').onclick=()=>save(true);
-    findAssets();showExisting();
+    async function initializeAsset(){
+      if(!c.primary_asset_uid&&(c.symbol||c.candidate_symbols?.length===1)){
+        note.textContent='Подставляем актив и тикер из разбора…';
+        try{
+          const r=await api('/feed/'+encodeURIComponent(item.id)+'/resolve-asset',{method:'POST',body:JSON.stringify({source_revision_id:item.revision_id})}),a=r.data;
+          if(!asset.isConnected||assetTouched)return;
+          Object.assign(c,{primary_asset_uid:a.asset_uid,symbol:a.display_symbol,asset_name:a.name});
+          item.classification=c;const current=items.find(i=>i.id===item.id&&i.revision_id===item.revision_id);if(current)Object.assign(current.classification,c);
+          asset.innerHTML='<option value="">Выберите актив</option><option selected value="'+esc(a.asset_uid)+'">'+esc(a.display_symbol+(a.name&&a.name!==a.display_symbol?' · '+a.name:''))+'</option>';
+          search.value=a.name||a.display_symbol;note.textContent='Актив и тикер подставлены автоматически.';render();
+        }catch(e){if(asset.isConnected&&!assetTouched)note.textContent=e.message;}
+      }
+      if(asset.isConnected&&!assetTouched){await findAssets();showExisting();}
+    }
+    initializeAsset();
   }
   try { stars = new Set(JSON.parse(localStorage.getItem('stv:feed:stars') || '[]')); } catch { stars = new Set(); }
   const kind = item => item.source_kind === 'telegram' ? 'Telegram' : 'X';

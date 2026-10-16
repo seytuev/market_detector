@@ -150,6 +150,12 @@ def register_research_routes(app, db, settings, require_auth):
         job=FeedClassifier(s,settings).queue(runner,material_id)
         return result({'job_id':job['id'] if job else None,'cached':job is None})
 
+    @router.post('/feed/{material_id}/resolve-asset')
+    def resolve_feed_asset(material_id:str,body:dict=Body(...)):
+        enabled()
+        from ..research.feed_assets import FeedAssets
+        return result(FeedAssets(s).resolve(material_id,body.get('source_revision_id')))
+
     @router.put('/feed/{material_id}/classification')
     def classify_post(material_id:str,body:dict=Body(...),key:str|None=Header(None,alias='Idempotency-Key')):
         from ..research.feed_signals import FeedSignals
