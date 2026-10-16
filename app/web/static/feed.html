@@ -55,7 +55,12 @@
     <header class="market-header"><div><p class="now-over">Информационный поток</p><h1 class="now-title">X / Telegram Feed</h1><p class="market-intro">Публикации проектов и каналов в одной ленте.</p></div><button class="btn" id="feed-refresh">↻ Обновить</button></header>
     <p id="feed-status" class="market-status" role="status" aria-live="polite"></p>
     <section class="research-card"><h2>Источники</h2><p id="feed-sources">Загружаем состояние источников…</p><a class="btn small" href="/research.html?tab=sources">Настроить источники</a><p class="research-muted">X — публикации из импорта STVTerminal. Telegram — импорт и сбор публичных каналов.</p></section>
-    <div class="research-toolbar feed-filters"><label>Источник<select id="feed-kind"><option value="">X + Telegram</option><option value="x">X Feed</option><option value="telegram">Telegram Feed</option></select></label><label>Поиск<input id="feed-search" type="search" placeholder="Текст или автор"></label><label><input type="checkbox" id="feed-stars"> Только избранные</label></div>
+    <section id="telegram-panel" class="research-card" aria-label="Обработка Telegram">
+      <div class="feed-section-head"><div><h2>Telegram · разбор и сюжеты</h2><p class="research-muted" id="telegram-status">Загружаем состояние обработки…</p></div><div class="research-toolbar"><button class="btn small" id="telegram-process">Получить и разобрать посты</button><button class="btn small" id="telegram-digest">Собрать дайджест</button></div></div>
+      <p class="research-muted" id="telegram-budget"></p><p class="research-status" id="telegram-action" role="status" aria-live="polite"></p>
+      <div id="telegram-digest-view"></div>
+    </section>
+    <div class="research-toolbar feed-filters"><label>Показать<select id="feed-view"><option value="posts">Публикации</option><option value="stories">Сюжеты Telegram</option></select></label><label>Источник<select id="feed-kind"><option value="">X + Telegram</option><option value="x">X Feed</option><option value="telegram">Telegram Feed</option></select></label><label>Поиск<input id="feed-search" type="search" placeholder="Текст или автор"></label><label><input type="checkbox" id="feed-stars"> Только избранные</label></div>
     <div class="feed-layout"><section aria-label="Публикации"><p id="feed-count" class="research-muted"></p><div id="feed-list" aria-live="polite"></div><button class="btn" id="feed-more" hidden>Загрузить ещё</button></section><aside class="research-card feed-detail" id="feed-detail"><h2>Публикация</h2><p class="research-muted">Выберите публикацию в ленте.</p></aside></div>
   </div>
     </div>

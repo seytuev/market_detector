@@ -34,7 +34,7 @@ class ResearchRunner:
         if not self.settings.research_enabled:
             raise ResearchError("disabled","Исследовательский модуль выключен",503)
         from .workbench import KINDS
-        if kind not in {"sync","collect","quarantine","channel"}|KINDS:
+        if kind not in {"sync","collect","quarantine","channel","telegram_analysis","telegram_digest"}|KINDS:
             raise ResearchError("unknown_job","Неизвестная задача")
         stamp = self.s.clock()
         with self.s.db.batch_writes():
@@ -125,6 +125,10 @@ class ResearchRunner:
                     self.s.execute("UPDATE research_job SET status='pending',attempts=0,progress=?,lease_until=0,next_attempt_at=?,payload=? WHERE id=? AND lease_owner=?",
                         (outcome.get("progress",0),self.s.clock()+1000,encode({**payload,"result":outcome}),row["id"],self.owner))
                     return self.job(row["id"])
+            elif row["kind"] in {"telegram_analysis","telegram_digest"}:
+                from .telegram import TelegramFeed
+                feed=TelegramFeed(self.s,self.settings)
+                outcome=feed.analyze(payload["material_id"],payload["revision_id"]) if row["kind"]=="telegram_analysis" else feed.digest()
             elif row["kind"]=="sync":
                 outcome=self.integration.sync(row["id"],should_stop=lambda:self.stop_event is not None and self.stop_event.is_set())
                 if outcome.get("interrupted"):
@@ -149,8 +153,12 @@ class ResearchRunner:
         except (ResearchError,httpx.HTTPError,ValueError,KeyError) as error:
             code = getattr(error,"code","source_unavailable")
             delay = getattr(error,"retry_after",min(1800,30*2**min(row["attempts"],5))+random.randint(0,15))
-            terminal = code=="auth_error" or row["attempts"]>=4
+            deferred = row["kind"] in {"telegram_analysis","telegram_digest"} and code in {"budget_blocked","model_rate_limited","model_not_configured"}
+            if deferred:delay=900
+            terminal = not deferred and (code=="auth_error" or row["attempts"]>=4)
             with self.s.db.batch_writes():
+                if deferred:
+                    self.s.execute("UPDATE research_job SET attempts=0 WHERE id=? AND lease_owner=?",(row["id"],self.owner))
                 if row["kind"]=="sync":
                     state = self.s.state("terminal")
                     if code in {"cursor_expired","dataset_changed"}:

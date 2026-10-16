@@ -106,12 +106,60 @@ def register_research_routes(app, db, settings, require_auth):
                 "AND n.available_at<=? AND (n.available_at>r.available_at OR "
                 "(n.available_at=r.available_at AND (n.change_seq>r.change_seq OR "
                 "(n.change_seq=r.change_seq AND n.revision_id>r.revision_id))))) "
-                "AND (? IS NULL OR COALESCE(r.published_at,r.available_at)<? OR "
+                "AND (CAST(? AS BIGINT) IS NULL OR COALESCE(r.published_at,r.available_at)<? OR "
                 "(COALESCE(r.published_at,r.available_at)=? AND r.material_id>?)) "
                 "AND r.source_kind IN ('telegram','x','twitter') "
                 "ORDER BY published_at DESC,r.material_id LIMIT ?",(moment,moment,before,before,before,before_id,limit+1))
             items=[{**decode(row['payload']),**{k:row[k] for k in ('id','revision_id','available_at','published_at')}} for row in rows[:limit]]
+            from ..research.telegram import TelegramFeed
+            TelegramFeed(s,settings).attach(items)
             return result({"items":items,"has_more":len(rows)>limit})
+
+    @router.get("/telegram")
+    def telegram_view():
+        enabled()
+        from ..research.telegram import TelegramFeed
+        with db.read_tx():
+            feed=TelegramFeed(s,settings)
+            stories=feed.stories()
+            latest=feed.latest_digest()
+            if latest:
+                _,_,signature,_=feed.digest_input()
+                saved=s.one("SELECT input_hash FROM research_telegram_digest WHERE id=?",(latest["id"],))
+                latest["superseded"]=saved["input_hash"]!=signature
+            return result({**stories,"digest":latest,"model":feed.model.status(),
+                "analysis_enabled":settings.research_telegram_analysis_enabled,"digest_enabled":settings.research_telegram_digest_enabled,
+                "jobs":s.rows("SELECT id,kind,status,error_code,updated_at FROM research_job WHERE kind IN ('telegram_analysis','telegram_digest') ORDER BY CASE WHEN status='running' THEN 0 WHEN status='pending' THEN 1 ELSE 2 END,updated_at DESC,id DESC LIMIT 20")})
+
+    @router.post("/telegram/process",status_code=202)
+    def telegram_process():
+        enabled()
+        from ..research.telegram import TelegramFeed
+        from ..research.channels import Channels
+        feed=TelegramFeed(s,settings);feed.check()
+        jobs=[]
+        for channel in Channels(s).list():
+            if channel["enabled"]:
+                jobs.append(runner.enqueue("channel",{"handle":channel["handle"]},key=channel["handle"])["id"])
+        for row in feed.rows(limit=50):
+            job=feed.queue(runner,row["id"],manual=True)
+            if job:jobs.append(job["id"])
+        return result({"job_ids":jobs,"message":"Сбор и обработка поставлены в очередь"})
+
+    @router.post("/telegram/materials/{material_id}/analyze",status_code=202)
+    def telegram_analyze(material_id:str):
+        enabled()
+        from ..research.telegram import TelegramFeed
+        job=TelegramFeed(s,settings).queue(runner,material_id,manual=True)
+        return result({"job_id":job["id"] if job else None,"cached":job is None})
+
+    @router.post("/telegram/digest",status_code=202)
+    def telegram_digest():
+        enabled()
+        from ..research.telegram import TelegramFeed
+        TelegramFeed(s,settings).check(True)
+        job=runner.enqueue("telegram_digest",key="scheduled")
+        return result({"job_id":job["id"]})
 
     @router.get("/materials/{material_id}")
     def material(material_id:str,as_of:int|None=None,revision_id:str|None=None):

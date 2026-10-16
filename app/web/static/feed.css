@@ -15,3 +15,16 @@
 #feed-more[hidden] { display: none; }
 .feed-filters input[type="checkbox"] { width: auto; margin: 0; }
 .feed-filters label:last-child { flex: none; }
+#telegram-panel { margin-top: 16px; }
+#telegram-panel[hidden] { display: none; }
+.feed-section-head { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; flex-wrap:wrap; }
+.feed-section-head h2 { margin-top:0; }
+.feed-story-source { border-top:1px solid var(--lf-border); padding:16px 0; }
+.feed-detail { max-height:calc(100vh - 48px); overflow-y:auto; }
+.feed-detail h3 { margin-top:24px; }
+.feed-detail details { margin-top:18px; }
+#telegram-digest-view { overflow-wrap:anywhere; }
+#telegram-digest-view li { margin:10px 0; }
+.feed-filters input[type="search"] { min-width:0; width:220px; max-width:100%; }
+.feed-filters label { flex:none; min-width:0; max-width:100%; }
+@media(max-width:850px) { .feed-detail { max-height:none; overflow:visible; } }

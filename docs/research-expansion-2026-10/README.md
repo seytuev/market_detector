@@ -55,6 +55,8 @@
 
 Направления 03–06 расширяют этот домен модулями ideas.py, strength.py, baskets.py, playbook.py/model.py и lab.py/lab_compute.py/lab_worker.py. Общий version repository — records.py/schema_v4.sql. API — research_workbench_api.py, интерфейс — research_workbench.js. Исходные STVTerminal analytics/validation/index-model/playbook/rules сохранены с provenance и собраны в тот же Node runtime. На старте разрешён отдельный фоновый цикл в существующем процессе; тяжёлые исследования уже исполняются в изолированном subprocess с frozen входами, лимитом 60 секунд/512 МиБ. Исследовательские задания не помещать в очередь calc_task для закрытых свечей. Использовать её проверенные принципы, сохраняя самостоятельные таблицы и ресурсные лимиты.
 
+Telegram Feed дополнен переводом и ИИ-разбором новых версий постов, сюжетами и сохраняемым дайджестом. Использованы исходные analyze/digest/priority/stories из STVTerminal; [объём и эксплуатация](07-telegram-feed.md).
+
 ### Запуск и обновление перенесённых модулей
 
 Настройки приведены в .env.example: RESEARCH_ENABLED=1 включает домен, RESEARCH_DERIBIT_ENABLED=1 — публичные экспирации. RESEARCH_NOTIFICATIONS_ENABLED по умолчанию выключен. URL и токен отдельного терминала можно оставить пустыми. Каналы настраиваются на /research.html. Обычный app.main запускает исследовательские задания вместе с текущим worker. Для локального просмотра без второго worker котировок: `python -m tools.serve_research --port 8086`.

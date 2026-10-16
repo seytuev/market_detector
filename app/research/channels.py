@@ -63,7 +63,7 @@ class Channels:
                     external="telegram:"+handle+":"+str(message)
                     payload={"source_kind":"telegram","source_id":handle,"author":handle,"canonical_url":"https://t.me/"+handle+"/"+str(message),
                              "original_text":original,"published_at":p.get("postedAt"),"source_observed_at":self.s.clock(),
-                             "title":terminal("meaningful_text",text=original)[:160],"assets":refs,
+                             "links":p.get("links",[]),"title":terminal("meaningful_text",text=original)[:160],"assets":refs,
                              "media_refs":[{"kind":photo["kind"],"url":photo["url"]} for photo in native.get("photos",[])]}
                     checksum=digest({k:v for k,v in payload.items() if k!="source_observed_at"})
                     mid=local_id("telegram-local","materials",external)

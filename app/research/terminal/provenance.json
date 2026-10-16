@@ -173,6 +173,30 @@
       "target": "services/ticker_recap/hub-core.ts",
       "sha256": "3aa22a558a70ee60e62951b54fbf3110880ea3aae8a87b977afe3d38494abb54",
       "mode": "verbatim extraction: HubPost, mergeHubPosts, hubConsensus, digestSchema"
+    },
+    {
+      "source": "src/telegram/analyze.ts",
+      "sha256": "c1df1e88cdbc174de527c8893a1753cb79dfe91602194eb279a3a49869f80d08",
+      "commit": "af1b0b3a74f28b61b8c44b423a895610af92c418",
+      "mode": "unchanged"
+    },
+    {
+      "source": "src/telegram/media.ts",
+      "sha256": "d3e7050f088790d197838280a059466c82b0332378f94e33adbb185ef3fda897",
+      "commit": "af1b0b3a74f28b61b8c44b423a895610af92c418",
+      "mode": "unchanged"
+    },
+    {
+      "source": "src/telegram/digest.ts",
+      "sha256": "bf2df80ba5400029bf106bbd60cbe19835f8aaa25f66bcf6faa1ddebd6fc6164",
+      "commit": "af1b0b3a74f28b61b8c44b423a895610af92c418",
+      "mode": "unchanged"
+    },
+    {
+      "source": "src/telegram/priority.ts",
+      "sha256": "37eed3ccc05b57242817efc2b833f752c0e75c46ef9265e8dba17c9260c3be03",
+      "commit": "af1b0b3a74f28b61b8c44b423a895610af92c418",
+      "mode": "unchanged"
     }
   ]
 }

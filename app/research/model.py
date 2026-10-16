@@ -54,7 +54,7 @@ class Model:
         if not daily.is_finite() or not reserve.is_finite() or daily<0 or reserve<0:raise ResearchError("invalid_budget","Бюджет должен быть конечным и неотрицательным")
         return daily,reserve
 
-    def call(self,operation,payload,strong=False,spec=None):
+    def call(self,operation,payload,strong=False,spec=None,max_output_tokens=2200):
         c=self.config;daily,reserve=self.budget();now=self.s.clock();identifier=uid()
         for rate in (c.get("input_per_million"),c.get("output_per_million")):
             if rate is not None:
@@ -81,7 +81,7 @@ class Model:
         try:
             if c["provider"]=="anthropic":
                 response=client.post("https://api.anthropic.com/v1/messages",headers={"x-api-key":c["key"],"anthropic-version":"2023-06-01"},
-                    json={"model":model,"max_tokens":2200,"system":messages[0]["content"],"messages":[messages[1]],
+                    json={"model":model,"max_tokens":max_output_tokens,"system":messages[0]["content"],"messages":[messages[1]],
                           "tools":[{"name":spec["schema"]["name"],"description":"Return only the requested structured result","input_schema":spec["schema"]["schema"]}],
                           "tool_choice":{"type":"tool","name":spec["schema"]["name"]}})
                 response.raise_for_status();raw=response.json();output=next((b["input"] for b in raw.get("content",[]) if b.get("type")=="tool_use"),None)
@@ -89,7 +89,7 @@ class Model:
             elif c["provider"] in {"openai","xai"}:
                 base="https://api.openai.com/v1" if c["provider"]=="openai" else "https://api.x.ai/v1"
                 body={"model":model,"messages":messages,"temperature":0,
-                    ("max_tokens" if c["provider"]=="xai" else "max_completion_tokens"):2200,"response_format":{"type":"json_schema","json_schema":{"name":spec["schema"]["name"],"schema":spec["schema"]["schema"],"strict":True}}}
+                    ("max_tokens" if c["provider"]=="xai" else "max_completion_tokens"):max_output_tokens,"response_format":{"type":"json_schema","json_schema":{"name":spec["schema"]["name"],"schema":spec["schema"]["schema"],"strict":True}}}
                 if c["provider"]=="xai":body["reasoning_effort"]="none"
                 response=client.post(base+"/chat/completions",headers={"Authorization":"Bearer "+c["key"]},json=body)
                 response.raise_for_status();raw=response.json();output=json.loads(raw["choices"][0]["message"]["content"])

@@ -51,6 +51,12 @@ def dispatch(runner,kind,payload):
 
 def maintenance(runner):
     s=runner.s;cfg=runner.settings;now=s.clock()
+    from .telegram import TelegramFeed
+    try:
+        TelegramFeed(s,cfg).maintenance(runner)
+    except ResearchError:
+        # Source/runtime failures must not prevent unrelated research maintenance.
+        __import__('logging').getLogger(__name__).exception("Telegram scheduling failed")
     if cfg.research_ideas_enabled:Ideas(s).maintenance()
     if cfg.research_baskets_enabled:Baskets(s).maintenance()
     if cfg.research_strength_enabled:

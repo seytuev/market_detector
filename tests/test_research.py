@@ -346,7 +346,7 @@ def test_research_migration_from_v2_preserves_data_and_repeats(research):
     migrate(s.db)
     migrate(s.db)
     assert s.require_asset(asset)["display_symbol"]=="BTC"
-    assert s.one("SELECT MAX(version) AS version FROM research_schema_version")["version"]==4
+    assert s.one("SELECT MAX(version) AS version FROM research_schema_version")["version"]==5
     assert s.rows("SELECT change_seq FROM research_analysis")==[]
 
 def test_combined_feed_unlinked_posts_pagination_and_latest_revision(research):
