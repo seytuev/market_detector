@@ -35,6 +35,7 @@ def terminal_settings(path=None,provider=None):
 class Model:
     def __init__(self,store,config=None,client=None):
         self.s=store;self.client=client
+        self.credential_source='provided'
         self.config=config if config is not None else terminal_settings()
         if config is None:
             saved=store.state("model-settings")
@@ -42,6 +43,9 @@ class Model:
             if saved.get("provider"):
                 # Resolve credentials for the selected provider, including local terminal settings.
                 self.config["key"]=terminal_settings(provider=saved["provider"])["key"]
+            from .credentials import Credentials
+            self.credential_source=Credentials(store).status(self.config['provider'],self.config.get('key',''))['source']
+            self.config["key"]=Credentials(store).get(self.config['provider'],self.config.get('key',''))
 
     def save_settings(self,body):
         allowed={"provider","cheap","strong","daily_usd","reserve_usd"}
@@ -73,7 +77,7 @@ class Model:
                 "daily_budget_usd":c.get("daily_usd","0"),"max_call_usd":c.get("reserve_usd","0"),"automatic_spending_enabled":self.budget()[0]>0 and self.budget()[1]>0,
                 "accounted_usd":str(accounted),"remaining_usd":str(max(Decimal(0),self.budget()[0]-accounted)),"calls_24h":len(rows),"accounting":"actual cost when configured; full reservation otherwise",
                 "last_request":latest,
-                "credential_source":"server environment or local STVTerminal settings","budget_window":"rolling_24_hours","max_calls_per_hour":60,"max_parallel_calls":1}
+                "credential_source":self.credential_source,"budget_window":"rolling_24_hours","max_calls_per_hour":60,"max_parallel_calls":1}
 
     def budget(self):
         try:daily=Decimal(str(self.config.get("daily_usd","0")));reserve=Decimal(str(self.config.get("reserve_usd","0")))
@@ -89,7 +93,7 @@ class Model:
                 except InvalidOperation:valid=False
                 if not valid:raise ResearchError("invalid_tariff","Тариф должен быть конечным и неотрицательным")
         if not c.get("key") or not c.get("strong" if strong else "cheap"):
-            raise ResearchError("model_not_configured","Локально нет ключа/модели провайдера STVTerminal. Задайте их в серверном окружении.",503)
+            raise ResearchError("model_not_configured","Укажите ключ провайдера и модель в настройках ИИ.",503)
         with self.s.db.batch_writes():
             if self.s.db.is_postgres:self.s.execute("SELECT pg_advisory_xact_lock(741852970)")
             rows=self.s.rows("SELECT * FROM research_model_usage WHERE at_ms>=?",(now-86400000,))

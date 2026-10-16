@@ -45,6 +45,27 @@ def register_research_routes(app, db, settings, require_auth):
         enabled()
         return result(s.idempotent(operation,key,body,function))
 
+    @router.get('/credentials')
+    def credential_status():
+        from ..research.credentials import Credentials
+        from ..research.model import terminal_settings
+        import os
+        credentials=Credentials(s)
+        return result({'items':{name:credentials.status(name,terminal_settings(provider=name)['key'])
+            for name in ('xai','openai','anthropic')} | {'x':credentials.status('x',os.environ.get('X_BEARER_TOKEN',''))}})
+
+    @router.put('/credentials/{name}')
+    def save_credential(name:str,body:dict=Body(...)):
+        from ..research.credentials import Credentials
+        enabled()
+        # Do not pass secrets through the idempotency cache or general settings audit.
+        return result(Credentials(s).save(name,body))
+
+    @router.delete('/credentials/{name}')
+    def remove_credential(name:str):
+        from ..research.credentials import Credentials
+        enabled();return result(Credentials(s).remove(name))
+
     @router.get("/config")
     def config():
         return result({"enabled":settings.research_enabled,"context_ui_enabled":settings.research_context_ui_enabled,
@@ -311,7 +332,7 @@ def register_research_routes(app, db, settings, require_auth):
     @router.get("/x-accounts")
     def x_accounts():
         from ..research.accounts import XAccounts
-        return result({'items':XAccounts(s).list(),'configured':XAccounts.configured()})
+        return result({'items':XAccounts(s).list(),'configured':XAccounts(s).configured()})
 
     @router.post("/x-accounts")
     def save_x_account(body:dict=Body(...),key:str|None=Header(None,alias="Idempotency-Key")):
@@ -328,7 +349,7 @@ def register_research_routes(app, db, settings, require_auth):
         from ..research.accounts import XAccounts,normalize_handle
         enabled();handle=normalize_handle(handle,'x')
         if not s.state('x-account:'+handle).get('enabled'):raise ResearchError('account_disabled','Аккаунт выключен или удалён',503)
-        if not XAccounts.configured():raise ResearchError('x_not_configured','Для получения постов X задайте X_BEARER_TOKEN на сервере',503)
+        if not XAccounts(s).configured():raise ResearchError('x_not_configured','Укажите токен X в настройках импорта',503)
         return result({'job_id':runner.enqueue('x_account',{'handle':handle},key=handle)['id']})
 
     @router.post("/subscriptions")

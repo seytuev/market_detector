@@ -83,7 +83,7 @@ class ResearchRunner:
             for channel in self.s.rows("SELECT handle FROM research_channel WHERE enabled=1"):
                 self.enqueue("channel",{"handle":channel["handle"]},key=channel["handle"])
             from .accounts import XAccounts
-            if XAccounts.configured():
+            if XAccounts(self.s).configured():
                 for account in XAccounts(self.s).list():
                     if account.get('enabled'):self.enqueue('x_account',{'handle':account['handle']},key=account['handle'])
             if self.settings.research_terminal_url and self.settings.research_integration_token:

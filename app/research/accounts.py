@@ -28,8 +28,11 @@ def normalize_handle(value, platform):
 class XAccounts:
     def __init__(self,store):self.s=store
 
-    @staticmethod
-    def configured():return bool(os.environ.get('X_BEARER_TOKEN'))
+    def token(self):
+        from .credentials import Credentials
+        return Credentials(self.s).get('x',os.environ.get('X_BEARER_TOKEN',''))
+
+    def configured(self):return bool(self.token())
 
     def list(self):
         return [decode(row['payload']) for row in self.s.rows("SELECT payload FROM research_source_state WHERE id LIKE 'x-account:%' ORDER BY id")]
@@ -53,9 +56,10 @@ class XAccounts:
     def collect(self,handle,client=None):
         handle=normalize_handle(handle,'x');key='x-account:'+handle;state=self.s.state(key)
         if not state.get('enabled'):raise ResearchError('account_disabled','Аккаунт выключен или удалён',503)
-        if not self.configured():raise ResearchError('x_not_configured','Для получения постов X задайте X_BEARER_TOKEN на сервере',503)
+        token=self.token()
+        if not token:raise ResearchError('x_not_configured','Укажите токен X в настройках импорта',503)
         owns=client is None
-        client=client or httpx.Client(base_url='https://api.x.com/2/',headers={'Authorization':'Bearer '+os.environ['X_BEARER_TOKEN']},timeout=30,trust_env=False)
+        client=client or httpx.Client(base_url='https://api.x.com/2/',headers={'Authorization':'Bearer '+token},timeout=30,trust_env=False)
         try:
             def get(path,**kwargs):
                 response=client.get(path,**kwargs)
