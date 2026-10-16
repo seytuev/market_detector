@@ -3,10 +3,47 @@
 This projection never cancels an H1 scenario or changes its entry zones.
 """
 from .d1_structure import daily_alignment
+from decimal import Decimal
 from ..models import ZoneStatus
 from ..notify.formatting import fmt_price_ru
 
 TARGET_TYPES = {"ob", "fvg", "breaker", "prb"}
+
+
+def _remaining_target_bounds(db, zone, as_of):
+    """Remove tested prices from the near side; keep original zone geometry intact."""
+    original_lower, original_upper = Decimal(str(zone.lower)), Decimal(str(zone.upper))
+    lower, upper = original_lower, original_upper
+    width = upper - lower
+    visits = db.get_visits(zone.id, zone.cycle_id)
+    for visit in visits:
+        if visit.entered_at > as_of:
+            continue
+        if visit.extreme is not None:
+            edge = Decimal(str(visit.extreme))
+        else:
+            depth = Decimal(str(visit.max_depth))
+            edge = (original_upper - depth * width
+                    if zone.direction.value == "bull" else
+                    original_lower + depth * width)
+        if zone.direction.value == "bull":
+            upper = min(upper, edge)
+        else:
+            lower = max(lower, edge)
+    # OB statistics also retain silent tests before confirmation.
+    if not any(v.entered_at > as_of for v in visits):
+        if zone.test_extreme is not None:
+            edge = Decimal(str(zone.test_extreme))
+        else:
+            depth = Decimal(str(zone.max_test_depth))
+            edge = (original_upper - depth * width
+                    if zone.direction.value == "bull" else
+                    original_lower + depth * width)
+        if zone.direction.value == "bull":
+            upper = min(upper, edge)
+        else:
+            lower = max(lower, edge)
+    return (float(lower), float(upper)) if lower < upper else None
 
 
 def nearest_daily_obstacle(db, instrument_id, direction, reference, as_of):
@@ -35,24 +72,28 @@ def nearest_daily_obstacle(db, instrument_id, direction, reference, as_of):
         if not ends and (z.market_validity != "active" or z.status not in
                          (ZoneStatus.ACTIVE, ZoneStatus.WEAKENED, ZoneStatus.CANDIDATE)):
             continue
+        bounds = _remaining_target_bounds(db, z, as_of)
+        if bounds is None:
+            continue
+        lower, upper = bounds
         if direction == "bull":
-            if z.upper < reference:
+            if upper < reference:
                 continue
-            boundary = z.lower
+            boundary = lower
             distance = max(0, boundary - reference)
         else:
-            if z.lower > reference:
+            if lower > reference:
                 continue
-            boundary = z.upper
+            boundary = upper
             distance = max(0, reference - boundary)
-        candidates.append((distance, z.id or 0, z, typ, boundary))
+        candidates.append((distance, z.id or 0, z, typ, boundary, lower, upper))
     if not candidates:
         return None
-    _, _, zone, typ, boundary = min(candidates, key=lambda c: c[:2])
+    _, _, zone, typ, boundary, lower, upper = min(candidates, key=lambda c: c[:2])
     return {"zone_id": zone.id, "type": typ.upper(), "timeframe": "D1",
-            "lower": zone.lower, "upper": zone.upper, "price": boundary,
-            "status": "inside" if zone.lower <= reference <= zone.upper else "ahead",
-            "text": f"До {typ.upper()} D1 {fmt_price_ru(boundary)} · границы {fmt_price_ru(zone.lower)}–{fmt_price_ru(zone.upper)}"}
+            "lower": lower, "upper": upper, "price": boundary,
+            "status": "inside" if lower <= reference <= upper else "ahead",
+            "text": f"До {typ.upper()} D1 {fmt_price_ru(boundary)} · неперекрытая часть {fmt_price_ru(lower)}–{fmt_price_ru(upper)}"}
 
 
 def synchronize_scenario(db, instrument_id, daily, direction, as_of, *, reference=None,

@@ -25,7 +25,10 @@ window.ChartShare = (() => {
     });
     Object.assign(clone.style, {position: 'relative', inset: 'auto', width: `${box.width}px`, height: `${box.height}px`, margin: '0'});
     clone.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${box.width} ${box.height}"><foreignObject width="100%" height="100%">${new XMLSerializer().serializeToString(clone)}</foreignObject></svg>`;
+    // Rasterize foreignObject in CSS pixels. WebKit can leave its HTML at
+    // CSS scale when the SVG viewBox scales to a high-DPI screenshot.
+    // Apply that scale explicitly on the canvas, together with the candles.
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${box.width}" height="${box.height}" viewBox="0 0 ${box.width} ${box.height}"><foreignObject width="100%" height="100%">${new XMLSerializer().serializeToString(clone)}</foreignObject></svg>`;
     const layers = await imageFrom('data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg));
     const scale = width / box.width;
     const header = Math.round(48 * scale);
@@ -41,7 +44,7 @@ window.ChartShare = (() => {
     ctx.font = `${10 * scale}px "Segoe UI", sans-serif`;
     ctx.fillText('STV Market Researcher · ' + new Date().toLocaleString('ru-RU', {timeZone: 'Europe/Moscow'}) + ' МСК', 12 * scale, 37 * scale);
     ctx.drawImage(shot, 0, header);
-    ctx.drawImage(layers, 0, header);
+    ctx.drawImage(layers, 0, header, width, height);
     return new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Не удалось создать PNG.')), 'image/png'));
   }
 

@@ -2,13 +2,61 @@ from dataclasses import replace
 
 import pytest
 
-from app.models import Direction, ZoneStatus, ZoneType
+from app.models import Direction, Visit, ZoneStatus, ZoneType
 from app.services.structure_sync import nearest_daily_obstacle, synchronize_scenario
 from app.services.asset_state import project_asset
 from tests.test_asset_state import _zone, _obs, _scenario, _leg, _open
 from tests.test_d1_structure import daily_bars
 
 AT = daily_bars()[-1].close_time
+
+
+@pytest.mark.parametrize("kind", [ZoneType.OB, ZoneType.FVG])
+@pytest.mark.parametrize("direction,trade,reference,extreme,bounds", [
+    (Direction.BEAR, "long", 10, 13, (13, 14)),
+    (Direction.BULL, "short", 16, 13, (12, 13)),
+])
+def test_target_uses_deepest_uncovered_part(db, instrument_id, kind, direction,
+                                          trade, reference, extreme, bounds):
+    zone = _zone(db, instrument_id, direction, 12, 14, kind=kind)
+    for depth, price in [(0.5, extreme), (0.25, 12.5 if trade == "long" else 13.5)]:
+        db.open_visit(Visit(None, zone.id, zone.cycle_id, AT - 20,
+                            exited_at=AT - 10, max_depth=depth, extreme=price))
+    result = nearest_daily_obstacle(db, instrument_id, trade, reference, AT)
+    assert (result["lower"], result["upper"]) == bounds
+    assert result["price"] == extreme
+    assert result["status"] == "ahead"
+    original = db.get_zone(zone.id)
+    assert (original.lower, original.upper) == (12, 14)
+
+
+@pytest.mark.parametrize("kind", [ZoneType.OB, ZoneType.FVG])
+@pytest.mark.parametrize("direction,trade,reference,extreme", [
+    (Direction.BEAR, "long", 10, 14),
+    (Direction.BULL, "short", 24, 12),
+])
+def test_fully_covered_target_is_skipped(db, instrument_id, kind, direction,
+                                       trade, reference, extreme):
+    zone = _zone(db, instrument_id, direction, 12, 14, kind=kind)
+    db.open_visit(Visit(None, zone.id, zone.cycle_id, AT - 10,
+                        max_depth=1, extreme=extreme))
+    assert nearest_daily_obstacle(db, instrument_id, trade, reference, AT) is None
+    other = _zone(db, instrument_id, direction, 18, 20, kind=kind)
+    assert nearest_daily_obstacle(db, instrument_id, trade, reference, AT)["zone_id"] == other.id
+
+
+def test_target_ranking_uses_remaining_boundary(db, instrument_id):
+    old = _zone(db, instrument_id, Direction.BEAR, 12, 18, kind=ZoneType.OB)
+    db.update_zone(old.id, test_extreme=17, max_test_depth=5/6, has_tests=True)
+    nearer = _zone(db, instrument_id, Direction.BEAR, 15, 16)
+    assert nearest_daily_obstacle(db, instrument_id, "long", 10, AT)["zone_id"] == nearer.id
+
+
+def test_target_supports_legacy_visit_depth_and_ignores_future_visits(db, instrument_id):
+    zone = _zone(db, instrument_id, Direction.BEAR, 12, 14)
+    db.open_visit(Visit(None, zone.id, zone.cycle_id, AT - 10, max_depth=0.25))
+    db.open_visit(Visit(None, zone.id, zone.cycle_id, AT + 10, max_depth=1, extreme=14))
+    assert nearest_daily_obstacle(db, instrument_id, "long", 10, AT)["price"] == 12.5
 
 
 @pytest.mark.parametrize("kind", [ZoneType.OB, ZoneType.FVG, ZoneType.BREAKER, ZoneType.PRB])
