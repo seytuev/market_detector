@@ -8,6 +8,7 @@ from fastapi.routing import APIRoute
 
 from ..research.contracts import ResearchError, decode, uid,encode,timestamp,text
 from ..research.catalysts import Catalysts
+from ..research.expiry_context import expiry_context
 from ..research.jobs import ResearchRunner
 
 log = logging.getLogger(__name__)
@@ -312,9 +313,11 @@ def register_research_routes(app, db, settings, require_auth):
                        review_status:str|None="accepted",unscheduled:bool=False,cursor:str|None=None,
                        limit:int=Query(50,ge=1,le=100),as_of:int|None=None,include_global:bool=False):
         with db.read_tx():
-            return result(catalysts.list(from_at=from_at,to_at=to_at,asset_uid=asset_uid,scope=scope,kind=kind,
+            page = catalysts.list(from_at=from_at,to_at=to_at,asset_uid=asset_uid,scope=scope,kind=kind,
                           stage=stage,review_status=review_status,unscheduled=unscheduled,after=cursor,limit=limit,
-                          as_of=as_of,include_global=include_global))
+                          as_of=as_of,include_global=include_global)
+            page["items"] = [{**item, "expiry_context": expiry_context(item, page["as_of"])} for item in page["items"]]
+            return result(page)
 
     @router.post("/catalysts")
     def create_catalyst(body:dict=Body(...),key:str|None=Header(None,alias="Idempotency-Key")):
@@ -322,7 +325,8 @@ def register_research_routes(app, db, settings, require_auth):
 
     @router.get("/catalysts/{identifier}")
     def catalyst(identifier:str,as_of:int|None=None):
-        return result(catalysts.get(identifier,as_of))
+        value = catalysts.get(identifier,as_of)
+        return result({**value, "expiry_context": expiry_context(value, s.clock() if as_of is None else as_of)})
 
     @router.patch("/catalysts/{identifier}")
     def update_catalyst(identifier:str,body:dict=Body(...),key:str|None=Header(None,alias="Idempotency-Key")):

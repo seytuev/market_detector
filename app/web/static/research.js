@@ -94,7 +94,7 @@ window.ResearchUI = (() => {
   async function detail(id){
     const response=await api('/catalysts/'+encodeURIComponent(id)),e=response.data;
     const d=dialog(e.title,'<p>'+badge(KINDS[e.kind]||e.kind)+badge(STAGES[e.stage]||e.stage)+badge(STATE[e.date_status]||e.date_status)+'</p>'+
-      '<p>'+esc(dateLabel(e))+'</p><p>'+esc(e.summary)+'</p>'+
+      '<p>'+esc(dateLabel(e))+'</p><p>'+esc(e.summary)+'</p>'+expiryHtml(e.expiry_context)+
       (e.conflicts?.length?'<p class="research-warning">Есть расхождения источников. Требуется проверка.</p>':'')+
       '<p class="research-muted">'+esc((e.priority_reasons||[]).join(' · '))+'</p>'+
       '<h3>Источники</h3>'+e.sources.map(s=>'<article class="research-card">'+safeLink(s.url,s.namespace||'Источник')+'<blockquote>'+esc(s.quote||s.text||'')+'</blockquote></article>').join('')+
@@ -157,10 +157,22 @@ window.ResearchUI = (() => {
     };
     return d;
   }
+  function expiryHtml(context, marketDirection){
+    if(!context)return '';
+    const cycle={monthly:'Месячная',quarterly:'Квартальная',weekly:'Недельная',daily:'Ежедневная'}[context.cycle]||'';
+    const agreement=context.active&&['long','short'].includes(marketDirection)
+      ?'<p class="research-muted">'+(context.side===marketDirection?'Исторический уклон совпадает с текущей оценкой рынка.':'Исторический уклон расходится с текущей оценкой рынка; подтверждение по цене особенно важно.')+'</p>':'';
+    return '<section class="research-card expiry-context" data-expiry-phase="'+esc(context.phase)+'"><h3>'+esc(context.currency)+' · '+esc(cycle)+' экспирация Deribit</h3>'+
+      '<p>'+esc(fmt(context.expires_at))+(context.study_applicable?' · 08:00 UTC / 11:00 МСК':'')+'</p>'+
+      '<p><strong>'+esc(context.title)+'</strong></p><p>'+esc(context.note)+'</p>'+agreement+
+      (context.catalog_quality&&context.catalog_quality!=='ok'?'<p class="research-warning">Каталог давно не проверялся или недоступен; показана сохранённая дата.</p>':'')+
+      (context.statistics?.length?'<p class="research-muted">Исторический фон по исследованию пользователя; период и размер выборки не указаны.</p><details data-persist="expiry-'+esc(context.currency)+'"><summary>Историческая статистика '+esc(context.currency)+'</summary><ul>'+context.statistics.map(line=>'<li>'+esc(line)+'</li>').join('')+'</ul><p class="research-muted">'+esc(context.study_note)+'</p></details>':'')+
+      (context.catalyst_id?'<a class="btn small" href="/events.html?mode=catalysts&catalyst='+encodeURIComponent(context.catalyst_id)+'">Дата, источники и история</a>':'')+'</section>';
+  }
   function eventCard(e,candidate=false){
     return '<article class="research-card">'+(!candidate?'<label class="research-muted"><input type="checkbox" data-merge="'+esc(e.id)+'"> Выбрать для объединения</label>':'')+
       '<h3>'+esc(e.title)+'</h3><p>'+badge(KINDS[e.kind]||'Другое')+badge(STAGES[e.stage]||'Требует проверки')+'</p>'+
-      '<p>'+esc(dateLabel(e))+'</p><p>'+esc(e.summary||'')+'</p>'+
+      '<p>'+esc(dateLabel(e))+'</p><p>'+esc(e.summary||'')+'</p>'+expiryHtml(e.expiry_context)+
       (e.conflicts?.length?'<p class="research-warning">Есть расхождения источников</p>':'')+
       '<div class="research-toolbar">'+(candidate?'<button class="btn small" data-review="'+esc(e.id)+'">Проверить</button><button class="btn small" data-reject="'+esc(e.id)+'">Отклонить</button>':
       '<button class="btn small" data-catalyst="'+esc(e.id)+'">Источники и история</button>')+'</div></article>';
@@ -170,7 +182,7 @@ window.ResearchUI = (() => {
       const start=dateMSK(Date.now());calendarState={container,view:'list',day:start,range:'month',filter:'all',asset:'',items:[],after:null,selected:new Map()};
       container.innerHTML='<section class="research-block"><div class="research-toolbar">'+
         '<button class="btn primary" data-create>Добавить событие</button><button class="btn" data-merge-events>Объединить выбранное</button>'+
-        '<button class="btn" data-refresh>Обновить</button></div>'+
+        '<button class="btn" data-refresh>Обновить</button><button class="btn" data-collect-expiries hidden>Обновить каталог Deribit</button></div>'+
         '<div class="research-toolbar"><label>Показать<select data-filter><option value="all">Предстоящие</option><option value="review">На проверке</option><option value="undated">Без точной даты</option><option value="macro">Макро</option></select></label>'+
         '<label>Вид<select data-view><option value="list">Список</option><option value="week">Неделя</option><option value="month">Месяц</option></select></label>'+
         '<label>Дата<input data-day type="date" value="'+start+'"></label><label>Актив<select data-asset><option value="">Все доступные</option></select></label></div>'+
@@ -205,6 +217,9 @@ window.ResearchUI = (() => {
     try{
       const cfg=await config();if(seq!==calendarSeq)return;
       if(!cfg.enabled){status.textContent='Исследовательский раздел выключен. Включение доступно в серверных настройках.';return;}
+      const collect=container.querySelector('[data-collect-expiries]');
+      collect.hidden=!cfg.sources.deribit;
+      collect.onclick=async()=>{collect.disabled=true;try{await send('/catalysts/collect',{});status.textContent='Обновление каталога Deribit поставлено в очередь. Нажмите «Обновить» после завершения.';}catch(error){status.textContent=error.message;}finally{collect.disabled=false;}};
       const params=new URLSearchParams({limit:'100'});
       if(state.asset)params.set('asset_uid',state.asset);
       if(state.filter==='macro')params.set('kind','macro');
@@ -342,7 +357,12 @@ window.ResearchUI = (() => {
   }
   async function page(tab){
     const container=document.getElementById('research-page');if(!container)return;
-    try{await HTF.ensureToken();if(['ideas','strength','baskets','playbook','lab'].includes(tab)&&window.ResearchWorkbench)await ResearchWorkbench.mount(container,tab);else if(tab==='identity')await identity(container);else if(tab==='sources'){location.replace('/?section=imports#settings');return;}else await mountCalendar(container,true);}
+    if(tab==='calendar'){
+      const url=new URL('/events.html',location.origin);url.searchParams.set('mode','catalysts');
+      const catalyst=new URLSearchParams(location.search).get('catalyst');if(catalyst)url.searchParams.set('catalyst',catalyst);
+      location.replace(url);return;
+    }
+    try{await HTF.ensureToken();if(['ideas','strength','baskets','playbook','lab'].includes(tab||'ideas')&&window.ResearchWorkbench)await ResearchWorkbench.mount(container,tab||'ideas');else if(tab==='identity')await identity(container);else if(tab==='sources'){location.replace('/?section=imports#settings');return;}else await mountCalendar(container,true);}
     catch(e){errorBox(container,e);}
   }
   document.querySelectorAll('[data-research-tab]').forEach(b=>b.onclick=()=>{const url=new URL(location.href);url.searchParams.set('tab',b.dataset.researchTab);history.pushState(null,'',url);page(b.dataset.researchTab);});
@@ -374,5 +394,5 @@ window.ResearchUI = (() => {
     setInterval(()=>{if(!document.hidden&&selectedInstrument)refreshContext(selectedInstrument);},300000);
   }
   function leaveCalendar(){calendarSeq++;calendarState=null;}
-  return {mountCalendar,leaveCalendar,refreshContext,detail,material,edit};
+  return {mountCalendar,leaveCalendar,refreshContext,detail,material,edit,expiryHtml};
 })();

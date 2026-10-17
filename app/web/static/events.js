@@ -702,6 +702,8 @@
     if (!body) return;
     const version = ++requestVersion;
     if (mode === 'catalysts' && window.ResearchUI) {
+      body.dataset.mode = mode;
+      body._marketHtml = null;
       const status = document.getElementById('market-status');
       if (status) status.textContent = 'Внешние события и катализаторы';
       body.setAttribute('aria-busy','true');
@@ -734,6 +736,13 @@
             `<article class="events-card"><h2>${esc(rule.text)}</h2><p>ID ${esc(rule.id)} · ${esc(CLASS_RU[rule.class] || rule.class || '—')}</p></article>`).join(''))
           + `<section class="events-card"><h2>Статистика</h2>${statsHtml(data.statistics)}</section>`;
       } else html = data.market ? renderNowMarket(data) : '<section class="events-card"><h2>Оценка рынка недоступна</h2><p>Недостаточно данных для общей оценки. Прежняя методика BTC доступна в справке.</p><a href="/#help">Открыть справку</a></section>';
+      if (['now','calendar'].includes(mode) && window.ResearchUI) {
+        const context = data.expiry_context;
+        html += `<section class="events-card market-expiries"><h2>Экспирации · ${mode === 'calendar' ? 'выбранный день' : 'текущий контекст'}</h2>` +
+          (context?.items?.length ? context.items.map(item => ResearchUI.expiryHtml(item, mode === 'now' && !data.market_stale ? data.market?.direction : null)).join('')
+            : `<p class="events-service">${esc(context?.empty_reason || 'Даты экспираций недоступны.')}</p>`) +
+          '<a class="btn small" href="/events.html?mode=catalysts">Все катализаторы и даты →</a></section>';
+      }
       // Сохраняем раскрытые детали при обновлении; одинаковый результат не перерисовываем.
       if (body.dataset.mode !== mode || body._marketHtml !== html) {
         const opened = body.dataset.mode === mode

@@ -40,6 +40,14 @@ _DEFAULT_CYCLE_SECONDS = 60
 
 
 def register_events_routes(app: FastAPI, db, settings, require_auth) -> None:
+    def expiry_background(at=None, day_view=False):
+        from ..research.expiry_context import market_expiries
+        from ..research.store import Store
+        if not settings.research_enabled:
+            return {"items": [], "empty_reason": "Каталог катализаторов выключен в настройках сервера."}
+        with db.read_tx():
+            return market_expiries(Store(db, clock=now_ms), at=at, day_view=day_view)
+
     @app.get("/api/events/overview", dependencies=[Depends(require_auth)])
     def overview() -> dict[str, Any]:
         snap = latest_snapshot(db, "BTC")
@@ -62,6 +70,7 @@ def register_events_routes(app: FastAPI, db, settings, require_auth) -> None:
                 "market_age_seconds": age,
                 "market_stale": stale,
                 "legacy_methodology": None,
+                "expiry_context": expiry_background(),
             }
         payload = _public(snap, health)
         # Рыночная область — рядом; legacy market_line (BTC) не трогаем (§10, AC04)
@@ -69,6 +78,7 @@ def register_events_routes(app: FastAPI, db, settings, require_auth) -> None:
         payload["market_age_seconds"] = age
         payload["market_stale"] = stale
         payload["legacy_methodology"] = LEGACY_METHODOLOGY
+        payload["expiry_context"] = expiry_background()
         return payload
 
     @app.get("/api/events/health", dependencies=[Depends(require_auth)])
@@ -117,6 +127,8 @@ def register_events_routes(app: FastAPI, db, settings, require_auth) -> None:
         market["time_context"] = {**market["time_context"], "completed_days": forecast.pop("completed_days")}
         market["forecast"] = forecast
         payload["market"] = market
+        # The selected calendar date is MSK; noon lies in that same UTC date.
+        payload["expiry_context"] = expiry_background(target + 12 * 3_600_000, day_view=True)
         return payload
 
     @app.get("/api/events/rules", dependencies=[Depends(require_auth)])
