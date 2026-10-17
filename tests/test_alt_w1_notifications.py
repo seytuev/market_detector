@@ -105,11 +105,39 @@ def test_w1_chart_excludes_future_and_incomplete_weeks(hbar):
     selected = next(z for z in before["overlays"] if z["label"] == "FVG W1 · тест")
     assert (selected["lower"], selected["upper"]) == (.0423, .0507)
     assert not any(z["type"] == "base" for z in before["overlays"])
+    reference = next(z for z in before["overlays"] if z["type"] == "base_reference")
+    assert (reference["lower"], reference["upper"]) == (.055, .0845)
+    assert reference["from"] == before["candles"][0]["time"]*1000
+    assert reference["to"] is None and "Исторические уровни базы 2022–2023" == reference["label"]
     assert {l["label"] for l in before["levels"]} >= {"L", "M", "U"}
     future = (at//DAY+1)*DAY
     db.insert_alt_candles([AltCandle(ctx.source.id, future+i*DAY, 1, 999, .01, 100) for i in range(14)])
     again = alt_w1.load_context(db, rows)
     assert alt_w1.snapshot(db, again) == before
+
+
+@pytest.mark.parametrize("ended", [False, True])
+def test_base_inside_chart_retains_its_actual_period(hbar, ended):
+    db, ctx, _ = hbar
+    first = alt_w1.snapshot(db, ctx)["candles"][0]["time"]*1000
+    ctx.frame["base_start_open_time"] = first + 8*WEEK
+    ctx.frame["base_end_open_time"] = first + 19*WEEK if ended else None
+    ctx.frame["base_end_confirmed_at_ms"] = first + 20*WEEK if ended else None
+    scene = alt_w1.snapshot(db, ctx)
+    base = next(z for z in scene["overlays"] if z["type"] == "base")
+    assert base["from"] == ctx.frame["base_start_open_time"]
+    assert base["to"] == (ctx.frame["base_end_confirmed_at_ms"] or ctx.lead["event_time_ms"])
+    assert not any(z["type"] == "base_reference" for z in scene["overlays"])
+
+
+@pytest.mark.parametrize("lower,upper", [(.0000051, .00000988), (1., 2.)])
+def test_historical_base_bounds_stay_visible_even_outside_recent_prices(hbar, lower, upper):
+    db, ctx, _ = hbar
+    ctx.frame.update(lower=lower, upper=upper, mid=(lower+upper)/2,
+                     scenario_state={"pd_zones": [], "scenarios": []})
+    scene = alt_w1.snapshot(db, ctx)
+    assert scene["price_bounds"]["min"] <= lower
+    assert scene["price_bounds"]["max"] >= upper
 
 
 def test_retry_keeps_original_venue_after_primary_source_changes(hbar):
@@ -250,3 +278,6 @@ def test_w1_png_uses_website_style_and_full_zone_bounds(hbar, tmp_path, monkeypa
     assert 'data-rendered="true"' in dom[0]
     assert "FVG W1 · тест" in dom[0] and "0,0423–0,0507" in dom[0]
     assert "Цена касания" in dom[0]
+    assert 'class="h1-zone zone-rect z-base_reference"' in dom[0]
+    assert "Исторические уровни базы 2022–2023</span>" in dom[0]
+    assert "border-style: dashed" in dom[0]

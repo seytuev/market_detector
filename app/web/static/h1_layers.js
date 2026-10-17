@@ -98,8 +98,8 @@
   }
 
   // Labels occupy separate lanes; thin zones keep their true price height.
-  function placeZoneLabel(box, occupied, paneRight, height) {
-    const width = Math.min(180, paneRight - box.left - 8);
+  function placeZoneLabel(box, occupied, paneRight, height, maxWidth = 180) {
+    const width = Math.min(maxWidth, paneRight - box.left - 8);
     if (width < 72 || height < 22) return null;
     const preferred = box.bottom - box.top < 30 ? box.top - 23 : box.top + 5;
     const candidates = [preferred];

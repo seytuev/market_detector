@@ -120,6 +120,7 @@
           left, box.top, end - left);
         div.style.borderColor = color;
         div.style.color = color;
+        if (zone.border_style) div.style.borderStyle = zone.border_style;
         if (!level) {
           div.style.height = box.height + 'px';
           div.style.background = zone.muted ? 'rgba(139,149,163,.12)'
@@ -134,7 +135,7 @@
           }
         }
         const label = H1Layers.placeZoneLabel({ left, right: end, top: box.top,
-          bottom: box.top + box.height }, occupied, right, paneHeight);
+          bottom: box.top + box.height }, occupied, right, paneHeight, zone.label_width);
         if (label) {
           const tag = add('h1-zone-tag type-' + type, label.left, label.top, label.width);
           const name = document.createElement('span');

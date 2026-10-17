@@ -165,7 +165,11 @@ def snapshot(db, ctx):
         "color": "#957025", "fill": "rgba(194,153,64,.10)", "label": "База " + base_period(f),
         "price_label": _bounds(f)}]
     if f["base_end_confirmed_at_ms"] and f["base_end_confirmed_at_ms"] <= weeks[0].t:
-        overlays = []  # Historical levels remain; do not extend the old base into this cycle.
+        # The base itself is outside the window. Shade its price levels as a
+        # reference band, explicitly distinct from the original dated base.
+        overlays = [{**overlays[0], "from": weeks[0].t, "to": None,
+            "type": "base_reference", "border_style": "dashed",
+            "label": "Исторические уровни базы " + base_period(f), "label_width": 460}]
     state = f["scenario_state"]
     announced = {item.get("payload", {}).get("zone_id") for item in ctx.events}
     touched = {item.get("payload", {}).get("zone_id") for item in ctx.events if item["event_type"] == "retest"}
@@ -195,8 +199,8 @@ def snapshot(db, ctx):
     result = {"title": f"{symbol} · {event_title(e)} · База {base_period(f)}", "subtitle": f"{ctx.source.venue.capitalize()} Spot · {ctx.source.symbol} · {time(at)}",
         "timeframe": "W1", "as_of": at, "candles": bars, "fit_content": True,
         "overlays": overlays, "levels": levels, "markers": markers,
-        "price_bounds": {"min": min([z["lower"] for z in active] + ([scenario["minimum"]] if scenario else [weeks[-1].low])),
-                         "max": max([z["upper"] for z in active] or [weeks[-1].high])},
+        "price_bounds": {"min": min([f["lower"]] + [z["lower"] for z in active] + ([scenario["minimum"]] if scenario else [weeks[-1].low])),
+                         "max": max([f["upper"], weeks[-1].high] + [z["upper"] for z in active])},
         "caption": ("Исторические уровни базы · " if f["base_end_open_time"] is not None else "") + "W1 закрыты по " + time(weeks[-1].available_at).split(' ')[0]}
     if e["event_type"] == "retest" and e.get("payload", {}).get("precision") != "D1":
         result["quote"] = {"price": e["price"], "label": "Сделка после пересечения" if e["payload"].get("precision") == "quote_crossing" else "Цена касания"}
