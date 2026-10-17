@@ -9,7 +9,7 @@ import asyncio
 import hashlib
 import json
 import logging
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 
 from ..models import now_ms
 
@@ -29,6 +29,7 @@ class Card:
     # Each target is explicit; grouped cards never silently act on the first.
     targets: list[dict] = field(default_factory=list)
     chart_pending: bool = False
+    message_thread_id: int | None = None
 
 
 class Outbox:
@@ -52,6 +53,59 @@ class Outbox:
         if render:
             self.renderers[channel] = render
 
+    def thread_for_channel(self, channel):
+        resolve = getattr(self.sender, "thread_for_channel", None)
+        return resolve(channel) if resolve else None
+
+    def thread_for_packet(self, row):
+        card = json.loads(row["card"])
+        # A positive topic stays frozen. Packets written by a version without
+        # routing may omit the field or explicitly store null; both need the
+        # current route before their first send.
+        thread = card.get("message_thread_id")
+        if thread is not None:
+            return thread
+        channel = row["channel"]
+        if channel == "chart" and row["semantic_key"].startswith("media:"):
+            parent = self.get(int(row["semantic_key"].split(":")[1]))
+            if parent:
+                return self.thread_for_packet(parent)
+        if channel == "digest":
+            children = self.db.conn.execute(
+                "SELECT * FROM notification_packet WHERE parent_id=? AND status IN ('bundled','sent')",
+                (row["id"],)).fetchall()
+            threads = {self.thread_for_packet(child) for child in children}
+            if len(threads) == 1:
+                return threads.pop()
+        return self.thread_for_channel(channel)
+
+    def _repair_topic_digests(self):
+        # A previous release may have bundled trading and screener packets
+        # without topics. Only bundles not yet sent can be split safely.
+        with self.db.batch_writes():
+            rows = self.db.conn.execute(
+                "SELECT * FROM notification_packet WHERE destination=? AND channel='digest' "
+                "AND status IN ('pending','failed')", (self.destination,)).fetchall()
+            for row in rows:
+                children = self.db.conn.execute(
+                    "SELECT * FROM notification_packet WHERE parent_id=? AND status='bundled'",
+                    (row["id"],)).fetchall()
+                if len(self._topic_groups(children)) <= 1:
+                    continue
+                claimed = self.db.conn.execute(
+                    "UPDATE notification_packet SET status='suppressed',reason='split by Telegram topic' "
+                    "WHERE id=? AND status IN ('pending','failed')", (row["id"],)).rowcount
+                if claimed:
+                    self.db.conn.execute(
+                        "UPDATE notification_packet SET parent_id=NULL,status='pending' "
+                        "WHERE parent_id=? AND status='bundled'", (row["id"],))
+
+    def _topic_groups(self, rows):
+        groups = {}
+        for row in rows:
+            groups.setdefault(self.thread_for_packet(row), []).append(row)
+        return groups
+
     def get(self, packet_id):
         return self.db.conn.execute("SELECT * FROM notification_packet WHERE id=?",
                                     (packet_id,)).fetchone()
@@ -74,6 +128,8 @@ class Outbox:
             raise ValueError("Notification members must reference persisted event IDs")
         stamp = now_ms()
         due = stamp + int(getattr(self.cfg, "notification_digest_seconds", 900)) * 1000 if quiet else stamp
+        card = replace(card, message_thread_id=card.message_thread_id
+                       if card.message_thread_id is not None else self.thread_for_channel(channel))
         encoded = json.dumps(asdict(card), ensure_ascii=False)
         with self.db.batch_writes():
             self.db.conn.execute(
@@ -122,6 +178,7 @@ class Outbox:
     async def _card(self, row):
         render = self.renderers.get(row["channel"])
         card = await render(row, self.members(row["id"])) if render else Card(**json.loads(row["card"]))
+        card.message_thread_id = self.thread_for_packet(row)
         await self._write("UPDATE notification_packet SET card=? WHERE id=?",
                              (json.dumps(asdict(card), ensure_ascii=False), row["id"]))
         return card
@@ -150,6 +207,7 @@ class Outbox:
     async def flush(self):
         async with self.lock:
             stamp = now_ms()
+            await asyncio.to_thread(self._repair_topic_digests)
             await asyncio.to_thread(self._recover_completed)
             await self._write(
                 "UPDATE notification_packet SET status='uncertain',reason='send lease expired' "
@@ -203,18 +261,23 @@ class Outbox:
                 await self._send(row)
             if quiet:
                 period = int(getattr(self.cfg, "notification_digest_seconds", 900)) * 1000
-                last = self.db.conn.execute(
-                    "SELECT MAX(created_at) FROM notification_packet WHERE destination=? AND channel='digest'",
-                    (self.destination,)).fetchone()[0]
-                if last is None or stamp - last >= period:
+                for thread, topic_rows in self._topic_groups(quiet).items():
+                    last = self.db.conn.execute(
+                        "SELECT MAX(created_at) FROM notification_packet WHERE destination=? AND channel='digest' "
+                        "AND COALESCE(CAST(json_extract(card,'$.message_thread_id') AS BIGINT),0)=?",
+                        (self.destination, thread or 0)).fetchone()[0]
+                    if last is not None and stamp - last < period:
+                        continue
                     # Include the entire current quiet window, not one message
                     # every five seconds as individual due times expire.
                     extra = self.db.conn.execute(
                         "SELECT * FROM notification_packet WHERE destination=? AND quiet=1 "
                         "AND channel NOT IN ('digest','chart') AND status='pending' ORDER BY id",
                         (self.destination,)).fetchall()
-                    selected = {r["id"]: r for r in quiet}
+                    selected = {r["id"]: r for r in topic_rows}
                     for r in extra:
+                        if self.thread_for_packet(r) != thread:
+                            continue
                         validate = self.validators.get(r["channel"])
                         if validate and await asyncio.to_thread(validate, r, self.members(r["id"])) is None:
                             selected[r["id"]] = r
@@ -282,12 +345,17 @@ class Outbox:
                 await asyncio.to_thread(self._finish, child, "sent")
 
     async def _digest(self, rows):
-        packet_id = await asyncio.to_thread(self._create_digest, rows)
-        await self._send(self.get(packet_id))
+        for topic_rows in self._topic_groups(rows).values():
+            packet_id = await asyncio.to_thread(self._create_digest, topic_rows)
+            await self._send(self.get(packet_id))
 
     def _create_digest(self, rows):
         # Freeze membership before sending. Retry uses this very same packet.
         key = fingerprint(sorted(r["id"] for r in rows))
+        threads = {self.thread_for_packet(row) for row in rows}
+        if len(threads) != 1:
+            raise ValueError("A digest must contain a single Telegram topic")
+        card = Card("🔕 Сводка STV Market Researcher", message_thread_id=threads.pop())
         with self.db.batch_writes():
             # Packet creation and child assignment commit together: another
             # process must never see an empty, sendable digest between them.
@@ -295,7 +363,7 @@ class Outbox:
             self.db.conn.execute(
                 "INSERT OR IGNORE INTO notification_packet "
                 "(destination,channel,semantic_key,card,quiet,created_at,due_at) VALUES(?,'digest',?,?,1,?,?)",
-                (self.destination, key, json.dumps(asdict(Card("🔕 Сводка STV Market Researcher")), ensure_ascii=False), stamp, stamp))
+                (self.destination, key, json.dumps(asdict(card), ensure_ascii=False), stamp, stamp))
             packet_id = self.db.conn.execute(
                 "SELECT id FROM notification_packet WHERE destination=? AND channel='digest' AND semantic_key=?",
                 (self.destination, key)).fetchone()[0]
@@ -362,7 +430,8 @@ class Outbox:
             if not card.image_path:
                 continue
             media = Card("📊 График к событию\n" + previous["text"].split("\n")[0],
-                         previous["details"], card.image_path, previous["targets"])
+                         previous["details"], card.image_path, previous["targets"],
+                         message_thread_id=self.thread_for_packet(row))
             packet_id = await asyncio.to_thread(self.put, "chart", f"media:{row['id']}", media, [], quiet=False)
             await self._write("UPDATE notification_packet SET quiet=1 WHERE id=?", (packet_id,))
             previous["chart_pending"] = False

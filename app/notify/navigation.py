@@ -8,6 +8,11 @@ from telegram.error import BadRequest
 
 
 def card_keyboard(packet_id, targets=None):
+    if targets and len(targets) == 1 and targets[0].get("kind") == "feed_post":
+        rows = [[Button("Подробнее", callback_data=f"nf:d:{packet_id}:0")]]
+        if targets[0].get("url", "").startswith("https://"):
+            rows.insert(0, [Button("Оригинал публикации ↗", url=targets[0]["url"])])
+        return Markup(rows)
     if targets and len(targets) == 1 and targets[0].get("kind") == "alt_w1":
         buttons = []
         if targets[0].get("url"):
@@ -42,11 +47,13 @@ def card_keyboard(packet_id, targets=None):
     ])
 
 
-async def reusable_panel(db, bot, chat_id, key, text, markup=None):
+async def reusable_panel(db, bot, chat_id, key, text, markup=None, *, message_thread_id=None):
     # Detail panels are paginated; current-state panels may still be verbose.
     if len(text.encode("utf-16-le")) // 2 > 4000:
         text = text.encode("utf-16-le")[:7800].decode("utf-16-le", errors="ignore") + "\n…"
     cache_key = f"notification:panel:{chat_id}:{key}"
+    if message_thread_id is not None:
+        cache_key += f":topic:{message_thread_id}"
     message_id = db.get_meta(cache_key)
     if message_id:
         try:
@@ -59,15 +66,18 @@ async def reusable_panel(db, bot, chat_id, key, text, markup=None):
             if not any(term in str(exc).lower() for term in ("message to edit not found", "message can't be edited")):
                 raise
     msg = await bot.send_message(chat_id=chat_id, text=text, reply_markup=markup,
-                                 disable_web_page_preview=True)
+                                 disable_web_page_preview=True,
+                                 **({"message_thread_id": message_thread_id} if message_thread_id is not None else {}))
     db.set_meta(cache_key, str(msg.message_id))
     return msg.message_id
 
 
-async def reusable_photo(db, bot, chat_id, key, path, caption, markup, reply_photo):
+async def reusable_photo(db, bot, chat_id, key, path, caption, markup, reply_photo, *, message_thread_id=None):
     """Keep interactive chart refreshes separate from immutable signal photos."""
     from telegram import InputMediaPhoto
     cache_key = f"notification:chart:{chat_id}:{key}"
+    if message_thread_id is not None:
+        cache_key += f":topic:{message_thread_id}"
     message_id = db.get_meta(cache_key)
     if len(caption.encode("utf-16-le")) // 2 > 1000:
         caption = caption.encode("utf-16-le")[:1960].decode("utf-16-le", errors="ignore") + "\n…"
@@ -168,6 +178,7 @@ def register_notification_handlers(app, db, settings):
             return
         keyboard.append([Button("🔎 Подробнее", callback_data=f"nf:d:{packet_id}:0"),
                          Button("⋯ Действия", callback_data=f"nf:a:{packet_id}")])
-        await reusable_panel(db, context.bot, chat, f"packet:{packet_id}", text, Markup(keyboard))
+        await reusable_panel(db, context.bot, chat, f"packet:{packet_id}", text, Markup(keyboard),
+                             message_thread_id=getattr(query.message, "message_thread_id", None))
 
     app.add_handler(CallbackQueryHandler(callback, pattern=r"^nf:"))

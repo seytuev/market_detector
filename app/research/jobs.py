@@ -25,6 +25,7 @@ class ResearchRunner:
         self.stop_event = None
         self.active_job = None
         self.reminders = Reminders(self.s,settings)
+        self.feed_notifications = None
         self.last_schedule = self.last_calendar = self.last_workbench = 0
         self.last_classification = 0
         self.lane = 'all'
@@ -33,6 +34,8 @@ class ResearchRunner:
 
     def bind_outbox(self, outbox):
         self.reminders = Reminders(self.s,self.settings,outbox)
+        from .feed_notifications import FeedNotifications
+        self.feed_notifications = FeedNotifications(self.s,self.settings,outbox)
 
     def enqueue(self, kind, payload=None, key="default"):
         if not self.settings.research_enabled:
@@ -118,6 +121,8 @@ class ResearchRunner:
             with self.s.db.batch_writes():
                 Catalysts(self.s).expire_dates()
             self.reminders.plan()
+            if self.feed_notifications:
+                self.feed_notifications.plan()
             self.last_calendar = now
         if now-self.last_workbench>=60_000:
             from .workbench import maintenance

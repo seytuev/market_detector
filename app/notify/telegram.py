@@ -286,6 +286,7 @@ class TelegramSender:
         db: Database,
         site_base_url: str = "http://127.0.0.1:8000",
         auth_token: str = "",
+        topic_ids: dict[str, int | None] | None = None,
     ):
         from telegram import Bot
 
@@ -294,18 +295,32 @@ class TelegramSender:
         self.db = db
         self.site_base_url = site_base_url
         self.auth_token = auth_token
+        self.topic_ids = dict(topic_ids or {})
+        log.info("Telegram topic routing: %s", self.topic_ids)
+
+    def thread_for_channel(self, channel: str) -> int | None:
+        return self.topic_ids.get(channel)
+
+    def _topic_kwargs(self, channel: str) -> dict:
+        thread = self.thread_for_channel(channel)
+        return {"message_thread_id": thread} if thread is not None else {}
 
     async def send_card(self, card, packet_id, *, quiet=False):
         from .compact import notification_html
         from .navigation import card_keyboard
         kwargs = dict(chat_id=self.chat_id, reply_markup=card_keyboard(packet_id, card.targets),
                       disable_notification=quiet, parse_mode="HTML")
+        if card.message_thread_id is not None:
+            kwargs["message_thread_id"] = card.message_thread_id
         if card.image_path:
             with open(card.image_path, "rb") as fh:
                 msg = await self._bot.send_photo(photo=fh, caption=notification_html(card.text, 1000), **kwargs)
         else:
             msg = await self._bot.send_message(text=notification_html(card.text, 4000),
                                                 disable_web_page_preview=True, **kwargs)
+        log.info("Telegram packet %s delivered: message=%s requested_topic=%s actual_topic=%s",
+                 packet_id, msg.message_id, card.message_thread_id,
+                 getattr(msg, "message_thread_id", None))
         return msg.message_id
 
     async def edit_card(self, message_id, card, packet_id, *, photo=False):
@@ -414,12 +429,14 @@ class TelegramSender:
                 await self._bot.send_photo(
                     chat_id=self.chat_id, photo=fh, caption=caption,
                     reply_markup=keyboard,
+                    **self._topic_kwargs("htf"),
                 )
             if caption is None:
-                await self._bot.send_message(chat_id=self.chat_id, text=text)
+                await self._bot.send_message(chat_id=self.chat_id, text=text, **self._topic_kwargs("htf"))
         else:
             await self._bot.send_message(
                 chat_id=self.chat_id, text=text, reply_markup=keyboard,
+                **self._topic_kwargs("htf"),
             )
 
     async def send_text(self, text: str) -> None:
@@ -433,6 +450,7 @@ class TelegramSender:
         await self._bot.send_message(
             chat_id=self.chat_id, text=text, reply_markup=reply_markup,
             disable_web_page_preview=True,
+            **self._topic_kwargs("ltf"),
         )
 
     async def send_ltf_photo(self, image_path: str, caption: str,
@@ -442,6 +460,7 @@ class TelegramSender:
             await self._bot.send_photo(
                 chat_id=self.chat_id, photo=fh, caption=caption,
                 reply_markup=reply_markup,
+                **self._topic_kwargs("ltf"),
             )
 
     async def send_alt(self, text: str) -> None:
@@ -449,6 +468,7 @@ class TelegramSender:
         ссылкой на график сетапа; превью ссылки отключено, как у LTF."""
         await self._bot.send_message(
             chat_id=self.chat_id, text=text, disable_web_page_preview=True,
+            **self._topic_kwargs("alt"),
         )
 
 

@@ -62,6 +62,16 @@ def parse_bool(raw: object) -> bool:
     raise ValueError(f"не булево значение: {raw!r}")
 
 
+def _thread_id(name: str) -> int | None:
+    raw = _env(name, "").strip()
+    if not raw:
+        return None
+    value = int(raw)
+    if value <= 0:
+        raise ValueError(f"{name}: ID темы должен быть положительным")
+    return value
+
+
 @dataclass
 class DetectorConfig:
     """Параметры детектора. uncalibrated_* — открытые решения §14 спеки."""
@@ -465,6 +475,20 @@ class Settings:
         return self.database_url or self.db_path
     telegram_token: str = field(default_factory=lambda: _env("TELEGRAM_TOKEN", ""))
     telegram_chat_id: str = field(default_factory=lambda: _env("TELEGRAM_CHAT_ID", ""))
+    telegram_trading_thread_id: int | None = field(default_factory=lambda: _thread_id("TELEGRAM_TRADING_THREAD_ID"))
+    telegram_screener_thread_id: int | None = field(default_factory=lambda: _thread_id("TELEGRAM_SCREENER_THREAD_ID"))
+    telegram_x_feed_thread_id: int | None = field(default_factory=lambda: _thread_id("TELEGRAM_X_FEED_THREAD_ID"))
+    telegram_tg_feed_thread_id: int | None = field(default_factory=lambda: _thread_id("TELEGRAM_TG_FEED_THREAD_ID"))
+    research_feed_notifications_enabled: bool = field(default_factory=lambda: parse_bool(_env("RESEARCH_FEED_NOTIFICATIONS_ENABLED", "0")))
+    research_feed_notification_min_impact: int = field(default_factory=lambda: int(_env("RESEARCH_FEED_NOTIFICATION_MIN_IMPACT", "4")))
+
+    @property
+    def telegram_topic_ids(self) -> dict[str, int | None]:
+        return {"htf": self.telegram_trading_thread_id, "ltf": self.telegram_trading_thread_id,
+                "events": self.telegram_trading_thread_id,
+                "alt": self.telegram_screener_thread_id, "alt_v3": self.telegram_screener_thread_id,
+                "x_feed": self.telegram_x_feed_thread_id, "tg_feed": self.telegram_tg_feed_thread_id}
+
     auth_token: str = field(default_factory=lambda: _env("HTF_AUTH_TOKEN", "dev-token"))
     backup_enabled: bool = field(default_factory=lambda: parse_bool(_env("HTF_BACKUP_ENABLED", "1")))
     backup_interval_hours: int = field(default_factory=lambda: int(_env("HTF_BACKUP_INTERVAL_HOURS", "24")))

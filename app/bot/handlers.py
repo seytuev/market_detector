@@ -338,7 +338,7 @@ def register_bot_handlers(app, settings, db: Database):
             f"ltf:{instrument_id}:{obs_id}:{tf}" + (f":{now}" if snapshot_now is not None else ""), path, caption,
             chart_result_inline(instrument_id, tf, days, mask, settings=settings, instrument=ins,
                                 observation_id=obs_id, image_url=image_url),
-            message.reply_photo)
+            message.reply_photo, message_thread_id=getattr(message, "message_thread_id", None))
 
     async def _send_zone_snapshot(message, zone) -> None:
         """Fallback nav:chartz без LTF-наблюдения: снимок самой HTF-зоны
@@ -362,7 +362,7 @@ def register_bot_handlers(app, settings, db: Database):
         from ..notify.formatting import fmt_time_msk
         await reusable_photo(db, app.bot, settings.telegram_chat_id,
             f"zone:{zone.id}", path, f"🔄 Текущий график · {fmt_time_msk(now_ms())}",
-            zone_inline(zone), message.reply_photo)
+            zone_inline(zone), message.reply_photo, message_thread_id=getattr(message, "message_thread_id", None))
 
     async def cmd_chart(update, context) -> None:
         if not is_owner(update):
@@ -904,7 +904,7 @@ def register_bot_handlers(app, settings, db: Database):
                 iid = int(parts[2])
                 await reusable_panel(db, context.bot, _chat_id(update), f"current:{iid}",
                     f"🔄 Текущее состояние · {fmt_time_msk(now_ms())}\n\n" + render_asset(db, settings, iid),
-                    asset_inline(db, settings, iid))
+                    asset_inline(db, settings, iid), message_thread_id=getattr(query.message, "message_thread_id", None))
                 await query.answer()
             elif kind == "chart":
                 iid = int(parts[2])

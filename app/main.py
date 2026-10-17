@@ -208,6 +208,7 @@ async def async_main() -> None:
             db,
             site_base_url=settings.effective_base_url(),
             auth_token=settings.auth_token,
+            topic_ids=settings.telegram_topic_ids,
         )
     else:
         sender = LogSender()
